@@ -171,7 +171,7 @@ Key configuration groups:
 - **MCP tool registration incomplete** — Server config parsing works, but tool discovery via MCP protocol is not yet implemented.
 - **Trace query API not wired** — `GET /api/trace/{id}` and `GET /api/traces` return placeholder responses.
 
-See [TODO.md](TODO.md) for the full list of planned features.
+See the issue tracker for the full list of planned features.
 
 ## Tech Stack
 
