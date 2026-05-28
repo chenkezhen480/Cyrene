@@ -1,0 +1,30 @@
+# Build
+target/
+*.class
+*.jar
+*.war
+dependency-reduced-pom.xml
+uploads/
+
+# Claude Code
+.claude/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+.settings/
+.project
+.classpath
+
+# Env
+.env
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Trace DB
+harness_trace.db
+harness_traces/

@@ -1,0 +1,148 @@
+package com.harness.audit.store;
+
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import com.harness.core.model.AgentTrace;
+import com.harness.env.EnvConfig;
+import com.harness.env.EnvKey;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.sql.*;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Optional;
+
+/**
+ * MySQL-based trace store.
+ * Configured via HARNESS_AUDIT_STORE=mysql + HARNESS_AUDIT_DB_URL/USER/PASS.
+ *
+ * Schema: see resources/schema-mysql.sql
+ */
+public class MysqlTraceStore implements TraceStore {
+
+    private static final Logger log = LoggerFactory.getLogger(MysqlTraceStore.class);
+    private final ObjectMapper mapper;
+    private final String dbUrl;
+    private final String dbUser;
+    private final String dbPass;
+
+    public MysqlTraceStore() {
+        this.mapper = new ObjectMapper();
+        this.mapper.registerModule(new JavaTimeModule());
+        EnvConfig cfg = EnvConfig.get();
+        this.dbUrl = cfg.getString(EnvKey.AUDIT_DB_URL, "jdbc:mysql://localhost:3306/agent");
+        this.dbUser = cfg.getString(EnvKey.AUDIT_DB_USER, "root");
+        this.dbPass = cfg.getString(EnvKey.AUDIT_DB_PASS, "1234");
+        log.info("MySQL trace store: url={}, user={}", dbUrl, dbUser);
+    }
+
+    private Connection getConnection() throws SQLException {
+        return DriverManager.getConnection(dbUrl, dbUser, dbPass);
+    }
+
+    @Override
+    public void save(AgentTrace trace) {
+        String sql = """
+                INSERT INTO agent_traces
+                (trace_id, timestamp, user_id, input_text, input_attachments,
+                 intent, rag_hits, rerank_result,
+                 llm_model, prompt_version, total_tokens,
+                 steps_json, step_count,
+                 final_output, risk_level, user_confirmed,
+                 total_duration_ms, metadata, full_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON DUPLICATE KEY UPDATE
+                    final_output = VALUES(final_output),
+                    risk_level = VALUES(risk_level),
+                    total_duration_ms = VALUES(total_duration_ms),
+                    total_tokens = VALUES(total_tokens),
+                    steps_json = VALUES(steps_json),
+                    step_count = VALUES(step_count),
+                    full_json = VALUES(full_json)
+                """;
+
+        try (Connection conn = getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
+            String fullJson = mapper.writeValueAsString(trace);
+            String stepsJson = mapper.writeValueAsString(trace.steps());
+            String attachmentsJson = mapper.writeValueAsString(trace.inputAttachments());
+            String ragHitsJson = mapper.writeValueAsString(trace.ragHits());
+            String metadataJson = mapper.writeValueAsString(trace.metadata());
+
+            ps.setString(1, trace.traceId());
+            ps.setTimestamp(2, Timestamp.from(trace.timestamp()));
+            ps.setString(3, trace.userId());
+            ps.setString(4, trace.inputText());
+            ps.setString(5, attachmentsJson);
+            ps.setString(6, trace.intent());
+            ps.setString(7, ragHitsJson);
+            ps.setString(8, trace.rerankResult());
+            ps.setString(9, trace.llmModel());
+            ps.setString(10, trace.promptVersion());
+            ps.setInt(11, trace.totalTokens());
+            ps.setString(12, stepsJson);
+            ps.setInt(13, trace.steps() != null ? trace.steps().size() : 0);
+            ps.setString(14, trace.finalOutput());
+            ps.setString(15, trace.riskLevel().name());
+            ps.setBoolean(16, trace.userConfirmed());
+            ps.setLong(17, trace.totalDurationMs());
+            ps.setString(18, metadataJson);
+            ps.setString(19, fullJson);
+
+            ps.executeUpdate();
+        } catch (SQLException | JsonProcessingException e) {
+            log.error("Failed to save trace {} to MySQL: {}", trace.traceId(), e.getMessage(), e);
+        }
+    }
+
+    @Override
+    public Optional<AgentTrace> findById(String traceId) {
+        String sql = "SELECT full_json FROM agent_traces WHERE trace_id = ?";
+        try (Connection conn = getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, traceId);
+            ResultSet rs = ps.executeQuery();
+            if (rs.next()) {
+                return Optional.of(mapper.readValue(rs.getString("full_json"), AgentTrace.class));
+            }
+        } catch (Exception e) {
+            log.error("Failed to find trace {} from MySQL: {}", traceId, e.getMessage(), e);
+        }
+        return Optional.empty();
+    }
+
+    @Override
+    public List<AgentTrace> listRecent(int limit) {
+        String sql = "SELECT full_json FROM agent_traces ORDER BY timestamp DESC LIMIT ?";
+        List<AgentTrace> results = new ArrayList<>();
+        try (Connection conn = getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setInt(1, limit);
+            ResultSet rs = ps.executeQuery();
+            while (rs.next()) {
+                results.add(mapper.readValue(rs.getString("full_json"), AgentTrace.class));
+            }
+        } catch (Exception e) {
+            log.error("Failed to list traces from MySQL: {}", e.getMessage(), e);
+        }
+        return results;
+    }
+
+    @Override
+    public int cleanup(int retentionDays) {
+        String sql = "DELETE FROM agent_traces WHERE timestamp < ?";
+        Instant cutoff = Instant.now().minusSeconds(retentionDays * 86400L);
+        try (Connection conn = getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setTimestamp(1, Timestamp.from(cutoff));
+            return ps.executeUpdate();
+        } catch (SQLException e) {
+            log.error("Failed to cleanup MySQL traces: {}", e.getMessage(), e);
+            return 0;
+        }
+    }
+
+    @Override
+    public void close() {
+        // Connection pool not used in this basic implementation
+    }
+}

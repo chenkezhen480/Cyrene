@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.harness</groupId>
+        <artifactId>harness-agent</artifactId>
+        <version>0.1.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>harness-agent-lib</artifactId>
+    <name>Harness Agent Library</name>
+    <description>Core agent orchestration library</description>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.harness</groupId>
+            <artifactId>harness-env</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.harness</groupId>
+            <artifactId>harness-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.harness</groupId>
+            <artifactId>harness-input</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.harness</groupId>
+            <artifactId>harness-preprocess</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.harness</groupId>
+            <artifactId>harness-ai</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.harness</groupId>
+            <artifactId>harness-tool</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.harness</groupId>
+            <artifactId>harness-audit</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>dev.langchain4j</groupId>
+            <artifactId>langchain4j</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>ch.qos.logback</groupId>
+            <artifactId>logback-classic</artifactId>
+        </dependency>
+    </dependencies>
+</project>
