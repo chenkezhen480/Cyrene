@@ -1,10 +1,14 @@
-# Harness Agent
+# Cyrene Agent
 
-A Java-based AI Agent application framework for building your own product's agent. Pluggable model providers, built-in RAG knowledge base, session memory, and a 5-layer pipeline architecture — designed as a scaffolding to bootstrap and customize agent applications for your specific business needs.
+A Java-based AI Agent application framework built on the **Harness architecture pattern**. Pluggable model providers, built-in RAG knowledge base, session memory, and a 5-layer pipeline architecture — designed as a scaffolding to bootstrap and customize agent applications for your specific business needs.
 
-## Why Harness Agent?
+## Why Cyrene Agent?
 
-Building an AI agent for your product shouldn't mean starting from scratch. Harness Agent provides a production-ready foundation — model abstraction, RAG, memory, tools, audit — so you focus on your business logic, not plumbing. Add custom tools, configure your models, and ship.
+Building an AI agent for your product shouldn't mean starting from scratch. Cyrene Agent provides a production-ready foundation — model abstraction, RAG, memory, tools, audit — so you focus on your business logic, not plumbing. Add custom tools, configure your models, and ship.
+
+### Harness Architecture
+
+Cyrene Agent adopts the **Harness architecture** — a design pattern where a general-purpose orchestration framework (the "harness") wraps around domain-specific components. The harness handles cross-cutting concerns (model routing, memory, audit, tool execution) while your custom logic plugs in at defined extension points. This separation means you can swap models, add tools, or change memory strategies without touching the pipeline core.
 
 ## Highlights
 
