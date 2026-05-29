@@ -52,6 +52,7 @@ public final class EnvKey {
     public static final String AUTH_TOKEN            = "HARNESS_AUTH_TOKEN";
     public static final String AUTH_JWT_SECRET       = "HARNESS_AUTH_JWT_SECRET";
     public static final String AUTH_JWT_ISSUER       = "HARNESS_AUTH_JWT_ISSUER";
+    public static final String AUTH_JWT_REFRESH_THRESHOLD_MINUTES = "HARNESS_AUTH_JWT_REFRESH_THRESHOLD_MINUTES";
 
     // ==================== RAG ====================
     public static final String RAG_PROVIDER          = "HARNESS_RAG_PROVIDER";
@@ -76,11 +77,15 @@ public final class EnvKey {
     public static final String MCP_SERVERS           = "HARNESS_MCP_SERVERS";
     public static final String MCP_CONNECT_TIMEOUT   = "HARNESS_MCP_CONNECT_TIMEOUT_MS";
     public static final String MCP_CALL_TIMEOUT      = "HARNESS_MCP_CALL_TIMEOUT_MS";
+    public static final String MCP_CONFIG_FILE       = "HARNESS_MCP_CONFIG_FILE";
 
     // ==================== Built-in Tools ====================
-    public static final String TOOL_WEB_SEARCH_ENABLED  = "HARNESS_TOOL_WEB_SEARCH_ENABLED";
-    public static final String TOOL_WEB_SEARCH_API_KEY   = "HARNESS_TOOL_WEB_SEARCH_API_KEY";
-    public static final String TOOL_WEB_SEARCH_ENGINE    = "HARNESS_TOOL_WEB_SEARCH_ENGINE";
+    public static final String TOOL_WEB_SEARCH_ENABLED        = "HARNESS_TOOL_WEB_SEARCH_ENABLED";
+    public static final String TOOL_WEB_SEARCH_API_KEY        = "HARNESS_TOOL_WEB_SEARCH_API_KEY";
+    public static final String TOOL_WEB_SEARCH_ENGINE         = "HARNESS_TOOL_WEB_SEARCH_ENGINE";
+    public static final String TOOL_WEB_SEARCH_PRIORITY       = "HARNESS_TOOL_WEB_SEARCH_PRIORITY";
+    public static final String TOOL_WEB_SEARCH_TAVILY_API_KEY = "HARNESS_TOOL_WEB_SEARCH_TAVILY_API_KEY";
+    public static final String TOOL_WEB_SEARCH_SERPAPI_API_KEY = "HARNESS_TOOL_WEB_SEARCH_SERPAPI_API_KEY";
     public static final String TOOL_FFMPEG_ENABLED       = "HARNESS_TOOL_FFMPEG_ENABLED";
     public static final String TOOL_FFMPEG_PATH          = "HARNESS_TOOL_FFMPEG_PATH";
     public static final String TOOL_CODE_EXEC_ENABLED    = "HARNESS_TOOL_CODE_EXEC_ENABLED";
@@ -91,6 +96,9 @@ public final class EnvKey {
     public static final String REACT_STRATEGY            = "HARNESS_REACT_STRATEGY";
     public static final String REACT_STOP_ON_TOOL_ERROR  = "HARNESS_REACT_STOP_ON_TOOL_ERROR";
     public static final String REACT_ENABLE_REFLECTION   = "HARNESS_REACT_ENABLE_REFLECTION";
+
+    // ==================== Sub-Agent ====================
+    public static final String AGENT_MAX_SUBAGENTS       = "HARNESS_AGENT_MAX_SUBAGENTS";
 
     // ==================== Audit ====================
     public static final String AUDIT_STORE           = "HARNESS_AUDIT_STORE";
@@ -134,17 +142,16 @@ public final class EnvKey {
     public static final String SESSION_TIMEOUT_MINUTES         = "HARNESS_SESSION_TIMEOUT_MINUTES";
     public static final String MEMORY_MIN_MESSAGES             = "HARNESS_MEMORY_MIN_MESSAGES";
     public static final String MEMORY_MIN_USER_CHARS           = "HARNESS_MEMORY_MIN_USER_CHARS";
-    public static final String CTX_RATIO_SYSTEM                = "HARNESS_CTX_RATIO_SYSTEM";
     public static final String MEMORY_LONGTERM_MAX_TOKENS      = "HARNESS_MEMORY_LONGTERM_MAX_TOKENS";
-    public static final String CTX_RATIO_SHORTTERM             = "HARNESS_CTX_RATIO_SHORTTERM";
-    public static final String CTX_RATIO_SHORTTERM_MAX         = "HARNESS_CTX_RATIO_SHORTTERM_MAX";
-    public static final String CTX_RATIO_RAG                   = "HARNESS_CTX_RATIO_RAG";
     public static final String CTX_COMPRESS_MINOR              = "HARNESS_CTX_COMPRESS_MINOR";
     public static final String CTX_COMPRESS_MINOR_ENABLED      = "HARNESS_CTX_COMPRESS_MINOR_ENABLED";
     public static final String CTX_COMPRESS_MAJOR              = "HARNESS_CTX_COMPRESS_MAJOR";
     public static final String CTX_COMPRESS_MAJOR_TARGET        = "HARNESS_CTX_COMPRESS_MAJOR_TARGET";
     public static final String CTX_COMPRESS_MINOR_TARGET        = "HARNESS_CTX_COMPRESS_MINOR_TARGET";
+    public static final String SYSTEM_PROMPT                   = "HARNESS_SYSTEM_PROMPT";
+    public static final String MEMORY_REFINEMENT_MIN_SCORE     = "HARNESS_MEMORY_REFINEMENT_MIN_SCORE";
     public static final String MEMORY_CLEANUP_INTERVAL_MINUTES = "HARNESS_MEMORY_CLEANUP_INTERVAL_MINUTES";
+    public static final String MEMORY_REFINEMENT_STUCK_MINUTES = "HARNESS_MEMORY_REFINEMENT_STUCK_MINUTES";
 
     // TODO: Redis cache — 暂未实现，预留扩展
     public static final String MEMORY_REDIS_URL                = "HARNESS_MEMORY_REDIS_URL";

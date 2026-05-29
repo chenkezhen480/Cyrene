@@ -6,6 +6,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
+import io.github.cdimascio.dotenv.Dotenv;
+
 /**
  * Centralized environment configuration.
  * Loads all HARNESS_* variables at startup, provides typed accessors with defaults.
@@ -17,13 +19,24 @@ public final class EnvConfig {
 
     private EnvConfig(Map<String, String> overrides) {
         this.store = new ConcurrentHashMap<>();
-        // Load from system env
+        // Load .env file as fallback (silently skip if missing)
+        try {
+            Dotenv dotenv = Dotenv.configure().ignoreIfMissing().load();
+            for (var entry : dotenv.entries()) {
+                if (entry.getKey().startsWith("HARNESS_")) {
+                    store.putIfAbsent(entry.getKey(), entry.getValue());
+                }
+            }
+        } catch (Exception e) {
+            // .env file not present or unparseable — continue with system env
+        }
+        // System env takes precedence over .env
         System.getenv().forEach((k, v) -> {
             if (k.startsWith("HARNESS_")) {
                 store.put(k, v);
             }
         });
-        // Overrides take precedence
+        // Overrides take highest precedence
         if (overrides != null) {
             store.putAll(overrides);
         }

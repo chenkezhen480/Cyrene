@@ -1,43 +1,37 @@
 -- ============================================================
--- Harness Agent - PostgreSQL pgvector Schema
+-- Harness Agent - RAG知识库向量表 (PostgreSQL pgvector)
 -- Run: psql -U postgres -f schema-pgvector.sql
 -- ============================================================
 
--- Enable pgvector extension
+-- 启用 pgvector 扩展
 CREATE EXTENSION IF NOT EXISTS vector;
 
--- Knowledge base document table with vector embeddings
+-- 知识库文档表（含向量嵌入）
 CREATE TABLE IF NOT EXISTS knowledge_documents (
-    id              BIGSERIAL PRIMARY KEY,
-    collection      VARCHAR(128)    NOT NULL DEFAULT 'default',
-    source          VARCHAR(512)    DEFAULT NULL,
-    content         TEXT            NOT NULL,
-    embedding       vector(1024)    NOT NULL,     -- dimension matches your embedding model
-    metadata        JSONB           DEFAULT NULL,
-    chunk_index     INT             DEFAULT NULL,
-    prev_chunk_id   VARCHAR(64)     DEFAULT NULL,
-    next_chunk_id   VARCHAR(64)     DEFAULT NULL,
-    created_at      TIMESTAMPTZ     NOT NULL DEFAULT NOW()
+    id              BIGSERIAL PRIMARY KEY                COMMENT '自增主键',
+    collection      VARCHAR(128)    NOT NULL DEFAULT 'default' COMMENT '知识库集合名称',
+    source          VARCHAR(512)    DEFAULT NULL         COMMENT '来源文件名',
+    content         TEXT            NOT NULL             COMMENT '文本块内容',
+    embedding       vector(1024)    NOT NULL             COMMENT '向量嵌入（维度需匹配embedding模型）',
+    metadata        JSONB           DEFAULT NULL         COMMENT '扩展元数据',
+    chunk_index     INT             DEFAULT NULL         COMMENT '文本块在原文中的序号',
+    prev_chunk_id   VARCHAR(64)     DEFAULT NULL         COMMENT '前一个文本块ID（语义回溯用）',
+    next_chunk_id   VARCHAR(64)     DEFAULT NULL         COMMENT '后一个文本块ID（语义前探用）',
+    created_at      TIMESTAMPTZ     NOT NULL DEFAULT NOW() COMMENT '创建时间'
 );
 
 CREATE INDEX IF NOT EXISTS idx_knowledge_collection ON knowledge_documents (collection);
 
--- Migration for existing tables:
--- ALTER TABLE knowledge_documents ADD COLUMN IF NOT EXISTS chunk_index INT;
--- ALTER TABLE knowledge_documents ADD COLUMN IF NOT EXISTS prev_chunk_id VARCHAR(64);
--- ALTER TABLE knowledge_documents ADD COLUMN IF NOT EXISTS next_chunk_id VARCHAR(64);
-
--- HNSW index for fast approximate nearest neighbor search
--- Adjust vector dimension (1024) to match your embedding model
+-- HNSW 索引用于快速近似最近邻搜索
+-- 向量维度 (1024) 需与 embedding 模型匹配
 CREATE INDEX IF NOT EXISTS idx_knowledge_embedding
     ON knowledge_documents
     USING hnsw (embedding vector_cosine_ops)
     WITH (m = 16, ef_construction = 64);
 
--- Query helper: search by collection + similarity
--- Usage:
---   SELECT id, content, source, 1 - (embedding <=> $1::vector) AS score
---   FROM knowledge_documents
---   WHERE collection = $2
---   ORDER BY embedding <=> $1::vector
---   LIMIT $3;
+-- 查询示例：按集合 + 相似度搜索
+-- SELECT id, content, source, 1 - (embedding <=> $1::vector) AS score
+-- FROM knowledge_documents
+-- WHERE collection = $2
+-- ORDER BY embedding <=> $1::vector
+-- LIMIT $3;

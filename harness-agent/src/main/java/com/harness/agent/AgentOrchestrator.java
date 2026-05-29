@@ -2,6 +2,7 @@ package com.harness.agent;
 
 import com.harness.ai.model.*;
 import com.harness.ai.react.ReActEngine;
+import com.harness.audit.ReplyAuditor;
 import com.harness.audit.TraceCollector;
 import com.harness.audit.store.TraceStore;
 import com.harness.audit.store.TraceStoreFactory;
@@ -17,6 +18,7 @@ import com.harness.tool.ToolRegistry;
 import com.harness.tool.builtin.FfmpegTool;
 import com.harness.tool.builtin.WebSearchTool;
 import com.harness.tool.mcp.McpServerConfig;
+import com.harness.tool.mcp.McpToolDiscovery;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -28,6 +30,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 
 /**
  * Wires all layers together using LangChain4j model providers.
@@ -57,6 +60,10 @@ public class AgentOrchestrator {
     private final ToolExecutor toolExecutor;
     private final ReActEngine reactEngine;
     private final TraceStore traceStore;
+    private final ReplyAuditor replyAuditor;
+
+    // Sub-agent subsystem
+    private final SubAgentOrchestrator subAgentOrchestrator;
 
     // Memory subsystem
     private final SessionStore sessionStore;
@@ -65,7 +72,6 @@ public class AgentOrchestrator {
     private final SessionLifecycleManager sessionLifecycle;
     private final PreferenceRefinementWorker refinementWorker;
     private final MemoryCompressor memoryCompressor;
-    private final TokenBudgetAllocator tokenBudget;
     private final SessionCleanupScheduler cleanupScheduler;
     private final SessionMessageCache messageCache;
     private final MessageWriteWorker messageWriteWorker;
@@ -92,12 +98,19 @@ public class AgentOrchestrator {
         registerMcpTools();
         this.toolExecutor = new ToolExecutor(toolRegistry);
 
+        // Sub-agent orchestrator (initialized before ReActEngine so spawn_subagent is available)
+        this.subAgentOrchestrator = new SubAgentOrchestrator(
+                chatModelProvider, visionModelProvider, voiceModelProvider, toolRegistry, toolExecutor);
+        // Register spawn_subagent tool
+        toolRegistry.register(new SpawnSubAgentTool(subAgentOrchestrator));
+
         // ReAct Engine (LangChain4j ChatLanguageModel + tools + multimodal fallback)
         this.reactEngine = new ReActEngine(chatModelProvider, toolRegistry, toolExecutor,
                 visionModelProvider, voiceModelProvider);
 
         // Layer 5: Audit
         this.traceStore = TraceStoreFactory.create();
+        this.replyAuditor = new ReplyAuditor();
 
         // Memory subsystem
         this.sessionStore = MemoryStoreFactory.createSessionStore();
@@ -106,7 +119,6 @@ public class AgentOrchestrator {
         this.sessionLifecycle = new SessionLifecycleManager(sessionStore, messageStore);
         this.refinementWorker = new PreferenceRefinementWorker(messageStore, preferenceStore, chatModelProvider);
         this.memoryCompressor = new MemoryCompressor(messageStore, sessionStore, chatModelProvider);
-        this.tokenBudget = new TokenBudgetAllocator();
         this.messageCache = new SessionMessageCache();
         this.messageWriteWorker = new MessageWriteWorker(messageStore);
 
@@ -131,14 +143,26 @@ public class AgentOrchestrator {
     }
 
     public AgentResult run(String token, String text, List<MultimodalParser.RawAttachment> attachments) {
-        return run(token, text, attachments, null);
+        return run(token, text, attachments, null, null, null);
+    }
+
+    public AgentResult run(String token, String text, List<MultimodalParser.RawAttachment> attachments, String requestedSessionId) {
+        return run(token, text, attachments, requestedSessionId, null, null);
     }
 
     /**
-     * Run agent with optional session ID.
-     * If requestedSessionId is null, reuses the active session (or creates new on first call).
+     * Run agent with full control over session, system prompt override, and cancellation.
+     *
+     * @param token auth token
+     * @param text user input text
+     * @param attachments optional attachments
+     * @param requestedSessionId optional session ID (null = reuse active)
+     * @param systemPromptOverride optional system prompt override (null = use env default)
+     * @param cancellationToken optional cancellation token for aborting in-progress runs
      */
-    public AgentResult run(String token, String text, List<MultimodalParser.RawAttachment> attachments, String requestedSessionId) {
+    public AgentResult run(String token, String text, List<MultimodalParser.RawAttachment> attachments,
+                           String requestedSessionId, String systemPromptOverride,
+                           com.harness.core.model.CancellationToken cancellationToken) {
         long runStart = System.currentTimeMillis();
         int attachCount = attachments != null ? attachments.size() : 0;
         log.info("[Orchestrator] Run start: textLen={}, sessionId={}, attachments={}",
@@ -164,6 +188,7 @@ public class AgentOrchestrator {
                 activeSessionId = sessionId;
                 log.info("[Memory] Session resolved: id={}, isNew={}, timedOut={}",
                         sessionId, lifecycle.isNewSession(), lifecycle.timedOutSessionIds().size());
+                trace.builder().sessionId(sessionId);
                 Map<String, String> meta = new HashMap<>(trace.builder().build().metadata());
                 meta.put("session_id", sessionId);
                 meta.put("session_new", String.valueOf(lifecycle.isNewSession()));
@@ -187,6 +212,10 @@ public class AgentOrchestrator {
                 } else {
                     log.debug("Cache hit for session: {}", sessionId);
                 }
+
+                // Load long-term memory (user preferences)
+                longtermPrefs = preferenceStore.loadByUser(input.userId());
+                log.debug("[Memory] Loaded {} long-term preferences for user {}", longtermPrefs.size(), input.userId());
             }
 
             // ===== Layer 2: Preprocess =====
@@ -195,7 +224,7 @@ public class AgentOrchestrator {
             trace.recordPreprocess(null, ctx.ragHitIds(), null);
 
             // system消息组装 + 长期记忆注入
-            String systemPrompt = buildSystemPrompt(ctx, longtermPrefs);
+            String systemPrompt = buildSystemPrompt(ctx, longtermPrefs, systemPromptOverride);
             log.debug("[Orchestrator] System prompt: {} chars, rag={}, longterm={}",
                     systemPrompt.length(), ctx.hasContext(), !longtermPrefs.isEmpty());
             trace.recordLlmMeta(chatModelProvider.modelName(), "v1");
@@ -234,11 +263,32 @@ public class AgentOrchestrator {
 
             // ===== Layer 3+4: ReAct loop（AI决策 + 工具执行 + 小压缩去除工具块） =====
             List<ChatMessage> historyChatMessages = convertToChatMessages(shorttermMessages);
-            ReActEngine.ReActResult result = reactEngine.execute(systemPrompt, text, historyChatMessages, trace.builder());
+            ReActEngine.ReActResult result = reactEngine.execute(systemPrompt, text, historyChatMessages, trace.builder(), null, cancellationToken);
             result.steps().forEach(trace::addStep);
 
             RiskLevel risk = determineRisk(result);
             trace.recordOutput(result.output(), risk, true);
+
+            // ===== Reply audit (async, non-blocking) =====
+            final String replyText = result.output();
+            CompletableFuture.runAsync(() -> {
+                try {
+                    ReplyAuditor.ReplyAuditResult auditResult = replyAuditor.audit(replyText);
+                    if (!auditResult.passed()) {
+                        log.warn("[ReplyAuditor] Audit failed: score={}, reason={}", auditResult.score(), auditResult.reason());
+                    } else {
+                        log.debug("[ReplyAuditor] Audit passed: score={}", auditResult.score());
+                    }
+                    // Store in trace metadata (best-effort, trace may already be finishing)
+                    Map<String, String> auditMeta = new HashMap<>(trace.builder().build().metadata());
+                    auditMeta.put("reply_audit_passed", String.valueOf(auditResult.passed()));
+                    auditMeta.put("reply_audit_score", String.valueOf(auditResult.score()));
+                    auditMeta.put("reply_audit_reason", auditResult.reason());
+                    trace.builder().metadata(auditMeta);
+                } catch (Exception e) {
+                    log.debug("[ReplyAuditor] Async audit failed: {}", e.getMessage());
+                }
+            });
 
             // ===== 后处理：保存AI回复 =====
             if (sessionId != null) {
@@ -262,19 +312,27 @@ public class AgentOrchestrator {
         }
     }
 
-    private String buildSystemPrompt(ContextBuilder.ContextResult ctx, List<Preference> longtermPrefs) {
+    private String buildSystemPrompt(ContextBuilder.ContextResult ctx, List<Preference> longtermPrefs, String systemPromptOverride) {
         StringBuilder sb = new StringBuilder();
-        sb.append("You are a helpful AI assistant with access to tools. ");
-        sb.append("Use tools when needed to answer questions. ");
-        sb.append("Think step by step. If a tool fails, try an alternative approach.\n\n");
+        String basePrompt = (systemPromptOverride != null && !systemPromptOverride.isBlank())
+                ? systemPromptOverride
+                : EnvConfig.get().getString(EnvKey.SYSTEM_PROMPT,
+                        "You are a helpful AI assistant with access to tools. Use tools when needed to answer questions. Think step by step. If a tool fails, try an alternative approach.");
+        sb.append(basePrompt).append("\n\n");
 
-        // Inject long-term memory (user preferences)
+        // Inject long-term memory (user preferences), capped at MEMORY_LONGTERM_MAX_TOKENS
         if (!longtermPrefs.isEmpty()) {
-            sb.append("[User Preferences]\n");
+            int maxChars = EnvConfig.get().getInt(EnvKey.MEMORY_LONGTERM_MAX_TOKENS, 800) * 3;
+            StringBuilder prefBlock = new StringBuilder("[User Preferences]\n");
             for (Preference pref : longtermPrefs) {
-                sb.append("- ").append(pref.category()).append(": ").append(pref.content()).append("\n");
+                prefBlock.append("- ").append(pref.category()).append(": ").append(pref.content()).append("\n");
             }
-            sb.append("\n");
+            if (prefBlock.length() > maxChars) {
+                prefBlock.setLength(maxChars);
+                prefBlock.append("...\n");
+                log.debug("[Memory] Long-term preferences truncated to {} chars ({} tokens max)", maxChars, maxChars / 3);
+            }
+            sb.append(prefBlock).append("\n");
         }
 
         // Inject RAG context
@@ -319,9 +377,12 @@ public class AgentOrchestrator {
     }
 
     private void registerMcpTools() {
-        for (McpServerConfig server : McpServerConfig.loadAll()) {
-            log.info("Registering MCP server: {} at {}", server.name(), server.url());
-        }
+        List<McpServerConfig> servers = McpServerConfig.loadAll();
+        if (servers.isEmpty()) return;
+
+        log.info("Discovering tools from {} MCP server(s)...", servers.size());
+        McpToolDiscovery discovery = new McpToolDiscovery();
+        discovery.discoverAndRegister(servers, toolRegistry);
     }
 
     // Expose model providers for external use (e.g., direct vision/voice calls)
@@ -338,6 +399,7 @@ public class AgentOrchestrator {
     public PreferenceStore preferenceStore() { return preferenceStore; }
     public SessionLifecycleManager sessionLifecycle() { return sessionLifecycle; }
     public PreferenceRefinementWorker refinementWorker() { return refinementWorker; }
+    public SubAgentOrchestrator subAgentOrchestrator() { return subAgentOrchestrator; }
 
     /**
      * Convert MemoryMessage list to LangChain4j ChatMessage list for ReAct history injection.
@@ -361,6 +423,7 @@ public class AgentOrchestrator {
     }
 
     public void shutdown() {
+        subAgentOrchestrator.shutdown();
         if (cleanupScheduler != null) cleanupScheduler.stop();
         messageWriteWorker.stop();  // Flush pending writes before stopping
         refinementWorker.stop();

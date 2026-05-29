@@ -26,7 +26,7 @@ public class AnthropicChatModelProvider implements ChatModelProvider {
 
     @Override
     public ChatModel chatModel() {
-        return AnthropicChatModel.builder()
+        return new RetryingChatModel(AnthropicChatModel.builder()
                 .apiKey(apiKey)
                 .baseUrl(baseUrl)
                 .modelName(model)
@@ -34,7 +34,7 @@ public class AnthropicChatModelProvider implements ChatModelProvider {
                 .temperature(temperature)
                 .logRequests(true)
                 .logResponses(true)
-                .build();
+                .build());
     }
 
     @Override

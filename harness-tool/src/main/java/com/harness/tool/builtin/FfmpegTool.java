@@ -13,6 +13,9 @@ import org.slf4j.LoggerFactory;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 
 /**
  * Built-in FFmpeg tool for audio/video processing.
@@ -54,8 +57,11 @@ public class FfmpegTool implements Tool {
         log.info("FFmpeg: {} {}", ffmpegPath, args);
 
         try {
-            ProcessBuilder pb = new ProcessBuilder();
-            pb.command(ffmpegPath.split(" "));
+            // Build command: ffmpegPath + user-provided args
+            List<String> command = new ArrayList<>();
+            Collections.addAll(command, ffmpegPath.split(" "));
+            Collections.addAll(command, args.split(" "));
+            ProcessBuilder pb = new ProcessBuilder(command);
             pb.redirectErrorStream(true);
             Process process = pb.start();
 

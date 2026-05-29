@@ -32,7 +32,7 @@ public class OpenAiChatModelProvider implements ChatModelProvider {
 
     @Override
     public ChatModel chatModel() {
-        return OpenAiChatModel.builder()
+        return new RetryingChatModel(OpenAiChatModel.builder()
                 .apiKey(apiKey)
                 .baseUrl(baseUrl)
                 .modelName(model)
@@ -40,7 +40,7 @@ public class OpenAiChatModelProvider implements ChatModelProvider {
                 .temperature(temperature)
                 .logRequests(true)
                 .logResponses(true)
-                .build();
+                .build());
     }
 
     @Override

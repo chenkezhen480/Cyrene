@@ -36,7 +36,15 @@ public class KnowledgeUploadHandler {
 
             String collection = ctx.formParam("collection");
             byte[] fileData = uploadedFile.content().readAllBytes();
-            String fileName = uploadedFile.filename();
+            String fileName;
+            try {
+                fileName = uploadedFile.filename();
+            } catch (Exception e) {
+                // Jetty may throw NotUtf8Exception for non-UTF-8 filenames (e.g., Chinese filenames
+                // sent by some clients with GBK encoding). Fall back to a safe default.
+                log.warn("[Server] Failed to decode uploaded filename ({}), using fallback", e.getMessage());
+                fileName = ctx.formParam("file") != null ? ctx.formParam("file") : "uploaded_file_" + System.currentTimeMillis();
+            }
             String mimeType = uploadedFile.contentType();
             log.info("[Server] POST /api/knowledge/upload: file={}, size={}KB, mimeType={}, collection={}",
                     fileName, fileData.length / 1024, mimeType, collection);
@@ -83,7 +91,7 @@ public class KnowledgeUploadHandler {
             ctx.status(400).json(Map.of("error", e.getMessage()));
         } catch (Exception e) {
             log.error("[Server] Knowledge upload failed: {}", e.getMessage(), e);
-            ctx.status(500).json(Map.of("error", e.getMessage()));
+            ctx.status(500).json(Map.of("error", e.getMessage() != null ? e.getMessage() : "Internal server error during knowledge upload"));
         }
     }
 }

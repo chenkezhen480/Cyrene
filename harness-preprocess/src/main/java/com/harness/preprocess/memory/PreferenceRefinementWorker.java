@@ -3,6 +3,8 @@ package com.harness.preprocess.memory;
 import com.harness.ai.model.ChatModelProvider;
 import com.harness.core.model.MemoryMessage;
 import com.harness.core.model.Preference;
+import com.harness.env.EnvConfig;
+import com.harness.env.EnvKey;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.chat.ChatModel;
 import org.slf4j.Logger;
@@ -31,6 +33,7 @@ public class PreferenceRefinementWorker {
     private final MessageStore messageStore;
     private final PreferenceStore preferenceStore;
     private final ChatModelProvider chatModel;
+    private final int longtermMaxTokens;
     private final BlockingQueue<RefinementTask> queue = new LinkedBlockingQueue<>();
     private final AtomicBoolean running = new AtomicBoolean(false);
     private Thread workerThread;
@@ -39,6 +42,7 @@ public class PreferenceRefinementWorker {
         this.messageStore = messageStore;
         this.preferenceStore = preferenceStore;
         this.chatModel = chatModel;
+        this.longtermMaxTokens = EnvConfig.get().getInt(EnvKey.MEMORY_LONGTERM_MAX_TOKENS, 800);
     }
 
     /**
@@ -134,6 +138,7 @@ public class PreferenceRefinementWorker {
             existing.append("- ").append(pref.category()).append(": ").append(pref.content()).append("\n");
         }
 
+        int maxChars = longtermMaxTokens * 3;
         String prompt = """
                 You are a user preference extraction system. Analyze the conversation and extract user preferences.
 
@@ -150,9 +155,11 @@ public class PreferenceRefinementWorker {
                 4. Categorize each preference (language, tone, domain, workflow, other)
                 5. Output format: one preference per line as "category: description"
                 6. If no meaningful preferences found, output "NONE"
+                7. CRITICAL: Total output must be under %d characters (~%d tokens). Be concise — every word must carry information. Omit low-value preferences if needed.
                 """.formatted(
                 existing.isEmpty() ? "(none)" : existing.toString(),
-                conversation.toString()
+                conversation.toString(),
+                maxChars, longtermMaxTokens
         );
 
         try {

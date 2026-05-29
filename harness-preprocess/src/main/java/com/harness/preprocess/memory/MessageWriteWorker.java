@@ -23,9 +23,12 @@ public class MessageWriteWorker {
 
     private static final int BATCH_SIZE = 20;
     private static final long DRAIN_INTERVAL_MS = 500;
+    private static final int MAX_RETRIES = 3;
+    private static final long RETRY_DELAY_MS = 1000;
 
     private final MessageStore messageStore;
     private final BlockingQueue<WriteTask> queue = new LinkedBlockingQueue<>();
+    private final List<WriteTask> deadLetterQueue = new ArrayList<>();
     private final AtomicBoolean running = new AtomicBoolean(false);
     private Thread workerThread;
 
@@ -102,14 +105,91 @@ public class MessageWriteWorker {
     }
 
     private void flush(List<WriteTask> batch) {
+        List<WriteTask> failedTasks = new ArrayList<>();
+
+        // First pass: try to write each message with retry
         for (WriteTask task : batch) {
-            try {
-                messageStore.save(task.sessionId(), task.role(), task.content(), task.isSummary());
-            } catch (Exception e) {
-                log.error("Failed to write message (session={}, role={}): {}",
-                        task.sessionId(), task.role(), e.getMessage(), e);
+            if (!writeWithRetry(task)) {
+                failedTasks.add(task);
             }
         }
-        log.debug("Flushed {} messages to DB", batch.size());
+
+        // Fallback: try to write failed messages individually (synchronous)
+        if (!failedTasks.isEmpty()) {
+            log.warn("Retrying {} failed messages as individual writes", failedTasks.size());
+            List<WriteTask> stillFailed = new ArrayList<>();
+            for (WriteTask task : failedTasks) {
+                try {
+                    messageStore.save(task.sessionId(), task.role(), task.content(), task.isSummary());
+                    log.info("Fallback write succeeded for message (session={}, role={})", task.sessionId(), task.role());
+                } catch (Exception e) {
+                    log.error("Fallback write also failed for message (session={}, role={}, content={}): {}",
+                            task.sessionId(), task.role(), truncate(task.content(), 100), e.getMessage(), e);
+                    stillFailed.add(task);
+                }
+            }
+
+            // Add to dead-letter queue if still failing
+            if (!stillFailed.isEmpty()) {
+                synchronized (deadLetterQueue) {
+                    deadLetterQueue.addAll(stillFailed);
+                }
+                log.error("{} messages added to dead-letter queue (total dead-lettered={})",
+                        stillFailed.size(), deadLetterQueue.size());
+            }
+        }
+
+        log.debug("Flushed {} messages to DB (failed={})", batch.size() - failedTasks.size(), failedTasks.size());
+    }
+
+    /**
+     * Try to write a single message with up to MAX_RETRIES attempts.
+     * Returns true if write succeeded, false if all retries exhausted.
+     */
+    private boolean writeWithRetry(WriteTask task) {
+        for (int attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+            try {
+                messageStore.save(task.sessionId(), task.role(), task.content(), task.isSummary());
+                return true;
+            } catch (Exception e) {
+                log.error("Write attempt {}/{} failed for message (session={}, role={}): {}",
+                        attempt, MAX_RETRIES, task.sessionId(), task.role(), e.getMessage(), e);
+                if (attempt < MAX_RETRIES) {
+                    try {
+                        Thread.sleep(RETRY_DELAY_MS);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        log.warn("Retry interrupted, giving up on message (session={}, role={})", task.sessionId(), task.role());
+                        return false;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Get a copy of the dead-letter queue for inspection/recovery.
+     */
+    public List<WriteTask> getDeadLetterQueue() {
+        synchronized (deadLetterQueue) {
+            return new ArrayList<>(deadLetterQueue);
+        }
+    }
+
+    /**
+     * Clear the dead-letter queue (e.g., after manual recovery).
+     */
+    public int clearDeadLetterQueue() {
+        synchronized (deadLetterQueue) {
+            int size = deadLetterQueue.size();
+            deadLetterQueue.clear();
+            return size;
+        }
+    }
+
+    private static String truncate(String s, int maxLen) {
+        if (s == null) return "null";
+        return s.length() <= maxLen ? s : s.substring(0, maxLen) + "...";
     }
 }

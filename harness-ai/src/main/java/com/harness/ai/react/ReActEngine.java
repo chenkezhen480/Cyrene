@@ -34,6 +34,7 @@ public class ReActEngine {
     private final ChatModel chatModel;
     private final ToolRegistry toolRegistry;
     private final ToolExecutor toolExecutor;
+    private final Inspector inspector;
     private final int maxIterations;
     private final boolean stopOnToolError;
 
@@ -51,24 +52,33 @@ public class ReActEngine {
         }
         this.toolRegistry = toolRegistry;
         this.toolExecutor = toolExecutor;
+        this.inspector = new Inspector();
         EnvConfig cfg = EnvConfig.get();
         this.maxIterations = cfg.getInt(EnvKey.REACT_MAX_ITERATIONS, 10);
         this.stopOnToolError = cfg.getBool(EnvKey.REACT_STOP_ON_TOOL_ERROR, false);
     }
 
     public ReActResult execute(String systemPrompt, String userMessage, AgentTrace.Builder traceBuilder) {
-        return execute(systemPrompt, userMessage, List.of(), traceBuilder);
+        return execute(systemPrompt, userMessage, List.of(), traceBuilder, null, null);
+    }
+
+    public ReActResult execute(String systemPrompt, String userMessage, List<ChatMessage> historyMessages, AgentTrace.Builder traceBuilder) {
+        return execute(systemPrompt, userMessage, historyMessages, traceBuilder, null, null);
     }
 
     /**
-     * Execute ReAct loop with optional history messages injected between system prompt and user message.
+     * Execute ReAct loop with optional history messages, step listener, and cancellation token.
      *
      * @param systemPrompt system prompt
      * @param userMessage current user input
      * @param historyMessages prior conversation messages (as ChatMessage list)
      * @param traceBuilder trace collector
+     * @param listener optional callback for intermediate step events (for SSE streaming)
+     * @param cancellationToken optional token to check for cancellation between iterations
      */
-    public ReActResult execute(String systemPrompt, String userMessage, List<ChatMessage> historyMessages, AgentTrace.Builder traceBuilder) {
+    public ReActResult execute(String systemPrompt, String userMessage, List<ChatMessage> historyMessages,
+                               AgentTrace.Builder traceBuilder, ReActListener listener,
+                               com.harness.core.model.CancellationToken cancellationToken) {
         long loopStart = System.currentTimeMillis();
         log.info("[L3-ReAct] Starting ReAct loop: maxIterations={}, historyMessages={}, tools={}",
                 maxIterations, historyMessages.size(), toolRegistry.size());
@@ -83,6 +93,14 @@ public class ReActEngine {
 
         for (int i = 1; i <= maxIterations; i++) {
             log.info("[L3-ReAct] Iteration {}/{}", i, maxIterations);
+
+            // Check for cancellation between iterations
+            if (cancellationToken != null && cancellationToken.isCancelled()) {
+                log.info("[L3-ReAct] Cancellation detected at iteration {}, stopping", i);
+                String cancelledOutput = allSteps.isEmpty() ? "Request cancelled" :
+                        allSteps.get(allSteps.size() - 1).observation();
+                return new ReActResult(cancelledOutput, allSteps);
+            }
 
             // Lightweight context cleanup: remove tool blocks if context is getting large
             if (i > 2) {
@@ -117,9 +135,13 @@ public class ReActEngine {
                 long totalMs = System.currentTimeMillis() - loopStart;
                 log.info("[L3-ReAct] Complete at iteration {}, answer: {}", i, truncate(answer));
                 log.info("[L3-ReAct] Finished in {}ms, steps={}, outputLen={}", totalMs, allSteps.size(), answer != null ? answer.length() : 0);
-                allSteps.add(new ReActStep(i, answer, "final_answer",
+                ReActStep finalStep = new ReActStep(i, answer, "final_answer",
                         List.of(), List.of(), answer,
-                        new ReActStep.InspectionResult(ReActStep.InspectionResult.InspectionStatus.PASS, "complete")));
+                        new ReActStep.InspectionResult(ReActStep.InspectionResult.InspectionStatus.PASS, "complete"));
+                allSteps.add(finalStep);
+                if (listener != null) {
+                    listener.onStep(finalStep);
+                }
                 messages.add(aiMessage);
                 return new ReActResult(answer, allSteps);
             }
@@ -150,13 +172,26 @@ public class ReActEngine {
                         result.success() ? result.output() : "ERROR: " + result.error()));
             }
 
-            ReActStep.InspectionResult inspection = inspect(toolCalls, toolResults);
-            allSteps.add(new ReActStep(i,
+            ReActStep.InspectionResult inspection = inspector.inspect(toolCalls, toolResults);
+            ReActStep step = new ReActStep(i,
                     aiMessage.text(),
                     toolReqs.stream().map(ToolExecutionRequest::name).reduce((a, b) -> a + "," + b).orElse(""),
                     toolCalls, toolResults,
                     toolResults.stream().map(ToolResult::output).reduce((a, b) -> a + "\n" + b).orElse(""),
-                    inspection));
+                    inspection);
+            allSteps.add(step);
+            if (listener != null) {
+                listener.onStep(step);
+            }
+
+            if (inspection.status() != ReActStep.InspectionResult.InspectionStatus.PASS) {
+                log.info("[L3-ReAct] Inspection result: status={}, reason={}", inspection.status(), inspection.reason());
+                String hint = Inspector.buildInspectionHint(inspection);
+                if (hint != null) {
+                    messages.add(UserMessage.from(hint));
+                    log.debug("[L3-ReAct] Injected inspection hint into context: {}", hint);
+                }
+            }
 
             if (inspection.status() == ReActStep.InspectionResult.InspectionStatus.TOOL_ERROR && stopOnToolError) {
                 log.warn("[L3-ReAct] Tool error at iteration {}, stopping", i);
@@ -188,18 +223,6 @@ public class ReActEngine {
         if (removed > 0) {
             log.info("Stripped {} tool messages from context ({} → {})", removed, before, messages.size());
         }
-    }
-
-    private ReActStep.InspectionResult inspect(List<ToolCall> toolCalls, List<ToolResult> toolResults) {
-        for (ToolResult result : toolResults) {
-            if (!result.success()) {
-                return new ReActStep.InspectionResult(
-                        ReActStep.InspectionResult.InspectionStatus.TOOL_ERROR,
-                        "Tool " + result.toolName() + " failed: " + result.error());
-            }
-        }
-        return new ReActStep.InspectionResult(
-                ReActStep.InspectionResult.InspectionStatus.PASS, "All tools executed successfully");
     }
 
     private List<ToolSpecification> toToolSpecifications(List<ToolSpec> specs) {

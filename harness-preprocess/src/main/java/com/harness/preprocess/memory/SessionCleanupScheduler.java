@@ -33,6 +33,7 @@ public class SessionCleanupScheduler {
     private final PreferenceRefinementWorker refinementWorker;
     private final Duration timeout;
     private final long intervalMinutes;
+    private final Duration stuckRefinementThreshold;
     private final AtomicBoolean running = new AtomicBoolean(false);
     private ScheduledExecutorService scheduler;
 
@@ -45,6 +46,8 @@ public class SessionCleanupScheduler {
         int timeoutMinutes = cfg.getInt(EnvKey.SESSION_TIMEOUT_MINUTES, 30);
         this.timeout = Duration.ofMinutes(timeoutMinutes);
         this.intervalMinutes = cfg.getLong(EnvKey.MEMORY_CLEANUP_INTERVAL_MINUTES, 60);
+        int stuckMinutes = cfg.getInt(EnvKey.MEMORY_REFINEMENT_STUCK_MINUTES, 10);
+        this.stuckRefinementThreshold = Duration.ofMinutes(stuckMinutes);
     }
 
     /**
@@ -84,6 +87,9 @@ public class SessionCleanupScheduler {
 
     private void cleanup() {
         try {
+            // Step 1: Recover stuck refinements before processing new ones
+            resetStuckRefinements();
+
             List<Session> timedOut = sessionStore.findTimedOut(timeout);
             if (timedOut.isEmpty()) {
                 log.debug("No timed-out sessions found");
@@ -92,17 +98,44 @@ public class SessionCleanupScheduler {
 
             log.info("Found {} timed-out sessions", timedOut.size());
             for (Session session : timedOut) {
-                sessionStore.close(session.id(), Session.SessionStatus.timeout);
-                log.info("Closed timed-out session {} (user={}, lastActive={})", session.id(), session.userId(), session.lastActive());
-
-                // Quality check and submit for refinement
-                if (lifecycleManager.isWorthyOfRefinement(session.id())) {
+                // Check if already claimed or in progress (skip if so)
+                if (sessionStore.claimForRefinement(session.id())) {
+                    log.info("Claimed session {} for refinement (user={}, lastActive={})",
+                            session.id(), session.userId(), session.lastActive());
                     refinementWorker.submit(session.id(), session.userId());
                     log.info("Submitted session {} for preference refinement", session.id());
+                } else {
+                    log.debug("Session {} already claimed or not pending refinement, skipping", session.id());
                 }
             }
         } catch (Exception e) {
             log.error("Error during session cleanup: {}", e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Detect sessions stuck in 'in_progress' refinement status and reset them to 'pending'.
+     * A session is considered stuck if refinement_status = 'in_progress' and last_active
+     * is older than the configured threshold (default 10 minutes). This handles crash
+     * recovery scenarios where refinement was interrupted mid-process.
+     */
+    void resetStuckRefinements() {
+        try {
+            List<Session> stuckSessions = sessionStore.findStuckRefinements(stuckRefinementThreshold);
+            if (stuckSessions.isEmpty()) {
+                log.debug("No stuck refinements found");
+                return;
+            }
+
+            log.warn("Found {} stuck refinement sessions (threshold={}min), resetting to pending",
+                    stuckSessions.size(), stuckRefinementThreshold.toMinutes());
+            for (Session session : stuckSessions) {
+                sessionStore.resetRefinementToPending(session.id());
+                log.warn("Reset stuck refinement for session {} (user={}, lastActive={})",
+                        session.id(), session.userId(), session.lastActive());
+            }
+        } catch (Exception e) {
+            log.error("Error during stuck refinement recovery: {}", e.getMessage(), e);
         }
     }
 }

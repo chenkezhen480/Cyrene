@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.harness.agent.AgentOrchestrator;
 import com.harness.audit.store.TraceStore;
 import com.harness.audit.store.TraceStoreFactory;
+import com.harness.core.model.AgentTrace;
+import com.harness.core.model.CancellationToken;
 import com.harness.env.EnvConfig;
 import com.harness.env.EnvKey;
 import com.harness.preprocess.knowledge.KnowledgeIngestService;
@@ -13,19 +15,23 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.Collections;
+import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * HTTP API server entry point for Harness Agent.
  * Run with: java -jar harness-server.jar
  *
  * Endpoints:
- *   POST /api/auth/token  - Get JWT token (userId/username + password)
- *   POST /api/chat        - Send a message, get agent response
- *   POST /api/knowledge/upload - Upload file for knowledge base ingestion
- *   GET  /api/trace/:id   - Get trace by ID
- *   GET  /api/traces      - List recent traces
- *   GET  /api/health      - Health check
+ *   POST   /api/auth/token        - Get JWT token (userId/username + password)
+ *   POST   /api/chat              - Send a message, get agent response (SSE stream)
+ *   DELETE /api/chat/{sessionId}  - Cancel an in-progress chat request
+ *   POST   /api/knowledge/upload  - Upload file for knowledge base ingestion
+ *   GET    /api/trace/{id}        - Get trace by ID
+ *   GET    /api/traces            - List recent traces
+ *   GET    /api/health            - Health check
  */
 public class Main {
 
@@ -66,6 +72,12 @@ public class Main {
         KnowledgeIngestService ingestService = new KnowledgeIngestService(agent.embeddingModel(), pgVector);
         TraceStore traceStore = TraceStoreFactory.create();
 
+        // Shared cancellation token registry for in-flight chat requests
+        ConcurrentHashMap<String, CancellationToken> activeRequests = new ConcurrentHashMap<>();
+
+        mapper.registerModule(new com.fasterxml.jackson.datatype.jsr310.JavaTimeModule());
+        mapper.disable(com.fasterxml.jackson.databind.SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
+
         Javalin app = Javalin.create(config -> {
             config.jsonMapper(new io.javalin.json.JavalinJackson(mapper, false));
         }).start(host, port);
@@ -84,20 +96,54 @@ public class Main {
         KnowledgeUploadHandler knowledgeHandler = new KnowledgeUploadHandler(ingestService, traceStore);
         app.post("/api/knowledge/upload", knowledgeHandler::handle);
 
-        // Chat endpoint
-        ChatHandler chatHandler = new ChatHandler(agent);
+        // Knowledge base management endpoints
+        KnowledgeManagementHandler knowledgeMgmtHandler = new KnowledgeManagementHandler(pgVector);
+        app.get("/api/knowledge/{collection}", knowledgeMgmtHandler::listDocuments);
+        app.delete("/api/knowledge/{collection}", knowledgeMgmtHandler::deleteCollection);
+        app.delete("/api/knowledge/{collection}/{documentId}", knowledgeMgmtHandler::deleteDocument);
+
+        // Chat endpoint (SSE streaming)
+        ChatHandler chatHandler = new ChatHandler(agent, activeRequests);
         app.post("/api/chat", chatHandler::handle);
 
-        // Get trace
-        app.get("/api/trace/{id}", ctx -> {
-            // TODO: Wire to TraceStore.findById
-            ctx.json(Map.of("message", "Trace lookup not yet wired"));
+        // Cancel in-progress chat request
+        app.delete("/api/chat/{sessionId}", ctx -> {
+            String sessionId = ctx.pathParam("sessionId");
+            CancellationToken token = activeRequests.get(sessionId);
+            if (token == null) {
+                ctx.status(404).json(Map.of("error", "No active request found for session: " + sessionId));
+                return;
+            }
+            token.cancel();
+            log.info("[Server] Cancellation requested for session: {}", sessionId);
+            ctx.json(Map.of("status", "cancelled", "sessionId", sessionId));
         });
 
-        // List traces
+        // Get trace by ID
+        app.get("/api/trace/{id}", ctx -> {
+            String traceId = ctx.pathParam("id");
+            Optional<AgentTrace> trace = traceStore.findById(traceId);
+            if (trace.isPresent()) {
+                ctx.json(trace.get());
+            } else {
+                ctx.status(404).json(Map.of("error", "Trace not found: " + traceId));
+            }
+        });
+
+        // List recent traces
         app.get("/api/traces", ctx -> {
-            // TODO: Wire to TraceStore.listRecent
-            ctx.json(Map.of("message", "Trace listing not yet wired"));
+            String limitParam = ctx.queryParam("limit");
+            int limit = 20; // default
+            if (limitParam != null) {
+                try {
+                    limit = Integer.parseInt(limitParam);
+                } catch (NumberFormatException e) {
+                    ctx.status(400).json(Map.of("error", "Invalid limit parameter: " + limitParam));
+                    return;
+                }
+            }
+            List<AgentTrace> traces = traceStore.listRecent(limit);
+            ctx.json(traces);
         });
 
         log.info("Harness Server started on {}:{}", host, port);

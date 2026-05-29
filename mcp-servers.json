@@ -1,0 +1,8 @@
+{
+  "filesystem": {
+    "url": "http://localhost:3001"
+  },
+  "search": {
+    "url": "http://localhost:3002"
+  }
+}

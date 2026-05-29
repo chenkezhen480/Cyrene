@@ -13,6 +13,7 @@ public record AgentTrace(
 
         // Input
         String userId,
+        String sessionId,
         String inputText,
         List<String> inputAttachments,
 
@@ -44,6 +45,7 @@ public record AgentTrace(
         private String traceId = java.util.UUID.randomUUID().toString();
         private Instant timestamp = Instant.now();
         private String userId;
+        private String sessionId;
         private String inputText;
         private List<String> inputAttachments = List.of();
         private String intent;
@@ -62,6 +64,7 @@ public record AgentTrace(
         public Builder traceId(String v) { this.traceId = v; return this; }
         public Builder timestamp(Instant v) { this.timestamp = v; return this; }
         public Builder userId(String v) { this.userId = v; return this; }
+        public Builder sessionId(String v) { this.sessionId = v; return this; }
         public Builder inputText(String v) { this.inputText = v; return this; }
         public Builder inputAttachments(List<String> v) { this.inputAttachments = v; return this; }
         public Builder intent(String v) { this.intent = v; return this; }
@@ -78,7 +81,7 @@ public record AgentTrace(
         public Builder metadata(Map<String, String> v) { this.metadata = v; return this; }
 
         public AgentTrace build() {
-            return new AgentTrace(traceId, timestamp, userId, inputText, inputAttachments,
+            return new AgentTrace(traceId, timestamp, userId, sessionId, inputText, inputAttachments,
                     intent, ragHits, rerankResult, llmModel, promptVersion, steps,
                     finalOutput, riskLevel, userConfirmed, totalDurationMs, totalTokens, metadata);
         }

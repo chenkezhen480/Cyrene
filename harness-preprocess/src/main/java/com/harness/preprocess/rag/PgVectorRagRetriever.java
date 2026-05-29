@@ -228,18 +228,82 @@ public class PgVectorRagRetriever {
 
     /**
      * Delete all documents in a collection.
+     * Returns the number of deleted documents.
      */
-    public void deleteCollection(String collectionName) {
+    public int deleteByCollection(String collectionName) {
         String sql = String.format("DELETE FROM %s WHERE collection = ?", table);
         try (Connection conn = DriverManager.getConnection(dbUrl, dbUser, dbPass);
              PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, collectionName);
             int deleted = ps.executeUpdate();
             log.info("Deleted {} documents from collection '{}'", deleted, collectionName);
+            return deleted;
         } catch (SQLException e) {
             log.error("Failed to delete collection '{}': {}", collectionName, e.getMessage(), e);
         }
+        return 0;
     }
+
+    /**
+     * Delete a specific document by its ID.
+     *
+     * @return true if the document was found and deleted
+     */
+    public boolean deleteById(String id) {
+        String sql = String.format("DELETE FROM %s WHERE id = ?", table);
+        try (Connection conn = DriverManager.getConnection(dbUrl, dbUser, dbPass);
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setLong(1, Long.parseLong(id));
+            int deleted = ps.executeUpdate();
+            if (deleted > 0) {
+                log.info("Deleted document {} from knowledge base", id);
+                return true;
+            }
+            log.debug("Document {} not found for deletion", id);
+        } catch (SQLException | NumberFormatException e) {
+            log.error("Failed to delete document {}: {}", id, e.getMessage(), e);
+        }
+        return false;
+    }
+
+    /**
+     * List all documents in a collection (id, source, chunk_index, created_at).
+     * Does not return embeddings or full content for efficiency.
+     */
+    public List<RagDocumentSummary> listByCollection(String collectionName) {
+        String sql = String.format(
+                "SELECT id, source, chunk_index, created_at FROM %s WHERE collection = ? ORDER BY id ASC",
+                table);
+        List<RagDocumentSummary> results = new ArrayList<>();
+        try (Connection conn = DriverManager.getConnection(dbUrl, dbUser, dbPass);
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, collectionName);
+            ResultSet rs = ps.executeQuery();
+            while (rs.next()) {
+                Timestamp ts = rs.getTimestamp("created_at");
+                results.add(new RagDocumentSummary(
+                        String.valueOf(rs.getLong("id")),
+                        rs.getString("source"),
+                        rs.getObject("chunk_index") != null ? rs.getInt("chunk_index") : null,
+                        ts != null ? ts.toInstant() : null
+                ));
+            }
+            log.info("Listed {} documents in collection '{}'", results.size(), collectionName);
+        } catch (SQLException e) {
+            log.error("Failed to list collection '{}': {}", collectionName, e.getMessage(), e);
+        }
+        return results;
+    }
+
+    /**
+     * Summary of a document for listing purposes (no embedding/full content).
+     */
+    public record RagDocumentSummary(
+            String id,
+            String source,
+            Integer chunkIndex,
+            java.time.Instant createdAt
+    ) {}
 
     private String toVectorLiteral(float[] vec) {
         StringBuilder sb = new StringBuilder("[");
@@ -283,7 +347,9 @@ public class PgVectorRagRetriever {
                 """, table);
 
         List<Long> ids = new ArrayList<>();
-        try (Connection conn = DriverManager.getConnection(dbUrl, dbUser, dbPass)) {
+        Connection conn = null;
+        try {
+            conn = DriverManager.getConnection(dbUrl, dbUser, dbPass);
             conn.setAutoCommit(false);
 
             // Step 1: Insert all chunks and collect IDs
@@ -319,7 +385,25 @@ public class PgVectorRagRetriever {
             log.info("Inserted {} linked documents into pgvector", entries.size());
 
         } catch (SQLException e) {
-            log.error("pgvector linked batch insert failed: {}", e.getMessage(), e);
+            log.error("pgvector linked batch insert failed, rolling back: {}", e.getMessage(), e);
+            if (conn != null) {
+                try {
+                    conn.rollback();
+                } catch (SQLException rollbackEx) {
+                    log.error("Rollback failed: {}", rollbackEx.getMessage(), rollbackEx);
+                }
+            }
+            ids.clear();
+            throw new RuntimeException("Knowledge base batch insert failed: " + e.getMessage(), e);
+        } finally {
+            if (conn != null) {
+                try {
+                    conn.setAutoCommit(true);
+                    conn.close();
+                } catch (SQLException closeEx) {
+                    log.debug("Failed to close connection: {}", closeEx.getMessage());
+                }
+            }
         }
 
         return ids;

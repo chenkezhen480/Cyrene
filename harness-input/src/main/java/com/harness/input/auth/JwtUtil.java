@@ -78,4 +78,44 @@ public class JwtUtil {
         log.debug("[Auth-JWT] Token verified: userId={}", userId);
         return userId;
     }
+
+    /**
+     * Verify a JWT token and return the full Claims.
+     *
+     * @throws JwtException if token is invalid or expired
+     */
+    public Claims verifyTokenClaims(String token) {
+        return Jwts.parser()
+                .verifyWith(secretKey)
+                .requireIssuer(issuer)
+                .build()
+                .parseSignedClaims(token)
+                .getPayload();
+    }
+
+    /**
+     * Check if a token should be refreshed based on remaining lifetime.
+     *
+     * @param claims           the parsed claims from the token
+     * @param thresholdMinutes if remaining lifetime is less than this, refresh is needed
+     * @return true if the token should be refreshed
+     */
+    public boolean shouldRefresh(Claims claims, int thresholdMinutes) {
+        Date expiration = claims.getExpiration();
+        if (expiration == null) return false;
+        long remainingMs = expiration.getTime() - System.currentTimeMillis();
+        long thresholdMs = thresholdMinutes * 60L * 1000L;
+        boolean needsRefresh = remainingMs < thresholdMs;
+        if (needsRefresh) {
+            log.info("[Auth-JWT] Token refresh needed: remainingMs={}, thresholdMs={}", remainingMs, thresholdMs);
+        }
+        return needsRefresh;
+    }
+
+    /**
+     * Generate a refreshed JWT token for the given userId, preserving the original expiration duration.
+     */
+    public String refreshToken(String userId) {
+        return generateToken(userId);
+    }
 }

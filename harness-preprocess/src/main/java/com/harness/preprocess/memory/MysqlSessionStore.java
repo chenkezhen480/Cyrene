@@ -129,6 +129,68 @@ public class MysqlSessionStore implements SessionStore {
         }
     }
 
+    @Override
+    public void markRefinementStatus(String sessionId, String status) {
+        String sql = "UPDATE sessions SET refinement_status = ? WHERE id = ?";
+        try (Connection conn = getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, status);
+            ps.setString(2, sessionId);
+            ps.executeUpdate();
+            log.debug("Marked session {} refinement_status={}", sessionId, status);
+        } catch (SQLException e) {
+            log.error("Failed to mark refinement status for session {}: {}", sessionId, e.getMessage(), e);
+        }
+    }
+
+    @Override
+    public boolean claimForRefinement(String sessionId) {
+        String sql = "UPDATE sessions SET refinement_status = 'in_progress' WHERE id = ? AND refinement_status = 'pending'";
+        try (Connection conn = getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, sessionId);
+            int updated = ps.executeUpdate();
+            if (updated > 0) {
+                log.debug("Claimed session {} for refinement", sessionId);
+                return true;
+            }
+            log.debug("Session {} not claimed (not in 'pending' state)", sessionId);
+        } catch (SQLException e) {
+            log.error("Failed to claim session {} for refinement: {}", sessionId, e.getMessage(), e);
+        }
+        return false;
+    }
+
+    @Override
+    public List<Session> findStuckRefinements(Duration stuckThreshold) {
+        String sql = "SELECT id, user_id, created_at, last_active, ended_at, status FROM sessions " +
+                "WHERE refinement_status = 'in_progress' AND last_active < ?";
+        Instant cutoff = Instant.now().minus(stuckThreshold);
+        List<Session> sessions = new ArrayList<>();
+        try (Connection conn = getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setTimestamp(1, Timestamp.from(cutoff));
+            ResultSet rs = ps.executeQuery();
+            while (rs.next()) {
+                sessions.add(mapSession(rs));
+            }
+        } catch (SQLException e) {
+            log.error("Failed to find stuck refinements: {}", e.getMessage(), e);
+        }
+        return sessions;
+    }
+
+    @Override
+    public void resetRefinementToPending(String sessionId) {
+        String sql = "UPDATE sessions SET refinement_status = 'pending' WHERE id = ? AND refinement_status = 'in_progress'";
+        try (Connection conn = getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, sessionId);
+            int updated = ps.executeUpdate();
+            if (updated > 0) {
+                log.debug("Reset refinement_status to 'pending' for session {}", sessionId);
+            }
+        } catch (SQLException e) {
+            log.error("Failed to reset refinement status for session {}: {}", sessionId, e.getMessage(), e);
+        }
+    }
+
     private Session mapSession(ResultSet rs) throws SQLException {
         Timestamp endedTs = rs.getTimestamp("ended_at");
         return new Session(

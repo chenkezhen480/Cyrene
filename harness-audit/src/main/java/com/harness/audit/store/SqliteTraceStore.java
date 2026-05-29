@@ -42,6 +42,7 @@ public class SqliteTraceStore implements TraceStore {
                     trace_id    TEXT PRIMARY KEY,
                     timestamp   TEXT NOT NULL,
                     user_id     TEXT,
+                    session_id  TEXT,
                     input_text  TEXT,
                     intent      TEXT,
                     llm_model   TEXT,
@@ -65,8 +66,8 @@ public class SqliteTraceStore implements TraceStore {
     public void save(AgentTrace trace) {
         String sql = """
                 INSERT OR REPLACE INTO agent_traces
-                (trace_id, timestamp, user_id, input_text, intent, llm_model, steps_json, final_output, risk_level, total_duration_ms, total_tokens, full_json)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (trace_id, timestamp, user_id, session_id, input_text, intent, llm_model, steps_json, final_output, risk_level, total_duration_ms, total_tokens, full_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """;
         try (Connection conn = getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
             String fullJson = mapper.writeValueAsString(trace);
@@ -75,15 +76,16 @@ public class SqliteTraceStore implements TraceStore {
             ps.setString(1, trace.traceId());
             ps.setString(2, trace.timestamp().toString());
             ps.setString(3, trace.userId());
-            ps.setString(4, trace.inputText());
-            ps.setString(5, trace.intent());
-            ps.setString(6, trace.llmModel());
-            ps.setString(7, stepsJson);
-            ps.setString(8, trace.finalOutput());
-            ps.setString(9, trace.riskLevel().name());
-            ps.setLong(10, trace.totalDurationMs());
-            ps.setInt(11, trace.totalTokens());
-            ps.setString(12, fullJson);
+            ps.setString(4, trace.sessionId());
+            ps.setString(5, trace.inputText());
+            ps.setString(6, trace.intent());
+            ps.setString(7, trace.llmModel());
+            ps.setString(8, stepsJson);
+            ps.setString(9, trace.finalOutput());
+            ps.setString(10, trace.riskLevel().name());
+            ps.setLong(11, trace.totalDurationMs());
+            ps.setInt(12, trace.totalTokens());
+            ps.setString(13, fullJson);
             ps.executeUpdate();
         } catch (SQLException | JsonProcessingException e) {
             log.error("Failed to save trace {}: {}", trace.traceId(), e.getMessage(), e);

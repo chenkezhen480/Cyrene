@@ -1,18 +1,26 @@
 package com.harness.server;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.harness.agent.AgentOrchestrator;
 import com.harness.core.model.AgentResult;
+import com.harness.core.model.CancellationToken;
 import com.harness.env.EnvConfig;
 import com.harness.env.EnvKey;
 import com.harness.input.auth.JwtUtil;
 import com.harness.input.multimodal.MultimodalParser;
 import io.javalin.http.Context;
+import io.jsonwebtoken.Claims;
+import jakarta.servlet.http.HttpServletResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
+import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class ChatHandler {
 
@@ -20,12 +28,18 @@ public class ChatHandler {
     private final AgentOrchestrator agent;
     private final String authMode;
     private final JwtUtil jwtUtil;
+    private final ConcurrentHashMap<String, CancellationToken> activeRequests;
+    private final ObjectMapper mapper;
+    private final int refreshThresholdMinutes;
 
-    public ChatHandler(AgentOrchestrator agent) {
+    public ChatHandler(AgentOrchestrator agent, ConcurrentHashMap<String, CancellationToken> activeRequests) {
         this.agent = agent;
+        this.activeRequests = activeRequests;
         this.authMode = EnvConfig.get().getString(EnvKey.AUTH_MODE, "none");
         this.jwtUtil = "jwt".equals(authMode) ? new JwtUtil() : null;
-        log.info("[Server] ChatHandler initialized: authMode={}", authMode);
+        this.mapper = new ObjectMapper();
+        this.refreshThresholdMinutes = EnvConfig.get().getInt(EnvKey.AUTH_JWT_REFRESH_THRESHOLD_MINUTES, 60);
+        log.info("[Server] ChatHandler initialized: authMode={}, refreshThreshold={}min", authMode, refreshThresholdMinutes);
     }
 
     public void handle(Context ctx) {
@@ -48,8 +62,16 @@ public class ChatHandler {
                 }
                 rawToken = authHeader.substring(7);
                 try {
-                    String userId = jwtUtil.verifyToken(rawToken);
+                    Claims claims = jwtUtil.verifyTokenClaims(rawToken);
+                    String userId = claims.getSubject();
                     log.info("[Server] JWT verified: userId={}", userId);
+
+                    // Sliding window refresh: if remaining lifetime < threshold, issue new token
+                    if (jwtUtil.shouldRefresh(claims, refreshThresholdMinutes)) {
+                        String newToken = jwtUtil.refreshToken(userId);
+                        ctx.header("X-New-Token", newToken);
+                        log.info("[Server] JWT refreshed for userId={}", userId);
+                    }
                 } catch (Exception e) {
                     log.warn("[Server] JWT verification failed: {}", e.getMessage());
                     ctx.status(401).json(Map.of("error", "Invalid token: " + e.getMessage()));
@@ -57,30 +79,72 @@ public class ChatHandler {
                 }
             }
 
-            AgentResult result = agent.run(rawToken, req.text(),
-                    req.attachments() != null ? req.attachments() : Collections.emptyList(), sessionId);
+            // Register cancellation token
+            String requestId = sessionId != null ? sessionId : java.util.UUID.randomUUID().toString();
+            CancellationToken cancellationToken = new CancellationToken();
+            activeRequests.put(requestId, cancellationToken);
 
-            long duration = System.currentTimeMillis() - start;
-            log.info("[Server] Chat completed: traceId={}, steps={}, risk={}, duration={}ms",
-                    result.trace().traceId(), result.steps().size(), result.riskLevel(), duration);
+            // Set up SSE streaming response via raw servlet response
+            HttpServletResponse res = ctx.res();
+            res.setContentType("text/event-stream");
+            res.setCharacterEncoding("UTF-8");
+            res.setHeader("Cache-Control", "no-cache");
+            res.setHeader("Connection", "keep-alive");
+            res.setHeader("X-Accel-Buffering", "no");
 
-            ctx.json(Map.of(
-                    "output", result.output(),
-                    "riskLevel", result.riskLevel().name(),
-                    "traceId", result.trace().traceId(),
-                    "steps", result.steps().size(),
-                    "sessionId", result.trace().metadata() != null
-                            ? result.trace().metadata().getOrDefault("session_id", "")
-                            : ""
-            ));
+            final String finalRawToken = rawToken;
+            final String finalSessionId = sessionId;
+
+            try (OutputStream out = res.getOutputStream()) {
+                AgentResult result = agent.run(finalRawToken, req.text(),
+                        req.attachments() != null ? req.attachments() : Collections.emptyList(),
+                        finalSessionId, req.systemPrompt(), cancellationToken);
+
+                long duration = System.currentTimeMillis() - start;
+                log.info("[Server] Chat completed: traceId={}, steps={}, risk={}, duration={}ms",
+                        result.trace().traceId(), result.steps().size(), result.riskLevel(), duration);
+
+                // Write done event with full result
+                Map<String, Object> doneData = Map.of(
+                        "output", result.output() != null ? result.output() : "",
+                        "riskLevel", result.riskLevel().name(),
+                        "traceId", result.trace().traceId(),
+                        "steps", result.steps().size(),
+                        "sessionId", result.trace().metadata() != null
+                                ? result.trace().metadata().getOrDefault("session_id", "")
+                                : ""
+                );
+                writeSseEvent(out, "done", mapper.writeValueAsString(doneData));
+
+            } catch (Exception e) {
+                long duration = System.currentTimeMillis() - start;
+                log.error("[Server] Chat error after {}ms: {}", duration, e.getMessage(), e);
+                try {
+                    OutputStream out = res.getOutputStream();
+                    Map<String, String> errorData = Map.of("error", e.getMessage() != null ? e.getMessage() : "Unknown error");
+                    writeSseEvent(out, "error", mapper.writeValueAsString(errorData));
+                } catch (IOException ex) {
+                    log.debug("[Server] Failed to write error event to stream: {}", ex.getMessage());
+                }
+            } finally {
+                activeRequests.remove(requestId);
+            }
+
         } catch (Exception e) {
             long duration = System.currentTimeMillis() - start;
-            log.error("[Server] Chat error after {}ms: {}", duration, e.getMessage(), e);
+            log.error("[Server] Chat setup error after {}ms: {}", duration, e.getMessage(), e);
             ctx.status(500).json(Map.of("error", e.getMessage()));
         }
     }
 
+    private void writeSseEvent(OutputStream out, String eventType, String data) throws IOException {
+        out.write(("event: " + eventType + "\n").getBytes(StandardCharsets.UTF_8));
+        out.write(("data: " + data + "\n\n").getBytes(StandardCharsets.UTF_8));
+        out.flush();
+    }
+
     public record ChatRequest(String text,
-            List<MultimodalParser.RawAttachment> attachments) {
+            List<MultimodalParser.RawAttachment> attachments,
+            String systemPrompt) {
     }
 }

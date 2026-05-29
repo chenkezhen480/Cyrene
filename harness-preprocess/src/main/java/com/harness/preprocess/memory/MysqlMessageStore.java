@@ -113,6 +113,77 @@ public class MysqlMessageStore implements MessageStore {
         return 0;
     }
 
+    @Override
+    public int countConversationTurns(String sessionId) {
+        // A "turn" is a user message followed by an assistant message.
+        // Count the number of user messages that have a subsequent assistant message.
+        String sql = "SELECT COUNT(*) FROM messages WHERE session_id = ? AND role = 'user' AND is_summary = 0";
+        int userCount = 0;
+        try (Connection conn = getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, sessionId);
+            ResultSet rs = ps.executeQuery();
+            if (rs.next()) userCount = rs.getInt(1);
+        } catch (SQLException e) {
+            log.error("Failed to count conversation turns for session {}: {}", sessionId, e.getMessage(), e);
+        }
+
+        String assistantSql = "SELECT COUNT(*) FROM messages WHERE session_id = ? AND role = 'assistant' AND is_summary = 0";
+        int assistantCount = 0;
+        try (Connection conn = getConnection(); PreparedStatement ps = conn.prepareStatement(assistantSql)) {
+            ps.setString(1, sessionId);
+            ResultSet rs = ps.executeQuery();
+            if (rs.next()) assistantCount = rs.getInt(1);
+        } catch (SQLException e) {
+            log.error("Failed to count assistant messages for session {}: {}", sessionId, e.getMessage(), e);
+        }
+
+        return Math.min(userCount, assistantCount);
+    }
+
+    @Override
+    public int countToolMessages(String sessionId) {
+        String sql = "SELECT COUNT(*) FROM messages WHERE session_id = ? AND role LIKE '%tool%' AND is_summary = 0";
+        try (Connection conn = getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, sessionId);
+            ResultSet rs = ps.executeQuery();
+            if (rs.next()) return rs.getInt(1);
+        } catch (SQLException e) {
+            log.error("Failed to count tool messages for session {}: {}", sessionId, e.getMessage(), e);
+        }
+        return 0;
+    }
+
+    @Override
+    public int avgAssistantReplyLength(String sessionId) {
+        String sql = "SELECT COALESCE(AVG(CHAR_LENGTH(content)), 0) FROM messages WHERE session_id = ? AND role = 'assistant' AND is_summary = 0";
+        try (Connection conn = getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, sessionId);
+            ResultSet rs = ps.executeQuery();
+            if (rs.next()) return rs.getInt(1);
+        } catch (SQLException e) {
+            log.error("Failed to calculate avg assistant reply length for session {}: {}", sessionId, e.getMessage(), e);
+        }
+        return 0;
+    }
+
+    @Override
+    public boolean hasUserQuestions(String sessionId) {
+        String sql = "SELECT COUNT(*) FROM messages WHERE session_id = ? AND role = 'user' AND is_summary = 0 " +
+                "AND (content LIKE '%?%' OR content LIKE '%？%' OR content LIKE '%how %' OR content LIKE '%what %' " +
+                "OR content LIKE '%why %' OR content LIKE '%when %' OR content LIKE '%where %' OR content LIKE '%who %' " +
+                "OR content LIKE '%which %' OR content LIKE '%can you%' OR content LIKE '%could you%' " +
+                "OR content LIKE '%please %' OR content LIKE '%i want%' OR content LIKE '%i need%' " +
+                "OR content LIKE '%help me%' OR content LIKE '%tell me%')";
+        try (Connection conn = getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, sessionId);
+            ResultSet rs = ps.executeQuery();
+            if (rs.next()) return rs.getInt(1) > 0;
+        } catch (SQLException e) {
+            log.error("Failed to check user questions for session {}: {}", sessionId, e.getMessage(), e);
+        }
+        return false;
+    }
+
     private MemoryMessage mapMessage(ResultSet rs) throws SQLException {
         return new MemoryMessage(
                 rs.getLong("id"),

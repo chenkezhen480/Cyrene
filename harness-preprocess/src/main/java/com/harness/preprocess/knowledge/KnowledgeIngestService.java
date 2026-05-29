@@ -104,7 +104,14 @@ public class KnowledgeIngestService {
                     metadata
             ));
         }
-        pgVector.insertBatchWithLinks(entries);
+        try {
+            pgVector.insertBatchWithLinks(entries);
+        } catch (Exception e) {
+            // Rollback: clean up the stored file since DB insert failed
+            log.warn("[Ingest] DB insert failed, cleaning up stored file: {}", storedPath);
+            fileStorage.delete(storedPath);
+            throw e;
+        }
 
         long duration = System.currentTimeMillis() - startTime;
         log.info("Ingest complete: {} chunks in {}ms", chunks.size(), duration);

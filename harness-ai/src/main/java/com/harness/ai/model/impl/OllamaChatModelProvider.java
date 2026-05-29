@@ -29,12 +29,12 @@ public class OllamaChatModelProvider implements ChatModelProvider {
 
     @Override
     public ChatModel chatModel() {
-        return OllamaChatModel.builder()
+        return new RetryingChatModel(OllamaChatModel.builder()
                 .baseUrl(baseUrl)
                 .modelName(model)
                 .temperature(temperature)
                 .timeout(Duration.ofSeconds(120))
-                .build();
+                .build());
     }
 
     @Override

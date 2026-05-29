@@ -47,14 +47,15 @@ public class MysqlTraceStore implements TraceStore {
     public void save(AgentTrace trace) {
         String sql = """
                 INSERT INTO agent_traces
-                (trace_id, timestamp, user_id, input_text, input_attachments,
+                (trace_id, timestamp, user_id, session_id, input_text, input_attachments,
                  intent, rag_hits, rerank_result,
                  llm_model, prompt_version, total_tokens,
                  steps_json, step_count,
                  final_output, risk_level, user_confirmed,
                  total_duration_ms, metadata, full_json)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON DUPLICATE KEY UPDATE
+                    session_id = VALUES(session_id),
                     final_output = VALUES(final_output),
                     risk_level = VALUES(risk_level),
                     total_duration_ms = VALUES(total_duration_ms),
@@ -74,22 +75,23 @@ public class MysqlTraceStore implements TraceStore {
             ps.setString(1, trace.traceId());
             ps.setTimestamp(2, Timestamp.from(trace.timestamp()));
             ps.setString(3, trace.userId());
-            ps.setString(4, trace.inputText());
-            ps.setString(5, attachmentsJson);
-            ps.setString(6, trace.intent());
-            ps.setString(7, ragHitsJson);
-            ps.setString(8, trace.rerankResult());
-            ps.setString(9, trace.llmModel());
-            ps.setString(10, trace.promptVersion());
-            ps.setInt(11, trace.totalTokens());
-            ps.setString(12, stepsJson);
-            ps.setInt(13, trace.steps() != null ? trace.steps().size() : 0);
-            ps.setString(14, trace.finalOutput());
-            ps.setString(15, trace.riskLevel().name());
-            ps.setBoolean(16, trace.userConfirmed());
-            ps.setLong(17, trace.totalDurationMs());
-            ps.setString(18, metadataJson);
-            ps.setString(19, fullJson);
+            ps.setString(4, trace.sessionId());
+            ps.setString(5, trace.inputText());
+            ps.setString(6, attachmentsJson);
+            ps.setString(7, trace.intent());
+            ps.setString(8, ragHitsJson);
+            ps.setString(9, trace.rerankResult());
+            ps.setString(10, trace.llmModel());
+            ps.setString(11, trace.promptVersion());
+            ps.setInt(12, trace.totalTokens());
+            ps.setString(13, stepsJson);
+            ps.setInt(14, trace.steps() != null ? trace.steps().size() : 0);
+            ps.setString(15, trace.finalOutput());
+            ps.setString(16, trace.riskLevel().name());
+            ps.setBoolean(17, trace.userConfirmed());
+            ps.setLong(18, trace.totalDurationMs());
+            ps.setString(19, metadataJson);
+            ps.setString(20, fullJson);
 
             ps.executeUpdate();
         } catch (SQLException | JsonProcessingException e) {
