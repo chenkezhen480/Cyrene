@@ -94,6 +94,10 @@ public class ChatHandler {
             final String finalRawToken = rawToken;
             final String finalSessionId = sessionId;
 
+            // Track sessionId alias for cleanup in finally block
+            final java.util.concurrent.atomic.AtomicReference<String> resolvedSessionIdRef =
+                    new java.util.concurrent.atomic.AtomicReference<>(null);
+
             AgentContext agentContext = AgentContext.of(req.context());
 
             try (OutputStream out = res.getOutputStream()) {
@@ -110,6 +114,7 @@ public class ChatHandler {
                                             String sid = (String) event.metadata().get("sessionId");
                                             if (sid != null && !sid.isEmpty() && !sid.equals(requestId)) {
                                                 activeRequests.put(sid, cancellationToken);
+                                                resolvedSessionIdRef.set(sid);
                                             }
                                             writeSseEvent(out, "start",
                                                     mapper.writeValueAsString(event.metadata()));
@@ -153,6 +158,7 @@ public class ChatHandler {
                     // Register sessionId for cancellation (alias to same token)
                     if (!resolvedSessionId.isEmpty() && !resolvedSessionId.equals(requestId)) {
                         activeRequests.put(resolvedSessionId, cancellationToken);
+                        resolvedSessionIdRef.set(resolvedSessionId);
                     }
 
                     // Emit START event with sessionId (first event for client)
@@ -181,6 +187,10 @@ public class ChatHandler {
                 }
             } finally {
                 activeRequests.remove(requestId);
+                String alias = resolvedSessionIdRef.get();
+                if (alias != null) {
+                    activeRequests.remove(alias);
+                }
             }
 
         } catch (Exception e) {

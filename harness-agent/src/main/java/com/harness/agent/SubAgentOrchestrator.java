@@ -5,6 +5,7 @@ import com.harness.ai.model.VisionModelProvider;
 import com.harness.ai.model.VoiceModelProvider;
 import com.harness.ai.react.ReActEngine;
 import com.harness.core.model.AgentTrace;
+import com.harness.core.model.CancellationToken;
 import com.harness.env.EnvConfig;
 import com.harness.env.EnvKey;
 import com.harness.tool.ToolExecutor;
@@ -36,6 +37,9 @@ public class SubAgentOrchestrator {
     private final ExecutorService executor;
     private final Map<String, CompletableFuture<SubAgentResult>> submittedTasks = new ConcurrentHashMap<>();
 
+    // Parent cancellation token, set per-run by AgentOrchestrator
+    private volatile CancellationToken parentToken;
+
     public SubAgentOrchestrator(ChatModelProvider chatModelProvider,
                                  VisionModelProvider visionModelProvider,
                                  VoiceModelProvider voiceModelProvider,
@@ -56,10 +60,24 @@ public class SubAgentOrchestrator {
     }
 
     /**
+     * Set the parent cancellation token. Called by AgentOrchestrator before each run.
+     */
+    public void setParentToken(CancellationToken token) {
+        this.parentToken = token;
+    }
+
+    /**
      * Submit a single sub-agent task. Returns a future that completes when the task finishes.
      */
     public CompletableFuture<SubAgentResult> submitTask(SubAgentTask task) {
         log.info("[SubAgent] Submitting task: id={}, deps={}", task.taskId(), task.dependencies());
+
+        // Check parent cancellation before submitting
+        if (parentToken != null && parentToken.isCancelled()) {
+            log.info("[SubAgent] Parent cancelled, skipping task: id={}", task.taskId());
+            return CompletableFuture.completedFuture(
+                    SubAgentResult.failure(task.taskId(), "Cancelled by parent", List.of(), 0));
+        }
 
         if (task.dependencies().isEmpty()) {
             // No dependencies: execute immediately
@@ -124,9 +142,15 @@ public class SubAgentOrchestrator {
 
     /**
      * Execute a single sub-agent task using a fresh ReActEngine instance.
+     * Propagates parent cancellation token to the sub-agent.
      */
     private CompletableFuture<SubAgentResult> executeTask(SubAgentTask task) {
         return CompletableFuture.supplyAsync(() -> {
+            Thread currentThread = Thread.currentThread();
+            // Register with parent token so cancel() interrupts sub-agent threads too
+            if (parentToken != null) {
+                parentToken.trackThread(currentThread);
+            }
             long start = System.currentTimeMillis();
             log.info("[SubAgent] Executing task: id={}", task.taskId());
             try {
@@ -137,14 +161,24 @@ public class SubAgentOrchestrator {
                 String systemPrompt = buildSubAgentPrompt(task);
                 AgentTrace.Builder traceBuilder = AgentTrace.builder();
 
-                ReActEngine.ReActResult result = engine.execute(systemPrompt, task.description(), traceBuilder);
+                // Pass parent cancellation token to sub-agent
+                ReActEngine.ReActResult result = engine.execute(systemPrompt, task.description(),
+                        List.of(), traceBuilder, null, parentToken);
                 long duration = System.currentTimeMillis() - start;
                 log.info("[SubAgent] Task {} completed in {}ms, steps={}", task.taskId(), duration, result.steps().size());
                 return SubAgentResult.success(task.taskId(), result.output(), result.steps(), duration);
             } catch (Exception e) {
                 long duration = System.currentTimeMillis() - start;
+                if (parentToken != null && parentToken.isCancelled()) {
+                    log.info("[SubAgent] Task {} cancelled after {}ms", task.taskId(), duration);
+                    return SubAgentResult.failure(task.taskId(), "Cancelled", List.of(), duration);
+                }
                 log.error("[SubAgent] Task {} failed in {}ms: {}", task.taskId(), duration, e.getMessage());
                 return SubAgentResult.failure(task.taskId(), e.getMessage(), List.of(), duration);
+            } finally {
+                if (parentToken != null) {
+                    parentToken.untrackThread(currentThread);
+                }
             }
         }, executor);
     }

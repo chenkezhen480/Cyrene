@@ -266,6 +266,8 @@ public class AgentOrchestrator {
             }
 
             // ===== Layer 3+4: ReAct loop（AI决策 + 工具执行 + 小压缩去除工具块） =====
+            // Set parent cancellation token for sub-agents
+            subAgentOrchestrator.setParentToken(cancellationToken);
             List<ChatMessage> historyChatMessages = convertToChatMessages(shorttermMessages);
             ReActEngine.ReActResult result = reactEngine.execute(systemPrompt, text, historyChatMessages, trace.builder(), null, cancellationToken);
             result.steps().forEach(trace::addStep);
@@ -407,6 +409,8 @@ public class AgentOrchestrator {
             callback.onEvent(StreamEvent.start(finalSessionId));
 
             // Layer 3+4: Streaming ReAct loop
+            // Set parent cancellation token for sub-agents
+            subAgentOrchestrator.setParentToken(cancellationToken);
             List<ChatMessage> historyChatMessages = convertToChatMessages(shorttermMessages);
             ReActListener listener = new ReActListener() {
                 @Override

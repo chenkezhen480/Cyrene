@@ -120,7 +120,28 @@ public class ReActEngine {
             }
 
             long llmStart = System.currentTimeMillis();
-            ChatResponse response = chatModel.chat(reqBuilder.build());
+            ChatResponse response;
+            if (cancellationToken != null) cancellationToken.trackCurrentThread();
+            try {
+                response = chatModel.chat(reqBuilder.build());
+            } catch (Exception e) {
+                if (cancellationToken != null && cancellationToken.isCancelled()) {
+                    log.info("[L3-ReAct] LLM call interrupted by cancellation");
+                    String cancelledOutput = allSteps.isEmpty() ? "Request cancelled" :
+                            allSteps.get(allSteps.size() - 1).observation();
+                    return new ReActResult(cancelledOutput, allSteps);
+                }
+                throw e;
+            } finally {
+                if (cancellationToken != null) cancellationToken.untrackCurrentThread();
+            }
+            // Check cancellation immediately after LLM returns (may have been cancelled during call)
+            if (cancellationToken != null && cancellationToken.isCancelled()) {
+                log.info("[L3-ReAct] Cancellation detected after LLM call at iteration {}", i);
+                String cancelledOutput = allSteps.isEmpty() ? "Request cancelled" :
+                        allSteps.get(allSteps.size() - 1).observation();
+                return new ReActResult(cancelledOutput, allSteps);
+            }
             long llmMs = System.currentTimeMillis() - llmStart;
             AiMessage aiMessage = response.aiMessage();
 
@@ -164,13 +185,21 @@ public class ReActEngine {
             List<ToolResult> toolResults = new ArrayList<>();
 
             for (ToolExecutionRequest toolReq : toolReqs) {
+                // Check cancellation before each tool execution
+                if (cancellationToken != null && cancellationToken.isCancelled()) {
+                    log.info("[L3-ReAct] Cancellation detected before tool execution at iteration {}", i);
+                    String cancelledOutput = allSteps.isEmpty() ? "Request cancelled" :
+                            allSteps.get(allSteps.size() - 1).observation();
+                    return new ReActResult(cancelledOutput, allSteps);
+                }
+
                 JsonNode argsNode = parseArgs(toolReq.arguments());
                 ToolCall tc = ToolCall.of(toolReq.name(), argsNode);
                 toolCalls.add(tc);
 
                 log.info("[L3-ReAct] Executing tool: {}", tc.toolName());
                 log.debug("[L3-ReAct] Tool args: {}", truncate(tc.arguments().toString()));
-                ToolResult result = executeWithRetry(tc, listener);
+                ToolResult result = executeWithRetry(tc, listener, cancellationToken);
                 log.debug("[L3-ReAct] Tool [{}] result: success={}, output={}",
                         tc.toolName(), result.success(), truncate(result.success() ? result.output() : result.error()));
                 toolResults.add(result);
@@ -281,11 +310,27 @@ public class ReActEngine {
             });
 
             ChatResponse response;
+            if (cancellationToken != null) cancellationToken.trackCurrentThread();
             try {
                 response = responseFuture.get();
             } catch (Exception e) {
+                if (cancellationToken != null && cancellationToken.isCancelled()) {
+                    log.info("[L3-ReAct] Streaming LLM call interrupted by cancellation");
+                    String cancelledOutput = allSteps.isEmpty() ? "Request cancelled" :
+                            allSteps.get(allSteps.size() - 1).observation();
+                    return new ReActResult(cancelledOutput, allSteps);
+                }
                 log.error("[L3-ReAct] Streaming LLM call failed: {}", e.getMessage());
                 throw new RuntimeException("Streaming LLM call failed", e);
+            } finally {
+                if (cancellationToken != null) cancellationToken.untrackCurrentThread();
+            }
+            // Check cancellation after streaming LLM returns
+            if (cancellationToken != null && cancellationToken.isCancelled()) {
+                log.info("[L3-ReAct] Cancellation detected after streaming LLM call at iteration {}", i);
+                String cancelledOutput = allSteps.isEmpty() ? "Request cancelled" :
+                        allSteps.get(allSteps.size() - 1).observation();
+                return new ReActResult(cancelledOutput, allSteps);
             }
 
             long llmMs = System.currentTimeMillis() - llmStart;
@@ -327,6 +372,14 @@ public class ReActEngine {
             List<ToolResult> toolResults = new ArrayList<>();
 
             for (ToolExecutionRequest toolReq : toolReqs) {
+                // Check cancellation before each tool execution
+                if (cancellationToken != null && cancellationToken.isCancelled()) {
+                    log.info("[L3-ReAct] Cancellation detected before tool execution at iteration {}", i);
+                    String cancelledOutput = allSteps.isEmpty() ? "Request cancelled" :
+                            allSteps.get(allSteps.size() - 1).observation();
+                    return new ReActResult(cancelledOutput, allSteps);
+                }
+
                 if (listener != null) {
                     listener.onToolCallStart(toolReq.name(), toolReq.arguments());
                 }
@@ -336,7 +389,7 @@ public class ReActEngine {
                 toolCalls.add(tc);
 
                 log.info("[L3-ReAct] Executing tool: {}", tc.toolName());
-                ToolResult result = executeWithRetry(tc, listener);
+                ToolResult result = executeWithRetry(tc, listener, cancellationToken);
                 toolResults.add(result);
 
                 messages.add(ToolExecutionResultMessage.from(toolReq,
@@ -380,12 +433,20 @@ public class ReActEngine {
     /**
      * Execute a tool with retry on error. Retries up to TOOL_MAX_RETRIES times when the tool
      * returns a failure (success=false). If the tool succeeds (even with empty output), no retry.
+     * Checks cancellation before each attempt.
      *
      * @param toolCall the tool call to execute
      * @param listener optional listener for streaming retry notifications
+     * @param cancellationToken optional cancellation token to check between retries
      * @return the tool result (either success or final failure after retries)
      */
-    private ToolResult executeWithRetry(ToolCall toolCall, ReActListener listener) {
+    private ToolResult executeWithRetry(ToolCall toolCall, ReActListener listener,
+                                        com.harness.core.model.CancellationToken cancellationToken) {
+        // Check cancellation before first attempt
+        if (cancellationToken != null && cancellationToken.isCancelled()) {
+            return ToolResult.fail(toolCall.id(), toolCall.toolName(), "Cancelled", 0);
+        }
+
         ToolResult result = toolExecutor.execute(toolCall);
 
         if (result.success()) {
@@ -394,6 +455,12 @@ public class ReActEngine {
 
         // Retry on error up to TOOL_MAX_RETRIES times
         for (int attempt = 1; attempt <= TOOL_MAX_RETRIES; attempt++) {
+            // Check cancellation before each retry
+            if (cancellationToken != null && cancellationToken.isCancelled()) {
+                log.info("[L3-ReAct] Cancellation detected during tool retry for [{}]", toolCall.toolName());
+                return ToolResult.fail(toolCall.id(), toolCall.toolName(), "Cancelled", 0);
+            }
+
             log.warn("[L3-ReAct] Tool [{}] failed (attempt {}/{}), retrying: {}",
                     toolCall.toolName(), attempt, TOOL_MAX_RETRIES, result.error());
             if (listener != null) {

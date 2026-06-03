@@ -15,10 +15,10 @@ mvn clean package -pl harness-core -am
 mvn clean compile
 
 # Run CLI (interactive REPL)
-java -jar harness-cli/target/harness-cli-0.2.4-SNAPSHOT.jar
+java -jar harness-cli/target/harness-cli-0.2.5-SNAPSHOT.jar
 
 # Run HTTP server (Javalin, default port 8080)
-java -jar harness-server/target/harness-server-0.2.4-SNAPSHOT.jar
+java -jar harness-server/target/harness-server-0.2.5-SNAPSHOT.jar
 
 # Run tests (currently no test files exist)
 mvn test
@@ -88,7 +88,7 @@ harness-server        ← HTTP API entry point (com.harness.server.Main, Javalin
   非 PASS 状态会注入 `Inspector.buildInspectionHint()` 作为下一轮的提示。`HARNESS_REACT_STOP_ON_TOOL_ERROR=true` 时遇到 `TOOL_ERROR` 立即停止循环；默认 `false` 继续下一轮让 LLM 自行决策。
 - **ReActListener** — SSE 流式回调接口，`onStep(ReActStep)` 在每轮迭代完成后调用。扩展方法：`onToken(String)` 每个 token 块回调，`onToolCallStart(String toolName, String arguments)` 工具调用开始回调。
 - **Streaming Output** — `AgentOrchestrator.streamRun()` 提供流式输出模式，通过 `StreamCallback` 实时推送 `StreamEvent`（START/TOKEN/STEP/DONE/ERROR）。`AgentContext` record 包装 `Map<String, Object>` context 参数，`isStreaming()` 判断输出模式。流式模式下后处理（trace.finish、sessionStore.updateLastActive）异步化。
-- **CancellationToken** — 线程安全的取消令牌，ReAct 循环每轮迭代间检查；HTTP 端点通过 `DELETE /api/chat/{sessionId}` 触发取消。
+- **CancellationToken** — 线程安全的取消令牌，支持轮询（`isCancelled()`）和线程中断（`Thread.interrupt()`）双重取消机制。`cancel()` 会中断所有已注册的工作线程（包括子代理线程）。ReAct 循环在每轮迭代间、LLM 调用后、工具执行前均检查取消状态；`DELETE /api/chat/{sessionId}` 触发取消。
 - **ReplyAuditor** — 异步启发式回复质量审计（无模型调用），检查回复长度、错误指标、工具残留。结果写入 trace metadata。
 - **Sub-Agent** — `SubAgentOrchestrator` 管理子代理生命周期，支持依赖解析和并行执行。LLM 通过 `spawn_subagent` 工具派生子任务，每个子代理拥有独立的 ReActEngine 实例但共享工具注册表。`MultiAgentOrchestrator` 提供编程式子代理访问。`HARNESS_AGENT_MAX_SUBAGENTS`（默认 3）控制并发数。
 - **Web Search fallback** — `WebSearchTool` 支持多引擎回退链：Tavily → SerpAPI → DuckDuckGo。优先级通过 `HARNESS_TOOL_WEB_SEARCH_PRIORITY` 配置，无 API key 的引擎自动跳过，DuckDuckGo 始终可用。
@@ -236,8 +236,7 @@ Same pattern for Vision/Voice/Embedding/Rerank providers.
 
 ## Database Schemas
 
-- MySQL audit: `sql/schema-mysql.sql` (database: `agent`, table: `agent_traces` with `session_id` column)
-- MySQL memory: `sql/schema-memory-mysql.sql` (database: `agent`, tables: `sessions` with `refinement_status`, `messages`, `user_preferences`)
+- MySQL (总表，不含 users): `sql/schema-mysql.sql` (database: `agent`, tables: `agent_traces`, `sessions`, `messages`, `user_preferences`)
 - MySQL users: `sql/schema-users-mysql.sql` (database: `agent`, table: `users` with SHA-256 password hash)
 - PostgreSQL pgvector RAG: `sql/schema-pgvector.sql` (extension: vector, table: `knowledge_documents` with `chunk_index`, `prev_chunk_id`, `next_chunk_id` columns for semantic lookback)
 - Schema comments: `sql/add-comments.sql` — ALTER TABLE statements to add Chinese COMMENT annotations to all existing tables
@@ -276,4 +275,4 @@ Same pattern for Vision/Voice/Embedding/Rerank providers.
 - Apache PDFBox 2.0.32 (PDF text extraction, harness-input)
 - Apache POI 5.2.5 (DOCX/XLSX parsing, harness-input)
 - SQLite/MySQL/PostgreSQL JDBC drivers
-- SLF4J 2.0.11 + Logback 1.4.14
+- SLF4J 2.0.16 + Logback 1.5.18
