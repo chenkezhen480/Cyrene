@@ -105,8 +105,15 @@ public class ChatHandler {
                             event -> {
                                 try {
                                     switch (event.type()) {
-                                        case START -> writeSseEvent(out, "start",
-                                                mapper.writeValueAsString(event.metadata()));
+                                        case START -> {
+                                            // Register sessionId for cancellation
+                                            String sid = (String) event.metadata().get("sessionId");
+                                            if (sid != null && !sid.isEmpty() && !sid.equals(requestId)) {
+                                                activeRequests.put(sid, cancellationToken);
+                                            }
+                                            writeSseEvent(out, "start",
+                                                    mapper.writeValueAsString(event.metadata()));
+                                        }
                                         case TOKEN -> writeSseEvent(out, "token",
                                                 mapper.writeValueAsString(Map.of("text", event.data())));
                                         case STEP -> {
@@ -129,7 +136,7 @@ public class ChatHandler {
                     long duration = System.currentTimeMillis() - start;
                     log.info("[Server] Streaming chat completed: duration={}ms", duration);
                 } else {
-                    // Blocking mode: existing behavior
+                    // Blocking mode: run agent
                     AgentResult result = agent.run(finalRawToken, req.text(),
                             req.attachments() != null ? req.attachments() : Collections.emptyList(),
                             finalSessionId, req.systemPrompt(), cancellationToken);
@@ -138,14 +145,26 @@ public class ChatHandler {
                     log.info("[Server] Chat completed: traceId={}, steps={}, risk={}, duration={}ms",
                             result.trace().traceId(), result.steps().size(), result.riskLevel(), duration);
 
+                    // Extract sessionId from result and send as first event
+                    String resolvedSessionId = result.trace().metadata() != null
+                            ? result.trace().metadata().getOrDefault("session_id", "")
+                            : "";
+
+                    // Register sessionId for cancellation (alias to same token)
+                    if (!resolvedSessionId.isEmpty() && !resolvedSessionId.equals(requestId)) {
+                        activeRequests.put(resolvedSessionId, cancellationToken);
+                    }
+
+                    // Emit START event with sessionId (first event for client)
+                    writeSseEvent(out, "start", mapper.writeValueAsString(Map.of(
+                            "sessionId", resolvedSessionId)));
+
                     Map<String, Object> doneData = Map.of(
                             "output", result.output() != null ? result.output() : "",
                             "riskLevel", result.riskLevel().name(),
                             "traceId", result.trace().traceId(),
                             "steps", result.steps().size(),
-                            "sessionId", result.trace().metadata() != null
-                                    ? result.trace().metadata().getOrDefault("session_id", "")
-                                    : ""
+                            "sessionId", resolvedSessionId
                     );
                     writeSseEvent(out, "done", mapper.writeValueAsString(doneData));
                 }
