@@ -28,6 +28,12 @@ import java.util.concurrent.ConcurrentHashMap;
  *   POST   /api/auth/token        - Get JWT token (userId/username + password)
  *   POST   /api/chat              - Send a message, get agent response (SSE stream)
  *   DELETE /api/chat/{sessionId}  - Cancel an in-progress chat request
+ *   POST   /api/sessions          - Create a new session
+ *   GET    /api/sessions          - List sessions (cursor pagination, filter by userId/status)
+ *   GET    /api/sessions/{id}     - Get session detail
+ *   GET    /api/sessions/{id}/messages - Get session message history (cursor pagination)
+ *   GET    /api/sessions/{id}/stats   - Get session statistics
+ *   DELETE /api/sessions/{id}     - Close/delete a session
  *   POST   /api/knowledge/upload  - Upload file for knowledge base ingestion
  *   GET    /api/trace/{id}        - Get trace by ID
  *   GET    /api/traces            - List recent traces
@@ -105,6 +111,15 @@ public class Main {
         // Chat endpoint (SSE streaming)
         ChatHandler chatHandler = new ChatHandler(agent, activeRequests);
         app.post("/api/chat", chatHandler::handle);
+
+        // Session management endpoints
+        SessionHandler sessionHandler = new SessionHandler(agent.sessionStore(), agent.messageStore(), agent.messageCache());
+        app.post("/api/sessions", sessionHandler::create);
+        app.get("/api/sessions", sessionHandler::list);
+        app.get("/api/sessions/{sessionId}", sessionHandler::detail);
+        app.get("/api/sessions/{sessionId}/messages", sessionHandler::messages);
+        app.get("/api/sessions/{sessionId}/stats", sessionHandler::stats);
+        app.delete("/api/sessions/{sessionId}", sessionHandler::delete);
 
         // Cancel in-progress chat request
         app.delete("/api/chat/{sessionId}", ctx -> {

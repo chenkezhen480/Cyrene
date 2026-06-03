@@ -3,6 +3,7 @@ package com.harness.preprocess.memory;
 import com.harness.core.model.Session;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
@@ -20,4 +21,6 @@ public class NoOpSessionStore implements SessionStore {
     @Override public boolean claimForRefinement(String sessionId) { return false; }
     @Override public List<Session> findStuckRefinements(java.time.Duration stuckThreshold) { return List.of(); }
     @Override public void resetRefinementToPending(String sessionId) {}
+    @Override public Optional<Session> findById(String sessionId) { return Optional.empty(); }
+    @Override public List<Session> findAll(String userId, Session.SessionStatus status, Instant cursor, int limit) { return List.of(); }
 }

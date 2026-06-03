@@ -184,6 +184,57 @@ public class MysqlMessageStore implements MessageStore {
         return false;
     }
 
+    @Override
+    public List<MemoryMessage> loadPage(String sessionId, long cursor, int limit, boolean ascending) {
+        String direction = ascending ? "ASC" : "DESC";
+        String operator = ascending ? ">" : "<";
+        String sql;
+        List<MemoryMessage> messages = new ArrayList<>();
+
+        if (cursor > 0) {
+            sql = "SELECT id, session_id, role, content, is_summary, created_at FROM messages " +
+                    "WHERE session_id = ? AND id " + operator + " ? ORDER BY id " + direction + " LIMIT ?";
+        } else {
+            sql = "SELECT id, session_id, role, content, is_summary, created_at FROM messages " +
+                    "WHERE session_id = ? ORDER BY id " + direction + " LIMIT ?";
+        }
+
+        try (Connection conn = getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, sessionId);
+            if (cursor > 0) {
+                ps.setLong(2, cursor);
+                ps.setInt(3, Math.min(limit, 200));
+            } else {
+                ps.setInt(2, Math.min(limit, 200));
+            }
+            ResultSet rs = ps.executeQuery();
+            while (rs.next()) {
+                messages.add(mapMessage(rs));
+            }
+        } catch (SQLException e) {
+            log.error("Failed to load message page for session {}: {}", sessionId, e.getMessage(), e);
+        }
+        // Return in chronological order (asc) regardless of query direction
+        if (!ascending) {
+            java.util.Collections.reverse(messages);
+        }
+        return messages;
+    }
+
+    @Override
+    public int countByRole(String sessionId, String role) {
+        String sql = "SELECT COUNT(*) FROM messages WHERE session_id = ? AND role = ? AND is_summary = 0";
+        try (Connection conn = getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, sessionId);
+            ps.setString(2, role);
+            ResultSet rs = ps.executeQuery();
+            if (rs.next()) return rs.getInt(1);
+        } catch (SQLException e) {
+            log.error("Failed to count {} messages for session {}: {}", role, sessionId, e.getMessage(), e);
+        }
+        return 0;
+    }
+
     private MemoryMessage mapMessage(ResultSet rs) throws SQLException {
         return new MemoryMessage(
                 rs.getLong("id"),

@@ -249,6 +249,12 @@ Same pattern for Vision/Voice/Embedding/Rerank providers.
 | POST | `/api/auth/token` | Get JWT token (userId/username + password, mode=jwt only) |
 | POST | `/api/chat` | Send message, get agent response (SSE stream). Supports `systemPrompt` and `context` (JSON: `outputMode`=blocking/streaming, `userId`) in body, `X-Session-Id` header |
 | DELETE | `/api/chat/{sessionId}` | Cancel an in-progress chat request |
+| POST | `/api/sessions` | Create a new session (body: `userId`) |
+| GET | `/api/sessions` | List sessions with cursor pagination. Query: `userId`, `status` (active/ended/timeout), `limit`, `cursor` (ISO-8601) |
+| GET | `/api/sessions/{sessionId}` | Get session detail |
+| GET | `/api/sessions/{sessionId}/messages` | Message history with cursor pagination. Query: `limit`, `cursor` (message ID), `direction` (asc/desc) |
+| GET | `/api/sessions/{sessionId}/stats` | Session statistics (message counts, turns, avg reply length, duration, etc.) |
+| DELETE | `/api/sessions/{sessionId}` | Close a session (messages preserved in DB) |
 | POST | `/api/knowledge/upload` | Upload file for knowledge base ingestion (multipart: `file`, `collection`) |
 | GET | `/api/knowledge/{collection}` | List documents in a collection |
 | DELETE | `/api/knowledge/{collection}` | Delete all documents in a collection |

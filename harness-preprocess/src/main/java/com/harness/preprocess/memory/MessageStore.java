@@ -32,4 +32,19 @@ public interface MessageStore {
      * Check if any user message in the session contains a question mark or intent keyword.
      */
     boolean hasUserQuestions(String sessionId);
+
+    /**
+     * Paginated message history for a session.
+     *
+     * @param sessionId session ID
+     * @param cursor    message ID cursor (exclusive), 0 to start from beginning/end
+     * @param limit     max results
+     * @param ascending true for old→new (asc), false for new→old (desc)
+     */
+    List<MemoryMessage> loadPage(String sessionId, long cursor, int limit, boolean ascending);
+
+    /**
+     * Count messages by role (e.g., "user", "assistant", "tool").
+     */
+    int countByRole(String sessionId, String role);
 }

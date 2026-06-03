@@ -3,6 +3,7 @@ package com.harness.preprocess.memory;
 import com.harness.core.model.Session;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
@@ -43,4 +44,19 @@ public interface SessionStore {
      * Reset refinement_status from 'in_progress' to 'pending' for a given session.
      */
     void resetRefinementToPending(String sessionId);
+
+    /**
+     * Find any session by ID (regardless of status).
+     */
+    Optional<Session> findById(String sessionId);
+
+    /**
+     * Paginated session listing with optional filters.
+     *
+     * @param userId filter by user, null for all users
+     * @param status filter by status, null for all statuses
+     * @param cursor lastActive cursor (exclusive), null to start from newest
+     * @param limit  max results to return
+     */
+    List<Session> findAll(String userId, Session.SessionStatus status, Instant cursor, int limit);
 }

@@ -573,6 +573,7 @@ public class AgentOrchestrator {
     public SessionLifecycleManager sessionLifecycle() { return sessionLifecycle; }
     public PreferenceRefinementWorker refinementWorker() { return refinementWorker; }
     public SubAgentOrchestrator subAgentOrchestrator() { return subAgentOrchestrator; }
+    public SessionMessageCache messageCache() { return messageCache; }
 
     /**
      * Convert MemoryMessage list to LangChain4j ChatMessage list for ReAct history injection.

@@ -191,6 +191,60 @@ public class MysqlSessionStore implements SessionStore {
         }
     }
 
+    @Override
+    public Optional<Session> findById(String sessionId) {
+        String sql = "SELECT id, user_id, created_at, last_active, ended_at, status FROM sessions WHERE id = ?";
+        try (Connection conn = getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, sessionId);
+            ResultSet rs = ps.executeQuery();
+            if (rs.next()) {
+                return Optional.of(mapSession(rs));
+            }
+        } catch (SQLException e) {
+            log.error("Failed to find session by id {}: {}", sessionId, e.getMessage(), e);
+        }
+        return Optional.empty();
+    }
+
+    @Override
+    public List<Session> findAll(String userId, Session.SessionStatus status, Instant cursor, int limit) {
+        StringBuilder sql = new StringBuilder(
+                "SELECT id, user_id, created_at, last_active, ended_at, status FROM sessions WHERE 1=1");
+        List<Object> params = new ArrayList<>();
+
+        if (userId != null) {
+            sql.append(" AND user_id = ?");
+            params.add(userId);
+        }
+        if (status != null) {
+            sql.append(" AND status = ?");
+            params.add(status.name());
+        }
+        if (cursor != null) {
+            sql.append(" AND last_active < ?");
+            params.add(Timestamp.from(cursor));
+        }
+        sql.append(" ORDER BY last_active DESC LIMIT ?");
+        params.add(Math.min(limit, 100));
+
+        List<Session> sessions = new ArrayList<>();
+        try (Connection conn = getConnection(); PreparedStatement ps = conn.prepareStatement(sql.toString())) {
+            for (int i = 0; i < params.size(); i++) {
+                Object p = params.get(i);
+                if (p instanceof String s) ps.setString(i + 1, s);
+                else if (p instanceof Timestamp t) ps.setTimestamp(i + 1, t);
+                else if (p instanceof Integer n) ps.setInt(i + 1, n);
+            }
+            ResultSet rs = ps.executeQuery();
+            while (rs.next()) {
+                sessions.add(mapSession(rs));
+            }
+        } catch (SQLException e) {
+            log.error("Failed to find sessions: {}", e.getMessage(), e);
+        }
+        return sessions;
+    }
+
     private Session mapSession(ResultSet rs) throws SQLException {
         Timestamp endedTs = rs.getTimestamp("ended_at");
         return new Session(

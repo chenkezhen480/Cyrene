@@ -16,4 +16,6 @@ public class NoOpMessageStore implements MessageStore {
     @Override public int countToolMessages(String sessionId) { return 0; }
     @Override public int avgAssistantReplyLength(String sessionId) { return 0; }
     @Override public boolean hasUserQuestions(String sessionId) { return false; }
+    @Override public List<MemoryMessage> loadPage(String sessionId, long cursor, int limit, boolean ascending) { return List.of(); }
+    @Override public int countByRole(String sessionId, String role) { return 0; }
 }
