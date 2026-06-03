@@ -2,8 +2,7 @@ package com.harness.server;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.harness.agent.AgentOrchestrator;
-import com.harness.core.model.AgentResult;
-import com.harness.core.model.CancellationToken;
+import com.harness.core.model.*;
 import com.harness.env.EnvConfig;
 import com.harness.env.EnvKey;
 import com.harness.input.auth.JwtUtil;
@@ -95,26 +94,61 @@ public class ChatHandler {
             final String finalRawToken = rawToken;
             final String finalSessionId = sessionId;
 
+            AgentContext agentContext = AgentContext.of(req.context());
+
             try (OutputStream out = res.getOutputStream()) {
-                AgentResult result = agent.run(finalRawToken, req.text(),
-                        req.attachments() != null ? req.attachments() : Collections.emptyList(),
-                        finalSessionId, req.systemPrompt(), cancellationToken);
+                if (agentContext.isStreaming()) {
+                    // Streaming mode: emit tokens as SSE events in real-time
+                    agent.streamRun(finalRawToken, req.text(),
+                            req.attachments() != null ? req.attachments() : Collections.emptyList(),
+                            finalSessionId, req.systemPrompt(), cancellationToken,
+                            event -> {
+                                try {
+                                    switch (event.type()) {
+                                        case START -> writeSseEvent(out, "start",
+                                                mapper.writeValueAsString(event.metadata()));
+                                        case TOKEN -> writeSseEvent(out, "token",
+                                                mapper.writeValueAsString(Map.of("text", event.data())));
+                                        case STEP -> {
+                                            ReActStep step = (ReActStep) event.metadata().get("step");
+                                            writeSseEvent(out, "step", mapper.writeValueAsString(Map.of(
+                                                    "stepNumber", step.stepNumber(),
+                                                    "action", step.action(),
+                                                    "toolCalls", step.toolCalls().stream().map(ToolCall::toolName).toList()
+                                            )));
+                                        }
+                                        case DONE -> writeSseEvent(out, "done",
+                                                mapper.writeValueAsString(event.metadata()));
+                                        case ERROR -> writeSseEvent(out, "error",
+                                                mapper.writeValueAsString(Map.of("error", event.data())));
+                                    }
+                                } catch (IOException e) {
+                                    log.debug("[Server] Failed to write SSE event: {}", e.getMessage());
+                                }
+                            });
+                    long duration = System.currentTimeMillis() - start;
+                    log.info("[Server] Streaming chat completed: duration={}ms", duration);
+                } else {
+                    // Blocking mode: existing behavior
+                    AgentResult result = agent.run(finalRawToken, req.text(),
+                            req.attachments() != null ? req.attachments() : Collections.emptyList(),
+                            finalSessionId, req.systemPrompt(), cancellationToken);
 
-                long duration = System.currentTimeMillis() - start;
-                log.info("[Server] Chat completed: traceId={}, steps={}, risk={}, duration={}ms",
-                        result.trace().traceId(), result.steps().size(), result.riskLevel(), duration);
+                    long duration = System.currentTimeMillis() - start;
+                    log.info("[Server] Chat completed: traceId={}, steps={}, risk={}, duration={}ms",
+                            result.trace().traceId(), result.steps().size(), result.riskLevel(), duration);
 
-                // Write done event with full result
-                Map<String, Object> doneData = Map.of(
-                        "output", result.output() != null ? result.output() : "",
-                        "riskLevel", result.riskLevel().name(),
-                        "traceId", result.trace().traceId(),
-                        "steps", result.steps().size(),
-                        "sessionId", result.trace().metadata() != null
-                                ? result.trace().metadata().getOrDefault("session_id", "")
-                                : ""
-                );
-                writeSseEvent(out, "done", mapper.writeValueAsString(doneData));
+                    Map<String, Object> doneData = Map.of(
+                            "output", result.output() != null ? result.output() : "",
+                            "riskLevel", result.riskLevel().name(),
+                            "traceId", result.trace().traceId(),
+                            "steps", result.steps().size(),
+                            "sessionId", result.trace().metadata() != null
+                                    ? result.trace().metadata().getOrDefault("session_id", "")
+                                    : ""
+                    );
+                    writeSseEvent(out, "done", mapper.writeValueAsString(doneData));
+                }
 
             } catch (Exception e) {
                 long duration = System.currentTimeMillis() - start;
@@ -145,6 +179,7 @@ public class ChatHandler {
 
     public record ChatRequest(String text,
             List<MultimodalParser.RawAttachment> attachments,
-            String systemPrompt) {
+            String systemPrompt,
+            java.util.Map<String, Object> context) {
     }
 }

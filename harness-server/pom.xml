@@ -7,12 +7,16 @@
     <parent>
         <groupId>com.harness</groupId>
         <artifactId>harness-agent</artifactId>
-        <version>0.2.1-SNAPSHOT</version>
+        <version>0.2.4-SNAPSHOT</version>
     </parent>
 
     <artifactId>harness-server</artifactId>
     <name>Harness Server</name>
     <description>HTTP API server for Harness Agent</description>
+
+    <properties>
+        <maven.install.skip>true</maven.install.skip>
+    </properties>
 
     <dependencies>
         <dependency>

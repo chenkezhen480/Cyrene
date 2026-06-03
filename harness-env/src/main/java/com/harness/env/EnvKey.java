@@ -153,6 +153,16 @@ public final class EnvKey {
     public static final String MEMORY_CLEANUP_INTERVAL_MINUTES = "HARNESS_MEMORY_CLEANUP_INTERVAL_MINUTES";
     public static final String MEMORY_REFINEMENT_STUCK_MINUTES = "HARNESS_MEMORY_REFINEMENT_STUCK_MINUTES";
 
+    // ==================== Cache (会话缓存管理) ====================
+    /** Max messages cached per session; oldest evicted when exceeded. 单 session 缓存消息上限，超出淘汰最早的 */
+    public static final String CACHE_MAX_MESSAGES_PER_SESSION = "HARNESS_CACHE_MAX_MESSAGES_PER_SESSION";
+    /** Max total cache memory in MB; LRU evict coldest 50% sessions when exceeded. 缓存总内存上限(MB)，超出按 LRU 淘汰最冷 50% */
+    public static final String CACHE_MAX_MB                   = "HARNESS_CACHE_MAX_MB";
+    /** Cache session TTL in hours; idle sessions expired by background cleanup. 缓存 session 过期时间(小时)，空闲超时自动淘汰 */
+    public static final String CACHE_SESSION_TTL_HOURS        = "HARNESS_CACHE_SESSION_TTL_HOURS";
+    /** Max concurrent sessions in cache. 缓存最大 session 并发数 */
+    public static final String CACHE_MAX_SESSIONS             = "HARNESS_MEMORY_CACHE_MAX_SESSIONS";
+
     // TODO: Redis cache — 暂未实现，预留扩展
     public static final String MEMORY_REDIS_URL                = "HARNESS_MEMORY_REDIS_URL";
     public static final String MEMORY_REDIS_PASSWORD           = "HARNESS_MEMORY_REDIS_PASSWORD";

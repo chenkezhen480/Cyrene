@@ -15,10 +15,10 @@ mvn clean package -pl harness-core -am
 mvn clean compile
 
 # Run CLI (interactive REPL)
-java -jar harness-cli/target/harness-cli-0.2.1-SNAPSHOT.jar
+java -jar harness-cli/target/harness-cli-0.2.4-SNAPSHOT.jar
 
 # Run HTTP server (Javalin, default port 8080)
-java -jar harness-server/target/harness-server-0.2.1-SNAPSHOT.jar
+java -jar harness-server/target/harness-server-0.2.4-SNAPSHOT.jar
 
 # Run tests (currently no test files exist)
 mvn test
@@ -74,7 +74,7 @@ harness-server        ← HTTP API entry point (com.harness.server.Main, Javalin
   | 6 | Realtime | `RealtimeModelProvider` | (reserved) |
 
 - **Tools implement `com.harness.tool.Tool` interface** — `spec()` returns ToolSpec, `execute(JsonNode)` returns String. Register in ToolRegistry. MCP tools adapted via McpToolAdapter.
-- **ReActEngine** uses LangChain4j 1.15.0 `ChatModel.chat(ChatRequest)` with `ToolSpecification` (JsonObjectSchema). Wraps ChatModel in `FallbackChatModel` when vision/voice providers are available.
+- **ReActEngine** uses LangChain4j 1.15.0 `ChatModel.chat(ChatRequest)` with `ToolSpecification` (JsonObjectSchema). Wraps ChatModel in `FallbackChatModel` when vision/voice providers are available. Supports streaming via `StreamingChatModel` (`streamExecute()` method). Tool calls retry up to 3 times on error; success with empty data passes to LLM without retry.
 - **ReAct Inspection** — 每轮工具调用后由 `Inspector` 启发式检查结果状态，记录在 `ReActStep.InspectionResult` 中：
 
   | 状态 | 含义 | 触发条件 |
@@ -86,13 +86,15 @@ harness-server        ← HTTP API entry point (com.harness.server.Main, Javalin
   | `NEEDS_RETRY` | 应该换参数重试 | 输出含异常堆栈痕迹 |
 
   非 PASS 状态会注入 `Inspector.buildInspectionHint()` 作为下一轮的提示。`HARNESS_REACT_STOP_ON_TOOL_ERROR=true` 时遇到 `TOOL_ERROR` 立即停止循环；默认 `false` 继续下一轮让 LLM 自行决策。
-- **ReActListener** — SSE 流式回调接口，`onStep(ReActStep)` 在每轮迭代完成后调用。
+- **ReActListener** — SSE 流式回调接口，`onStep(ReActStep)` 在每轮迭代完成后调用。扩展方法：`onToken(String)` 每个 token 块回调，`onToolCallStart(String toolName, String arguments)` 工具调用开始回调。
+- **Streaming Output** — `AgentOrchestrator.streamRun()` 提供流式输出模式，通过 `StreamCallback` 实时推送 `StreamEvent`（START/TOKEN/STEP/DONE/ERROR）。`AgentContext` record 包装 `Map<String, Object>` context 参数，`isStreaming()` 判断输出模式。流式模式下后处理（trace.finish、sessionStore.updateLastActive）异步化。
 - **CancellationToken** — 线程安全的取消令牌，ReAct 循环每轮迭代间检查；HTTP 端点通过 `DELETE /api/chat/{sessionId}` 触发取消。
 - **ReplyAuditor** — 异步启发式回复质量审计（无模型调用），检查回复长度、错误指标、工具残留。结果写入 trace metadata。
 - **Sub-Agent** — `SubAgentOrchestrator` 管理子代理生命周期，支持依赖解析和并行执行。LLM 通过 `spawn_subagent` 工具派生子任务，每个子代理拥有独立的 ReActEngine 实例但共享工具注册表。`MultiAgentOrchestrator` 提供编程式子代理访问。`HARNESS_AGENT_MAX_SUBAGENTS`（默认 3）控制并发数。
 - **Web Search fallback** — `WebSearchTool` 支持多引擎回退链：Tavily → SerpAPI → DuckDuckGo。优先级通过 `HARNESS_TOOL_WEB_SEARCH_PRIORITY` 配置，无 API key 的引擎自动跳过，DuckDuckGo 始终可用。
 - **MCP Tool Discovery** — `McpToolDiscovery` 通过 JSON-RPC `tools/list` 自动发现 MCP 服务器工具，结果缓存避免重复发现。MCP 服务器配置支持两种方式：`HARNESS_MCP_CONFIG_FILE`（JSON 文件，推荐）或 `HARNESS_MCP_SERVERS`（逗号分隔的 `name=url` 环境变量）。JSON 文件中每个服务器可独立设置 `connectTimeoutMs` / `callTimeoutMs`。
-- **Retry & Robustness** — 五层容错机制：
+- **Retry & Robustness** — 六层容错机制：
+  - **Tool 调用重试:** `ReActEngine.executeWithRetry()` — 工具调用失败时最多重试 3 次，成功（即使输出为空）不重试，错误结果传递给 LLM 由其决策
   - **LLM API 重试:** `RetryingChatModel` 装饰器包装所有 ChatModelProvider，指数退避（1s→2s→4s），最多 3 次，仅重试 429/503/timeout 等可恢复错误
   - **MCP 断线重连:** `McpToolAdapter` 捕获 IOException 后重建 OkHttpClient 并重试 1 次
   - **消息写入重试:** `MessageWriteWorker` 三层降级：重试 3 次 → 单条同步写 → 死信队列（`getDeadLetterQueue()` API）
@@ -161,7 +163,7 @@ Layer 5: Audit
 - `NoOp*Store` — no-op implementations when `HARNESS_MEMORY_STORE=none`
 - `MemoryStoreFactory` — creates stores based on `HARNESS_MEMORY_STORE` env var
 - `SessionLifecycleManager` — passive timeout detection + session resolution + refinement quality scoring (4 signals: conversation turns, tool usage, avg reply length, user questions)
-- `SessionMessageCache` — LRU cache for active session messages (HashMap, access-ordered, max 100 sessions)
+- `SessionMessageCache` — LRU cache for active session messages with three-layer eviction: per-session message cap (default 10), total memory cap (default 20MB, evict coldest 50%), session TTL (default 12h idle expiry)
 - `MemoryCompressor` — major compression only: AI-based intelligent extraction with time-decay weighting
 - `PreferenceRefinementWorker` — async background worker for preference extraction (output constrained by `HARNESS_MEMORY_LONGTERM_MAX_TOKENS`)
 - `SessionCleanupScheduler` — periodic scan for timed-out sessions
@@ -174,11 +176,15 @@ Layer 5: Audit
 - **大压缩 (Major, AI-based, 预处理层):** `MemoryCompressor.compressIfNeeded()` — 整体上下文 > `HARNESS_CTX_COMPRESS_MAJOR`（默认 85%）时触发。使用时间衰减标签（RECENT/MIDDLE/OLD）智能提炼旧消息，压缩至 `HARNESS_CTX_COMPRESS_MAJOR_TARGET`（默认 30%）。仅压缩旧消息，当前用户消息在压缩之后保存，不会被压缩。
 - 原始消息永不删除，只新增 `is_summary=true` 的摘要行。
 
-**Cache strategy (async write-through LRU):**
-- **读取:** cache hit → 直接返回; miss → MessageStore.loadForContext → 填充缓存
+**Cache strategy (three-layer eviction LRU):**
+- **读取:** cache hit → 直接返回; miss → MessageStore.loadForContext → 填充缓存（trimToLimit 保留最新 N 条）
 - **写入:** MessageWriteWorker 异步入队（DB 落盘） + cache.append（同步，内存操作）
 - **压缩后:** 从 DB 重建缓存（put），压缩摘要同步写 DB（MemoryCompressor 内部）
-- **淘汰:** LRU 自动淘汰冷 session（默认上限 `HARNESS_MEMORY_CACHE_MAX_SESSIONS=100`）
+- **淘汰 (三层):**
+  1. Per-session message cap: oldest messages evicted when count exceeds `HARNESS_CACHE_MAX_MESSAGES_PER_SESSION` (default 10)
+  2. Total memory cap: coldest 50% sessions evicted when estimated memory exceeds `HARNESS_CACHE_MAX_MB` (default 20MB)
+  3. Session TTL: idle sessions expired after `HARNESS_CACHE_SESSION_TTL_HOURS` (default 12h)
+- **最大并发:** `HARNESS_MEMORY_CACHE_MAX_SESSIONS` (default 10) — LinkedHashMap access-ordered LRU 自动淘汰
 - **扩展:** `HARNESS_MEMORY_REDIS_*` 环境变量已预留（TODO: 暂未实现）
 
 ### Knowledge Base Upload & Management (harness-input + harness-preprocess + harness-server)
@@ -241,7 +247,7 @@ Same pattern for Vision/Voice/Embedding/Rerank providers.
 | Method | Path | Description |
 |--------|------|-------------|
 | POST | `/api/auth/token` | Get JWT token (userId/username + password, mode=jwt only) |
-| POST | `/api/chat` | Send message, get agent response (SSE stream). Supports `systemPrompt` in body, `X-Session-Id` header |
+| POST | `/api/chat` | Send message, get agent response (SSE stream). Supports `systemPrompt` and `context` (JSON: `outputMode`=blocking/streaming, `userId`) in body, `X-Session-Id` header |
 | DELETE | `/api/chat/{sessionId}` | Cancel an in-progress chat request |
 | POST | `/api/knowledge/upload` | Upload file for knowledge base ingestion (multipart: `file`, `collection`) |
 | GET | `/api/knowledge/{collection}` | List documents in a collection |
@@ -251,7 +257,7 @@ Same pattern for Vision/Voice/Embedding/Rerank providers.
 | GET | `/api/traces` | List recent traces (query param: `limit`) |
 | GET | `/api/health` | Health check |
 
-**Chat SSE events:** `event: done` (full result JSON), `event: error` (error JSON). JWT mode returns refreshed token in `X-New-Token` header when remaining lifetime < threshold.
+**Chat SSE events:** Blocking mode: `event: done` (full result JSON), `event: error` (error JSON). Streaming mode (`context.outputMode=streaming`): `event: start` (sessionId), `event: token` (partial text), `event: step` (ReAct step info), `event: done` (final result), `event: error`. JWT mode returns refreshed token in `X-New-Token` header when remaining lifetime < threshold.
 
 ## Dependencies
 

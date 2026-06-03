@@ -11,8 +11,10 @@ import com.harness.tool.ToolExecutor;
 import com.harness.tool.ToolRegistry;
 import dev.langchain4j.data.message.*;
 import dev.langchain4j.model.chat.ChatModel;
+import dev.langchain4j.model.chat.StreamingChatModel;
 import dev.langchain4j.model.chat.request.ChatRequest;
 import dev.langchain4j.model.chat.response.ChatResponse;
+import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
 import dev.langchain4j.model.chat.request.json.JsonObjectSchema;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.agent.tool.ToolSpecification;
@@ -22,6 +24,7 @@ import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 
 /**
  * Layer 3+4: ReAct loop engine, powered by LangChain4j 1.15.
@@ -31,7 +34,10 @@ public class ReActEngine {
 
     private static final Logger log = LoggerFactory.getLogger(ReActEngine.class);
 
+    private static final int TOOL_MAX_RETRIES = 3;
+
     private final ChatModel chatModel;
+    private final StreamingChatModel streamingChatModel;
     private final ToolRegistry toolRegistry;
     private final ToolExecutor toolExecutor;
     private final Inspector inspector;
@@ -50,6 +56,7 @@ public class ReActEngine {
         } else {
             this.chatModel = rawModel;
         }
+        this.streamingChatModel = chatModelProvider.streamingModel();
         this.toolRegistry = toolRegistry;
         this.toolExecutor = toolExecutor;
         this.inspector = new Inspector();
@@ -163,7 +170,7 @@ public class ReActEngine {
 
                 log.info("[L3-ReAct] Executing tool: {}", tc.toolName());
                 log.debug("[L3-ReAct] Tool args: {}", truncate(tc.arguments().toString()));
-                ToolResult result = toolExecutor.execute(tc);
+                ToolResult result = executeWithRetry(tc, listener);
                 log.debug("[L3-ReAct] Tool [{}] result: success={}, output={}",
                         tc.toolName(), result.success(), truncate(result.success() ? result.output() : result.error()));
                 toolResults.add(result);
@@ -177,7 +184,7 @@ public class ReActEngine {
                     aiMessage.text(),
                     toolReqs.stream().map(ToolExecutionRequest::name).reduce((a, b) -> a + "," + b).orElse(""),
                     toolCalls, toolResults,
-                    toolResults.stream().map(ToolResult::output).reduce((a, b) -> a + "\n" + b).orElse(""),
+                    toolResults.stream().map(r -> r.output() != null ? r.output() : "").reduce((a, b) -> a + "\n" + b).orElse(""),
                     inspection);
             allSteps.add(step);
             if (listener != null) {
@@ -205,6 +212,202 @@ public class ReActEngine {
         log.warn("[L3-ReAct] Reached max iterations ({}), returning last output", maxIterations);
         log.info("[L3-ReAct] Finished in {}ms, steps={}", totalMs, allSteps.size());
         return new ReActResult(lastOutput, allSteps);
+    }
+
+    /**
+     * Streaming variant of execute(). Uses StreamingChatModel for real-time token output.
+     * Falls back to blocking execute() if no streaming model is available.
+     */
+    public ReActResult streamExecute(String systemPrompt, String userMessage, List<ChatMessage> historyMessages,
+                                      AgentTrace.Builder traceBuilder, ReActListener listener,
+                                      com.harness.core.model.CancellationToken cancellationToken) {
+        if (streamingChatModel == null) {
+            log.warn("[L3-ReAct] No streaming model available, falling back to blocking mode");
+            return execute(systemPrompt, userMessage, historyMessages, traceBuilder, listener, cancellationToken);
+        }
+
+        long loopStart = System.currentTimeMillis();
+        log.info("[L3-ReAct] Starting STREAMING ReAct loop: maxIterations={}, tools={}",
+                maxIterations, toolRegistry.size());
+
+        List<ChatMessage> messages = new ArrayList<>();
+        messages.add(SystemMessage.from(systemPrompt));
+        messages.addAll(historyMessages);
+        messages.add(UserMessage.from(userMessage));
+
+        List<ToolSpecification> toolSpecs = toToolSpecifications(toolRegistry.getAll());
+        List<ReActStep> allSteps = new ArrayList<>();
+
+        for (int i = 1; i <= maxIterations; i++) {
+            log.info("[L3-ReAct] Streaming iteration {}/{}", i, maxIterations);
+
+            if (cancellationToken != null && cancellationToken.isCancelled()) {
+                log.info("[L3-ReAct] Cancellation detected at iteration {}", i);
+                String cancelledOutput = allSteps.isEmpty() ? "Request cancelled" :
+                        allSteps.get(allSteps.size() - 1).observation();
+                return new ReActResult(cancelledOutput, allSteps);
+            }
+
+            if (i > 2) {
+                stripToolMessages(messages);
+            }
+
+            ChatRequest.Builder reqBuilder = ChatRequest.builder().messages(messages);
+            if (!toolSpecs.isEmpty()) {
+                reqBuilder.toolSpecifications(toolSpecs);
+            }
+
+            // Streaming LLM call
+            long llmStart = System.currentTimeMillis();
+            CompletableFuture<ChatResponse> responseFuture = new CompletableFuture<>();
+
+            streamingChatModel.chat(reqBuilder.build(), new StreamingChatResponseHandler() {
+                @Override
+                public void onPartialResponse(String text) {
+                    if (listener != null) {
+                        listener.onToken(text);
+                    }
+                }
+
+                @Override
+                public void onCompleteResponse(ChatResponse response) {
+                    responseFuture.complete(response);
+                }
+
+                @Override
+                public void onError(Throwable error) {
+                    responseFuture.completeExceptionally(error);
+                }
+            });
+
+            ChatResponse response;
+            try {
+                response = responseFuture.get();
+            } catch (Exception e) {
+                log.error("[L3-ReAct] Streaming LLM call failed: {}", e.getMessage());
+                throw new RuntimeException("Streaming LLM call failed", e);
+            }
+
+            long llmMs = System.currentTimeMillis() - llmStart;
+            AiMessage aiMessage = response.aiMessage();
+
+            if (response.metadata() != null && response.metadata().tokenUsage() != null) {
+                var usage = response.metadata().tokenUsage();
+                log.info("[L3-ReAct] Streaming LLM call in {}ms, tokens: in={}, out={}",
+                        llmMs, usage.inputTokenCount(), usage.outputTokenCount());
+                traceBuilder.totalTokens(
+                        (traceBuilder.build().totalTokens())
+                                + usage.inputTokenCount()
+                                + usage.outputTokenCount());
+            }
+
+            // Final answer (no tool calls)
+            if (aiMessage.toolExecutionRequests() == null || aiMessage.toolExecutionRequests().isEmpty()) {
+                String answer = aiMessage.text();
+                long totalMs = System.currentTimeMillis() - loopStart;
+                log.info("[L3-ReAct] Streaming complete at iteration {}, answer: {}", i, truncate(answer));
+                log.info("[L3-ReAct] Finished in {}ms, steps={}", totalMs, allSteps.size());
+                ReActStep finalStep = new ReActStep(i, answer, "final_answer",
+                        List.of(), List.of(), answer,
+                        new ReActStep.InspectionResult(ReActStep.InspectionResult.InspectionStatus.PASS, "complete"));
+                allSteps.add(finalStep);
+                if (listener != null) {
+                    listener.onStep(finalStep);
+                }
+                messages.add(aiMessage);
+                return new ReActResult(answer, allSteps);
+            }
+
+            // Tool execution round
+            messages.add(aiMessage);
+            List<ToolExecutionRequest> toolReqs = aiMessage.toolExecutionRequests();
+            log.info("[L3-ReAct] Streaming: LLM requested {} tool calls", toolReqs.size());
+
+            List<ToolCall> toolCalls = new ArrayList<>();
+            List<ToolResult> toolResults = new ArrayList<>();
+
+            for (ToolExecutionRequest toolReq : toolReqs) {
+                if (listener != null) {
+                    listener.onToolCallStart(toolReq.name(), toolReq.arguments());
+                }
+
+                JsonNode argsNode = parseArgs(toolReq.arguments());
+                ToolCall tc = ToolCall.of(toolReq.name(), argsNode);
+                toolCalls.add(tc);
+
+                log.info("[L3-ReAct] Executing tool: {}", tc.toolName());
+                ToolResult result = executeWithRetry(tc, listener);
+                toolResults.add(result);
+
+                messages.add(ToolExecutionResultMessage.from(toolReq,
+                        result.success() ? result.output() : "ERROR: " + result.error()));
+            }
+
+            ReActStep.InspectionResult inspection = inspector.inspect(toolCalls, toolResults);
+            ReActStep step = new ReActStep(i,
+                    aiMessage.text(),
+                    toolReqs.stream().map(ToolExecutionRequest::name).reduce((a, b) -> a + "," + b).orElse(""),
+                    toolCalls, toolResults,
+                    toolResults.stream().map(r -> r.output() != null ? r.output() : "").reduce((a, b) -> a + "\n" + b).orElse(""),
+                    inspection);
+            allSteps.add(step);
+            if (listener != null) {
+                listener.onStep(step);
+            }
+
+            if (inspection.status() != ReActStep.InspectionResult.InspectionStatus.PASS) {
+                log.info("[L3-ReAct] Inspection: status={}, reason={}", inspection.status(), inspection.reason());
+                String hint = Inspector.buildInspectionHint(inspection);
+                if (hint != null) {
+                    messages.add(UserMessage.from(hint));
+                }
+            }
+
+            if (inspection.status() == ReActStep.InspectionResult.InspectionStatus.TOOL_ERROR && stopOnToolError) {
+                log.warn("[L3-ReAct] Tool error at iteration {}, stopping", i);
+                break;
+            }
+        }
+
+        String lastOutput = allSteps.isEmpty() ? "Max iterations reached" :
+                allSteps.get(allSteps.size() - 1).observation();
+        long totalMs = System.currentTimeMillis() - loopStart;
+        log.warn("[L3-ReAct] Streaming: reached max iterations ({}), returning last output", maxIterations);
+        log.info("[L3-ReAct] Finished in {}ms, steps={}", totalMs, allSteps.size());
+        return new ReActResult(lastOutput, allSteps);
+    }
+
+    /**
+     * Execute a tool with retry on error. Retries up to TOOL_MAX_RETRIES times when the tool
+     * returns a failure (success=false). If the tool succeeds (even with empty output), no retry.
+     *
+     * @param toolCall the tool call to execute
+     * @param listener optional listener for streaming retry notifications
+     * @return the tool result (either success or final failure after retries)
+     */
+    private ToolResult executeWithRetry(ToolCall toolCall, ReActListener listener) {
+        ToolResult result = toolExecutor.execute(toolCall);
+
+        if (result.success()) {
+            return result;
+        }
+
+        // Retry on error up to TOOL_MAX_RETRIES times
+        for (int attempt = 1; attempt <= TOOL_MAX_RETRIES; attempt++) {
+            log.warn("[L3-ReAct] Tool [{}] failed (attempt {}/{}), retrying: {}",
+                    toolCall.toolName(), attempt, TOOL_MAX_RETRIES, result.error());
+            if (listener != null) {
+                listener.onToolCallStart(toolCall.toolName(), toolCall.arguments().toString());
+            }
+            result = toolExecutor.execute(toolCall);
+            if (result.success()) {
+                log.info("[L3-ReAct] Tool [{}] succeeded on retry {}", toolCall.toolName(), attempt);
+                return result;
+            }
+        }
+
+        log.error("[L3-ReAct] Tool [{}] failed after {} retries", toolCall.toolName(), TOOL_MAX_RETRIES);
+        return result;
     }
 
     /**

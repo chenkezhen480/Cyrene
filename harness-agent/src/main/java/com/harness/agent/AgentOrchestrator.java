@@ -32,6 +32,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
+import com.harness.core.model.StreamCallback;
+import com.harness.core.model.StreamEvent;
+import com.harness.ai.react.ReActListener;
+
 /**
  * Wires all layers together using LangChain4j model providers.
  */
@@ -309,6 +313,175 @@ public class AgentOrchestrator {
             trace.recordOutput("Error: " + e.getMessage(), RiskLevel.HIGH, false);
             trace.finish();
             throw e;
+        }
+    }
+
+    /**
+     * Streaming variant of run(). Emits real-time events via callback.
+     * All blocking DB operations are made async in streaming mode.
+     */
+    public void streamRun(String token, String text, List<MultimodalParser.RawAttachment> attachments,
+                          String requestedSessionId, String systemPromptOverride,
+                          com.harness.core.model.CancellationToken cancellationToken,
+                          StreamCallback callback) {
+        long runStart = System.currentTimeMillis();
+        int attachCount = attachments != null ? attachments.size() : 0;
+        log.info("[Orchestrator] Stream run start: textLen={}, sessionId={}, attachments={}",
+                text != null ? text.length() : 0, requestedSessionId, attachCount);
+
+        TraceCollector trace = new TraceCollector(traceStore);
+
+        try {
+            // Layer 1: Input
+            InputProcessor.InputResult input = inputProcessor.process(token, text, attachments);
+            trace.recordInput(input.userId(), text,
+                    input.message().attachments().stream().map(AgentMessage.Attachment::name).toList());
+
+            // Layer 1.5: Session lifecycle
+            String sessionId = null;
+            List<MemoryMessage> shorttermMessages = List.of();
+            List<Preference> longtermPrefs = List.of();
+            boolean compressed = false;
+            if (MemoryStoreFactory.isEnabled() && input.userId() != null) {
+                String effectiveSessionId = requestedSessionId != null ? requestedSessionId : activeSessionId;
+                SessionLifecycleManager.LifecycleResult lifecycle = sessionLifecycle.process(input.userId(), effectiveSessionId);
+                sessionId = lifecycle.session().id();
+                activeSessionId = sessionId;
+                log.info("[Memory] Session resolved: id={}, isNew={}, timedOut={}",
+                        sessionId, lifecycle.isNewSession(), lifecycle.timedOutSessionIds().size());
+                trace.builder().sessionId(sessionId);
+                Map<String, String> meta = new HashMap<>(trace.builder().build().metadata());
+                meta.put("session_id", sessionId);
+                meta.put("session_new", String.valueOf(lifecycle.isNewSession()));
+                if (!lifecycle.timedOutSessionIds().isEmpty()) {
+                    meta.put("sessions_timed_out", String.join(",", lifecycle.timedOutSessionIds()));
+                }
+                trace.builder().metadata(meta);
+
+                for (String timedOutId : lifecycle.timedOutSessionIds()) {
+                    if (sessionLifecycle.isWorthyOfRefinement(timedOutId)) {
+                        refinementWorker.submit(timedOutId, input.userId());
+                        meta.put("refinement_submitted", timedOutId);
+                    }
+                }
+
+                shorttermMessages = messageCache.getIfPresent(sessionId);
+                if (shorttermMessages == null) {
+                    shorttermMessages = messageStore.loadForContext(sessionId);
+                    messageCache.put(sessionId, shorttermMessages);
+                }
+
+                longtermPrefs = preferenceStore.loadByUser(input.userId());
+            }
+
+            // Layer 2: Preprocess
+            ContextBuilder.ContextResult ctx = contextBuilder.build(text);
+            trace.recordPreprocess(null, ctx.ragHitIds(), null);
+            String systemPrompt = buildSystemPrompt(ctx, longtermPrefs, systemPromptOverride);
+            trace.recordLlmMeta(chatModelProvider.modelName(), "v1");
+
+            // Compression check
+            if (sessionId != null) {
+                int shorttermTokens = estimateTokens(shorttermMessages);
+                int ragTokens = ctx.contextBlock() != null ? estimateTokens(ctx.contextBlock()) : 0;
+                int inputTokens = estimateTokens(text);
+                int systemTokens = estimateTokens(systemPrompt);
+                int totalUsed = shorttermTokens + ragTokens + inputTokens + systemTokens;
+                int totalBudget = chatModelProvider.chatModel() != null ? 128000 : 8000;
+                var compressResult = memoryCompressor.compressIfNeeded(
+                        sessionId, shorttermMessages, shorttermTokens, totalUsed, totalBudget);
+                if (compressResult.type() != MemoryCompressor.CompressionResult.CompressionType.NONE) {
+                    compressed = true;
+                    log.info("[Memory] Compression triggered: type={}, before={}, after={}",
+                            compressResult.type(), compressResult.messagesBefore(), compressResult.messagesAfter());
+                    shorttermMessages = messageStore.loadForContext(sessionId);
+                    messageCache.put(sessionId, shorttermMessages);
+                }
+
+                messageWriteWorker.submit(sessionId, "user", text, false);
+                messageCache.append(sessionId, new MemoryMessage(0, sessionId, "user", text, false, null));
+            }
+
+            // Emit start event with sessionId (first event for client)
+            final String finalSessionId = sessionId;
+            callback.onEvent(StreamEvent.start(finalSessionId));
+
+            // Layer 3+4: Streaming ReAct loop
+            List<ChatMessage> historyChatMessages = convertToChatMessages(shorttermMessages);
+            ReActListener listener = new ReActListener() {
+                @Override
+                public void onStep(ReActStep step) {
+                    callback.onEvent(StreamEvent.step(step));
+                }
+
+                @Override
+                public void onToken(String tokenText) {
+                    callback.onEvent(StreamEvent.token(tokenText));
+                }
+            };
+
+            ReActEngine.ReActResult result = reactEngine.streamExecute(
+                    systemPrompt, text, historyChatMessages, trace.builder(), listener, cancellationToken);
+            result.steps().forEach(trace::addStep);
+
+            RiskLevel risk = determineRisk(result);
+            trace.recordOutput(result.output(), risk, true);
+
+            // Reply audit (async)
+            final String replyText = result.output();
+            CompletableFuture.runAsync(() -> {
+                try {
+                    ReplyAuditor.ReplyAuditResult auditResult = replyAuditor.audit(replyText);
+                    if (!auditResult.passed()) {
+                        log.warn("[ReplyAuditor] Audit failed: score={}, reason={}", auditResult.score(), auditResult.reason());
+                    }
+                } catch (Exception e) {
+                    log.debug("[ReplyAuditor] Async audit failed: {}", e.getMessage());
+                }
+            });
+
+            // Post-processing: save AI message (async via worker)
+            if (finalSessionId != null) {
+                messageWriteWorker.submit(finalSessionId, "assistant", result.output(), false);
+                messageCache.append(finalSessionId, new MemoryMessage(0, finalSessionId, "assistant", result.output(), false, null));
+            }
+
+            // Async: trace.finish() and sessionStore.updateLastActive()
+            CompletableFuture.runAsync(() -> {
+                try {
+                    trace.finish();
+                } catch (Exception e) {
+                    log.error("[Orchestrator] Async trace.finish() failed: {}", e.getMessage());
+                }
+            });
+            if (finalSessionId != null) {
+                CompletableFuture.runAsync(() -> {
+                    try {
+                        sessionStore.updateLastActive(finalSessionId);
+                    } catch (Exception e) {
+                        log.error("[Orchestrator] Async updateLastActive failed: {}", e.getMessage());
+                    }
+                });
+            }
+
+            long duration = System.currentTimeMillis() - runStart;
+            log.info("[Orchestrator] Stream run complete: outputLen={}, steps={}, duration={}ms",
+                    result.output() != null ? result.output().length() : 0, result.steps().size(), duration);
+
+            callback.onEvent(StreamEvent.done(
+                    result.output(),
+                    trace.builder().build().traceId(),
+                    finalSessionId,
+                    result.steps().size()));
+
+        } catch (Exception e) {
+            long duration = System.currentTimeMillis() - runStart;
+            log.error("[Orchestrator] Stream run failed after {}ms: {}", duration, e.getMessage(), e);
+            trace.recordOutput("Error: " + e.getMessage(), RiskLevel.HIGH, false);
+            CompletableFuture.runAsync(() -> {
+                try { trace.finish(); } catch (Exception ignored) {}
+            });
+            callback.onEvent(StreamEvent.error(e.getMessage()));
         }
     }
 

@@ -2,10 +2,10 @@ package com.harness.cli;
 
 import com.harness.agent.AgentOrchestrator;
 import com.harness.core.model.AgentResult;
+import com.harness.core.model.ReActStep;
 import com.harness.env.EnvConfig;
 
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.Scanner;
 
@@ -26,9 +26,12 @@ public class Main {
             return;
         }
 
+        boolean useStream = Arrays.asList(args).contains("--stream");
+
         System.out.println("=== Harness Agent v0.1.0 ===");
         System.out.println("LLM: " + EnvConfig.get().getString("HARNESS_LLM_PROVIDER", "openai"));
         System.out.println("Model: " + EnvConfig.get().getString("HARNESS_LLM_MODEL", "default"));
+        System.out.println("Mode: " + (useStream ? "streaming" : "blocking"));
         System.out.println("Type 'quit' to exit.\n");
 
         AgentOrchestrator agent = new AgentOrchestrator();
@@ -48,11 +51,31 @@ public class Main {
             if (input.isEmpty()) continue;
 
             try {
-                AgentResult result = agent.run(null, input, Collections.emptyList());
-                System.out.println("\nAgent> " + result.output());
-                System.out.println("[Trace: " + result.trace().traceId() +
-                        ", Steps: " + result.steps().size() +
-                        ", Risk: " + result.riskLevel() + "]\n");
+                if (useStream) {
+                    System.out.print("\nAgent> ");
+                    agent.streamRun(null, input, Collections.emptyList(), null, null, null,
+                            event -> {
+                                switch (event.type()) {
+                                    case TOKEN -> System.out.print(event.data());
+                                    case STEP -> {
+                                        ReActStep step = (ReActStep) event.metadata().get("step");
+                                        System.out.printf("%n[Step %d: %s]%n", step.stepNumber(), step.action());
+                                    }
+                                    case DONE -> System.out.printf(
+                                            "%n[Trace: %s, Steps: %s]%n",
+                                            event.metadata().get("traceId"),
+                                            event.metadata().get("steps"));
+                                    case ERROR -> System.out.println("\nError> " + event.data());
+                                }
+                            });
+                    System.out.println();
+                } else {
+                    AgentResult result = agent.run(null, input, Collections.emptyList());
+                    System.out.println("\nAgent> " + result.output());
+                    System.out.println("[Trace: " + result.trace().traceId() +
+                            ", Steps: " + result.steps().size() +
+                            ", Risk: " + result.riskLevel() + "]\n");
+                }
             } catch (Exception e) {
                 System.out.println("\nError> " + e.getMessage() + "\n");
             }

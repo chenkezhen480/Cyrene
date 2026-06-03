@@ -7,7 +7,7 @@
     <parent>
         <groupId>com.harness</groupId>
         <artifactId>harness-agent</artifactId>
-        <version>0.2.1-SNAPSHOT</version>
+        <version>0.2.4-SNAPSHOT</version>
     </parent>
 
     <artifactId>harness-core</artifactId>

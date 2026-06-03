@@ -14,4 +14,16 @@ public interface ReActListener {
      * @param step the completed step with thought, tool calls, results, and inspection
      */
     void onStep(ReActStep step);
+
+    /**
+     * Called for each partial text token during streaming.
+     * Default is no-op for backward compatibility.
+     */
+    default void onToken(String token) {}
+
+    /**
+     * Called when a tool call begins execution during streaming.
+     * Default is no-op for backward compatibility.
+     */
+    default void onToolCallStart(String toolName, String arguments) {}
 }
