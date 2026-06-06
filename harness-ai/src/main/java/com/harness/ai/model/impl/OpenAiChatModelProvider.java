@@ -10,6 +10,8 @@ import dev.langchain4j.model.openai.OpenAiStreamingChatModel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.Map;
+
 public class OpenAiChatModelProvider implements ChatModelProvider {
 
     private static final Logger log = LoggerFactory.getLogger(OpenAiChatModelProvider.class);
@@ -18,6 +20,7 @@ public class OpenAiChatModelProvider implements ChatModelProvider {
     private final String model;
     private final int maxTokens;
     private final double temperature;
+    private final boolean thinking;
 
     public OpenAiChatModelProvider() {
         EnvConfig cfg = EnvConfig.get();
@@ -26,8 +29,9 @@ public class OpenAiChatModelProvider implements ChatModelProvider {
         this.model = cfg.getString(EnvKey.MODEL_CHAT_MODEL, "gpt-4o");
         this.maxTokens = cfg.getInt(EnvKey.MODEL_CHAT_MAX_TOKENS, 4096);
         this.temperature = cfg.getDouble(EnvKey.MODEL_CHAT_TEMPERATURE, 0.7);
-        log.info("[Model] OpenAI Chat initialized: model={}, baseUrl={}, maxTokens={}, temp={}",
-                model, baseUrl, maxTokens, temperature);
+        this.thinking = cfg.getBool(EnvKey.MODEL_CHAT_THINKING, true);
+        log.info("[Model] OpenAI Chat initialized: model={}, baseUrl={}, maxTokens={}, temp={}, thinking={}",
+                model, baseUrl, maxTokens, temperature, thinking);
     }
 
     @Override
@@ -40,6 +44,21 @@ public class OpenAiChatModelProvider implements ChatModelProvider {
                 .temperature(temperature)
                 .logRequests(true)
                 .logResponses(true)
+                .customParameters(Map.of("enable_thinking", thinking))
+                .build());
+    }
+
+    @Override
+    public ChatModel chatModelNoThinking() {
+        return new RetryingChatModel(OpenAiChatModel.builder()
+                .apiKey(apiKey)
+                .baseUrl(baseUrl)
+                .modelName(model)
+                .maxTokens(maxTokens)
+                .temperature(temperature)
+                .logRequests(true)
+                .logResponses(true)
+                .customParameters(Map.of("enable_thinking", false))
                 .build());
     }
 
@@ -51,6 +70,7 @@ public class OpenAiChatModelProvider implements ChatModelProvider {
                 .modelName(model)
                 .maxTokens(maxTokens)
                 .temperature(temperature)
+                .customParameters(Map.of("enable_thinking", thinking))
                 .build();
     }
 

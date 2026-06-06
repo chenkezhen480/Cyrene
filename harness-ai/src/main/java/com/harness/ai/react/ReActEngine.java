@@ -37,6 +37,7 @@ public class ReActEngine {
     private static final int TOOL_MAX_RETRIES = 3;
 
     private final ChatModel chatModel;
+    private final ChatModel chatModelNoThinking;
     private final StreamingChatModel streamingChatModel;
     private final ToolRegistry toolRegistry;
     private final ToolExecutor toolExecutor;
@@ -51,10 +52,13 @@ public class ReActEngine {
     public ReActEngine(ChatModelProvider chatModelProvider, ToolRegistry toolRegistry, ToolExecutor toolExecutor,
                        VisionModelProvider visionProvider, VoiceModelProvider voiceProvider) {
         ChatModel rawModel = chatModelProvider.chatModel();
+        ChatModel rawNoThinking = chatModelProvider.chatModelNoThinking();
         if (visionProvider != null || voiceProvider != null) {
             this.chatModel = new FallbackChatModel(rawModel, visionProvider, voiceProvider, chatModelProvider.modelName());
+            this.chatModelNoThinking = new FallbackChatModel(rawNoThinking, visionProvider, voiceProvider, chatModelProvider.modelName());
         } else {
             this.chatModel = rawModel;
+            this.chatModelNoThinking = rawNoThinking;
         }
         this.streamingChatModel = chatModelProvider.streamingModel();
         this.toolRegistry = toolRegistry;
@@ -65,12 +69,17 @@ public class ReActEngine {
         this.stopOnToolError = cfg.getBool(EnvKey.REACT_STOP_ON_TOOL_ERROR, false);
     }
 
+    private ChatModel selectModel(Boolean enableThinking) {
+        if (enableThinking != null && !enableThinking) return chatModelNoThinking;
+        return chatModel;
+    }
+
     public ReActResult execute(String systemPrompt, String userMessage, AgentTrace.Builder traceBuilder) {
-        return execute(systemPrompt, userMessage, List.of(), traceBuilder, null, null);
+        return execute(systemPrompt, userMessage, List.of(), traceBuilder, null, null, null);
     }
 
     public ReActResult execute(String systemPrompt, String userMessage, List<ChatMessage> historyMessages, AgentTrace.Builder traceBuilder) {
-        return execute(systemPrompt, userMessage, historyMessages, traceBuilder, null, null);
+        return execute(systemPrompt, userMessage, historyMessages, traceBuilder, null, null, null);
     }
 
     /**
@@ -82,13 +91,16 @@ public class ReActEngine {
      * @param traceBuilder trace collector
      * @param listener optional callback for intermediate step events (for SSE streaming)
      * @param cancellationToken optional token to check for cancellation between iterations
+     * @param enableThinking null = use env default, true = force thinking, false = force no thinking
      */
     public ReActResult execute(String systemPrompt, String userMessage, List<ChatMessage> historyMessages,
                                AgentTrace.Builder traceBuilder, ReActListener listener,
-                               com.harness.core.model.CancellationToken cancellationToken) {
+                               com.harness.core.model.CancellationToken cancellationToken,
+                               Boolean enableThinking) {
         long loopStart = System.currentTimeMillis();
-        log.info("[L3-ReAct] Starting ReAct loop: maxIterations={}, historyMessages={}, tools={}",
-                maxIterations, historyMessages.size(), toolRegistry.size());
+        ChatModel activeModel = selectModel(enableThinking);
+        log.info("[L3-ReAct] Starting ReAct loop: maxIterations={}, historyMessages={}, tools={}, thinking={}",
+                maxIterations, historyMessages.size(), toolRegistry.size(), enableThinking);
 
         List<ChatMessage> messages = new ArrayList<>();
         messages.add(SystemMessage.from(systemPrompt));
@@ -123,7 +135,7 @@ public class ReActEngine {
             ChatResponse response;
             if (cancellationToken != null) cancellationToken.trackCurrentThread();
             try {
-                response = chatModel.chat(reqBuilder.build());
+                response = activeModel.chat(reqBuilder.build());
             } catch (Exception e) {
                 if (cancellationToken != null && cancellationToken.isCancelled()) {
                     log.info("[L3-ReAct] LLM call interrupted by cancellation");
@@ -250,9 +262,16 @@ public class ReActEngine {
     public ReActResult streamExecute(String systemPrompt, String userMessage, List<ChatMessage> historyMessages,
                                       AgentTrace.Builder traceBuilder, ReActListener listener,
                                       com.harness.core.model.CancellationToken cancellationToken) {
-        if (streamingChatModel == null) {
-            log.warn("[L3-ReAct] No streaming model available, falling back to blocking mode");
-            return execute(systemPrompt, userMessage, historyMessages, traceBuilder, listener, cancellationToken);
+        return streamExecute(systemPrompt, userMessage, historyMessages, traceBuilder, listener, cancellationToken, null);
+    }
+
+    public ReActResult streamExecute(String systemPrompt, String userMessage, List<ChatMessage> historyMessages,
+                                      AgentTrace.Builder traceBuilder, ReActListener listener,
+                                      com.harness.core.model.CancellationToken cancellationToken,
+                                      Boolean enableThinking) {
+        if (streamingChatModel == null || (enableThinking != null && !enableThinking)) {
+            log.warn("[L3-ReAct] Falling back to blocking mode (streaming unavailable or thinking disabled)");
+            return execute(systemPrompt, userMessage, historyMessages, traceBuilder, listener, cancellationToken, enableThinking);
         }
 
         long loopStart = System.currentTimeMillis();

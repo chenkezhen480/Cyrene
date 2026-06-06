@@ -94,7 +94,7 @@ public class AgentOrchestrator {
         this.inputProcessor = new InputProcessor(chatModelProvider, visionModelProvider, voiceModelProvider);
 
         // Layer 2: Preprocess
-        this.contextBuilder = new ContextBuilder(rerankModelProvider, chatModelProvider, embeddingModelProvider);
+        this.contextBuilder = new ContextBuilder(rerankModelProvider, embeddingModelProvider);
 
         // Layer 3: Tools
         this.toolRegistry = new ToolRegistry();
@@ -147,15 +147,21 @@ public class AgentOrchestrator {
     }
 
     public AgentResult run(String token, String text, List<MultimodalParser.RawAttachment> attachments) {
-        return run(token, text, attachments, null, null, null);
+        return run(token, text, attachments, null, null, null, null);
     }
 
     public AgentResult run(String token, String text, List<MultimodalParser.RawAttachment> attachments, String requestedSessionId) {
-        return run(token, text, attachments, requestedSessionId, null, null);
+        return run(token, text, attachments, requestedSessionId, null, null, null);
+    }
+
+    public AgentResult run(String token, String text, List<MultimodalParser.RawAttachment> attachments,
+                           String requestedSessionId, String systemPromptOverride,
+                           com.harness.core.model.CancellationToken cancellationToken) {
+        return run(token, text, attachments, requestedSessionId, systemPromptOverride, cancellationToken, null);
     }
 
     /**
-     * Run agent with full control over session, system prompt override, and cancellation.
+     * Run agent with full control over session, system prompt override, cancellation, and thinking mode.
      *
      * @param token auth token
      * @param text user input text
@@ -163,10 +169,12 @@ public class AgentOrchestrator {
      * @param requestedSessionId optional session ID (null = reuse active)
      * @param systemPromptOverride optional system prompt override (null = use env default)
      * @param cancellationToken optional cancellation token for aborting in-progress runs
+     * @param enableThinking null = use env default, true = force thinking, false = force no thinking
      */
     public AgentResult run(String token, String text, List<MultimodalParser.RawAttachment> attachments,
                            String requestedSessionId, String systemPromptOverride,
-                           com.harness.core.model.CancellationToken cancellationToken) {
+                           com.harness.core.model.CancellationToken cancellationToken,
+                           Boolean enableThinking) {
         long runStart = System.currentTimeMillis();
         int attachCount = attachments != null ? attachments.size() : 0;
         log.info("[Orchestrator] Run start: textLen={}, sessionId={}, attachments={}",
@@ -179,6 +187,17 @@ public class AgentOrchestrator {
             InputProcessor.InputResult input = inputProcessor.process(token, text, attachments);
             trace.recordInput(input.userId(), text,
                     input.message().attachments().stream().map(AgentMessage.Attachment::name).toList());
+
+            // Build enhanced text: user text + extracted file contents
+            String enhancedText = text;
+            if (!input.parsedContents().isEmpty()) {
+                StringBuilder sb = new StringBuilder(text);
+                for (ParsedContent pc : input.parsedContents()) {
+                    sb.append("\n\n[File: ").append(pc.metadata().get("file_name")).append("]\n");
+                    sb.append(pc.text());
+                }
+                enhancedText = sb.toString();
+            }
 
             // ===== Layer 1.5: Session lifecycle =====
             String sessionId = null;
@@ -224,7 +243,7 @@ public class AgentOrchestrator {
 
             // ===== Layer 2: Preprocess =====
             // RAG知识库检索
-            ContextBuilder.ContextResult ctx = contextBuilder.build(text);
+            ContextBuilder.ContextResult ctx = contextBuilder.build(enhancedText);
             trace.recordPreprocess(null, ctx.ragHitIds(), null);
 
             // system消息组装 + 长期记忆注入
@@ -237,7 +256,7 @@ public class AgentOrchestrator {
             if (sessionId != null) {
                 int shorttermTokens = estimateTokens(shorttermMessages);
                 int ragTokens = ctx.contextBlock() != null ? estimateTokens(ctx.contextBlock()) : 0;
-                int inputTokens = estimateTokens(text);  // 只估算用户消息，AI回复未知
+                int inputTokens = estimateTokens(enhancedText);
                 int systemTokens = estimateTokens(systemPrompt);
                 int totalUsed = shorttermTokens + ragTokens + inputTokens + systemTokens;
                 int totalBudget = chatModelProvider.chatModel() != null ? 128000 : 8000;
@@ -260,8 +279,8 @@ public class AgentOrchestrator {
                 }
 
                 // 用户消息：异步写DB + 同步更新缓存
-                messageWriteWorker.submit(sessionId, "user", text, false);
-                messageCache.append(sessionId, new MemoryMessage(0, sessionId, "user", text, false, null));
+                messageWriteWorker.submit(sessionId, "user", enhancedText, false);
+                messageCache.append(sessionId, new MemoryMessage(0, sessionId, "user", enhancedText, false, null));
                 sessionStore.updateLastActive(sessionId);
             }
 
@@ -269,7 +288,7 @@ public class AgentOrchestrator {
             // Set parent cancellation token for sub-agents
             subAgentOrchestrator.setParentToken(cancellationToken);
             List<ChatMessage> historyChatMessages = convertToChatMessages(shorttermMessages);
-            ReActEngine.ReActResult result = reactEngine.execute(systemPrompt, text, historyChatMessages, trace.builder(), null, cancellationToken);
+            ReActEngine.ReActResult result = reactEngine.execute(systemPrompt, enhancedText, historyChatMessages, trace.builder(), null, cancellationToken, enableThinking);
             result.steps().forEach(trace::addStep);
 
             RiskLevel risk = determineRisk(result);
@@ -326,6 +345,13 @@ public class AgentOrchestrator {
                           String requestedSessionId, String systemPromptOverride,
                           com.harness.core.model.CancellationToken cancellationToken,
                           StreamCallback callback) {
+        streamRun(token, text, attachments, requestedSessionId, systemPromptOverride, cancellationToken, callback, null);
+    }
+
+    public void streamRun(String token, String text, List<MultimodalParser.RawAttachment> attachments,
+                          String requestedSessionId, String systemPromptOverride,
+                          com.harness.core.model.CancellationToken cancellationToken,
+                          StreamCallback callback, Boolean enableThinking) {
         long runStart = System.currentTimeMillis();
         int attachCount = attachments != null ? attachments.size() : 0;
         log.info("[Orchestrator] Stream run start: textLen={}, sessionId={}, attachments={}",
@@ -338,6 +364,17 @@ public class AgentOrchestrator {
             InputProcessor.InputResult input = inputProcessor.process(token, text, attachments);
             trace.recordInput(input.userId(), text,
                     input.message().attachments().stream().map(AgentMessage.Attachment::name).toList());
+
+            // Build enhanced text: user text + extracted file contents
+            String enhancedText = text;
+            if (!input.parsedContents().isEmpty()) {
+                StringBuilder sb = new StringBuilder(text);
+                for (ParsedContent pc : input.parsedContents()) {
+                    sb.append("\n\n[File: ").append(pc.metadata().get("file_name")).append("]\n");
+                    sb.append(pc.text());
+                }
+                enhancedText = sb.toString();
+            }
 
             // Layer 1.5: Session lifecycle
             String sessionId = null;
@@ -377,7 +414,7 @@ public class AgentOrchestrator {
             }
 
             // Layer 2: Preprocess
-            ContextBuilder.ContextResult ctx = contextBuilder.build(text);
+            ContextBuilder.ContextResult ctx = contextBuilder.build(enhancedText);
             trace.recordPreprocess(null, ctx.ragHitIds(), null);
             String systemPrompt = buildSystemPrompt(ctx, longtermPrefs, systemPromptOverride);
             trace.recordLlmMeta(chatModelProvider.modelName(), "v1");
@@ -386,7 +423,7 @@ public class AgentOrchestrator {
             if (sessionId != null) {
                 int shorttermTokens = estimateTokens(shorttermMessages);
                 int ragTokens = ctx.contextBlock() != null ? estimateTokens(ctx.contextBlock()) : 0;
-                int inputTokens = estimateTokens(text);
+                int inputTokens = estimateTokens(enhancedText);
                 int systemTokens = estimateTokens(systemPrompt);
                 int totalUsed = shorttermTokens + ragTokens + inputTokens + systemTokens;
                 int totalBudget = chatModelProvider.chatModel() != null ? 128000 : 8000;
@@ -400,8 +437,8 @@ public class AgentOrchestrator {
                     messageCache.put(sessionId, shorttermMessages);
                 }
 
-                messageWriteWorker.submit(sessionId, "user", text, false);
-                messageCache.append(sessionId, new MemoryMessage(0, sessionId, "user", text, false, null));
+                messageWriteWorker.submit(sessionId, "user", enhancedText, false);
+                messageCache.append(sessionId, new MemoryMessage(0, sessionId, "user", enhancedText, false, null));
             }
 
             // Emit start event with sessionId (first event for client)
@@ -425,7 +462,7 @@ public class AgentOrchestrator {
             };
 
             ReActEngine.ReActResult result = reactEngine.streamExecute(
-                    systemPrompt, text, historyChatMessages, trace.builder(), listener, cancellationToken);
+                    systemPrompt, enhancedText, historyChatMessages, trace.builder(), listener, cancellationToken, enableThinking);
             result.steps().forEach(trace::addStep);
 
             RiskLevel risk = determineRisk(result);

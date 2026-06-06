@@ -99,6 +99,7 @@ public class ChatHandler {
                     new java.util.concurrent.atomic.AtomicReference<>(null);
 
             AgentContext agentContext = AgentContext.of(req.context());
+            Boolean enableThinking = agentContext.enableThinking();
 
             try (OutputStream out = res.getOutputStream()) {
                 if (agentContext.isStreaming()) {
@@ -137,14 +138,14 @@ public class ChatHandler {
                                 } catch (IOException e) {
                                     log.debug("[Server] Failed to write SSE event: {}", e.getMessage());
                                 }
-                            });
+                            }, enableThinking);
                     long duration = System.currentTimeMillis() - start;
                     log.info("[Server] Streaming chat completed: duration={}ms", duration);
                 } else {
                     // Blocking mode: run agent
                     AgentResult result = agent.run(finalRawToken, req.text(),
                             req.attachments() != null ? req.attachments() : Collections.emptyList(),
-                            finalSessionId, req.systemPrompt(), cancellationToken);
+                            finalSessionId, req.systemPrompt(), cancellationToken, enableThinking);
 
                     long duration = System.currentTimeMillis() - start;
                     log.info("[Server] Chat completed: traceId={}, steps={}, risk={}, duration={}ms",

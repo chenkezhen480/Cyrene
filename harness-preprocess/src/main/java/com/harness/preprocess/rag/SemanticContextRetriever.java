@@ -1,10 +1,7 @@
 package com.harness.preprocess.rag;
 
-import com.harness.ai.model.ChatModelProvider;
 import com.harness.env.EnvConfig;
 import com.harness.env.EnvKey;
-import dev.langchain4j.data.message.UserMessage;
-import dev.langchain4j.model.chat.request.ChatRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -13,21 +10,42 @@ import java.util.*;
 /**
  * Wraps RAG retrieval to add semantic completeness checking.
  * When a chunk is semantically truncated, it fetches the previous chunk and merges.
+ * Uses pure heuristics (punctuation + continuation word detection) — no LLM calls.
  */
 public class SemanticContextRetriever {
 
     private static final Logger log = LoggerFactory.getLogger(SemanticContextRetriever.class);
 
-    private static final String COMPLETENESS_PROMPT =
-            "判断以下文本是否语义完整（是否在句子或段落中间被截断）。只回答 COMPLETE 或 INCOMPLETE。";
+    // Terminal punctuation — ending with these means the chunk is likely complete
+    private static final String TERMINAL_PUNCTUATION = "。.！!？?」』】）)\"‘’“”";
+
+    // Structural closing characters — code blocks, quotes, tables
+    private static final String STRUCTURAL_ENDINGS = "}>]`|";
+
+    // Chinese continuation words — if chunk starts with these, it's a continuation
+    private static final String[] CN_CONTINUATIONS = {
+            "而", "但", "却", "且", "并", "或", "及", "与", "以及", "但是",
+            "然而", "因此", "所以", "故", "则", "又", "再", "还", "也", "就",
+            "才", "即", "若", "如", "虽然", "尽管", "即使", "因为", "由于",
+            "不过", "否则", "于是", "接着", "然后", "首先", "其次", "最后",
+            "总之", "另外", "此外", "同时", "反之", "也就是说"
+    };
+
+    // English continuation words — lowercase, checked after lowering
+    private static final String[] EN_CONTINUATIONS = {
+            "and ", "but ", "or ", "nor ", "yet ", "so ", "for ",
+            "however ", "therefore ", "moreover ", "furthermore ",
+            "nevertheless ", "meanwhile ", "otherwise ", "thus ",
+            "then ", "also ", "still ", "even ", "while ", "whereas ",
+            "although ", "because ", "since ", "unless ", "until ",
+            "additionally ", "consequently ", "hence ", "accordingly "
+    };
 
     private final PgVectorRagRetriever pgVectorRetriever;
-    private final ChatModelProvider chatProvider;
     private final int maxLookback;
 
-    public SemanticContextRetriever(PgVectorRagRetriever pgVectorRetriever, ChatModelProvider chatProvider) {
+    public SemanticContextRetriever(PgVectorRagRetriever pgVectorRetriever) {
         this.pgVectorRetriever = pgVectorRetriever;
-        this.chatProvider = chatProvider;
         EnvConfig cfg = EnvConfig.get();
         this.maxLookback = cfg.getInt(EnvKey.RAG_CONTEXT_LOOKBACK_MAX, 2);
     }
@@ -80,26 +98,55 @@ public class SemanticContextRetriever {
         return enhanced;
     }
 
+    /**
+     * Heuristic semantic completeness check — no LLM calls.
+     * Checks both chunk ending (terminal punctuation) and chunk opening (continuation words).
+     */
     private boolean isSemanticallyComplete(String text) {
         if (text == null || text.isBlank()) return true;
-        // Heuristic: if text ends with terminal punctuation, likely complete
         String trimmed = text.stripTrailing();
-        if (trimmed.endsWith("。") || trimmed.endsWith(".") || trimmed.endsWith("！")
-                || trimmed.endsWith("!") || trimmed.endsWith("？") || trimmed.endsWith("?")
-                || trimmed.endsWith("]") || trimmed.endsWith(")")) {
-            return true;
+        if (trimmed.isEmpty()) return true;
+
+        // Layer 1: Terminal punctuation at end — likely complete
+        char last = trimmed.charAt(trimmed.length() - 1);
+        if (TERMINAL_PUNCTUATION.indexOf(last) >= 0) return true;
+
+        // Layer 2: Structural closing — code blocks, quotes, tables
+        if (STRUCTURAL_ENDINGS.indexOf(last) >= 0) return true;
+
+        // Layer 3: Opening continuation detection — if chunk starts mid-sentence, it's incomplete
+        String firstLine = trimmed.contains("\n")
+                ? trimmed.substring(0, trimmed.indexOf('\n')).stripLeading()
+                : trimmed.stripLeading();
+        if (!firstLine.isEmpty()) {
+            char first = firstLine.charAt(0);
+            // Lowercase English letter — likely mid-sentence
+            if (first >= 'a' && first <= 'z') return false;
+            // Starts with continuation word or punctuation
+            if (startsWithContinuation(firstLine)) return false;
         }
-        // Use LLM for ambiguous cases
-        try {
-            String prompt = COMPLETENESS_PROMPT + "\n\n" + text;
-            String response = chatProvider.chatModel().chat(ChatRequest.builder()
-                    .messages(UserMessage.from(prompt))
-                    .build()).aiMessage().text().trim().toUpperCase();
-            return response.contains("COMPLETE") && !response.contains("INCOMPLETE");
-        } catch (Exception e) {
-            log.warn("Completeness check failed, assuming complete: {}", e.getMessage());
-            return true;
+
+        return true;  // Default to complete when uncertain (conservative, avoids over-lookback)
+    }
+
+    private static boolean startsWithContinuation(String firstLine) {
+        // Continuation punctuation
+        char first = firstLine.charAt(0);
+        if (first == ',' || first == '，' || first == ';' || first == '；'
+                || first == ':' || first == '：') return true;
+
+        // Chinese continuation words
+        for (String w : CN_CONTINUATIONS) {
+            if (firstLine.startsWith(w)) return true;
         }
+
+        // English continuation words (case-insensitive)
+        String lower = firstLine.toLowerCase();
+        for (String w : EN_CONTINUATIONS) {
+            if (lower.startsWith(w)) return true;
+        }
+
+        return false;
     }
 
     private String getPrevChunkId(String chunkId) {

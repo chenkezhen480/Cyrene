@@ -12,6 +12,15 @@ public interface ChatModelProvider {
 
     ChatModel chatModel();
 
+    /**
+     * Returns a chat model with thinking/reasoning disabled.
+     * Used for lightweight tasks like file summarization where thinking is wasteful.
+     * Default: returns the same model as chatModel() (providers that support thinking should override).
+     */
+    default ChatModel chatModelNoThinking() {
+        return chatModel();
+    }
+
     default StreamingChatModel streamingModel() {
         return null;
     }

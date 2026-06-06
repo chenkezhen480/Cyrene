@@ -163,7 +163,7 @@ public class SubAgentOrchestrator {
 
                 // Pass parent cancellation token to sub-agent
                 ReActEngine.ReActResult result = engine.execute(systemPrompt, task.description(),
-                        List.of(), traceBuilder, null, parentToken);
+                        List.of(), traceBuilder, null, parentToken, null);
                 long duration = System.currentTimeMillis() - start;
                 log.info("[SubAgent] Task {} completed in {}ms, steps={}", task.taskId(), duration, result.steps().size());
                 return SubAgentResult.success(task.taskId(), result.output(), result.steps(), duration);

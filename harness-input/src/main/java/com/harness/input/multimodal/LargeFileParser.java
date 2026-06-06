@@ -3,6 +3,7 @@ package com.harness.input.multimodal;
 import com.harness.ai.model.ChatModelProvider;
 import com.harness.ai.model.VisionModelProvider;
 import com.harness.ai.model.VoiceModelProvider;
+import dev.langchain4j.model.chat.ChatModel;
 import com.harness.core.model.ParsedContent;
 import com.harness.input.multimodal.impl.TextExtractorRegistry;
 import dev.langchain4j.data.message.UserMessage;
@@ -32,9 +33,11 @@ public class LargeFileParser {
     private static final int GROUP_SIZE = 8;
 
     private final ChatModelProvider chatProvider;
+    private final ChatModel noThinkingModel;
 
     public LargeFileParser(ChatModelProvider chatProvider, VisionModelProvider visionProvider, VoiceModelProvider voiceProvider) {
         this.chatProvider = chatProvider;
+        this.noThinkingModel = chatProvider.chatModelNoThinking();
     }
 
     public ParsedContent parse(byte[] fileData, String fileName, String mimeType) {
@@ -78,7 +81,7 @@ public class LargeFileParser {
     private String summarizeChunk(String chunk, int index, int total) {
         try {
             String prompt = SUMMARIZE_PROMPT + "\n\n[" + index + "/" + total + "]\n" + chunk;
-            return chatProvider.chatModel().chat(ChatRequest.builder()
+            return noThinkingModel.chat(ChatRequest.builder()
                     .messages(UserMessage.from(prompt))
                     .build()).aiMessage().text();
         } catch (Exception e) {
@@ -94,7 +97,7 @@ public class LargeFileParser {
             for (int i = 0; i < summaries.size(); i++) {
                 prompt.append("\n\n--- 摘要 ").append(i + 1).append(" ---\n").append(summaries.get(i));
             }
-            return chatProvider.chatModel().chat(ChatRequest.builder()
+            return noThinkingModel.chat(ChatRequest.builder()
                     .messages(UserMessage.from(prompt.toString()))
                     .build()).aiMessage().text();
         } catch (Exception e) {

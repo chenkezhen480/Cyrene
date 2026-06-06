@@ -5,14 +5,28 @@ import com.harness.env.EnvKey;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.regex.Pattern;
 
 /**
  * Static text chunking utility. Splits text by semantic boundaries
- * (paragraphs → lines → fixed token count).
+ * (paragraphs → sentences → lines → fixed token count).
+ * Each semantic unit becomes its own chunk — no merging across boundaries.
  */
 public final class TextChunker {
 
     private TextChunker() {}
+
+    // Paragraph separator: two or more newlines
+    private static final Pattern PARAGRAPH_SEP = Pattern.compile("\\n\\n+");
+
+    // Heading patterns: markdown headings or lines that look like titles
+    private static final Pattern HEADING_PATTERN = Pattern.compile("^#{1,6}\\s.*$", Pattern.MULTILINE);
+
+    // Horizontal rule: ---, ===, ***, - - -, etc.
+    private static final Pattern HR_PATTERN = Pattern.compile("^[-=*]{3,}\\s*$", Pattern.MULTILINE);
+
+    // Sentence-ending punctuation (CJK + Latin)
+    private static final String SENTENCE_ENDINGS = "。.！!？?；;";
 
     public static List<String> split(String text) {
         return split(text, defaultChunkTokenSize());
@@ -22,36 +36,121 @@ public final class TextChunker {
         List<String> chunks = new ArrayList<>();
         if (text == null || text.isBlank()) return chunks;
 
-        String[] paragraphs = text.split("\\n\\n+");
-        StringBuilder currentChunk = new StringBuilder();
-        int currentTokens = 0;
+        // Step 1: Split by semantic boundaries (paragraphs, headings, horizontal rules)
+        List<String> semanticUnits = splitBySemanticBoundaries(text);
 
-        for (String paragraph : paragraphs) {
-            int paragraphTokens = estimateTokens(paragraph);
-            if (currentTokens + paragraphTokens > chunkTokenSize && !currentChunk.isEmpty()) {
-                chunks.add(currentChunk.toString().trim());
-                currentChunk = new StringBuilder();
-                currentTokens = 0;
-            }
-            currentChunk.append(paragraph).append("\n\n");
-            currentTokens += paragraphTokens;
-        }
-        if (!currentChunk.toString().isBlank()) {
-            chunks.add(currentChunk.toString().trim());
-        }
-
-        List<String> finalChunks = new ArrayList<>();
-        for (String chunk : chunks) {
-            if (estimateTokens(chunk) > chunkTokenSize * 1.5) {
-                finalChunks.addAll(splitByLine(chunk, chunkTokenSize));
+        // Step 2: Each semantic unit becomes its own chunk; oversized ones get sub-split
+        for (String unit : semanticUnits) {
+            if (unit.isBlank()) continue;
+            int tokens = estimateTokens(unit);
+            if (tokens <= chunkTokenSize) {
+                chunks.add(unit.strip());
             } else {
-                finalChunks.add(chunk);
+                // Sub-split by sentence boundaries
+                chunks.addAll(splitBySentence(unit, chunkTokenSize));
             }
         }
 
-        return finalChunks;
+        return chunks;
     }
 
+    /**
+     * Split text by semantic boundaries: paragraphs, headings, horizontal rules.
+     * Does NOT merge units — each unit is returned as-is.
+     */
+    private static List<String> splitBySemanticBoundaries(String text) {
+        List<String> units = new ArrayList<>();
+
+        // Split on: horizontal rules, markdown headings, paragraph breaks
+        // Use a combined pattern: HR or double-newline
+        String[] rawParts = text.split("(?m)(?=^#{1,6}\\s)|\\n\\n+|(?=^[-=*]{3,}\\s*$)");
+
+        for (String part : rawParts) {
+            if (!part.isBlank()) {
+                units.add(part.strip());
+            }
+        }
+
+        return units;
+    }
+
+    /**
+     * Split a large semantic unit by sentence boundaries.
+     * Uses sentence-ending punctuation as split points.
+     */
+    private static List<String> splitBySentence(String text, int chunkTokenSize) {
+        List<String> chunks = new ArrayList<>();
+
+        // Split on sentence-ending punctuation, keeping the delimiter with the preceding sentence
+        List<String> sentences = splitSentences(text);
+
+        StringBuilder current = new StringBuilder();
+        int currentTokens = 0;
+
+        for (String sentence : sentences) {
+            int sentenceTokens = estimateTokens(sentence);
+            if (currentTokens + sentenceTokens > chunkTokenSize && !current.isEmpty()) {
+                chunks.add(current.toString().strip());
+                current = new StringBuilder();
+                currentTokens = 0;
+            }
+            current.append(sentence);
+            currentTokens += sentenceTokens;
+        }
+        if (!current.toString().isBlank()) {
+            String remaining = current.toString().strip();
+            if (estimateTokens(remaining) > chunkTokenSize * 1.5) {
+                // Still oversized — fall back to line splitting
+                chunks.addAll(splitByLine(remaining, chunkTokenSize));
+            } else {
+                chunks.add(remaining);
+            }
+        }
+
+        return chunks;
+    }
+
+    /**
+     * Split text into sentences by sentence-ending punctuation.
+     * Keeps the punctuation attached to the preceding text.
+     */
+    private static List<String> splitSentences(String text) {
+        List<String> sentences = new ArrayList<>();
+        StringBuilder current = new StringBuilder();
+
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            current.append(c);
+
+            if (SENTENCE_ENDINGS.indexOf(c) >= 0) {
+                // Look ahead: if next char is a quote/bracket, include it
+                int next = i + 1;
+                while (next < text.length()) {
+                    char nc = text.charAt(next);
+                    if (nc == '"' || nc == '\'' || nc == '"' || nc == '"' || nc == '\''
+                            || nc == '」' || nc == '』' || nc == ')' || nc == ']') {
+                        current.append(nc);
+                        next++;
+                        i++;
+                    } else {
+                        break;
+                    }
+                }
+                sentences.add(current.toString());
+                current = new StringBuilder();
+            }
+        }
+
+        if (!current.toString().isBlank()) {
+            sentences.add(current.toString());
+        }
+
+        return sentences;
+    }
+
+    /**
+     * Split by single newlines. Last resort before fixed-token splitting.
+     */
     private static List<String> splitByLine(String text, int chunkTokenSize) {
         List<String> chunks = new ArrayList<>();
         String[] lines = text.split("\\n");
@@ -61,7 +160,7 @@ public final class TextChunker {
         for (String line : lines) {
             int lineTokens = estimateTokens(line);
             if (currentTokens + lineTokens > chunkTokenSize && !current.isEmpty()) {
-                chunks.add(current.toString().trim());
+                chunks.add(current.toString().strip());
                 current = new StringBuilder();
                 currentTokens = 0;
             }
@@ -69,7 +168,7 @@ public final class TextChunker {
             currentTokens += lineTokens;
         }
         if (!current.toString().isBlank()) {
-            chunks.add(current.toString().trim());
+            chunks.add(current.toString().strip());
         }
         return chunks;
     }

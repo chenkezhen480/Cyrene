@@ -15,10 +15,10 @@ mvn clean package -pl harness-core -am
 mvn clean compile
 
 # Run CLI (interactive REPL)
-java -jar harness-cli/target/harness-cli-0.2.5-SNAPSHOT.jar
+java -jar harness-cli/target/harness-cli-0.2.6-SNAPSHOT.jar
 
 # Run HTTP server (Javalin, default port 8080)
-java -jar harness-server/target/harness-server-0.2.5-SNAPSHOT.jar
+java -jar harness-server/target/harness-server-0.2.6-SNAPSHOT.jar
 
 # Run tests (currently no test files exist)
 mvn test
@@ -75,6 +75,8 @@ harness-server        ← HTTP API entry point (com.harness.server.Main, Javalin
 
 - **Tools implement `com.harness.tool.Tool` interface** — `spec()` returns ToolSpec, `execute(JsonNode)` returns String. Register in ToolRegistry. MCP tools adapted via McpToolAdapter.
 - **ReActEngine** uses LangChain4j 1.15.0 `ChatModel.chat(ChatRequest)` with `ToolSpecification` (JsonObjectSchema). Wraps ChatModel in `FallbackChatModel` when vision/voice providers are available. Supports streaming via `StreamingChatModel` (`streamExecute()` method). Tool calls retry up to 3 times on error; success with empty data passes to LLM without retry.
+- **Thinking Mode Control** — `HARNESS_MODEL_CHAT_THINKING` env var (default `true`) controls whether to enable thinking/reasoning mode for the chat model. `ChatModelProvider.chatModelNoThinking()` returns a model with thinking disabled (used by `LargeFileParser` for cost savings). Per-request override via `AgentContext.enableThinking()` (set in `context.enableThinking` JSON field). Providers pass `enable_thinking` via `customParameters(Map)` to OpenAI-compatible APIs (DashScope etc.). `ReActEngine.selectModel(Boolean)` picks thinking/non-thinking model; streaming mode falls back to blocking when thinking is disabled.
+- **File Content Injection** — File attachments are extracted and injected into the LLM context via `enhancedText` in `AgentOrchestrator`. Small files (< `HARNESS_INPUT_FILE_SIZE_THRESHOLD_KB`, default 100KB) use `TextExtractorRegistry.extract()` directly; large files use `LargeFileParser` MapReduce summarization. Works independently of RAG knowledge base configuration.
 - **ReAct Inspection** — 每轮工具调用后由 `Inspector` 启发式检查结果状态，记录在 `ReActStep.InspectionResult` 中：
 
   | 状态 | 含义 | 触发条件 |
@@ -107,13 +109,13 @@ harness-server        ← HTTP API entry point (com.harness.server.Main, Javalin
 ## Subsystems
 
 ### Large File Parsing (harness-input)
-Files exceeding `HARNESS_INPUT_FILE_SIZE_THRESHOLD_KB` (default 512) are parsed via `LargeFileParser`: extract text via `TextExtractorRegistry` (supports PDF/DOCX/XLSX/text) → split into chunks via `TextChunker` (paragraph → line → fixed token) → summarize each chunk via ChatModelProvider → merge summaries (flat for ≤8 chunks, tree reduce for more). Output is `ParsedContent` with strategy `CHUNKED_REDUCE`.
+Files exceeding `HARNESS_INPUT_FILE_SIZE_THRESHOLD_KB` (default 100) are parsed via `LargeFileParser`: extract text via `TextExtractorRegistry` (supports PDF/DOCX/XLSX/text) → split into chunks via `TextChunker` (semantic boundary splitting) → summarize each chunk via ChatModelProvider (thinking mode disabled for cost savings) → merge summaries (flat for ≤8 chunks, tree reduce for more). Output is `ParsedContent` with strategy `CHUNKED_REDUCE`. Files below the threshold use direct text extraction (`TextExtractorRegistry.extract()`) with `ParseStrategy.DIRECT`.
 
 ### Multimodal Fallback (harness-ai)
 `FallbackChatModel` wraps the main ChatModel. When a request contains ImageContent/AudioContent but the model lacks the capability (checked via `ModalCapabilityRegistry`), it transparently falls back to VisionModelProvider (image→text) or VoiceModelProvider (audio→text). Override model capabilities via `HARNESS_MODEL_CHAT_CAPABILITIES`.
 
 ### Semantic Context Retrieval (harness-preprocess)
-`SemanticContextRetriever` checks retrieved chunks for semantic completeness. Truncated chunks trigger lookback to previous chunks via `prev_chunk_id` in pgvector. Max lookback controlled by `HARNESS_RAG_CONTEXT_LOOKBACK_MAX` (default 2).
+`SemanticContextRetriever` checks retrieved chunks for semantic completeness using pure heuristic analysis (no LLM calls). Truncated chunks trigger lookback to previous chunks via `prev_chunk_id` in pgvector. Completeness detection: terminal punctuation (`。！？…""''` etc.) → structural endings (`]}`) → opening continuation word detection (35 Chinese continuations like `而且/但是/因此`, 27 English like `and/but/then`). Max lookback controlled by `HARNESS_RAG_CONTEXT_LOOKBACK_MAX` (default 2).
 
 ### Rerank Integration (harness-ai + harness-preprocess)
 `OpenAiRerankModelProvider` calls OpenAI-compatible `/rerank` endpoint. Integrated into `ContextBuilder` pipeline: RAG retrieval → semantic enhancement → rerank → format. Timing and doc counts recorded in metadata.
@@ -199,7 +201,7 @@ File (multipart) → TextExtractorRegistry → TextChunker.split
 
 **Key classes:**
 - `TextExtractor` interface + `TextExtractorRegistry` (harness-input) — format-specific text extraction
-- `TextChunker` (harness-input) — static text chunking utility (paragraph → line → fixed token), shared by both LargeFileParser and KnowledgeIngestService
+- `TextChunker` (harness-input) — semantic boundary text chunking utility (paragraph → sentence → line → fixed token fallback), shared by both LargeFileParser and KnowledgeIngestService. Each semantic unit becomes its own chunk without merging across boundaries.
 - `KnowledgeIngestService` (harness-preprocess) — orchestrator: extract → chunk → embed → store
 - `FileStorageService` (harness-preprocess) — persists files to `{HARNESS_KNOWLEDGE_UPLOAD_DIR}/{collection}/`
 - `PgVectorRagRetriever.insertBatchWithLinks()` — inserts chunks with `chunk_index`, `prev_chunk_id`, `next_chunk_id` linking
@@ -246,7 +248,7 @@ Same pattern for Vision/Voice/Embedding/Rerank providers.
 | Method | Path | Description |
 |--------|------|-------------|
 | POST | `/api/auth/token` | Get JWT token (userId/username + password, mode=jwt only) |
-| POST | `/api/chat` | Send message, get agent response (SSE stream). Supports `systemPrompt` and `context` (JSON: `outputMode`=blocking/streaming, `userId`) in body, `X-Session-Id` header |
+| POST | `/api/chat` | Send message, get agent response (SSE stream). Supports `systemPrompt` and `context` (JSON: `outputMode`=blocking/streaming, `userId`, `enableThinking`) in body, `X-Session-Id` header |
 | DELETE | `/api/chat/{sessionId}` | Cancel an in-progress chat request |
 | POST | `/api/sessions` | Create a new session (body: `userId`) |
 | GET | `/api/sessions` | List sessions with cursor pagination. Query: `userId`, `status` (active/ended/timeout), `limit`, `cursor` (ISO-8601) |

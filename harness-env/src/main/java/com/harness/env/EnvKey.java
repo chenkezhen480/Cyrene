@@ -15,6 +15,7 @@ public final class EnvKey {
     public static final String MODEL_CHAT_MODEL       = "HARNESS_MODEL_CHAT_MODEL";
     public static final String MODEL_CHAT_MAX_TOKENS  = "HARNESS_MODEL_CHAT_MAX_TOKENS";
     public static final String MODEL_CHAT_TEMPERATURE = "HARNESS_MODEL_CHAT_TEMPERATURE";
+    public static final String MODEL_CHAT_THINKING   = "HARNESS_MODEL_CHAT_THINKING";
 
     // ==================== 2. Vision Model (图片识别/视频分析) ====================
     public static final String MODEL_VISION_PROVIDER  = "HARNESS_MODEL_VISION_PROVIDER";

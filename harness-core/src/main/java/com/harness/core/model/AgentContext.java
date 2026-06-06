@@ -11,6 +11,7 @@ public record AgentContext(
 ) {
     public static final String KEY_USER_ID = "userId";
     public static final String KEY_OUTPUT_MODE = "outputMode";
+    public static final String KEY_ENABLE_THINKING = "enableThinking";
     public static final String VALUE_MODE_BLOCKING = "blocking";
     public static final String VALUE_MODE_STREAMING = "streaming";
 
@@ -34,5 +35,12 @@ public record AgentContext(
     public String userId() {
         Object id = data.get(KEY_USER_ID);
         return id != null ? id.toString() : null;
+    }
+
+    public Boolean enableThinking() {
+        Object val = data.get(KEY_ENABLE_THINKING);
+        if (val instanceof Boolean b) return b;
+        if (val instanceof String s) return Boolean.parseBoolean(s);
+        return null;  // not specified, use env default
     }
 }

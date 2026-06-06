@@ -5,13 +5,16 @@ import com.harness.ai.model.VisionModelProvider;
 import com.harness.ai.model.VoiceModelProvider;
 import com.harness.core.model.AgentMessage;
 import com.harness.core.model.ParsedContent;
+import com.harness.input.multimodal.impl.TextExtractorRegistry;
 import com.harness.env.EnvConfig;
 import com.harness.env.EnvKey;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Parses multimodal inputs (images, files, video) into a unified message format.
@@ -37,7 +40,7 @@ public class MultimodalParser {
         this.imageEnabled = cfg.getBool(EnvKey.MULTIMODAL_IMAGE_ENABLED, true);
         this.videoEnabled = cfg.getBool(EnvKey.MULTIMODAL_VIDEO_ENABLED, false);
         this.maxFileSizeMb = cfg.getLong(EnvKey.MULTIMODAL_FILE_MAX_SIZE, 50);
-        this.thresholdKb = cfg.getInt(EnvKey.INPUT_FILE_SIZE_THRESHOLD_KB, 512);
+        this.thresholdKb = cfg.getInt(EnvKey.INPUT_FILE_SIZE_THRESHOLD_KB, 100);
         log.info("[L1-Multimodal] Initialized: image={}, video={}, maxSize={}MB, threshold={}KB",
                 imageEnabled, videoEnabled, maxFileSizeMb, thresholdKb);
 
@@ -66,18 +69,32 @@ public class MultimodalParser {
             if (parsed != null) {
                 ParsedContent parsedContent = null;
 
-                // For FILE attachments that exceed the threshold, use LargeFileParser
-                if (parsed.type() == AgentMessage.Attachment.AttachmentType.FILE
-                        && largeFileParser != null
-                        && parsed.data().length / 1024 > thresholdKb) {
-                    log.info("[L1-Multimodal] Large file detected: {} ({}KB > {}KB), running MapReduce summarization",
-                            parsed.name(), parsed.data().length / 1024, thresholdKb);
-                    try {
-                        parsedContent = largeFileParser.parse(parsed.data(), parsed.name(), parsed.mimeType());
-                    } catch (Exception e) {
-                        log.warn("[L1-Multimodal] Large file parsing failed for {}, falling back to raw attachment: {}",
-                                parsed.name(), e.getMessage());
-                        parsedContent = null;
+                // For FILE attachments, extract text content
+                if (parsed.type() == AgentMessage.Attachment.AttachmentType.FILE) {
+                    if (largeFileParser != null && parsed.data().length / 1024 > thresholdKb) {
+                        // Large file: MapReduce summarization via LLM
+                        log.info("[L1-Multimodal] Large file detected: {} ({}KB > {}KB), running MapReduce summarization",
+                                parsed.name(), parsed.data().length / 1024, thresholdKb);
+                        try {
+                            parsedContent = largeFileParser.parse(parsed.data(), parsed.name(), parsed.mimeType());
+                        } catch (Exception e) {
+                            log.warn("[L1-Multimodal] Large file parsing failed for {}, falling back to direct extraction: {}",
+                                    parsed.name(), e.getMessage());
+                        }
+                    }
+                    // Small file or large file fallback: extract text directly
+                    if (parsedContent == null) {
+                        try {
+                            String extractedText = TextExtractorRegistry.extract(parsed.data(), parsed.name(), parsed.mimeType());
+                            if (extractedText != null && !extractedText.isBlank()) {
+                                Map<String, Object> meta = new HashMap<>();
+                                meta.put("file_name", parsed.name());
+                                meta.put("file_size_kb", parsed.data().length / 1024);
+                                parsedContent = new ParsedContent(extractedText, ParsedContent.ParseStrategy.DIRECT, 1, meta);
+                            }
+                        } catch (Exception e) {
+                            log.warn("[L1-Multimodal] Text extraction failed for {}: {}", parsed.name(), e.getMessage());
+                        }
                     }
                 }
 

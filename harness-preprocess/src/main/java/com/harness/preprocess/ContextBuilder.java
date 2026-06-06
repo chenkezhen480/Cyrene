@@ -1,6 +1,5 @@
 package com.harness.preprocess;
 
-import com.harness.ai.model.ChatModelProvider;
 import com.harness.ai.model.EmbeddingModelProvider;
 import com.harness.ai.model.RerankModelProvider;
 import com.harness.preprocess.rag.PgVectorRagRetriever;
@@ -26,13 +25,13 @@ public class ContextBuilder {
     private final Reranker reranker;
     private final SemanticContextRetriever semanticRetriever;
 
-    public ContextBuilder(RerankModelProvider rerankModelProvider, ChatModelProvider chatModelProvider,
+    public ContextBuilder(RerankModelProvider rerankModelProvider,
                           EmbeddingModelProvider embeddingModelProvider) {
         this.ragRetriever = new RagRetriever(embeddingModelProvider);
         this.reranker = new Reranker(rerankModelProvider);
         PgVectorRagRetriever pgVector = ragRetriever.getPgVectorRetriever();
-        this.semanticRetriever = (pgVector != null && chatModelProvider != null)
-                ? new SemanticContextRetriever(pgVector, chatModelProvider) : null;
+        this.semanticRetriever = pgVector != null
+                ? new SemanticContextRetriever(pgVector) : null;
     }
 
     /**
