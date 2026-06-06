@@ -39,8 +39,13 @@ public class SessionHandler {
             ctx.status(400).json(Map.of("error", "userId is required"));
             return;
         }
+        String title = body.get("title");
         Session session = sessionStore.create(userId);
-        log.info("[Server] Created session {} for user {}", session.id(), userId);
+        if (title != null && !title.isBlank()) {
+            sessionStore.updateTitle(session.id(), title.trim());
+            session = sessionStore.findById(session.id()).orElse(session);
+        }
+        log.info("[Server] Created session {} for user {}, title={}", session.id(), userId, session.title());
         ctx.status(201).json(session);
     }
 

@@ -106,69 +106,34 @@ public class SessionLifecycleManager {
 
     /**
      * Check if a session meets quality thresholds for preference refinement.
-     * Requires BOTH the existing thresholds (message count + char count) AND a minimum refinement score.
+     * Uses a single consolidated query for all stats.
      */
     public boolean isWorthyOfRefinement(String sessionId) {
-        int msgCount = messageStore.countUserMessages(sessionId);
-        int charCount = messageStore.sumUserContentLength(sessionId);
+        MessageStore.SessionStats stats = messageStore.loadSessionStats(sessionId);
 
-        // Basic threshold check
-        if (msgCount < minMessages || charCount < minUserChars) {
-            log.debug("Session {} not worthy of refinement: msgs={}/{}, chars={}/{}",
-                    sessionId, msgCount, minMessages, charCount, minUserChars);
+        if (stats.userMsgCount() < minMessages || stats.userCharCount() < minUserChars) {
+            log.debug("Session {} not worthy: msgs={}/{}, chars={}/{}",
+                    sessionId, stats.userMsgCount(), minMessages, stats.userCharCount(), minUserChars);
             return false;
         }
 
-        // Scoring check
-        int score = calculateRefinementScore(sessionId);
+        int score = calculateRefinementScoreFromStats(stats);
         if (score < refinementMinScore) {
-            log.debug("Session {} below refinement score threshold: score={}/{}",
-                    sessionId, score, refinementMinScore);
+            log.debug("Session {} below score threshold: {}/{}", sessionId, score, refinementMinScore);
             return false;
         }
-
         return true;
     }
 
     /**
-     * Calculate a refinement quality score for a session.
-     * Each signal adds 1 point. Higher scores indicate more valuable sessions.
-     *
-     * Signals:
-     * 1. Conversation turns >= 3 (meaningful back-and-forth)
-     * 2. Tool usage present (messages with tool results)
-     * 3. Average AI reply length >= 200 chars (detailed responses)
-     * 4. User messages contain questions or intent keywords
+     * Calculate refinement score from pre-loaded stats (no additional DB calls).
      */
-    public int calculateRefinementScore(String sessionId) {
+    private int calculateRefinementScoreFromStats(MessageStore.SessionStats stats) {
         int score = 0;
-
-        // Signal 1: Conversation turns (user+assistant pairs)
-        int turns = messageStore.countConversationTurns(sessionId);
-        if (turns >= 3) {
-            score++;
-        }
-
-        // Signal 2: Tool usage
-        int toolMessages = messageStore.countToolMessages(sessionId);
-        if (toolMessages > 0) {
-            score++;
-        }
-
-        // Signal 3: Average AI reply length
-        int avgReplyLen = messageStore.avgAssistantReplyLength(sessionId);
-        if (avgReplyLen >= 200) {
-            score++;
-        }
-
-        // Signal 4: User questions or intent
-        boolean hasQuestions = messageStore.hasUserQuestions(sessionId);
-        if (hasQuestions) {
-            score++;
-        }
-
-        log.debug("Session {} refinement score: {} (turns={}, tools={}, avgLen={}, hasQuestions={})",
-                sessionId, score, turns, toolMessages, avgReplyLen, hasQuestions);
+        if (stats.conversationTurns() >= 3) score++;
+        if (stats.toolMsgCount() > 0) score++;
+        if (stats.avgAssistantReplyLen() >= 200) score++;
+        if (stats.hasUserQuestions()) score++;
         return score;
     }
 

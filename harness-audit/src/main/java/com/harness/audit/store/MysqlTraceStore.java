@@ -4,8 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.harness.core.model.AgentTrace;
-import com.harness.env.EnvConfig;
-import com.harness.env.EnvKey;
+import com.harness.env.MysqlConnectionPool;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -17,30 +16,16 @@ import java.util.Optional;
 
 /**
  * MySQL-based trace store.
- * Configured via HARNESS_AUDIT_STORE=mysql + HARNESS_AUDIT_DB_URL/USER/PASS.
- *
- * Schema: see resources/schema-mysql.sql
+ * Uses shared HikariCP connection pool.
  */
 public class MysqlTraceStore implements TraceStore {
 
     private static final Logger log = LoggerFactory.getLogger(MysqlTraceStore.class);
     private final ObjectMapper mapper;
-    private final String dbUrl;
-    private final String dbUser;
-    private final String dbPass;
 
     public MysqlTraceStore() {
         this.mapper = new ObjectMapper();
         this.mapper.registerModule(new JavaTimeModule());
-        EnvConfig cfg = EnvConfig.get();
-        this.dbUrl = cfg.getString(EnvKey.AUDIT_DB_URL, "jdbc:mysql://localhost:3306/agent");
-        this.dbUser = cfg.getString(EnvKey.AUDIT_DB_USER, "root");
-        this.dbPass = cfg.getString(EnvKey.AUDIT_DB_PASS, "1234");
-        log.info("MySQL trace store: url={}, user={}", dbUrl, dbUser);
-    }
-
-    private Connection getConnection() throws SQLException {
-        return DriverManager.getConnection(dbUrl, dbUser, dbPass);
     }
 
     @Override
@@ -65,7 +50,7 @@ public class MysqlTraceStore implements TraceStore {
                     full_json = VALUES(full_json)
                 """;
 
-        try (Connection conn = getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
+        try (Connection conn = MysqlConnectionPool.getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
             String fullJson = mapper.writeValueAsString(trace);
             String stepsJson = mapper.writeValueAsString(trace.steps());
             String attachmentsJson = mapper.writeValueAsString(trace.inputAttachments());
@@ -102,7 +87,7 @@ public class MysqlTraceStore implements TraceStore {
     @Override
     public Optional<AgentTrace> findById(String traceId) {
         String sql = "SELECT full_json FROM agent_traces WHERE trace_id = ?";
-        try (Connection conn = getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
+        try (Connection conn = MysqlConnectionPool.getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, traceId);
             ResultSet rs = ps.executeQuery();
             if (rs.next()) {
@@ -118,7 +103,7 @@ public class MysqlTraceStore implements TraceStore {
     public List<AgentTrace> listRecent(int limit) {
         String sql = "SELECT full_json FROM agent_traces ORDER BY timestamp DESC LIMIT ?";
         List<AgentTrace> results = new ArrayList<>();
-        try (Connection conn = getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
+        try (Connection conn = MysqlConnectionPool.getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setInt(1, limit);
             ResultSet rs = ps.executeQuery();
             while (rs.next()) {
@@ -134,7 +119,7 @@ public class MysqlTraceStore implements TraceStore {
     public int cleanup(int retentionDays) {
         String sql = "DELETE FROM agent_traces WHERE timestamp < ?";
         Instant cutoff = Instant.now().minusSeconds(retentionDays * 86400L);
-        try (Connection conn = getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
+        try (Connection conn = MysqlConnectionPool.getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setTimestamp(1, Timestamp.from(cutoff));
             return ps.executeUpdate();
         } catch (SQLException e) {
@@ -145,6 +130,6 @@ public class MysqlTraceStore implements TraceStore {
 
     @Override
     public void close() {
-        // Connection pool not used in this basic implementation
+        // Shared pool managed by MysqlConnectionPool.shutdown()
     }
 }

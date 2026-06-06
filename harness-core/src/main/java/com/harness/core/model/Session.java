@@ -8,6 +8,7 @@ import java.time.Instant;
 public record Session(
         String id,
         String userId,
+        String title,
         Instant createdAt,
         Instant lastActive,
         Instant endedAt,

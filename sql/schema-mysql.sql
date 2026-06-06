@@ -56,6 +56,7 @@ CREATE TABLE IF NOT EXISTS `agent_traces` (
 CREATE TABLE IF NOT EXISTS `sessions` (
     `id`                  VARCHAR(64)     NOT NULL     COMMENT '会话ID（主键）',
     `user_id`             VARCHAR(128)    NOT NULL     COMMENT '用户ID',
+    `title`               VARCHAR(256)    DEFAULT NULL COMMENT '会话标题（用户首条消息）',
     `created_at`          DATETIME(3)     NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '创建时间',
     `last_active`         DATETIME(3)     NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '最后活跃时间',
     `ended_at`            DATETIME(3)     DEFAULT NULL COMMENT '结束时间（超时/手动关闭）',

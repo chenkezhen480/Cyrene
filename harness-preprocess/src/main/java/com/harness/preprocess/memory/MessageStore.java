@@ -47,4 +47,19 @@ public interface MessageStore {
      * Count messages by role (e.g., "user", "assistant", "tool").
      */
     int countByRole(String sessionId, String role);
+
+    /**
+     * Aggregated session stats for refinement scoring.
+     * Consolidates 7-8 queries into a single GROUP BY.
+     */
+    record SessionStats(
+            int userMsgCount,
+            int userCharCount,
+            int conversationTurns,
+            int toolMsgCount,
+            int avgAssistantReplyLen,
+            boolean hasUserQuestions
+    ) {}
+
+    SessionStats loadSessionStats(String sessionId);
 }

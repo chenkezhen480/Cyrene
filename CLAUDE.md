@@ -15,10 +15,10 @@ mvn clean package -pl harness-core -am
 mvn clean compile
 
 # Run CLI (interactive REPL)
-java -jar harness-cli/target/harness-cli-0.2.6-SNAPSHOT.jar
+java -jar harness-cli/target/harness-cli-0.2.7-SNAPSHOT.jar
 
 # Run HTTP server (Javalin, default port 8080)
-java -jar harness-server/target/harness-server-0.2.6-SNAPSHOT.jar
+java -jar harness-server/target/harness-server-0.2.7-SNAPSHOT.jar
 
 # Run tests (currently no test files exist)
 mvn test
@@ -42,7 +42,7 @@ Memory integration points: session lifecycle (timeout + cache load), preprocess 
 
 **Module dependency graph (bottom-up):**
 ```
-harness-env           ← foundation, all HARNESS_* env var access via EnvConfig
+harness-env           ← foundation, all HARNESS_* env var access via EnvConfig + shared HikariCP connection pool (MysqlConnectionPool)
 harness-core          ← models (AgentMessage, AgentTrace, ReActStep, ToolSpec, ParsedContent, etc.)
     ├── harness-input        ← auth (Authenticator) + multimodal parsing (MultimodalParser) + text extraction (TextExtractorRegistry) + text chunking (TextChunker) + large file parsing (LargeFileParser)
     ├── harness-preprocess   ← RAG retrieval (PgVectorRagRetriever) + semantic context (SemanticContextRetriever) + rerank + context injection (ContextBuilder)
@@ -131,9 +131,9 @@ Layer 1: Input
   └─ InputProcessor: 解析用户输入，认证，提取 userId
 
 Layer 1.5: Session Lifecycle
-  ├─ SessionLifecycleManager: 超时检测 + 关闭旧 session + 创建/复用 session
-  ├─ Timed-out sessions → quality check → PreferenceRefinementWorker (async)
-  └─ 加载短期记忆（SessionMessageCache 缓存优先，miss 时从 MessageStore 加载）
+  ├─ SessionLifecycleManager: 超时检测 + 关闭旧 session + 创建/复用 session + 自动设置标题
+  ├─ Timed-out sessions → async quality check (fire-and-forget) → PreferenceRefinementWorker
+  └─ 并行加载: 短期记忆 + 长期偏好 + RAG 检索 (CompletableFuture.allOf)
 
 Layer 2: Preprocess
   ├─ RAG 知识库检索 (ContextBuilder → PgVectorRagRetriever → SemanticContextRetriever → Rerank)
@@ -161,10 +161,10 @@ Layer 5: Audit
 
 **Key classes (com.harness.preprocess.memory):**
 - `SessionStore` / `MessageStore` / `PreferenceStore` — persistence interfaces
-- `MysqlSessionStore` / `MysqlMessageStore` / `MysqlPreferenceStore` — MySQL implementations (reuse AUDIT_DB_URL)
+- `MysqlSessionStore` / `MysqlMessageStore` / `MysqlPreferenceStore` — MySQL implementations, all use shared `MysqlConnectionPool` (HikariCP, in harness-env)
 - `NoOp*Store` — no-op implementations when `HARNESS_MEMORY_STORE=none`
 - `MemoryStoreFactory` — creates stores based on `HARNESS_MEMORY_STORE` env var
-- `SessionLifecycleManager` — passive timeout detection + session resolution + refinement quality scoring (4 signals: conversation turns, tool usage, avg reply length, user questions)
+- `SessionLifecycleManager` — passive timeout detection + session resolution + refinement quality scoring (4 signals: conversation turns, tool usage, avg reply length, user questions). Uses consolidated `MessageStore.loadSessionStats()` (single GROUP BY query, replaces 7-8 individual queries).
 - `SessionMessageCache` — LRU cache for active session messages with three-layer eviction: per-session message cap (default 10), total memory cap (default 20MB, evict coldest 50%), session TTL (default 12h idle expiry)
 - `MemoryCompressor` — major compression only: AI-based intelligent extraction with time-decay weighting
 - `PreferenceRefinementWorker` — async background worker for preference extraction (output constrained by `HARNESS_MEMORY_LONGTERM_MAX_TOKENS`)
@@ -177,6 +177,13 @@ Layer 5: Audit
 - **小压缩 (Minor, code-based, ReAct 层):** `ReActEngine.stripToolMessages()` — iteration > 2 时去除 `ToolExecutionResultMessage` 和含 `toolExecutionRequests` 的 `AiMessage`，释放上下文空间。不涉及 AI 调用，纯代码操作。
 - **大压缩 (Major, AI-based, 预处理层):** `MemoryCompressor.compressIfNeeded()` — 整体上下文 > `HARNESS_CTX_COMPRESS_MAJOR`（默认 85%）时触发。使用时间衰减标签（RECENT/MIDDLE/OLD）智能提炼旧消息，压缩至 `HARNESS_CTX_COMPRESS_MAJOR_TARGET`（默认 30%）。仅压缩旧消息，当前用户消息在压缩之后保存，不会被压缩。
 - 原始消息永不删除，只新增 `is_summary=true` 的摘要行。
+
+**Performance optimizations (v0.2.7):**
+- **HikariCP connection pool** — `MysqlConnectionPool` singleton in `harness-env`, shared by all MySQL stores (Session/Message/Preference/Trace). One pool per JVM (maxPool=10, minIdle=2). Eliminates per-operation TCP+MySQL handshake overhead.
+- **Memory/RAG parallel loading** — Short-term memory (`messageStore.loadForContext`), long-term prefs (`preferenceStore.loadByUser`), and RAG retrieval (`contextBuilder.build`) run concurrently via `CompletableFuture.allOf()`. RAG starts immediately before session lifecycle resolves.
+- **Refinement SQL consolidation** — `MessageStore.loadSessionStats()` replaces 7-8 individual queries with a single GROUP BY. `SessionLifecycleManager.isWorthyOfRefinement()` uses consolidated stats. Refinement check is fire-and-forget async (`CompletableFuture.runAsync`), non-blocking.
+- **Session title** — `Session` record includes `title` field. Auto-set from user's first message (truncated to 100 chars). DB column: `sessions.title VARCHAR(256)`.
+- **URL file download** — `RawAttachment` supports `url` field. `UrlDownloader` downloads to `HARNESS_KNOWLEDGE_UPLOAD_DIR/downloads/`, with SSRF protection (block private/loopback IPs) and MIME detection. Same text extraction pipeline as local files.
 
 **Cache strategy (three-layer eviction LRU):**
 - **读取:** cache hit → 直接返回; miss → MessageStore.loadForContext → 填充缓存（trimToLimit 保留最新 N 条）
@@ -250,7 +257,7 @@ Same pattern for Vision/Voice/Embedding/Rerank providers.
 | POST | `/api/auth/token` | Get JWT token (userId/username + password, mode=jwt only) |
 | POST | `/api/chat` | Send message, get agent response (SSE stream). Supports `systemPrompt` and `context` (JSON: `outputMode`=blocking/streaming, `userId`, `enableThinking`) in body, `X-Session-Id` header |
 | DELETE | `/api/chat/{sessionId}` | Cancel an in-progress chat request |
-| POST | `/api/sessions` | Create a new session (body: `userId`) |
+| POST | `/api/sessions` | Create a new session (body: `userId`, optional `title`) |
 | GET | `/api/sessions` | List sessions with cursor pagination. Query: `userId`, `status` (active/ended/timeout), `limit`, `cursor` (ISO-8601) |
 | GET | `/api/sessions/{sessionId}` | Get session detail |
 | GET | `/api/sessions/{sessionId}/messages` | Message history with cursor pagination. Query: `limit`, `cursor` (message ID), `direction` (asc/desc) |

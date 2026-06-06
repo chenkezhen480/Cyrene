@@ -30,6 +30,7 @@ public class MultimodalParser {
     private final long maxFileSizeMb;
     private final long thresholdKb;
     private final LargeFileParser largeFileParser;
+    private final UrlDownloader urlDownloader;
 
     public MultimodalParser() {
         this(null, null, null);
@@ -49,6 +50,7 @@ public class MultimodalParser {
         } else {
             this.largeFileParser = null;
         }
+        this.urlDownloader = new UrlDownloader();
     }
 
     /**
@@ -65,7 +67,8 @@ public class MultimodalParser {
         log.info("[L1-Multimodal] Parsing {} attachments", rawAttachments.size());
         List<ParsedAttachment> result = new ArrayList<>();
         for (RawAttachment raw : rawAttachments) {
-            AgentMessage.Attachment parsed = parseOne(raw);
+            RawAttachment resolved = resolveUrl(raw);
+            AgentMessage.Attachment parsed = parseOne(resolved);
             if (parsed != null) {
                 ParsedContent parsedContent = null;
 
@@ -116,12 +119,31 @@ public class MultimodalParser {
 
         List<AgentMessage.Attachment> result = new ArrayList<>();
         for (RawAttachment raw : rawAttachments) {
-            AgentMessage.Attachment parsed = parseOne(raw);
+            RawAttachment resolved = resolveUrl(raw);
+            AgentMessage.Attachment parsed = parseOne(resolved);
             if (parsed != null) {
                 result.add(parsed);
             }
         }
         return result;
+    }
+
+    /**
+     * If the attachment has a URL but no data, download the file and return a new RawAttachment with the downloaded data.
+     */
+    private RawAttachment resolveUrl(RawAttachment raw) {
+        if (raw.url() != null && !raw.url().isBlank() && (raw.data() == null || raw.data().length == 0)) {
+            log.info("[L1-Multimodal] URL attachment detected: {}", raw.url());
+            try {
+                UrlDownloader.DownloadResult dl = urlDownloader.download(raw.url(), raw.name(), raw.mimeType());
+                return new RawAttachment(dl.name(), dl.data(), dl.mimeType(), null);
+            } catch (Exception e) {
+                log.warn("[L1-Multimodal] URL download failed for {}: {}", raw.url(), e.getMessage());
+                throw new com.harness.core.exception.AgentException(
+                        "Failed to download file from URL: " + raw.url() + " - " + e.getMessage());
+            }
+        }
+        return raw;
     }
 
     private AgentMessage.Attachment parseOne(RawAttachment raw) {
@@ -158,7 +180,7 @@ public class MultimodalParser {
         return AgentMessage.Attachment.AttachmentType.FILE;
     }
 
-    public record RawAttachment(String name, byte[] data, String mimeType) {}
+    public record RawAttachment(String name, byte[] data, String mimeType, String url) {}
 
     /**
      * Wraps a parsed attachment with optional pre-parsed content for large files.

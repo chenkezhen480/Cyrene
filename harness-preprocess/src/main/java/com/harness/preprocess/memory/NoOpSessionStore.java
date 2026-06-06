@@ -17,6 +17,7 @@ public class NoOpSessionStore implements SessionStore {
     @Override public List<Session> findTimedOut(Duration timeout) { return List.of(); }
     @Override public void close(String sessionId, Session.SessionStatus status) {}
     @Override public void updateLastActive(String sessionId) {}
+    @Override public void updateTitle(String sessionId, String title) {}
     @Override public void markRefinementStatus(String sessionId, String status) {}
     @Override public boolean claimForRefinement(String sessionId) { return false; }
     @Override public List<Session> findStuckRefinements(java.time.Duration stuckThreshold) { return List.of(); }

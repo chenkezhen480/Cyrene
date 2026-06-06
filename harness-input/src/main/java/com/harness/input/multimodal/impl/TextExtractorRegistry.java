@@ -43,7 +43,7 @@ public class TextExtractorRegistry {
         return new String(data, StandardCharsets.UTF_8);
     }
 
-    private static String guessMimeType(String fileName) {
+    public static String guessMimeType(String fileName) {
         if (fileName == null) return null;
         String lower = fileName.toLowerCase();
         if (lower.endsWith(".pdf")) return "application/pdf";

@@ -127,6 +127,7 @@ public final class EnvKey {
     public static final String MULTIMODAL_IMAGE_ENABLED   = "HARNESS_MULTIMODAL_IMAGE_ENABLED";
     public static final String MULTIMODAL_VIDEO_ENABLED   = "HARNESS_MULTIMODAL_VIDEO_ENABLED";
     public static final String MULTIMODAL_FILE_MAX_SIZE   = "HARNESS_MULTIMODAL_FILE_MAX_SIZE_MB";
+    public static final String MULTIMODAL_URL_BLOCK_PRIVATE_IPS = "HARNESS_MULTIMODAL_URL_BLOCK_PRIVATE_IPS";
 
     // ==================== Input (File Parsing) ====================
     public static final String INPUT_FILE_SIZE_THRESHOLD_KB = "HARNESS_INPUT_FILE_SIZE_THRESHOLD_KB";

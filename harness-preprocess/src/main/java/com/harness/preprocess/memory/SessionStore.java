@@ -19,6 +19,11 @@ public interface SessionStore {
     void updateLastActive(String sessionId);
 
     /**
+     * Update the title for a session (typically set from the user's first message).
+     */
+    void updateTitle(String sessionId, String title);
+
+    /**
      * Update the refinement_status column for a session.
      */
     void markRefinementStatus(String sessionId, String status);

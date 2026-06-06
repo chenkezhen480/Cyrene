@@ -198,17 +198,24 @@ public class AgentOrchestrator {
                 }
                 enhancedText = sb.toString();
             }
+            final String ragInput = enhancedText;
 
             // ===== Layer 1.5: Session lifecycle =====
             String sessionId = null;
             List<MemoryMessage> shorttermMessages = List.of();
             List<Preference> longtermPrefs = List.of();
             boolean compressed = false;
+
+            // RAG retrieval always runs; memory loading is conditional
+            CompletableFuture<ContextBuilder.ContextResult> ragFuture = CompletableFuture.supplyAsync(() ->
+                    contextBuilder.build(ragInput));
+
             if (MemoryStoreFactory.isEnabled() && input.userId() != null) {
                 String effectiveSessionId = requestedSessionId != null ? requestedSessionId : activeSessionId;
                 SessionLifecycleManager.LifecycleResult lifecycle = sessionLifecycle.process(input.userId(), effectiveSessionId);
                 sessionId = lifecycle.session().id();
                 activeSessionId = sessionId;
+                final String sid = sessionId;
                 log.info("[Memory] Session resolved: id={}, isNew={}, timedOut={}",
                         sessionId, lifecycle.isNewSession(), lifecycle.timedOutSessionIds().size());
                 trace.builder().sessionId(sessionId);
@@ -220,33 +227,50 @@ public class AgentOrchestrator {
                 }
                 trace.builder().metadata(meta);
 
+                // Set session title from user's first message
+                if (lifecycle.isNewSession()) {
+                    String title = text.length() > 100 ? text.substring(0, 100) : text;
+                    sessionStore.updateTitle(sessionId, title);
+                }
+
+                // Async: check refinement worthiness for timed-out sessions
+                final String userId = input.userId();
                 for (String timedOutId : lifecycle.timedOutSessionIds()) {
-                    if (sessionLifecycle.isWorthyOfRefinement(timedOutId)) {
-                        refinementWorker.submit(timedOutId, input.userId());
-                        meta.put("refinement_submitted", timedOutId);
+                    final String tid = timedOutId;
+                    CompletableFuture.runAsync(() -> {
+                        if (sessionLifecycle.isWorthyOfRefinement(tid)) {
+                            refinementWorker.submit(tid, userId);
+                        }
+                    });
+                }
+
+                // Load short-term memory and long-term prefs in parallel with RAG
+                CompletableFuture<List<MemoryMessage>> shorttermFuture = CompletableFuture.supplyAsync(() -> {
+                    List<MemoryMessage> cached = messageCache.getIfPresent(sid);
+                    if (cached != null) {
+                        log.debug("Cache hit for session: {}", sid);
+                        return cached;
                     }
-                }
+                    List<MemoryMessage> loaded = messageStore.loadForContext(sid);
+                    messageCache.put(sid, loaded);
+                    return loaded;
+                });
+                CompletableFuture<List<Preference>> longtermFuture = CompletableFuture.supplyAsync(() -> {
+                    List<Preference> prefs = preferenceStore.loadByUser(userId);
+                    log.debug("[Memory] Loaded {} long-term preferences for user {}", prefs.size(), userId);
+                    return prefs;
+                });
 
-                // Load short-term memory (旧消息，cache-first)
-                shorttermMessages = messageCache.getIfPresent(sessionId);
-                if (shorttermMessages == null) {
-                    shorttermMessages = messageStore.loadForContext(sessionId);
-                    messageCache.put(sessionId, shorttermMessages);
-                } else {
-                    log.debug("Cache hit for session: {}", sessionId);
-                }
-
-                // Load long-term memory (user preferences)
-                longtermPrefs = preferenceStore.loadByUser(input.userId());
-                log.debug("[Memory] Loaded {} long-term preferences for user {}", longtermPrefs.size(), input.userId());
+                CompletableFuture.allOf(shorttermFuture, longtermFuture, ragFuture).join();
+                shorttermMessages = shorttermFuture.join();
+                longtermPrefs = longtermFuture.join();
+            } else {
+                ragFuture.join();
             }
 
             // ===== Layer 2: Preprocess =====
-            // RAG知识库检索
-            ContextBuilder.ContextResult ctx = contextBuilder.build(enhancedText);
+            ContextBuilder.ContextResult ctx = ragFuture.join();
             trace.recordPreprocess(null, ctx.ragHitIds(), null);
-
-            // system消息组装 + 长期记忆注入
             String systemPrompt = buildSystemPrompt(ctx, longtermPrefs, systemPromptOverride);
             log.debug("[Orchestrator] System prompt: {} chars, rag={}, longterm={}",
                     systemPrompt.length(), ctx.hasContext(), !longtermPrefs.isEmpty());
@@ -375,17 +399,24 @@ public class AgentOrchestrator {
                 }
                 enhancedText = sb.toString();
             }
+            final String ragInput = enhancedText;
 
             // Layer 1.5: Session lifecycle
             String sessionId = null;
             List<MemoryMessage> shorttermMessages = List.of();
             List<Preference> longtermPrefs = List.of();
             boolean compressed = false;
+
+            // RAG retrieval always runs; memory loading is conditional
+            CompletableFuture<ContextBuilder.ContextResult> ragFuture = CompletableFuture.supplyAsync(() ->
+                    contextBuilder.build(ragInput));
+
             if (MemoryStoreFactory.isEnabled() && input.userId() != null) {
                 String effectiveSessionId = requestedSessionId != null ? requestedSessionId : activeSessionId;
                 SessionLifecycleManager.LifecycleResult lifecycle = sessionLifecycle.process(input.userId(), effectiveSessionId);
                 sessionId = lifecycle.session().id();
                 activeSessionId = sessionId;
+                final String sid = sessionId;
                 log.info("[Memory] Session resolved: id={}, isNew={}, timedOut={}",
                         sessionId, lifecycle.isNewSession(), lifecycle.timedOutSessionIds().size());
                 trace.builder().sessionId(sessionId);
@@ -397,24 +428,43 @@ public class AgentOrchestrator {
                 }
                 trace.builder().metadata(meta);
 
+                // Set session title from user's first message
+                if (lifecycle.isNewSession()) {
+                    String title = text.length() > 100 ? text.substring(0, 100) : text;
+                    sessionStore.updateTitle(sessionId, title);
+                }
+
+                // Async: check refinement worthiness for timed-out sessions
+                final String userId = input.userId();
                 for (String timedOutId : lifecycle.timedOutSessionIds()) {
-                    if (sessionLifecycle.isWorthyOfRefinement(timedOutId)) {
-                        refinementWorker.submit(timedOutId, input.userId());
-                        meta.put("refinement_submitted", timedOutId);
-                    }
+                    final String tid = timedOutId;
+                    CompletableFuture.runAsync(() -> {
+                        if (sessionLifecycle.isWorthyOfRefinement(tid)) {
+                            refinementWorker.submit(tid, userId);
+                        }
+                    });
                 }
 
-                shorttermMessages = messageCache.getIfPresent(sessionId);
-                if (shorttermMessages == null) {
-                    shorttermMessages = messageStore.loadForContext(sessionId);
-                    messageCache.put(sessionId, shorttermMessages);
-                }
+                // Load short-term memory and long-term prefs in parallel with RAG
+                CompletableFuture<List<MemoryMessage>> shorttermFuture = CompletableFuture.supplyAsync(() -> {
+                    List<MemoryMessage> cached = messageCache.getIfPresent(sid);
+                    if (cached != null) return cached;
+                    List<MemoryMessage> loaded = messageStore.loadForContext(sid);
+                    messageCache.put(sid, loaded);
+                    return loaded;
+                });
+                CompletableFuture<List<Preference>> longtermFuture = CompletableFuture.supplyAsync(() ->
+                        preferenceStore.loadByUser(userId));
 
-                longtermPrefs = preferenceStore.loadByUser(input.userId());
+                CompletableFuture.allOf(shorttermFuture, longtermFuture, ragFuture).join();
+                shorttermMessages = shorttermFuture.join();
+                longtermPrefs = longtermFuture.join();
+            } else {
+                ragFuture.join();
             }
 
             // Layer 2: Preprocess
-            ContextBuilder.ContextResult ctx = contextBuilder.build(enhancedText);
+            ContextBuilder.ContextResult ctx = ragFuture.join();
             trace.recordPreprocess(null, ctx.ragHitIds(), null);
             String systemPrompt = buildSystemPrompt(ctx, longtermPrefs, systemPromptOverride);
             trace.recordLlmMeta(chatModelProvider.modelName(), "v1");
