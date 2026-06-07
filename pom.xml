@@ -6,11 +6,11 @@
 
     <groupId>com.harness</groupId>
     <artifactId>harness-agent</artifactId>
-    <version>0.2.7-SNAPSHOT</version>
+    <version>0.2.9</version>
     <packaging>pom</packaging>
 
-    <name>Harness Agent</name>
-    <description>A general-purpose open-source Agent harness</description>
+    <name>Cyrene Agent</name>
+    <description>基于 Harness 架构的通用开源 AI Agent 框架</description>
 
     <modules>
         <module>harness-env</module>

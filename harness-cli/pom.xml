@@ -7,7 +7,7 @@
     <parent>
         <groupId>com.harness</groupId>
         <artifactId>harness-agent</artifactId>
-        <version>0.2.7-SNAPSHOT</version>
+        <version>0.2.9</version>
     </parent>
 
     <artifactId>harness-cli</artifactId>
@@ -35,6 +35,7 @@
                     <archive>
                         <manifest>
                             <mainClass>com.harness.cli.Main</mainClass>
+                            <addDefaultImplementationEntries>true</addDefaultImplementationEntries>
                         </manifest>
                     </archive>
                 </configuration>

@@ -1,124 +1,215 @@
 # Cyrene Agent
 
-A Java-based AI Agent application framework built on the **Harness architecture pattern**. Pluggable model providers, built-in RAG knowledge base, session memory, and a 5-layer pipeline architecture — designed as a scaffolding to bootstrap and customize agent applications for your specific business needs.
+基于 **Harness 架构模式** 的 Java AI Agent 应用框架。提供可插拔的模型 Provider、内置 RAG 知识库、会话记忆与 5 层流水线编排，可作为脚手架快速搭建并定制面向业务的 Agent 应用。
 
-## Why Cyrene Agent?
+## 为什么选择 Cyrene Agent？
 
-Building an AI agent for your product shouldn't mean starting from scratch. Cyrene Agent provides a production-ready foundation — model abstraction, RAG, memory, tools, audit — so you focus on your business logic, not plumbing. Add custom tools, configure your models, and ship.
+为你的产品构建 AI Agent 不必从零开始。Cyrene Agent 提供生产可用的基础能力——模型抽象、RAG、记忆、工具、审计——让你专注于业务逻辑而非底层 plumbing。配置模型、注册工具、即可上线。
 
-### Harness Architecture
+### Harness 架构
 
-Cyrene Agent adopts the **Harness architecture** — a design pattern where a general-purpose orchestration framework (the "harness") wraps around domain-specific components. The harness handles cross-cutting concerns (model routing, memory, audit, tool execution) while your custom logic plugs in at defined extension points. This separation means you can swap models, add tools, or change memory strategies without touching the pipeline core.
+Cyrene Agent 采用 **Harness 架构**：通用编排框架（"harness"）包裹领域组件，由框架处理横切关注点（模型路由、记忆、审计、工具执行），业务逻辑通过预定义的扩展点接入。这意味着你可以更换模型、添加工具或调整记忆策略，而无需改动流水线核心。
 
-## Highlights
+## 核心特性
 
-### 5-Layer Pipeline Architecture
+### 5 层流水线架构
 
 ```
-Input → Session Lifecycle → Preprocess → ReAct Loop (AI ↔ Tool) → Post-process → Audit
+Input → Session Lifecycle → Preprocess → ReAct Loop (AI ↔ Tool ↔ Inspection) → Post-process → Audit
 ```
 
-Every request flows through a structured pipeline with full observability — each layer is independently logged, traced, and configurable.
+每个请求经过结构化流水线，各层独立可观测、可配置、可追踪。
 
-### 6 Independent Model Types
+### 6 种独立模型类型
 
-Each model type is independently configurable with its own provider, API key, and endpoint:
+每种模型类型可独立配置 Provider、API Key 和端点：
 
-| Type | Purpose | Providers |
-|------|---------|-----------|
-| Chat | Conversation + tool calling | OpenAI, Anthropic, Ollama, DashScope |
-| Vision | Image/video understanding | OpenAI, Anthropic |
-| Voice | Speech recognition + synthesis | OpenAI |
-| Embedding | Multimodal vectorization | OpenAI, Ollama, DashScope |
-| Rerank | Retrieval result reranking | OpenAI-compatible |
-| Realtime | Realtime multimodal (reserved) | — |
+| 类型 | 用途 | 支持的 Provider |
+|------|------|-----------------|
+| Chat | 对话 + 工具调用 | OpenAI、Anthropic、Ollama、DashScope 等 |
+| Vision | 图片/视频理解 | OpenAI、Anthropic |
+| Voice | 语音识别 + 语音合成 | OpenAI |
+| Embedding | 多模态向量化 | OpenAI、Ollama |
+| Rerank | 检索结果重排序 | OpenAI 兼容接口 |
+| Realtime | 实时多模态（预留） | — |
 
-Mix and match providers freely — use DashScope for chat, OpenAI for embedding, and a local Ollama for rerank.
+可自由混搭——例如 Chat 用 DashScope、Embedding 用 OpenAI、Rerank 用本地 Ollama。
 
-### Built-in RAG Knowledge Base
+### 内置 RAG 知识库
 
-Upload documents (PDF, DOCX, XLSX, TXT, Markdown) via API. Automatic text extraction, chunking, embedding, and storage in PostgreSQL pgvector. Semantic context retrieval with lookback for truncated chunks, plus optional rerank for precision.
+通过 API 上传文档（PDF、DOCX、XLSX、TXT、Markdown 等），自动完成文本提取、语义分块、Embedding 并存储到 PostgreSQL pgvector。
 
-### Session Memory with Intelligent Compression
+**完整 RAG 流水线：**
 
-- **Short-term memory**: LRU-cached conversation history per session
-- **Long-term memory**: AI-extracted user preferences from completed sessions
-- **Minor compression**: Strips tool call blocks in ReAct loops (code-based, zero cost)
-- **Major compression**: AI-driven intelligent message extraction when context window fills up (time-decay weighted)
+```
+用户查询
+  │
+  ▼
+查询改写（可选，环境变量插拔）
+  │  none      → 透传原始查询（默认）
+  │  hyde      → LLM 生成假设性文档作为检索查询（提升精准度）
+  │  multi-query → LLM 生成多个不同措辞的查询，分别检索后合并（提升召回率）
+  │  step-back → LLM 生成更通用的抽象查询（适合过于具体的问题）
+  │
+  ▼
+多路召回（可选，环境变量插拔）
+  │  语义向量召回  → pgvector cosine similarity（默认）
+  │  关键词全文召回 → PostgreSQL tsvector/tsquery（与语义互补）
+  │  知识图谱召回  → 预留扩展
+  │  多路结果按文档 ID 去重合并（CompletableFuture 并行）
+  │
+  ▼
+语义上下文增强
+  │  启发式检测截断块（标点/结构/续接词）
+  │  自动回溯 prev_chunk 补全上下文（最多 2 次）
+  │
+  ▼
+Rerank 重排序（可选）
+  │  Cross-encoder 精排，或按相似度分数排序
+  │
+  ▼
+注入 System Prompt → LLM 结合知识库上下文 + 对话历史生成回答
+```
 
-### Multimodal Fallback
+**查询改写策略对比：**
 
-When the chat model lacks vision/audio capabilities, `FallbackChatModel` transparently routes to the appropriate Vision or Voice provider — no code changes needed.
+| 策略 | 原理 | 适用场景 |
+|------|------|----------|
+| HyDE | LLM 生成"假答案"，用假答案去向量检索 | 短查询/抽象查询，直接 embedding 效果差 |
+| Multi-Query | LLM 生成 N 个不同措辞的查询，分别检索合并 | 同一问题有多种表达，单一查询召回不全 |
+| Step-Back | LLM 生成更通用的版本，先获取背景知识 | 问题过于具体，直接检索命中率低 |
 
-### ReAct Engine with Inspection
+**大文件处理：** 超过 100KB 的文件采用"语义切片 → 合并到模型上下文 40% → 并行摘要"的策略，将数百次 LLM 调用压缩到个位数（1MB 文件约 5-8 次），上下文窗口大小从模型名称自动检测。
 
-Tool-calling loop with per-step inspection (PASS / TOOL_ERROR), configurable stop-on-error behavior, and automatic context trimming for long tool interactions.
+### 会话记忆与智能压缩
 
-### MCP Remote Tool Support
+- **短期记忆**：按会话 LRU 缓存对话历史
+- **长期记忆**：从已结束会话中 AI 提取的用户偏好
+- **小压缩**：ReAct 循环中去除工具调用块（纯代码，零成本）
+- **大压缩**：上下文窗口接近上限时 AI 智能提炼旧消息（时间衰减加权）
 
-Register external tools via MCP (Model Context Protocol) over HTTP. Configure servers in environment variables, call remote tools as if they were local.
+### 多模态回退
 
-## Quick Start
+当 Chat 模型不支持视觉/音频能力时，`FallbackChatModel` 透明路由到 Vision 或 Voice Provider，无需修改业务代码。
 
-### Prerequisites
+### ReAct 引擎与 Inspection
+
+工具调用循环，每步启发式检查结果（PASS / TOOL_ERROR / WRONG_TOOL / INSUFFICIENT / NEEDS_RETRY），可配置遇错即停，长工具交互时自动裁剪上下文。
+
+### 子代理（Sub-Agent）
+
+LLM 通过 `spawn_subagent` 工具派生子任务，支持依赖解析与并行执行，每个子代理拥有独立 ReActEngine 实例。
+
+### MCP 远程工具
+
+通过 MCP（Model Context Protocol）HTTP 注册外部工具。支持 JSON 配置文件或环境变量，自动发现 `tools/list` 并缓存。
+
+### 联网搜索
+
+`WebSearchTool` 支持多引擎回退链：Tavily → SerpAPI → DuckDuckGo，无 API Key 的引擎自动跳过，DuckDuckGo 始终可用。
+
+### 流式输出与取消
+
+- **SSE 流式输出**：`context.outputMode=streaming` 时实时推送 token、ReAct 步骤、完成事件
+- **请求取消**：`DELETE /api/chat/{sessionId}` 触发 `CancellationToken`，中断 LLM 调用、工具执行和子代理线程
+- **JWT 滑动窗口刷新**：Token 剩余有效期低于阈值时自动刷新，新 Token 通过 `X-New-Token` 响应头返回
+
+### 六层容错机制
+
+| 层级 | 机制 | 策略 |
+|------|------|------|
+| Tool 调用重试 | 工具执行失败 | 最多重试 3 次，错误结果传递给 LLM 决策 |
+| LLM API 重试 | 429/503/超时 | 指数退避（1s→2s→4s），最多 3 次 |
+| MCP 断线重连 | IOException | 重建 OkHttpClient 并重试 1 次 |
+| 消息写入重试 | DB 写入失败 | 重试 3 次 → 单条同步写 → 死信队列 |
+| Refinement 卡住恢复 | 质量评估卡住 | 定时扫描，CAS 重置为 pending |
+| 知识库批量回滚 | 批量插入失败 | 显式事务回滚 + 清理孤立文件 |
+
+## 快速开始
+
+### 环境要求
 
 - Java 17+
 - Maven 3.8+
-- PostgreSQL with pgvector extension (for RAG)
-- MySQL 8+ (for audit + memory, optional)
+- PostgreSQL + pgvector 扩展（RAG，可选）
+- MySQL 8+（审计 + 会话记忆，可选）
 
-### Build
+### 构建
 
 ```bash
-# Build all modules (produces fat JARs for CLI and server)
+# 构建所有模块（生成 cli 和 server 的 fat JAR）
 mvn clean package -DskipTests
 ```
 
-### Configure
+### 配置
 
 ```bash
 cp .env.example .env
-# Edit .env — set at minimum:
-#   HARNESS_MODEL_CHAT_PROVIDER + HARNESS_MODEL_CHAT_API_KEY
+# 编辑 .env，至少配置：
+#   HARNESS_MODEL_CHAT_PROVIDER
+#   HARNESS_MODEL_CHAT_API_KEY
 ```
 
-### Run
+`.env` 由 `EnvConfig` 从工作目录自动加载；系统环境变量优先级更高。
+
+### 运行
 
 ```bash
-# Start HTTP server (default port 8080)
-export $(cat .env | xargs)
-java -jar harness-server/target/harness-server-0.1.0-SNAPSHOT.jar
+# 启动 HTTP 服务（默认端口 8080）
+java -jar harness-server/target/harness-server-0.2.9.jar
+
+# 启动 CLI 交互式 REPL
+java -jar harness-cli/target/harness-cli-0.2.9.jar
 ```
 
-> **Note**: CLI mode (`harness-cli`) is currently not available. Please use the HTTP server mode.
+Windows 用户可直接在项目根目录放置 `.env` 后运行上述 `java -jar` 命令，无需手动 export 环境变量。
 
-### Test
+### 测试
 
 ```bash
 curl -X POST http://localhost:8080/api/chat \
   -H "Content-Type: application/json; charset=utf-8" \
-  -d '{"text":"Hello, what can you do?"}'
+  -d '{"text":"你好，你能做什么？"}'
 ```
 
-## API Endpoints
+## API 端点
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/api/chat` | Send a message, get agent response |
-| `POST` | `/api/knowledge/upload` | Upload document for RAG knowledge base (multipart) |
-| `POST` | `/api/auth/token` | Get JWT token (when auth mode = jwt) |
-| `GET` | `/api/health` | Health check |
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `POST` | `/api/auth/token` | 获取 JWT Token（auth 模式为 jwt 时） |
+| `POST` | `/api/chat` | 发送消息，获取 Agent 回复（SSE 流式） |
+| `DELETE` | `/api/chat/{sessionId}` | 取消进行中的对话请求 |
+| `POST` | `/api/sessions` | 创建新会话 |
+| `GET` | `/api/sessions` | 列出会话（游标分页，可按 userId/status 过滤） |
+| `GET` | `/api/sessions/{sessionId}` | 获取会话详情 |
+| `GET` | `/api/sessions/{sessionId}/messages` | 获取会话消息历史 |
+| `GET` | `/api/sessions/{sessionId}/stats` | 获取会话统计信息 |
+| `DELETE` | `/api/sessions/{sessionId}` | 关闭会话（消息保留在 DB） |
+| `POST` | `/api/knowledge/upload` | 上传文档到知识库（multipart） |
+| `GET` | `/api/knowledge/{collection}` | 列出集合中的文档 |
+| `DELETE` | `/api/knowledge/{collection}` | 删除集合中所有文档 |
+| `DELETE` | `/api/knowledge/{collection}/{documentId}` | 删除指定文档 |
+| `GET` | `/api/trace/{id}` | 按 ID 查询 Trace |
+| `GET` | `/api/traces` | 列出最近 Trace |
+| `GET` | `/api/health` | 健康检查 |
 
-### Chat Request
+### 对话请求示例
 
 ```json
 {
-  "text": "What is the asset management system?",
-  "attachments": []
+  "text": "资产管理系统是什么？",
+  "attachments": [],
+  "context": {
+    "outputMode": "streaming",
+    "userId": "user-001",
+    "enableThinking": true
+  }
 }
 ```
 
-### Chat Response
+请求头可携带 `X-Session-Id` 复用会话。JWT 模式下，Token 剩余有效期低于阈值时，新 Token 通过 `X-New-Token` 响应头返回。
+
+### 对话响应示例（阻塞模式）
 
 ```json
 {
@@ -130,7 +221,12 @@ curl -X POST http://localhost:8080/api/chat \
 }
 ```
 
-### Knowledge Upload
+### SSE 事件
+
+- **阻塞模式**：`event: done`（完整结果 JSON）、`event: error`（错误 JSON）
+- **流式模式**（`context.outputMode=streaming`）：`event: start`、`event: token`、`event: step`、`event: done`、`event: error`
+
+### 知识库上传
 
 ```bash
 curl -X POST http://localhost:8080/api/knowledge/upload \
@@ -138,58 +234,90 @@ curl -X POST http://localhost:8080/api/knowledge/upload \
   -F "collection=default"
 ```
 
-## Architecture
+## 模块架构
 
 ```
-harness-env           ← Foundation: all HARNESS_* env var access via EnvConfig
-harness-core          ← Models: AgentMessage, AgentTrace, ReActStep, ToolSpec, etc.
-    ├── harness-input        ← Auth (JWT) + multimodal parsing + text extraction + chunking
-    ├── harness-preprocess   ← RAG retrieval + semantic context + rerank + context injection
-    ├── harness-tool         ← Tool interface, registry, executor, MCP adapter
-    ├── harness-audit        ← TraceCollector + TraceStore (MySQL/SQLite/file)
-    └── harness-ai           ← LangChain4j integration, 6 model providers, ReActEngine
-harness-agent         ← AgentOrchestrator (wires all layers together)
-harness-server        ← HTTP API server (Javalin)
-harness-cli           ← CLI entry point (currently unavailable)
+harness-env           ← 基础层：所有 HARNESS_* 环境变量 + HikariCP 连接池
+harness-core          ← 核心模型：AgentMessage、AgentTrace、ReActStep、ToolSpec 等
+    ├── harness-input        ← 认证(JWT) + 多模态解析 + 大文件合并摘要 + 文本提取 + 分块
+    ├── harness-preprocess   ← RAG 查询改写 + 多路召回 + 语义上下文 + Rerank + 记忆管理
+    ├── harness-tool         ← 工具接口、注册表、执行器、MCP 适配
+    ├── harness-audit        ← TraceCollector + TraceStore
+    └── harness-ai           ← LangChain4j 集成、6 种模型、ReActEngine、重试容错
+harness-agent         ← AgentOrchestrator（串联所有层）
+harness-server        ← HTTP API 入口（Javalin, SSE 流式）
+harness-cli           ← CLI 交互式入口
 ```
 
-## Configuration
+## 配置说明
 
-All configuration is via environment variables prefixed with `HARNESS_`. See [.env.example](.env.example) for the full list with descriptions.
+所有配置通过 `HARNESS_` 前缀的环境变量管理，完整列表见 [.env.example](.env.example)。
 
-Key configuration groups:
+| 配置组 | 变量 | 说明 |
+|--------|------|------|
+| 模型 | `HARNESS_MODEL_CHAT_*` 等 | 6 种模型各自的 Provider、Key、端点，上下文窗口自动检测 |
+| 服务 | `HARNESS_SERVER_*` | 主机、端口、工作线程 |
+| 认证 | `HARNESS_AUTH_MODE` | `none` 或 `jwt` |
+| RAG 基础 | `HARNESS_RAG_PG_*` | PostgreSQL pgvector 连接、集合、TopK、相似度阈值 |
+| RAG 查询改写 | `HARNESS_RAG_QUERY_REWRITE` | `none` / `hyde` / `multi-query` / `step-back` |
+| RAG 多路召回 | `HARNESS_RAG_MULTI_ROUTE` | `true` 开启多路并行，`HARNESS_RAG_FULLTEXT_ENABLED` 开启全文检索 |
+| 记忆 | `HARNESS_MEMORY_STORE` | `mysql` 或 `none`（默认） |
+| 工具 | `HARNESS_TOOL_*` | 内置工具开关与 Web 搜索引擎优先级 |
+| MCP | `HARNESS_MCP_CONFIG_FILE` | MCP 服务器 JSON 配置文件 |
 
-| Group | Variables | Description |
-|-------|-----------|-------------|
-| Model | `HARNESS_MODEL_CHAT_*` | Chat model provider, API key, endpoint |
-| Server | `HARNESS_SERVER_*` | Host, port, workers |
-| Auth | `HARNESS_AUTH_MODE` | `none` or `jwt` |
-| RAG | `HARNESS_RAG_PG_*` | PostgreSQL pgvector connection |
-| Memory | `HARNESS_MEMORY_STORE` | `mysql`, `sqlite`, or `none` |
-| Tools | `HARNESS_TOOL_*` | Enable/disable built-in tools |
+## 数据库 Schema
 
-## Current Limitations
+- MySQL（不含 users）：[`sql/schema-mysql.sql`](sql/schema-mysql.sql)
+- MySQL 用户表：[`sql/schema-users-mysql.sql`](sql/schema-users-mysql.sql)
+- PostgreSQL pgvector RAG：[`sql/schema-pgvector.sql`](sql/schema-pgvector.sql)
+- 表注释：[`sql/add-comments.sql`](sql/add-comments.sql)
 
-- **CLI mode not available** — The `harness-cli` module is under development. Use the HTTP server instead.
-- **Web search tool is a placeholder** — `WebSearchTool` returns stub responses. Real API integration (DuckDuckGo, SerpAPI, Tavily) is pending.
-- **MCP tool registration incomplete** — Server config parsing works, but tool discovery via MCP protocol is not yet implemented.
-- **Trace query API not wired** — `GET /api/trace/{id}` and `GET /api/traces` return placeholder responses.
+## 扩展指南
 
-See the issue tracker for the full list of planned features.
+### 添加新的 LLM Provider
 
-## Tech Stack
+1. 在 `com.harness.ai.model.impl` 实现对应 Provider 接口
+2. 在 `ModelProviderFactory` 中注册
+3. 在 `EnvKey.java` 中添加环境变量键（遵循 `HARNESS_MODEL_*` 命名规范）
 
-- **Java 17** + Maven multi-module
-- **LangChain4j 1.15.0** — LLM integration, tool specifications, chat models
-- **Javalin 6.1.3** — HTTP server
-- **PostgreSQL + pgvector** — RAG vector storage
-- **MySQL** — Audit traces + session memory
-- **Jackson** — JSON serialization
-- **OkHttp** — HTTP client for API calls
-- **Apache POI + PDFBox** — Document text extraction (PDF, DOCX, XLSX, DOC)
-- **SLF4J + Logback** — Logging
-- **jjwt** — JWT authentication
+### 添加新工具
 
-## License
+1. 实现 `com.harness.tool.Tool`（`spec()` + `execute()`）
+2. 在 `AgentOrchestrator.registerBuiltinTools()` 注册，或通过 MCP 自动发现
+
+### 添加新的查询改写策略
+
+1. 实现 `com.harness.preprocess.rag.rewrite.QueryRewriter`（`rewrite()` + `strategyName()`）
+2. 在 `QueryRewriterFactory.create()` 中注册新策略名
+3. 设置 `HARNESS_RAG_QUERY_REWRITE=your-strategy`
+
+### 添加新的召回路由
+
+1. 实现 `com.harness.preprocess.rag.route.RetrievalRoute`（`retrieve()` + `routeName()` + `isAvailable()`）
+2. 在 `RetrievalRouteFactory.createEnabledRoutes()` 中添加路由创建逻辑
+3. 设置 `HARNESS_RAG_MULTI_ROUTE=true` 开启多路并行
+
+## 已知限制
+
+- **Redis 缓存**：`HARNESS_MEMORY_REDIS_*` 环境变量已预留，尚未实现
+- **Realtime 模型**：接口已预留，暂无 Provider 实现
+- **知识图谱召回**：`RetrievalRoute` 接口已预留，暂无后端实现
+- **测试覆盖**：当前测试文件较少，建议自行补充关键路径测试
+
+## 技术栈
+
+- **Java 17** + Maven 多模块
+- **LangChain4j 1.15.0** — LLM 集成、工具规格、Chat Model
+- **Javalin 6.1.3** — HTTP 服务（SSE 流式）
+- **PostgreSQL + pgvector** — RAG 向量存储 + 全文检索
+- **MySQL + HikariCP** — 审计 Trace + 会话记忆
+- **Jackson** — JSON 序列化
+- **OkHttp** — HTTP 客户端（语音/API/Rerank/联网搜索）
+- **Apache POI + PDFBox** — 文档文本提取（PDF、DOCX、XLSX）
+- **dotenv-java** — `.env` 文件自动加载
+- **SLF4J + Logback** — 日志
+- **JJWT** — JWT 认证
+
+## 许可证
 
 Apache License 2.0

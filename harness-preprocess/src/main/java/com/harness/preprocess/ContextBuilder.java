@@ -1,37 +1,63 @@
 package com.harness.preprocess;
 
+import com.harness.ai.model.ChatModelProvider;
 import com.harness.ai.model.EmbeddingModelProvider;
 import com.harness.ai.model.RerankModelProvider;
+import com.harness.env.EnvConfig;
+import com.harness.env.EnvKey;
+import com.harness.preprocess.rag.MultiRouteRetriever;
 import com.harness.preprocess.rag.PgVectorRagRetriever;
 import com.harness.preprocess.rag.RagRetriever;
 import com.harness.preprocess.rag.SemanticContextRetriever;
+import com.harness.preprocess.rag.rewrite.QueryRewriter;
+import com.harness.preprocess.rag.rewrite.QueryRewriterFactory;
+import com.harness.preprocess.rag.route.RetrievalRoute;
+import com.harness.preprocess.rag.route.RetrievalRouteFactory;
 import com.harness.preprocess.rerank.Reranker;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 /**
  * Layer 2: Preprocessing.
  * Orchestrates RAG retrieval + semantic enhancement + reranking to build context for the AI layer.
+ * Supports optional query rewriting (HyDE, Multi-Query, Step-Back) before retrieval.
+ * Supports multi-route parallel retrieval (pgvector + fulltext + knowledge graph).
  */
 public class ContextBuilder {
 
     private static final Logger log = LoggerFactory.getLogger(ContextBuilder.class);
 
-    private final RagRetriever ragRetriever;
+    private final RagRetriever ragRetriever;           // null in multi-route mode
+    private final MultiRouteRetriever multiRouteRetriever; // null in single-route mode
     private final Reranker reranker;
     private final SemanticContextRetriever semanticRetriever;
+    private final QueryRewriter queryRewriter;
 
     public ContextBuilder(RerankModelProvider rerankModelProvider,
-                          EmbeddingModelProvider embeddingModelProvider) {
-        this.ragRetriever = new RagRetriever(embeddingModelProvider);
+                          EmbeddingModelProvider embeddingModelProvider,
+                          ChatModelProvider chatModelProvider) {
+        EnvConfig cfg = EnvConfig.get();
+        boolean multiRoute = cfg.getBool(EnvKey.RAG_MULTI_ROUTE, false);
+
+        if (multiRoute) {
+            List<RetrievalRoute> routes = RetrievalRouteFactory.createEnabledRoutes(embeddingModelProvider);
+            this.multiRouteRetriever = new MultiRouteRetriever(routes);
+            this.ragRetriever = null;
+            PgVectorRagRetriever pgVector = RetrievalRouteFactory.findPgVectorRetriever(routes);
+            this.semanticRetriever = pgVector != null ? new SemanticContextRetriever(pgVector) : null;
+        } else {
+            this.ragRetriever = new RagRetriever(embeddingModelProvider);
+            this.multiRouteRetriever = null;
+            PgVectorRagRetriever pgVector = ragRetriever.getPgVectorRetriever();
+            this.semanticRetriever = pgVector != null ? new SemanticContextRetriever(pgVector) : null;
+        }
+
         this.reranker = new Reranker(rerankModelProvider);
-        PgVectorRagRetriever pgVector = ragRetriever.getPgVectorRetriever();
-        this.semanticRetriever = pgVector != null
-                ? new SemanticContextRetriever(pgVector) : null;
+        this.queryRewriter = QueryRewriterFactory.create(chatModelProvider);
     }
 
     /**
@@ -43,8 +69,28 @@ public class ContextBuilder {
     public ContextResult build(String userText) {
         log.info("[L2-RAG] Building context for text ({} chars)", userText != null ? userText.length() : 0);
 
-        // Step 1: RAG retrieval
-        List<RagRetriever.RagDocument> ragDocs = ragRetriever.retrieve(userText);
+        // Step 0: Query rewriting
+        List<String> queries = queryRewriter.rewrite(userText);
+        if (queries.size() > 1) {
+            log.info("[L2-RAG] Query rewrite [{}]: {} queries", queryRewriter.strategyName(), queries.size());
+        }
+
+        // Step 1: RAG retrieval (support multi-query + multi-route)
+        List<RagRetriever.RagDocument> ragDocs;
+        if (queries.size() == 1) {
+            ragDocs = doRetrieve(queries.get(0));
+        } else {
+            ragDocs = queries.stream()
+                    .map(this::doRetrieve)
+                    .flatMap(List::stream)
+                    .collect(Collectors.toMap(
+                            RagRetriever.RagDocument::id,
+                            Function.identity(),
+                            (a, b) -> a.score() >= b.score() ? a : b))
+                    .values().stream()
+                    .sorted(Comparator.comparingDouble(RagRetriever.RagDocument::score).reversed())
+                    .toList();
+        }
         log.info("[L2-RAG] Retrieved {} docs", ragDocs.size());
 
         // Step 2: Semantic enhancement (lookback for truncated chunks)
@@ -81,6 +127,9 @@ public class ContextBuilder {
         metadata.put("rag_doc_count", String.valueOf(ragDocs.size()));
         metadata.put("reranked_doc_count", String.valueOf(reranked.size()));
         metadata.put("lookback_count", String.valueOf(totalLookback));
+        metadata.put("query_rewrite", queryRewriter.strategyName());
+        metadata.put("query_count", String.valueOf(queries.size()));
+        metadata.put("multi_route", String.valueOf(multiRouteRetriever != null));
         if (!lookbackChunkIds.isEmpty()) {
             metadata.put("lookback_chunk_ids", String.join(",", lookbackChunkIds));
         }
@@ -90,6 +139,13 @@ public class ContextBuilder {
                 contextBlock,
                 metadata
         );
+    }
+
+    private List<RagRetriever.RagDocument> doRetrieve(String query) {
+        if (multiRouteRetriever != null) {
+            return multiRouteRetriever.retrieve(query);
+        }
+        return ragRetriever.retrieve(query);
     }
 
     private String formatContext(List<RagRetriever.RagDocument> docs) {

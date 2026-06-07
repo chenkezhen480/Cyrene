@@ -43,6 +43,12 @@ public class Main {
 
     private static final Logger log = LoggerFactory.getLogger(Main.class);
     private static final ObjectMapper mapper = new ObjectMapper();
+    private static final String VERSION = resolveVersion();
+
+    private static String resolveVersion() {
+        String v = Main.class.getPackage().getImplementationVersion();
+        return v != null ? v : "dev";
+    }
 
     public static void main(String[] args) {
         EnvConfig.init(Collections.emptyMap());
@@ -89,7 +95,7 @@ public class Main {
         }).start(host, port);
 
         // Health check
-        app.get("/api/health", ctx -> ctx.json(Map.of("status", "ok", "version", "0.1.0")));
+        app.get("/api/health", ctx -> ctx.json(Map.of("status", "ok", "version", VERSION)));
 
         // Auth token endpoint
         if ("jwt".equals(authMode)) {

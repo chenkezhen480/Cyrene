@@ -130,11 +130,24 @@ public final class EnvKey {
     public static final String MULTIMODAL_URL_BLOCK_PRIVATE_IPS = "HARNESS_MULTIMODAL_URL_BLOCK_PRIVATE_IPS";
 
     // ==================== Input (File Parsing) ====================
-    public static final String INPUT_FILE_SIZE_THRESHOLD_KB = "HARNESS_INPUT_FILE_SIZE_THRESHOLD_KB";
-    public static final String INPUT_CHUNK_TOKEN_SIZE        = "HARNESS_INPUT_CHUNK_TOKEN_SIZE";
+    public static final String INPUT_FILE_SIZE_THRESHOLD_KB     = "HARNESS_INPUT_FILE_SIZE_THRESHOLD_KB";
+    public static final String INPUT_CHUNK_TOKEN_SIZE           = "HARNESS_INPUT_CHUNK_TOKEN_SIZE";
+    public static final String MODEL_CHAT_CONTEXT_WINDOW       = "HARNESS_MODEL_CHAT_CONTEXT_WINDOW";
+    public static final String LARGE_FILE_CONTEXT_RATIO        = "HARNESS_LARGE_FILE_CONTEXT_RATIO";
+    public static final String LARGE_FILE_SUMMARY_CONCURRENCY  = "HARNESS_LARGE_FILE_SUMMARY_CONCURRENCY";
 
     // ==================== Semantic RAG ====================
-    public static final String RAG_CONTEXT_LOOKBACK_MAX = "HARNESS_RAG_CONTEXT_LOOKBACK_MAX";
+    public static final String RAG_CONTEXT_LOOKBACK_MAX    = "HARNESS_RAG_CONTEXT_LOOKBACK_MAX";
+
+    // ==================== Query Rewriting ====================
+    public static final String RAG_QUERY_REWRITE           = "HARNESS_RAG_QUERY_REWRITE";
+    public static final String RAG_QUERY_REWRITE_COUNT     = "HARNESS_RAG_QUERY_REWRITE_COUNT";
+
+    // ==================== Multi-Route Retrieval ====================
+    public static final String RAG_MULTI_ROUTE             = "HARNESS_RAG_MULTI_ROUTE";
+    public static final String RAG_FULLTEXT_ENABLED        = "HARNESS_RAG_FULLTEXT_ENABLED";
+    public static final String RAG_FULLTEXT_LANG           = "HARNESS_RAG_FULLTEXT_LANG";
+    public static final String RAG_KNOWLEDGE_GRAPH_ENABLED = "HARNESS_RAG_KNOWLEDGE_GRAPH_ENABLED";
 
     // ==================== AI Fallback ====================
     public static final String MODEL_CHAT_CAPABILITIES  = "HARNESS_MODEL_CHAT_CAPABILITIES";

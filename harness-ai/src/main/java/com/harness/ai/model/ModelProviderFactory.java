@@ -22,12 +22,14 @@ public final class ModelProviderFactory {
     public static ChatModelProvider createChat() {
         String provider = EnvConfig.get().getString(EnvKey.MODEL_CHAT_PROVIDER, "openai");
         log.info("Creating chat model provider: {}", provider);
-        return switch (provider.toLowerCase()) {
+        ChatModelProvider chatProvider = switch (provider.toLowerCase()) {
             case "openai", "dashscope" -> new OpenAiChatModelProvider();
             case "anthropic", "claude" -> new AnthropicChatModelProvider();
             case "ollama" -> new OllamaChatModelProvider();
             default -> throw new IllegalStateException("Unknown chat model provider: " + provider);
         };
+        log.info("[Model] Chat model={}, contextWindow={}", chatProvider.modelName(), chatProvider.contextWindow());
+        return chatProvider;
     }
 
     /**

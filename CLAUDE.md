@@ -15,10 +15,10 @@ mvn clean package -pl harness-core -am
 mvn clean compile
 
 # Run CLI (interactive REPL)
-java -jar harness-cli/target/harness-cli-0.2.7-SNAPSHOT.jar
+java -jar harness-cli/target/harness-cli-0.2.9.jar
 
 # Run HTTP server (Javalin, default port 8080)
-java -jar harness-server/target/harness-server-0.2.7-SNAPSHOT.jar
+java -jar harness-server/target/harness-server-0.2.9.jar
 
 # Run tests (currently no test files exist)
 mvn test
@@ -76,7 +76,7 @@ harness-server        ← HTTP API entry point (com.harness.server.Main, Javalin
 - **Tools implement `com.harness.tool.Tool` interface** — `spec()` returns ToolSpec, `execute(JsonNode)` returns String. Register in ToolRegistry. MCP tools adapted via McpToolAdapter.
 - **ReActEngine** uses LangChain4j 1.15.0 `ChatModel.chat(ChatRequest)` with `ToolSpecification` (JsonObjectSchema). Wraps ChatModel in `FallbackChatModel` when vision/voice providers are available. Supports streaming via `StreamingChatModel` (`streamExecute()` method). Tool calls retry up to 3 times on error; success with empty data passes to LLM without retry.
 - **Thinking Mode Control** — `HARNESS_MODEL_CHAT_THINKING` env var (default `true`) controls whether to enable thinking/reasoning mode for the chat model. `ChatModelProvider.chatModelNoThinking()` returns a model with thinking disabled (used by `LargeFileParser` for cost savings). Per-request override via `AgentContext.enableThinking()` (set in `context.enableThinking` JSON field). Providers pass `enable_thinking` via `customParameters(Map)` to OpenAI-compatible APIs (DashScope etc.). `ReActEngine.selectModel(Boolean)` picks thinking/non-thinking model; streaming mode falls back to blocking when thinking is disabled.
-- **File Content Injection** — File attachments are extracted and injected into the LLM context via `enhancedText` in `AgentOrchestrator`. Small files (< `HARNESS_INPUT_FILE_SIZE_THRESHOLD_KB`, default 100KB) use `TextExtractorRegistry.extract()` directly; large files use `LargeFileParser` MapReduce summarization. Works independently of RAG knowledge base configuration.
+- **File Content Injection** — File attachments are extracted and injected into the LLM context via `enhancedText` in `AgentOrchestrator`. Small files (< `HARNESS_INPUT_FILE_SIZE_THRESHOLD_KB`, default 100KB) use `TextExtractorRegistry.extract()` directly; large files use `LargeFileParser` merge-then-summarize approach: semantic splitting → greedy merge to `MODEL_CHAT_CONTEXT_WINDOW × LARGE_FILE_CONTEXT_RATIO` (default 40%) → parallel summarization → final merge. Works independently of RAG knowledge base configuration.
 - **ReAct Inspection** — 每轮工具调用后由 `Inspector` 启发式检查结果状态，记录在 `ReActStep.InspectionResult` 中：
 
   | 状态 | 含义 | 触发条件 |
@@ -109,7 +109,24 @@ harness-server        ← HTTP API entry point (com.harness.server.Main, Javalin
 ## Subsystems
 
 ### Large File Parsing (harness-input)
-Files exceeding `HARNESS_INPUT_FILE_SIZE_THRESHOLD_KB` (default 100) are parsed via `LargeFileParser`: extract text via `TextExtractorRegistry` (supports PDF/DOCX/XLSX/text) → split into chunks via `TextChunker` (semantic boundary splitting) → summarize each chunk via ChatModelProvider (thinking mode disabled for cost savings) → merge summaries (flat for ≤8 chunks, tree reduce for more). Output is `ParsedContent` with strategy `CHUNKED_REDUCE`. Files below the threshold use direct text extraction (`TextExtractorRegistry.extract()`) with `ParseStrategy.DIRECT`.
+Files exceeding `HARNESS_INPUT_FILE_SIZE_THRESHOLD_KB` (default 100) are parsed via `LargeFileParser` using a **merge-then-summarize** approach:
+
+```
+TextExtractorRegistry.extract() → TextChunker.split() (semantic boundaries)
+  → greedy merge consecutive chunks until reaching contextWindow × LARGE_FILE_CONTEXT_RATIO (default 40%)
+  → parallel summarize each merged block (noThinkingModel, bounded by LARGE_FILE_SUMMARY_CONCURRENCY, default 3)
+  → final merge all block summaries
+```
+
+Context window is **auto-detected** from model name via `ChatModelProvider.contextWindow()` (known mappings: Claude→200K, GPT-4→128K, Gemini→1M, Qwen→128K, DeepSeek→64K, o3→200K). Override via `HARNESS_MODEL_CHAT_CONTEXT_WINDOW` env var if needed.
+
+Key env vars:
+- `HARNESS_MODEL_CHAT_CONTEXT_WINDOW` (optional, auto-detected) — override model context window size
+- `HARNESS_LARGE_FILE_CONTEXT_RATIO` (default 0.4) — fraction of context window used per summarization block
+- `HARNESS_LARGE_FILE_SUMMARY_CONCURRENCY` (default 3) — max parallel summarization threads
+- `HARNESS_INPUT_CHUNK_TOKEN_SIZE` (default 1024) — per-semantic-chunk token size
+
+LLM call count: for a 1MB file (~333K tokens), this produces ~326 chunks → merged into ~4-7 blocks → 4-7 summary calls + 1 merge call ≈ **5-8 total LLM calls** (vs ~375 in the old per-chunk approach). Output is `ParsedContent` with strategy `CHUNKED_REDUCE`. Files below the threshold use direct text extraction (`TextExtractorRegistry.extract()`) with `ParseStrategy.DIRECT`.
 
 ### Multimodal Fallback (harness-ai)
 `FallbackChatModel` wraps the main ChatModel. When a request contains ImageContent/AudioContent but the model lacks the capability (checked via `ModalCapabilityRegistry`), it transparently falls back to VisionModelProvider (image→text) or VoiceModelProvider (audio→text). Override model capabilities via `HARNESS_MODEL_CHAT_CAPABILITIES`.
@@ -119,6 +136,37 @@ Files exceeding `HARNESS_INPUT_FILE_SIZE_THRESHOLD_KB` (default 100) are parsed 
 
 ### Rerank Integration (harness-ai + harness-preprocess)
 `OpenAiRerankModelProvider` calls OpenAI-compatible `/rerank` endpoint. Integrated into `ContextBuilder` pipeline: RAG retrieval → semantic enhancement → rerank → format. Timing and doc counts recorded in metadata.
+
+### Query Rewriting (harness-preprocess)
+Pluggable pre-retrieval query transformation. `QueryRewriter` interface with `List<String> rewrite(String)` — returns one or more rewritten queries. Controlled by `HARNESS_RAG_QUERY_REWRITE` (default `none`).
+
+| Strategy | Env Value | Behavior |
+|----------|-----------|----------|
+| NoOp | `none` | Pass-through, no LLM call |
+| HyDE | `hyde` | LLM generates hypothetical answer, uses it as retrieval query |
+| Multi-Query | `multi-query` | LLM generates N alternative formulations (`HARNESS_RAG_QUERY_REWRITE_COUNT`, default 3), retrieves for each, merges by ID |
+| Step-Back | `step-back` | LLM generates a more general/abstract version of the query |
+
+All strategies use `chatModelNoThinking()` for cost savings. LLM failure falls back to original query. Multi-query results are merged by document ID (keep highest score) before passing to downstream pipeline.
+
+Key classes: `QueryRewriter` (interface), `QueryRewriterFactory`, `NoOpQueryRewriter`, `HydeQueryRewriter`, `MultiQueryRewriter`, `StepBackQueryRewriter`.
+
+### Multi-Route Retrieval (harness-preprocess)
+Parallel fan-out to multiple retrieval backends, merge and deduplicate results. Enabled via `HARNESS_RAG_MULTI_ROUTE` (default `false`). When disabled, uses the existing single-provider `RagRetriever` path.
+
+**RetrievalRoute interface:** `List<RagDocument> retrieve(String query)`, `routeName()`, `isAvailable()`.
+
+| Route | Env Control | Backend |
+|-------|-------------|---------|
+| PgVectorRoute | `HARNESS_RAG_PROVIDER=pgvector` | pgvector cosine similarity (existing) |
+| FulltextRoute | `HARNESS_RAG_FULLTEXT_ENABLED=true` | PostgreSQL `tsvector`/`tsquery` keyword search |
+| KnowledgeGraphRoute | `HARNESS_RAG_KNOWLEDGE_GRAPH_ENABLED=true` | Stub (not yet implemented) |
+
+`MultiRouteRetriever` fans out via `CompletableFuture.allOf()`, merges by document ID (keep highest score). Individual route failures are caught and logged — graceful degradation.
+
+Fulltext route requires `content_tsv` tsvector column + GIN index on `knowledge_documents` table (see `sql/schema-pgvector.sql`). Language config via `HARNESS_RAG_FULLTEXT_LANG` (default `english`, use `simple` for Chinese).
+
+Key classes: `RetrievalRoute` (interface), `RetrievalRouteFactory`, `PgVectorRoute`, `FulltextRoute`, `KnowledgeGraphRoute`, `MultiRouteRetriever`.
 
 ### Memory & Context Management (harness-preprocess + harness-cli)
 Session-based conversation memory with short-term and long-term subsystems. Enabled via `HARNESS_MEMORY_STORE=mysql` (default `none`).
@@ -136,7 +184,7 @@ Layer 1.5: Session Lifecycle
   └─ 并行加载: 短期记忆 + 长期偏好 + RAG 检索 (CompletableFuture.allOf)
 
 Layer 2: Preprocess
-  ├─ RAG 知识库检索 (ContextBuilder → PgVectorRagRetriever → SemanticContextRetriever → Rerank)
+  ├─ RAG 知识库检索 (ContextBuilder → QueryRewriter → [MultiRouteRetriever | RagRetriever] → SemanticContextRetriever → Rerank)
   ├─ 加载长期记忆 (PreferenceStore.loadByUser)
   ├─ System 消息组装: HARNESS_SYSTEM_PROMPT 基础提示词 + 长期记忆（受 MEMORY_LONGTERM_MAX_TOKENS 限制）+ RAG 上下文
   ├─ 短期记忆 + RAG 有多少放多少，总上下文 > HARNESS_CTX_COMPRESS_MAJOR（默认 85%）时触发大压缩

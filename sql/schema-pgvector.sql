@@ -35,3 +35,26 @@ CREATE INDEX IF NOT EXISTS idx_knowledge_embedding
 -- WHERE collection = $2
 -- ORDER BY embedding <=> $1::vector
 -- LIMIT $3;
+
+-- ============================================================
+-- 全文检索支持 (Fulltext Search)
+-- 需要先运行此段 SQL 才能使用 HARNESS_RAG_FULLTEXT_ENABLED=true
+-- ============================================================
+
+-- 自动生成 tsvector 列（content 变化时自动更新）
+ALTER TABLE knowledge_documents
+    ADD COLUMN IF NOT EXISTS content_tsv tsvector
+    GENERATED ALWAYS AS (to_tsvector('english', content)) STORED;
+
+-- GIN 索引加速全文检索
+CREATE INDEX IF NOT EXISTS idx_knowledge_fts
+    ON knowledge_documents USING GIN (content_tsv);
+
+-- 查询示例：按集合 + 全文检索
+-- SELECT id, content, source,
+--        ts_rank_cd(content_tsv, plainto_tsquery('english', $1)) AS score
+-- FROM knowledge_documents
+-- WHERE collection = $2
+--   AND content_tsv @@ plainto_tsquery('english', $1)
+-- ORDER BY score DESC
+-- LIMIT $3;
