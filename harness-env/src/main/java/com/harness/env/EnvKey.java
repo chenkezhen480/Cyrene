@@ -168,14 +168,22 @@ public final class EnvKey {
     public static final String MEMORY_REFINEMENT_STUCK_MINUTES = "HARNESS_MEMORY_REFINEMENT_STUCK_MINUTES";
 
     // ==================== Cache (会话缓存管理) ====================
-    /** Max messages cached per session; oldest evicted when exceeded. 单 session 缓存消息上限，超出淘汰最早的 */
+    /** @deprecated replaced by per-user limits */
     public static final String CACHE_MAX_MESSAGES_PER_SESSION = "HARNESS_CACHE_MAX_MESSAGES_PER_SESSION";
-    /** Max total cache memory in MB; LRU evict coldest 50% sessions when exceeded. 缓存总内存上限(MB)，超出按 LRU 淘汰最冷 50% */
+    /** @deprecated replaced by CACHE_MAX_MB_GLOBAL */
     public static final String CACHE_MAX_MB                   = "HARNESS_CACHE_MAX_MB";
     /** Cache session TTL in hours; idle sessions expired by background cleanup. 缓存 session 过期时间(小时)，空闲超时自动淘汰 */
     public static final String CACHE_SESSION_TTL_HOURS        = "HARNESS_CACHE_SESSION_TTL_HOURS";
-    /** Max concurrent sessions in cache. 缓存最大 session 并发数 */
+    /** @deprecated replaced by CACHE_MAX_SESSIONS_PER_USER */
     public static final String CACHE_MAX_SESSIONS             = "HARNESS_MEMORY_CACHE_MAX_SESSIONS";
+    /** Max sessions per user; evict user's oldest when exceeded. 单用户最大会话数，超出淘汰该用户最旧会话 */
+    public static final String CACHE_MAX_SESSIONS_PER_USER    = "HARNESS_CACHE_MAX_SESSIONS_PER_USER";
+    /** Max cache memory per user in MB; evict user's oldest when exceeded. 单用户缓存内存上限(MB)，超出淘汰该用户最旧会话 */
+    public static final String CACHE_MAX_MB_PER_USER          = "HARNESS_CACHE_MAX_MB_PER_USER";
+    /** Global cache memory cap in MB. 全局缓存内存上限(MB) */
+    public static final String CACHE_MAX_MB_GLOBAL            = "HARNESS_CACHE_MAX_MB_GLOBAL";
+    /** Eviction target ratio (1-100); global eviction stops when memory drops below this % of global cap. 全局淘汰目标比例，内存降到此百分比以下停止淘汰 */
+    public static final String CACHE_EVICTION_TARGET_RATIO    = "HARNESS_CACHE_EVICTION_TARGET_RATIO";
 
     // TODO: Redis cache — 暂未实现，预留扩展
     public static final String MEMORY_REDIS_URL                = "HARNESS_MEMORY_REDIS_URL";

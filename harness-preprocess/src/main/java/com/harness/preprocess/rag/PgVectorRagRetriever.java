@@ -3,6 +3,7 @@ package com.harness.preprocess.rag;
 import com.harness.ai.model.EmbeddingModelProvider;
 import com.harness.env.EnvConfig;
 import com.harness.env.EnvKey;
+import com.harness.env.PgConnectionPool;
 import dev.langchain4j.data.embedding.Embedding;
 import dev.langchain4j.data.segment.TextSegment;
 import org.slf4j.Logger;
@@ -34,9 +35,6 @@ public class PgVectorRagRetriever {
 
     private static final Logger log = LoggerFactory.getLogger(PgVectorRagRetriever.class);
 
-    private final String dbUrl;
-    private final String dbUser;
-    private final String dbPass;
     private final String table;
     private final String collection;
     private final int topK;
@@ -50,9 +48,6 @@ public class PgVectorRagRetriever {
 
     public PgVectorRagRetriever(EmbeddingModelProvider embeddingProvider) {
         EnvConfig cfg = EnvConfig.get();
-        this.dbUrl = cfg.getString(EnvKey.RAG_PG_URL, "jdbc:postgresql://localhost:5432/agent");
-        this.dbUser = cfg.getString(EnvKey.RAG_PG_USER, "postgres");
-        this.dbPass = cfg.getString(EnvKey.RAG_PG_PASS, "");
         this.table = cfg.getString(EnvKey.RAG_PG_TABLE, "knowledge_documents");
         this.collection = cfg.getString(EnvKey.RAG_COLLECTION, "default");
         this.topK = cfg.getInt(EnvKey.RAG_TOP_K, 5);
@@ -85,7 +80,7 @@ public class PgVectorRagRetriever {
                 """, vectorLiteral, table, vectorLiteral, vectorLiteral);
 
         List<RagRetriever.RagDocument> results = new ArrayList<>();
-        try (Connection conn = DriverManager.getConnection(dbUrl, dbUser, dbPass);
+        try (Connection conn = PgConnectionPool.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
 
             ps.setString(1, collection);
@@ -143,7 +138,7 @@ public class PgVectorRagRetriever {
                 VALUES (?, ?, ?, '%s'::vector)
                 """, table, vectorLiteral);
 
-        try (Connection conn = DriverManager.getConnection(dbUrl, dbUser, dbPass);
+        try (Connection conn = PgConnectionPool.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
 
             ps.setString(1, collectionName != null ? collectionName : collection);
@@ -165,7 +160,7 @@ public class PgVectorRagRetriever {
                 VALUES (?, ?, ?, ?::vector)
                 """, table);
 
-        try (Connection conn = DriverManager.getConnection(dbUrl, dbUser, dbPass);
+        try (Connection conn = PgConnectionPool.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
 
             conn.setAutoCommit(false);
@@ -190,7 +185,7 @@ public class PgVectorRagRetriever {
      */
     public RagRetriever.RagDocument retrieveById(String id) {
         String sql = String.format("SELECT id, content, source FROM %s WHERE id = ?", table);
-        try (Connection conn = DriverManager.getConnection(dbUrl, dbUser, dbPass);
+        try (Connection conn = PgConnectionPool.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setLong(1, Long.parseLong(id));
             ResultSet rs = ps.executeQuery();
@@ -213,7 +208,7 @@ public class PgVectorRagRetriever {
      */
     public String getPrevChunkId(String chunkId) {
         String sql = String.format("SELECT prev_chunk_id FROM %s WHERE id = ?", table);
-        try (Connection conn = DriverManager.getConnection(dbUrl, dbUser, dbPass);
+        try (Connection conn = PgConnectionPool.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setLong(1, Long.parseLong(chunkId));
             ResultSet rs = ps.executeQuery();
@@ -232,7 +227,7 @@ public class PgVectorRagRetriever {
      */
     public int deleteByCollection(String collectionName) {
         String sql = String.format("DELETE FROM %s WHERE collection = ?", table);
-        try (Connection conn = DriverManager.getConnection(dbUrl, dbUser, dbPass);
+        try (Connection conn = PgConnectionPool.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, collectionName);
             int deleted = ps.executeUpdate();
@@ -251,7 +246,7 @@ public class PgVectorRagRetriever {
      */
     public boolean deleteById(String id) {
         String sql = String.format("DELETE FROM %s WHERE id = ?", table);
-        try (Connection conn = DriverManager.getConnection(dbUrl, dbUser, dbPass);
+        try (Connection conn = PgConnectionPool.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setLong(1, Long.parseLong(id));
             int deleted = ps.executeUpdate();
@@ -275,7 +270,7 @@ public class PgVectorRagRetriever {
                 "SELECT id, source, chunk_index, created_at FROM %s WHERE collection = ? ORDER BY id ASC",
                 table);
         List<RagDocumentSummary> results = new ArrayList<>();
-        try (Connection conn = DriverManager.getConnection(dbUrl, dbUser, dbPass);
+        try (Connection conn = PgConnectionPool.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, collectionName);
             ResultSet rs = ps.executeQuery();
@@ -349,7 +344,7 @@ public class PgVectorRagRetriever {
         List<Long> ids = new ArrayList<>();
         Connection conn = null;
         try {
-            conn = DriverManager.getConnection(dbUrl, dbUser, dbPass);
+            conn = PgConnectionPool.getConnection();
             conn.setAutoCommit(false);
 
             // Step 1: Insert all chunks and collect IDs

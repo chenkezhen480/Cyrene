@@ -3,6 +3,7 @@ package com.harness.preprocess.memory;
 import com.harness.core.model.Session;
 import com.harness.env.EnvConfig;
 import com.harness.env.EnvKey;
+import com.harness.tool.skill.SkillRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -31,6 +32,8 @@ public class SessionCleanupScheduler {
     private final SessionStore sessionStore;
     private final SessionLifecycleManager lifecycleManager;
     private final PreferenceRefinementWorker refinementWorker;
+    private final SessionMessageCache messageCache;
+    private final SkillRegistry skillRegistry;
     private final Duration timeout;
     private final long intervalMinutes;
     private final Duration stuckRefinementThreshold;
@@ -38,10 +41,13 @@ public class SessionCleanupScheduler {
     private ScheduledExecutorService scheduler;
 
     public SessionCleanupScheduler(SessionStore sessionStore, SessionLifecycleManager lifecycleManager,
-                                   PreferenceRefinementWorker refinementWorker) {
+                                   PreferenceRefinementWorker refinementWorker,
+                                   SessionMessageCache messageCache, SkillRegistry skillRegistry) {
         this.sessionStore = sessionStore;
         this.lifecycleManager = lifecycleManager;
         this.refinementWorker = refinementWorker;
+        this.messageCache = messageCache;
+        this.skillRegistry = skillRegistry;
         EnvConfig cfg = EnvConfig.get();
         int timeoutMinutes = cfg.getInt(EnvKey.SESSION_TIMEOUT_MINUTES, 30);
         this.timeout = Duration.ofMinutes(timeoutMinutes);
@@ -87,6 +93,13 @@ public class SessionCleanupScheduler {
 
     private void cleanup() {
         try {
+            // Step 0: Evict expired entries from in-memory caches
+            int cacheEvicted = messageCache.evictExpired();
+            int skillEvicted = skillRegistry.evictExpired();
+            if (cacheEvicted > 0 || skillEvicted > 0) {
+                log.info("[Cleanup] Cache eviction: messageCache={}, skillRegistry={}", cacheEvicted, skillEvicted);
+            }
+
             // Step 1: Recover stuck refinements before processing new ones
             resetStuckRefinements();
 

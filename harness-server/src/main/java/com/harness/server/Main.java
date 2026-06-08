@@ -119,7 +119,7 @@ public class Main {
         app.post("/api/chat", chatHandler::handle);
 
         // Session management endpoints
-        SessionHandler sessionHandler = new SessionHandler(agent.sessionStore(), agent.messageStore(), agent.messageCache());
+        SessionHandler sessionHandler = new SessionHandler(agent.sessionStore(), agent.messageStore(), agent.messageCache(), agent.skillRegistry());
         app.post("/api/sessions", sessionHandler::create);
         app.get("/api/sessions", sessionHandler::list);
         app.get("/api/sessions/{sessionId}", sessionHandler::detail);

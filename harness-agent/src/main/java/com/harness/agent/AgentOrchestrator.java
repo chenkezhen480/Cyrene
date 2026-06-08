@@ -136,13 +136,14 @@ public class AgentOrchestrator {
         this.refinementWorker = new PreferenceRefinementWorker(messageStore, preferenceStore, chatModelProvider);
         this.memoryCompressor = new MemoryCompressor(messageStore, sessionStore, chatModelProvider);
         this.messageCache = new SessionMessageCache();
+        this.messageCache.setOnEvict(skillRegistry::clearSession);
         this.messageWriteWorker = new MessageWriteWorker(messageStore);
 
         // Start background workers if memory enabled
         if (MemoryStoreFactory.isEnabled()) {
             refinementWorker.start();
             messageWriteWorker.start();
-            cleanupScheduler = new SessionCleanupScheduler(sessionStore, sessionLifecycle, refinementWorker);
+            cleanupScheduler = new SessionCleanupScheduler(sessionStore, sessionLifecycle, refinementWorker, messageCache, skillRegistry);
             cleanupScheduler.start();
         } else {
             cleanupScheduler = null;
@@ -239,7 +240,8 @@ public class AgentOrchestrator {
             CompletableFuture<ContextBuilder.ContextResult> ragFuture = CompletableFuture.supplyAsync(() ->
                     contextBuilder.build(ragInput));
 
-            if (MemoryStoreFactory.isEnabled() && input.userId() != null) {
+            final String userId = input.userId();
+            if (MemoryStoreFactory.isEnabled() && userId != null) {
                 String effectiveSessionId = requestedSessionId != null ? requestedSessionId : activeSessionId;
                 SessionLifecycleManager.LifecycleResult lifecycle = sessionLifecycle.process(input.userId(), effectiveSessionId);
                 sessionId = lifecycle.session().id();
@@ -263,7 +265,6 @@ public class AgentOrchestrator {
                 }
 
                 // Async: check refinement worthiness for timed-out sessions
-                final String userId = input.userId();
                 for (String timedOutId : lifecycle.timedOutSessionIds()) {
                     final String tid = timedOutId;
                     CompletableFuture.runAsync(() -> {
@@ -281,7 +282,7 @@ public class AgentOrchestrator {
                         return cached;
                     }
                     List<MemoryMessage> loaded = messageStore.loadForContext(sid);
-                    messageCache.put(sid, loaded);
+                    messageCache.put(sid, userId, loaded);
                     return loaded;
                 });
                 CompletableFuture<List<Preference>> longtermFuture = CompletableFuture.supplyAsync(() -> {
@@ -318,7 +319,7 @@ public class AgentOrchestrator {
 
             // 大压缩检查（旧消息 + 估算新用户消息 + RAG + system + 长期记忆）
             int totalBudget = chatModelProvider.chatModel() != null ? chatModelProvider.contextWindow() : 8000;
-            if (sessionId != null) {
+            if (sessionId != null && userId != null) {
                 int shorttermTokens = estimateTokens(shorttermMessages);
                 int ragTokens = ctx.contextBlock() != null ? estimateTokens(ctx.contextBlock()) : 0;
                 int inputTokens = estimateTokens(enhancedText);
@@ -339,7 +340,7 @@ public class AgentOrchestrator {
                     trace.builder().metadata(meta);
                     // 压缩后重建缓存（从DB加载含摘要的状态）
                     shorttermMessages = messageStore.loadForContext(sessionId);
-                    messageCache.put(sessionId, shorttermMessages);
+                    messageCache.put(sessionId, userId, shorttermMessages);
 
                     // 大压缩后重新注入已加载的skill内容（skill内容不在DB中，需要重新加载）
                     List<com.harness.core.model.Skill> loadedSkills = skillRegistry.getLoadedSkills(sessionId);
@@ -351,13 +352,13 @@ public class AgentOrchestrator {
                             skillMessages.add(new MemoryMessage(0, sessionId, "system", skillContent, false, null));
                         }
                         shorttermMessages = skillMessages;
-                        messageCache.put(sessionId, shorttermMessages);
+                        messageCache.put(sessionId, userId, shorttermMessages);
                     }
                 }
 
                 // 用户消息：异步写DB + 同步更新缓存
                 messageWriteWorker.submit(sessionId, "user", enhancedText, false);
-                messageCache.append(sessionId, new MemoryMessage(0, sessionId, "user", enhancedText, false, null));
+                messageCache.append(sessionId, userId, new MemoryMessage(0, sessionId, "user", enhancedText, false, null));
                 sessionStore.updateLastActive(sessionId);
             }
 
@@ -393,9 +394,9 @@ public class AgentOrchestrator {
             });
 
             // ===== 后处理：保存AI回复 =====
-            if (sessionId != null) {
+            if (sessionId != null && userId != null) {
                 messageWriteWorker.submit(sessionId, "assistant", result.output(), false);
-                messageCache.append(sessionId, new MemoryMessage(0, sessionId, "assistant", result.output(), false, null));
+                messageCache.append(sessionId, userId, new MemoryMessage(0, sessionId, "assistant", result.output(), false, null));
                 sessionStore.updateLastActive(sessionId);
             }
 
@@ -483,7 +484,8 @@ public class AgentOrchestrator {
             CompletableFuture<ContextBuilder.ContextResult> ragFuture = CompletableFuture.supplyAsync(() ->
                     contextBuilder.build(ragInput));
 
-            if (MemoryStoreFactory.isEnabled() && input.userId() != null) {
+            final String userId = input.userId();
+            if (MemoryStoreFactory.isEnabled() && userId != null) {
                 String effectiveSessionId = requestedSessionId != null ? requestedSessionId : activeSessionId;
                 SessionLifecycleManager.LifecycleResult lifecycle = sessionLifecycle.process(input.userId(), effectiveSessionId);
                 sessionId = lifecycle.session().id();
@@ -507,7 +509,6 @@ public class AgentOrchestrator {
                 }
 
                 // Async: check refinement worthiness for timed-out sessions
-                final String userId = input.userId();
                 for (String timedOutId : lifecycle.timedOutSessionIds()) {
                     final String tid = timedOutId;
                     CompletableFuture.runAsync(() -> {
@@ -522,7 +523,7 @@ public class AgentOrchestrator {
                     List<MemoryMessage> cached = messageCache.getIfPresent(sid);
                     if (cached != null) return cached;
                     List<MemoryMessage> loaded = messageStore.loadForContext(sid);
-                    messageCache.put(sid, loaded);
+                    messageCache.put(sid, userId, loaded);
                     return loaded;
                 });
                 CompletableFuture<List<Preference>> longtermFuture = CompletableFuture.supplyAsync(() ->
@@ -551,7 +552,7 @@ public class AgentOrchestrator {
 
             // Compression check
             int totalBudget = chatModelProvider.chatModel() != null ? chatModelProvider.contextWindow() : 8000;
-            if (sessionId != null) {
+            if (sessionId != null && userId != null) {
                 int shorttermTokens = estimateTokens(shorttermMessages);
                 int ragTokens = ctx.contextBlock() != null ? estimateTokens(ctx.contextBlock()) : 0;
                 int inputTokens = estimateTokens(enhancedText);
@@ -564,7 +565,7 @@ public class AgentOrchestrator {
                     log.info("[Memory] Compression triggered: type={}, before={}, after={}",
                             compressResult.type(), compressResult.messagesBefore(), compressResult.messagesAfter());
                     shorttermMessages = messageStore.loadForContext(sessionId);
-                    messageCache.put(sessionId, shorttermMessages);
+                    messageCache.put(sessionId, userId, shorttermMessages);
 
                     // 大压缩后重新注入已加载的skill内容（skill内容不在DB中，需要重新加载）
                     List<com.harness.core.model.Skill> loadedSkills = skillRegistry.getLoadedSkills(sessionId);
@@ -576,12 +577,12 @@ public class AgentOrchestrator {
                             skillMessages.add(new MemoryMessage(0, sessionId, "system", skillContent, false, null));
                         }
                         shorttermMessages = skillMessages;
-                        messageCache.put(sessionId, shorttermMessages);
+                        messageCache.put(sessionId, userId, shorttermMessages);
                     }
                 }
 
                 messageWriteWorker.submit(sessionId, "user", enhancedText, false);
-                messageCache.append(sessionId, new MemoryMessage(0, sessionId, "user", enhancedText, false, null));
+                messageCache.append(sessionId, userId, new MemoryMessage(0, sessionId, "user", enhancedText, false, null));
             }
 
             // Emit start event with sessionId (first event for client)
@@ -624,9 +625,9 @@ public class AgentOrchestrator {
             });
 
             // Post-processing: save AI message (async via worker)
-            if (finalSessionId != null) {
+            if (finalSessionId != null && userId != null) {
                 messageWriteWorker.submit(finalSessionId, "assistant", result.output(), false);
-                messageCache.append(finalSessionId, new MemoryMessage(0, finalSessionId, "assistant", result.output(), false, null));
+                messageCache.append(finalSessionId, userId, new MemoryMessage(0, finalSessionId, "assistant", result.output(), false, null));
             }
 
             // Async: trace.finish() and sessionStore.updateLastActive()
@@ -821,6 +822,7 @@ public class AgentOrchestrator {
     public PreferenceRefinementWorker refinementWorker() { return refinementWorker; }
     public SubAgentOrchestrator subAgentOrchestrator() { return subAgentOrchestrator; }
     public SessionMessageCache messageCache() { return messageCache; }
+    public SkillRegistry skillRegistry() { return skillRegistry; }
 
     /**
      * Convert MemoryMessage list to LangChain4j ChatMessage list for ReAct history injection.
@@ -854,7 +856,11 @@ public class AgentOrchestrator {
         if (cleanupScheduler != null) cleanupScheduler.stop();
         messageWriteWorker.stop();  // Flush pending writes before stopping
         refinementWorker.stop();
+        messageCache.evictExpired();
+        skillRegistry.evictExpired();
         traceStore.close();
+        com.harness.env.PgConnectionPool.shutdown();
+        com.harness.env.MysqlConnectionPool.shutdown();
         log.info("Agent shut down");
     }
 }

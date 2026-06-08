@@ -8,12 +8,14 @@ import org.slf4j.LoggerFactory;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Consumer;
 
 /**
- * LRU cache for active session messages with three-layer eviction:
+ * LRU cache for active session messages with per-user and global eviction:
  * <ol>
- *   <li>Per-session message cap: oldest messages evicted when count exceeds {@code CACHE_MAX_MESSAGES_PER_SESSION}</li>
- *   <li>Total memory cap: coldest 50% sessions evicted when estimated memory exceeds {@code CACHE_MAX_MB}</li>
+ *   <li>Per-user session count: user's oldest session evicted when count exceeds {@code CACHE_MAX_SESSIONS_PER_USER}</li>
+ *   <li>Per-user memory cap: user's oldest session evicted when estimated memory exceeds {@code CACHE_MAX_MB_PER_USER}</li>
+ *   <li>Global memory cap: globally oldest session evicted until memory drops below {@code CACHE_EVICTION_TARGET_RATIO}% of {@code CACHE_MAX_MB_GLOBAL}</li>
  *   <li>Session TTL: idle sessions expired after {@code CACHE_SESSION_TTL_HOURS}</li>
  * </ol>
  *
@@ -24,34 +26,49 @@ public class SessionMessageCache {
     private static final Logger log = LoggerFactory.getLogger(SessionMessageCache.class);
     private static final long BYTES_PER_MESSAGE = 2500; // ~2.5KB per message estimate
 
-    private final int maxSessions;
-    private final int maxMessagesPerSession;
-    private final long maxMemoryBytes;
+    private final int maxSessionsPerUser;
+    private final long maxMemoryBytesPerUser;
+    private final long globalMaxMemoryBytes;
+    private final double evictionTargetRatio; // 0.0 ~ 1.0
     private final long sessionTtlMs;
 
-    /** sessionId → messages (LRU access-ordered) */
-    private final Map<String, List<MemoryMessage>> cache;
-    /** sessionId → last access timestamp */
-    private final Map<String, Long> lastAccess = new ConcurrentHashMap<>();
-    /** estimated total memory usage in bytes */
-    private long estimatedBytes = 0;
+    /** sessionId → messages */
+    private final Map<String, List<MemoryMessage>> cache = new HashMap<>();
+    /** timestamp → set of sessionIds (ordered, for O(log n) oldest lookup) */
+    private final TreeMap<Long, Set<String>> timeToSessions = new TreeMap<>();
+    /** sessionId → last access timestamp (reverse map for O(1) lookup) */
+    private final Map<String, Long> sessionToTime = new HashMap<>();
+    /** sessionId → userId */
+    private final Map<String, String> sessionUser = new HashMap<>();
+    /** userId → set of sessionIds */
+    private final Map<String, Set<String>> userSessions = new HashMap<>();
+    /** userId → estimated memory bytes */
+    private final Map<String, Long> userMemoryBytes = new HashMap<>();
+    /** global estimated memory bytes */
+    private long globalEstimatedBytes = 0;
+    /** callback invoked when a session is evicted (for cross-cache cleanup) */
+    private Consumer<String> onEvict;
 
     public SessionMessageCache() {
         EnvConfig cfg = EnvConfig.get();
-        this.maxSessions = cfg.getInt(EnvKey.CACHE_MAX_SESSIONS, 10);
-        this.maxMessagesPerSession = cfg.getInt(EnvKey.CACHE_MAX_MESSAGES_PER_SESSION, 10);
-        this.maxMemoryBytes = (long) cfg.getInt(EnvKey.CACHE_MAX_MB, 20) * 1024 * 1024;
+        this.maxSessionsPerUser = cfg.getInt(EnvKey.CACHE_MAX_SESSIONS_PER_USER, 10);
+        this.maxMemoryBytesPerUser = (long) cfg.getInt(EnvKey.CACHE_MAX_MB_PER_USER, 2) * 1024 * 1024;
+        this.globalMaxMemoryBytes = (long) cfg.getInt(EnvKey.CACHE_MAX_MB_GLOBAL, 4096) * 1024 * 1024;
+        this.evictionTargetRatio = cfg.getInt(EnvKey.CACHE_EVICTION_TARGET_RATIO, 50) / 100.0;
         this.sessionTtlMs = (long) cfg.getInt(EnvKey.CACHE_SESSION_TTL_HOURS, 12) * 3600 * 1000;
 
-        this.cache = new LinkedHashMap<>(16, 0.75f, true) {
-            @Override
-            protected boolean removeEldestEntry(Map.Entry<String, List<MemoryMessage>> eldest) {
-                return size() > maxSessions;
-            }
-        };
+        log.info("[Cache] SessionMessageCache initialized: maxPerUser={}, maxMBPerUser={}, globalMaxMB={}, evictionTarget={}%, ttlHours={}",
+                maxSessionsPerUser, maxMemoryBytesPerUser / (1024 * 1024),
+                globalMaxMemoryBytes / (1024 * 1024),
+                (int) (evictionTargetRatio * 100), sessionTtlMs / 3600000);
+    }
 
-        log.info("[Cache] SessionMessageCache initialized: maxSessions={}, maxMsgPerSession={}, maxMB={}, ttlHours={}",
-                maxSessions, maxMessagesPerSession, maxMemoryBytes / (1024 * 1024), sessionTtlMs / 3600000);
+    /**
+     * Register a callback to be invoked when a session is evicted.
+     * Used to synchronize cross-cache cleanup (e.g. SkillRegistry).
+     */
+    public void setOnEvict(Consumer<String> onEvict) {
+        this.onEvict = onEvict;
     }
 
     /**
@@ -59,82 +76,74 @@ public class SessionMessageCache {
      */
     public synchronized List<MemoryMessage> getIfPresent(String sessionId) {
         if (isExpired(sessionId)) {
-            evictSession(sessionId);
+            evictSessionInternal(sessionId, true);
             return null;
         }
         List<MemoryMessage> msgs = cache.get(sessionId);
         if (msgs != null) {
-            lastAccess.put(sessionId, System.currentTimeMillis());
+            touchSession(sessionId);
         }
         return msgs;
     }
 
     /**
-     * Populate cache after DB load. Trims to maxMessagesPerSession (keeps newest).
+     * Populate cache after DB load.
      */
-    public synchronized void put(String sessionId, List<MemoryMessage> messages) {
-        List<MemoryMessage> trimmed = trimToLimit(messages);
-        List<MemoryMessage> old = cache.put(sessionId, new ArrayList<>(trimmed));
-        lastAccess.put(sessionId, System.currentTimeMillis());
+    public synchronized void put(String sessionId, String userId, List<MemoryMessage> messages) {
+        List<MemoryMessage> old = cache.put(sessionId, new ArrayList<>(messages));
+        touchSession(sessionId);
 
-        // Update memory estimate
+        long newBytes = (long) messages.size() * BYTES_PER_MESSAGE;
+        long oldBytes = 0;
+
         if (old != null) {
-            estimatedBytes -= (long) old.size() * BYTES_PER_MESSAGE;
+            oldBytes = (long) old.size() * BYTES_PER_MESSAGE;
+            globalEstimatedBytes -= oldBytes;
+            String existingUser = sessionUser.get(sessionId);
+            if (existingUser != null && !existingUser.equals(userId)) {
+                Set<String> oldUserSessions = userSessions.get(existingUser);
+                if (oldUserSessions != null) {
+                    oldUserSessions.remove(sessionId);
+                    if (oldUserSessions.isEmpty()) userSessions.remove(existingUser);
+                }
+                userMemoryBytes.merge(existingUser, -oldBytes, Long::sum);
+                if (userMemoryBytes.getOrDefault(existingUser, 0L) <= 0) userMemoryBytes.remove(existingUser);
+            } else if (existingUser != null) {
+                userMemoryBytes.merge(existingUser, -oldBytes, Long::sum);
+            }
         }
-        estimatedBytes += (long) trimmed.size() * BYTES_PER_MESSAGE;
 
-        enforceMemoryLimit();
+        globalEstimatedBytes += newBytes;
+        sessionUser.put(sessionId, userId);
+        userSessions.computeIfAbsent(userId, k -> new HashSet<>()).add(sessionId);
+        userMemoryBytes.merge(userId, newBytes, Long::sum);
+
+        enforcePerUserLimits(userId);
+        enforceGlobalMemoryLimit();
     }
 
     /**
-     * Append a message to cache. Trims oldest if per-session limit exceeded.
-     * Checks total memory after append.
+     * Append a message to cache.
      */
-    public synchronized void append(String sessionId, MemoryMessage message) {
+    public synchronized void append(String sessionId, String userId, MemoryMessage message) {
         List<MemoryMessage> msgs = cache.computeIfAbsent(sessionId, k -> new ArrayList<>());
         msgs.add(message);
-        lastAccess.put(sessionId, System.currentTimeMillis());
-        estimatedBytes += BYTES_PER_MESSAGE;
+        touchSession(sessionId);
 
-        // Per-session message limit: evict oldest
-        if (msgs.size() > maxMessagesPerSession) {
-            int overflow = msgs.size() - maxMessagesPerSession;
-            msgs.subList(0, overflow).clear();
-            estimatedBytes -= (long) overflow * BYTES_PER_MESSAGE;
-            log.debug("[Cache] Session {} trimmed {} old messages (limit={})", sessionId, overflow, maxMessagesPerSession);
-        }
+        globalEstimatedBytes += BYTES_PER_MESSAGE;
+        sessionUser.putIfAbsent(sessionId, userId);
+        userSessions.computeIfAbsent(userId, k -> new HashSet<>()).add(sessionId);
+        userMemoryBytes.merge(userId, (long) BYTES_PER_MESSAGE, Long::sum);
 
-        enforceMemoryLimit();
+        enforcePerUserLimits(userId);
+        enforceGlobalMemoryLimit();
     }
 
     /**
-     * Invalidate after compression (forces DB reload on next read).
-     */
-    public synchronized void invalidate(String sessionId) {
-        List<MemoryMessage> old = cache.remove(sessionId);
-        lastAccess.remove(sessionId);
-        if (old != null) {
-            estimatedBytes -= (long) old.size() * BYTES_PER_MESSAGE;
-        }
-    }
-
-    /**
-     * Remove on session close.
+     * Remove on session close. Triggers onEvict callback for cross-cache cleanup.
      */
     public synchronized void remove(String sessionId) {
-        List<MemoryMessage> old = cache.remove(sessionId);
-        lastAccess.remove(sessionId);
-        if (old != null) {
-            estimatedBytes -= (long) old.size() * BYTES_PER_MESSAGE;
-        }
-    }
-
-    public synchronized boolean contains(String sessionId) {
-        if (isExpired(sessionId)) {
-            evictSession(sessionId);
-            return false;
-        }
-        return cache.containsKey(sessionId);
+        evictSessionInternal(sessionId, true);
     }
 
     public synchronized int size() {
@@ -143,22 +152,22 @@ public class SessionMessageCache {
 
     /**
      * Evict all expired sessions. Call periodically from cleanup scheduler.
+     * Scans from oldest timestamp; stops at first non-expired entry.
      */
     public synchronized int evictExpired() {
         long now = System.currentTimeMillis();
+        long threshold = now - sessionTtlMs;
         int evicted = 0;
-        Iterator<Map.Entry<String, Long>> it = lastAccess.entrySet().iterator();
-        while (it.hasNext()) {
-            Map.Entry<String, Long> entry = it.next();
-            if (now - entry.getValue() > sessionTtlMs) {
-                String sid = entry.getKey();
-                List<MemoryMessage> old = cache.remove(sid);
-                if (old != null) {
-                    estimatedBytes -= (long) old.size() * BYTES_PER_MESSAGE;
-                }
-                it.remove();
-                evicted++;
-            }
+
+        // Collect expired sessionIds from oldest timestamps
+        List<String> expired = new ArrayList<>();
+        for (Map.Entry<Long, Set<String>> entry : timeToSessions.entrySet()) {
+            if (entry.getKey() > threshold) break; // all remaining are newer
+            expired.addAll(entry.getValue());
+        }
+        for (String sid : expired) {
+            evictSessionInternal(sid, true);
+            evicted++;
         }
         if (evicted > 0) {
             log.info("[Cache] Evicted {} expired sessions (TTL={}h), remaining={}", evicted, sessionTtlMs / 3600000, cache.size());
@@ -166,66 +175,159 @@ public class SessionMessageCache {
         return evicted;
     }
 
-    public synchronized long getEstimatedBytes() {
-        return estimatedBytes;
+    public synchronized long getGlobalEstimatedBytes() {
+        return globalEstimatedBytes;
     }
 
     // ========== Internal ==========
 
+    /**
+     * Update session's access timestamp.
+     * Moves sessionId from old timestamp bucket to new timestamp bucket in timeToSessions.
+     */
+    private void touchSession(String sessionId) {
+        long now = System.currentTimeMillis();
+        Long oldTime = sessionToTime.put(sessionId, now);
+        if (oldTime != null) {
+            removeFromTimeIndex(oldTime, sessionId);
+        }
+        timeToSessions.computeIfAbsent(now, k -> new HashSet<>()).add(sessionId);
+    }
+
     private boolean isExpired(String sessionId) {
-        Long last = lastAccess.get(sessionId);
+        Long last = sessionToTime.get(sessionId);
         return last != null && (System.currentTimeMillis() - last) > sessionTtlMs;
     }
 
-    private void evictSession(String sessionId) {
+    private void evictSessionInternal(String sessionId, boolean notifyEvict) {
         List<MemoryMessage> old = cache.remove(sessionId);
-        lastAccess.remove(sessionId);
+
+        // Remove from time index
+        Long ts = sessionToTime.remove(sessionId);
+        if (ts != null) {
+            removeFromTimeIndex(ts, sessionId);
+        }
+
+        long freed = 0;
         if (old != null) {
-            estimatedBytes -= (long) old.size() * BYTES_PER_MESSAGE;
-            log.debug("[Cache] Evicted expired session: {}, freed {} messages", sessionId, old.size());
-        }
-    }
-
-    /**
-     * Trim message list to maxMessagesPerSession, keeping the newest messages.
-     */
-    private List<MemoryMessage> trimToLimit(List<MemoryMessage> messages) {
-        if (messages.size() <= maxMessagesPerSession) {
-            return messages;
-        }
-        int start = messages.size() - maxMessagesPerSession;
-        log.debug("[Cache] Trimming messages: {} → {} (keeping newest)", messages.size(), maxMessagesPerSession);
-        return new ArrayList<>(messages.subList(start, messages.size()));
-    }
-
-    /**
-     * When total estimated memory exceeds maxMemoryBytes, evict coldest 50% sessions by LRU.
-     */
-    private void enforceMemoryLimit() {
-        if (estimatedBytes <= maxMemoryBytes) {
-            return;
+            freed = (long) old.size() * BYTES_PER_MESSAGE;
+            globalEstimatedBytes -= freed;
         }
 
-        int targetEvictions = Math.max(1, cache.size() / 2);
-        log.warn("[Cache] Memory limit exceeded: {}MB > {}MB, evicting {} coldest sessions",
-                estimatedBytes / (1024 * 1024), maxMemoryBytes / (1024 * 1024), targetEvictions);
-
-        // LinkedHashMap iteration order = insertion order (not access order) for eviction list
-        // We need to sort by lastAccess time to evict the coldest
-        List<String> sortedSessions = lastAccess.entrySet().stream()
-                .sorted(Map.Entry.comparingByValue())
-                .limit(targetEvictions)
-                .map(Map.Entry::getKey)
-                .toList();
-
-        for (String sid : sortedSessions) {
-            List<MemoryMessage> old = cache.remove(sid);
-            lastAccess.remove(sid);
-            if (old != null) {
-                estimatedBytes -= (long) old.size() * BYTES_PER_MESSAGE;
+        String userId = sessionUser.remove(sessionId);
+        if (userId != null) {
+            Set<String> sessions = userSessions.get(userId);
+            if (sessions != null) {
+                sessions.remove(sessionId);
+                if (sessions.isEmpty()) {
+                    userSessions.remove(userId);
+                }
+            }
+            userMemoryBytes.merge(userId, -freed, Long::sum);
+            if (userMemoryBytes.getOrDefault(userId, 0L) <= 0) {
+                userMemoryBytes.remove(userId);
             }
         }
 
-        log.info("[Cache] After eviction: sessions={}, estimatedMB={}", cache.size(), estimatedBytes / (1024 * 1024));
+        log.debug("[Cache] Evicted session: {}, freed {} messages (user={}, notify={})", sessionId, old != null ? old.size() : 0, userId, notifyEvict);
+
+        // Notify cross-cache cleanup (e.g. SkillRegistry)
+        if (notifyEvict && onEvict != null) {
+            try {
+                onEvict.accept(sessionId);
+            } catch (Exception e) {
+                log.warn("[Cache] onEvict callback failed for session {}: {}", sessionId, e.getMessage());
+            }
+        }
+    }
+
+    private void removeFromTimeIndex(long timestamp, String sessionId) {
+        Set<String> sessions = timeToSessions.get(timestamp);
+        if (sessions != null) {
+            sessions.remove(sessionId);
+            if (sessions.isEmpty()) {
+                timeToSessions.remove(timestamp);
+            }
+        }
+    }
+
+    /**
+     * Per-user limits: session count and memory.
+     * Evicts user's oldest sessions one by one until within limits.
+     */
+    private void enforcePerUserLimits(String userId) {
+        Set<String> sessions = userSessions.get(userId);
+        if (sessions == null) return;
+
+        // Session count limit
+        while (sessions.size() > maxSessionsPerUser) {
+            String oldest = findOldestSession(sessions);
+            if (oldest == null) break;
+            log.warn("[Cache] Per-user session limit exceeded: user={}, sessions={}, max={}, evicting {}",
+                    userId, sessions.size(), maxSessionsPerUser, oldest);
+            evictSessionInternal(oldest, true);
+        }
+
+        // Per-user memory limit
+        while (userMemoryBytes.getOrDefault(userId, 0L) > maxMemoryBytesPerUser) {
+            sessions = userSessions.get(userId);
+            if (sessions == null || sessions.isEmpty()) break;
+            String oldest = findOldestSession(sessions);
+            if (oldest == null) break;
+            log.warn("[Cache] Per-user memory limit exceeded: user={}, bytes={}MB > {}MB, evicting {}",
+                    userId, userMemoryBytes.get(userId) / (1024 * 1024),
+                    maxMemoryBytesPerUser / (1024 * 1024), oldest);
+            evictSessionInternal(oldest, true);
+        }
+    }
+
+    /**
+     * Global memory limit.
+     * Evicts globally oldest sessions one by one until below evictionTargetRatio of global cap.
+     */
+    private void enforceGlobalMemoryLimit() {
+        long targetBytes = (long) (globalMaxMemoryBytes * evictionTargetRatio);
+        if (globalEstimatedBytes <= globalMaxMemoryBytes) {
+            return;
+        }
+
+        log.warn("[Cache] Global memory limit exceeded: {}MB > {}MB, evicting to {}MB",
+                globalEstimatedBytes / (1024 * 1024),
+                globalMaxMemoryBytes / (1024 * 1024),
+                targetBytes / (1024 * 1024));
+
+        while (globalEstimatedBytes > targetBytes && !cache.isEmpty()) {
+            String oldest = findGloballyOldestSession();
+            if (oldest == null) break;
+            evictSessionInternal(oldest, true);
+        }
+
+        log.info("[Cache] After global eviction: sessions={}, globalMB={}",
+                cache.size(), globalEstimatedBytes / (1024 * 1024));
+    }
+
+    /**
+     * Find the session with the lowest lastAccess time among the given set.
+     */
+    private String findOldestSession(Set<String> sessions) {
+        String oldest = null;
+        long oldestTime = Long.MAX_VALUE;
+        for (String sid : sessions) {
+            Long t = sessionToTime.get(sid);
+            if (t != null && t < oldestTime) {
+                oldestTime = t;
+                oldest = sid;
+            }
+        }
+        return oldest;
+    }
+
+    /**
+     * Find the globally oldest session. O(log n) via TreeMap.firstKey().
+     */
+    private String findGloballyOldestSession() {
+        Map.Entry<Long, Set<String>> first = timeToSessions.firstEntry();
+        if (first == null || first.getValue().isEmpty()) return null;
+        return first.getValue().iterator().next();
     }
 }

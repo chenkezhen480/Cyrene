@@ -15,10 +15,10 @@ mvn clean package -pl harness-core -am
 mvn clean compile
 
 # Run CLI (interactive REPL)
-java -jar harness-cli/target/harness-cli-0.3.0.jar
+java -jar harness-cli/target/harness-cli-0.3.1.jar
 
 # Run HTTP server (Javalin, default port 8080)
-java -jar harness-server/target/harness-server-0.3.0.jar
+java -jar harness-server/target/harness-server-0.3.1.jar
 
 # Run tests (currently no test files exist)
 mvn test
@@ -42,7 +42,7 @@ Memory integration points: session lifecycle (timeout + cache load), preprocess 
 
 **Module dependency graph (bottom-up):**
 ```
-harness-env           ← foundation, all HARNESS_* env var access via EnvConfig + shared HikariCP connection pool (MysqlConnectionPool)
+harness-env           ← foundation, all HARNESS_* env var access via EnvConfig + shared HikariCP connection pools (MysqlConnectionPool, PgConnectionPool)
 harness-core          ← models (AgentMessage, AgentTrace, ReActStep, ToolSpec, ParsedContent, etc.)
     ├── harness-input        ← auth (Authenticator) + multimodal parsing (MultimodalParser) + text extraction (TextExtractorRegistry) + text chunking (TextChunker) + large file parsing (LargeFileParser)
     ├── harness-preprocess   ← RAG retrieval (PgVectorRagRetriever) + semantic context (SemanticContextRetriever) + rerank + context injection (ContextBuilder)
@@ -189,7 +189,7 @@ Layer 2: Preprocess
   ├─ 加载长期记忆 (PreferenceStore.loadByUser)
   ├─ System 消息组装: HARNESS_SYSTEM_PROMPT 基础提示词 + 长期记忆（受 MEMORY_LONGTERM_MAX_TOKENS 限制）+ RAG 上下文
   ├─ 短期记忆 + RAG 有多少放多少，总上下文 > HARNESS_CTX_COMPRESS_MAJOR（默认 85%）时触发大压缩
-  │   └─ 触发: MemoryCompressor 压缩旧消息 → 重新加载含摘要的短期记忆 → invalidate 缓存
+  │   └─ 触发: MemoryCompressor 压缩旧消息 → 重新加载含摘要的短期记忆 → put 重建缓存
   └─ 保存用户消息（MessageWriteWorker 异步入队 + 缓存 append）
 
 Layer 3+4: ReAct Loop
@@ -214,7 +214,7 @@ Layer 5: Audit
 - `NoOp*Store` — no-op implementations when `HARNESS_MEMORY_STORE=none`
 - `MemoryStoreFactory` — creates stores based on `HARNESS_MEMORY_STORE` env var
 - `SessionLifecycleManager` — passive timeout detection + session resolution + refinement quality scoring (4 signals: conversation turns, tool usage, avg reply length, user questions). Uses consolidated `MessageStore.loadSessionStats()` (single GROUP BY query, replaces 7-8 individual queries).
-- `SessionMessageCache` — LRU cache for active session messages with three-layer eviction: per-session message cap (default 10), total memory cap (default 20MB, evict coldest 50%), session TTL (default 12h idle expiry)
+- `SessionMessageCache` — LRU cache for active session messages with per-user and global eviction: per-user session count (default 10), per-user memory (default 2MB), global memory (default 4GB, evict to 50% target), session TTL (default 12h idle expiry). Uses TreeMap for O(log n) oldest-session lookup. onEvict callback synchronizes cross-cache cleanup (SkillRegistry).
 - `MemoryCompressor` — major compression only: AI-based intelligent extraction with time-decay weighting
 - `PreferenceRefinementWorker` — async background worker for preference extraction (output constrained by `HARNESS_MEMORY_LONGTERM_MAX_TOKENS`)
 - `SessionCleanupScheduler` — periodic scan for timed-out sessions
@@ -228,22 +228,23 @@ Layer 5: Audit
 - 原始消息永不删除，只新增 `is_summary=true` 的摘要行。
 
 **Performance optimizations (v0.2.7):**
-- **HikariCP connection pool** — `MysqlConnectionPool` singleton in `harness-env`, shared by all MySQL stores (Session/Message/Preference/Trace). One pool per JVM (maxPool=10, minIdle=2). Eliminates per-operation TCP+MySQL handshake overhead.
+- **HikariCP connection pool** — `MysqlConnectionPool` + `PgConnectionPool` singletons in `harness-env`, shared by MySQL stores and PgVectorRagRetriever respectively. One pool per JVM per DB (maxPool=10, minIdle=2). Eliminates per-operation TCP+handshake overhead.
 - **Memory/RAG parallel loading** — Short-term memory (`messageStore.loadForContext`), long-term prefs (`preferenceStore.loadByUser`), and RAG retrieval (`contextBuilder.build`) run concurrently via `CompletableFuture.allOf()`. RAG starts immediately before session lifecycle resolves.
 - **Refinement SQL consolidation** — `MessageStore.loadSessionStats()` replaces 7-8 individual queries with a single GROUP BY. `SessionLifecycleManager.isWorthyOfRefinement()` uses consolidated stats. Refinement check is fire-and-forget async (`CompletableFuture.runAsync`), non-blocking.
 - **Session title** — `Session` record includes `title` field. Auto-set from user's first message (truncated to 100 chars). DB column: `sessions.title VARCHAR(256)`.
 - **URL file download** — `RawAttachment` supports `url` field. `UrlDownloader` downloads to `HARNESS_KNOWLEDGE_UPLOAD_DIR/downloads/`, with SSRF protection (block private/loopback IPs) and MIME detection. Same text extraction pipeline as local files.
 
-**Cache strategy (three-layer eviction LRU):**
-- **读取:** cache hit → 直接返回; miss → MessageStore.loadForContext → 填充缓存（trimToLimit 保留最新 N 条）
+**Cache strategy (per-user + global eviction LRU):**
+- **读取:** cache hit → 直接返回; miss → MessageStore.loadForContext → 填充缓存
 - **写入:** MessageWriteWorker 异步入队（DB 落盘） + cache.append（同步，内存操作）
 - **压缩后:** 从 DB 重建缓存（put），压缩摘要同步写 DB（MemoryCompressor 内部）
-- **淘汰 (三层):**
-  1. Per-session message cap: oldest messages evicted when count exceeds `HARNESS_CACHE_MAX_MESSAGES_PER_SESSION` (default 10)
-  2. Total memory cap: coldest 50% sessions evicted when estimated memory exceeds `HARNESS_CACHE_MAX_MB` (default 20MB)
-  3. Session TTL: idle sessions expired after `HARNESS_CACHE_SESSION_TTL_HOURS` (default 12h)
-- **最大并发:** `HARNESS_MEMORY_CACHE_MAX_SESSIONS` (default 10) — LinkedHashMap access-ordered LRU 自动淘汰
-- **扩展:** `HARNESS_MEMORY_REDIS_*` 环境变量已预留（TODO: 暂未实现）
+- **淘汰 (四层):**
+  1. Per-user session count: user's oldest session evicted when count exceeds `HARNESS_CACHE_MAX_SESSIONS_PER_USER` (default 10)
+  2. Per-user memory: user's oldest session evicted when estimated memory exceeds `HARNESS_CACHE_MAX_MB_PER_USER` (default 2MB)
+  3. Global memory: globally oldest session evicted until below `HARNESS_CACHE_EVICTION_TARGET_RATIO`% (default 50%) of `HARNESS_CACHE_MAX_MB_GLOBAL` (default 4096MB)
+  4. Session TTL: idle sessions expired after `HARNESS_CACHE_SESSION_TTL_HOURS` (default 12h)
+- **跨缓存联动:** onEvict 回调机制 — messageCache 淘汰会话时自动触发 skillRegistry.clearSession()，确保 skill 缓存跟随会话生命周期
+- **数据结构:** TreeMap 时间索引实现 O(log n) 最旧会话查找，per-user 维度通过 userSessions + userMemoryBytes 跟踪
 
 ### Knowledge Base Upload & Management (harness-input + harness-preprocess + harness-server)
 Independent knowledge base ingestion pipeline via `POST /api/knowledge/upload` (multipart form). Management via `GET/DELETE /api/knowledge/{collection}` and `DELETE /api/knowledge/{collection}/{documentId}`. Flow:

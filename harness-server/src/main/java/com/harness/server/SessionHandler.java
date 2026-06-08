@@ -5,6 +5,7 @@ import com.harness.core.model.Session;
 import com.harness.preprocess.memory.MessageStore;
 import com.harness.preprocess.memory.SessionMessageCache;
 import com.harness.preprocess.memory.SessionStore;
+import com.harness.tool.skill.SkillRegistry;
 import io.javalin.http.Context;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -22,11 +23,14 @@ public class SessionHandler {
     private final SessionStore sessionStore;
     private final MessageStore messageStore;
     private final SessionMessageCache cache;
+    private final SkillRegistry skillRegistry;
 
-    public SessionHandler(SessionStore sessionStore, MessageStore messageStore, SessionMessageCache cache) {
+    public SessionHandler(SessionStore sessionStore, MessageStore messageStore,
+                          SessionMessageCache cache, SkillRegistry skillRegistry) {
         this.sessionStore = sessionStore;
         this.messageStore = messageStore;
         this.cache = cache;
+        this.skillRegistry = skillRegistry;
     }
 
     /**
@@ -236,7 +240,7 @@ public class SessionHandler {
             return;
         }
         sessionStore.close(sessionId, Session.SessionStatus.ended);
-        cache.remove(sessionId);
+        cache.remove(sessionId); // triggers onEvict → skillRegistry.clearSession()
         log.info("[Server] Closed session {}", sessionId);
         ctx.json(Map.of("message", "Session closed", "sessionId", sessionId));
     }
