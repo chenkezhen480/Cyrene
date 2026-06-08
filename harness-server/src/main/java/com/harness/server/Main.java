@@ -2,6 +2,7 @@ package com.harness.server;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.harness.agent.AgentOrchestrator;
+import com.harness.audit.store.AuditCleanupScheduler;
 import com.harness.audit.store.TraceStore;
 import com.harness.audit.store.TraceStoreFactory;
 import com.harness.core.model.AgentTrace;
@@ -11,6 +12,7 @@ import com.harness.env.EnvKey;
 import com.harness.preprocess.knowledge.KnowledgeIngestService;
 import com.harness.preprocess.rag.PgVectorRagRetriever;
 import io.javalin.Javalin;
+import org.eclipse.jetty.util.thread.QueuedThreadPool;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -75,6 +77,7 @@ public class Main {
 
         String host = EnvConfig.get().getString(EnvKey.SERVER_HOST, "0.0.0.0");
         int port = EnvConfig.get().getInt(EnvKey.SERVER_PORT, 8080);
+        int workers = Math.max(EnvConfig.get().getInt(EnvKey.SERVER_WORKERS, Runtime.getRuntime().availableProcessors() * 2), 8);
 
         AgentOrchestrator agent = new AgentOrchestrator();
         Runtime.getRuntime().addShutdownHook(new Thread(agent::shutdown));
@@ -90,8 +93,17 @@ public class Main {
         mapper.registerModule(new com.fasterxml.jackson.datatype.jsr310.JavaTimeModule());
         mapper.disable(com.fasterxml.jackson.databind.SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
 
+        // Audit cleanup scheduler
+        AuditCleanupScheduler auditCleanup = new AuditCleanupScheduler(traceStore);
+        auditCleanup.start();
+        Runtime.getRuntime().addShutdownHook(new Thread(auditCleanup::stop));
+
+        QueuedThreadPool pool = new QueuedThreadPool(workers, workers, 60000);
+        pool.setName("harness-server");
+
         Javalin app = Javalin.create(config -> {
             config.jsonMapper(new io.javalin.json.JavalinJackson(mapper, false));
+            config.jetty.threadPool = pool;
         }).start(host, port);
 
         // Health check
@@ -167,6 +179,29 @@ public class Main {
             ctx.json(traces);
         });
 
-        log.info("Harness Server started on {}:{}", host, port);
+        // Trace stats
+        int retentionDays = EnvConfig.get().getInt(EnvKey.AUDIT_RETENTION_DAYS, 30);
+        app.get("/api/traces/stats", ctx -> {
+            ctx.json(Map.of("count", traceStore.count(), "retentionDays", retentionDays));
+        });
+
+        // Manual trace cleanup
+        app.delete("/api/traces/cleanup", ctx -> {
+            int deleted = traceStore.cleanup(retentionDays);
+            ctx.json(Map.of("deleted", deleted, "retentionDays", retentionDays));
+        });
+
+        // Delete specific trace
+        app.delete("/api/traces/{traceId}", ctx -> {
+            String traceId = ctx.pathParam("traceId");
+            boolean deleted = traceStore.deleteById(traceId);
+            if (deleted) {
+                ctx.json(Map.of("status", "deleted", "traceId", traceId));
+            } else {
+                ctx.status(404).json(Map.of("error", "Trace not found: " + traceId));
+            }
+        });
+
+        log.info("Harness Server started on {}:{} (workers={})", host, port, workers);
     }
 }

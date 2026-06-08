@@ -89,14 +89,11 @@ public final class EnvKey {
     public static final String TOOL_WEB_SEARCH_SERPAPI_API_KEY = "HARNESS_TOOL_WEB_SEARCH_SERPAPI_API_KEY";
     public static final String TOOL_FFMPEG_ENABLED       = "HARNESS_TOOL_FFMPEG_ENABLED";
     public static final String TOOL_FFMPEG_PATH          = "HARNESS_TOOL_FFMPEG_PATH";
-    public static final String TOOL_CODE_EXEC_ENABLED    = "HARNESS_TOOL_CODE_EXEC_ENABLED";
-    public static final String TOOL_CODE_EXEC_SANDBOX    = "HARNESS_TOOL_CODE_EXEC_SANDBOX";
 
     // ==================== ReAct ====================
     public static final String REACT_MAX_ITERATIONS      = "HARNESS_REACT_MAX_ITERATIONS";
     public static final String REACT_STRATEGY            = "HARNESS_REACT_STRATEGY";
     public static final String REACT_STOP_ON_TOOL_ERROR  = "HARNESS_REACT_STOP_ON_TOOL_ERROR";
-    public static final String REACT_ENABLE_REFLECTION   = "HARNESS_REACT_ENABLE_REFLECTION";
 
     // ==================== Sub-Agent ====================
     public static final String AGENT_MAX_SUBAGENTS       = "HARNESS_AGENT_MAX_SUBAGENTS";
@@ -168,14 +165,8 @@ public final class EnvKey {
     public static final String MEMORY_REFINEMENT_STUCK_MINUTES = "HARNESS_MEMORY_REFINEMENT_STUCK_MINUTES";
 
     // ==================== Cache (会话缓存管理) ====================
-    /** @deprecated replaced by per-user limits */
-    public static final String CACHE_MAX_MESSAGES_PER_SESSION = "HARNESS_CACHE_MAX_MESSAGES_PER_SESSION";
-    /** @deprecated replaced by CACHE_MAX_MB_GLOBAL */
-    public static final String CACHE_MAX_MB                   = "HARNESS_CACHE_MAX_MB";
     /** Cache session TTL in hours; idle sessions expired by background cleanup. 缓存 session 过期时间(小时)，空闲超时自动淘汰 */
     public static final String CACHE_SESSION_TTL_HOURS        = "HARNESS_CACHE_SESSION_TTL_HOURS";
-    /** @deprecated replaced by CACHE_MAX_SESSIONS_PER_USER */
-    public static final String CACHE_MAX_SESSIONS             = "HARNESS_MEMORY_CACHE_MAX_SESSIONS";
     /** Max sessions per user; evict user's oldest when exceeded. 单用户最大会话数，超出淘汰该用户最旧会话 */
     public static final String CACHE_MAX_SESSIONS_PER_USER    = "HARNESS_CACHE_MAX_SESSIONS_PER_USER";
     /** Max cache memory per user in MB; evict user's oldest when exceeded. 单用户缓存内存上限(MB)，超出淘汰该用户最旧会话 */
@@ -185,7 +176,6 @@ public final class EnvKey {
     /** Eviction target ratio (1-100); global eviction stops when memory drops below this % of global cap. 全局淘汰目标比例，内存降到此百分比以下停止淘汰 */
     public static final String CACHE_EVICTION_TARGET_RATIO    = "HARNESS_CACHE_EVICTION_TARGET_RATIO";
 
-    // TODO: Redis cache — 暂未实现，预留扩展
     public static final String MEMORY_REDIS_URL                = "HARNESS_MEMORY_REDIS_URL";
     public static final String MEMORY_REDIS_PASSWORD           = "HARNESS_MEMORY_REDIS_PASSWORD";
     public static final String MEMORY_REDIS_DB                 = "HARNESS_MEMORY_REDIS_DB";

@@ -135,7 +135,7 @@ public class AgentOrchestrator {
         this.sessionLifecycle = new SessionLifecycleManager(sessionStore, messageStore);
         this.refinementWorker = new PreferenceRefinementWorker(messageStore, preferenceStore, chatModelProvider);
         this.memoryCompressor = new MemoryCompressor(messageStore, sessionStore, chatModelProvider);
-        this.messageCache = new SessionMessageCache();
+        this.messageCache = MemoryStoreFactory.createMessageCache();
         this.messageCache.setOnEvict(skillRegistry::clearSession);
         this.messageWriteWorker = new MessageWriteWorker(messageStore);
 
@@ -861,6 +861,7 @@ public class AgentOrchestrator {
         traceStore.close();
         com.harness.env.PgConnectionPool.shutdown();
         com.harness.env.MysqlConnectionPool.shutdown();
+        com.harness.env.RedisConnectionPool.shutdown();
         log.info("Agent shut down");
     }
 }

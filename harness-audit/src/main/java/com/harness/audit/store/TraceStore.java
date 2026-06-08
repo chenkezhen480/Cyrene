@@ -32,6 +32,17 @@ public interface TraceStore {
     int cleanup(int retentionDays);
 
     /**
+     * Delete a specific trace by ID.
+     * @return true if the trace was found and deleted
+     */
+    boolean deleteById(String traceId);
+
+    /**
+     * Return total number of traces stored.
+     */
+    int count();
+
+    /**
      * Close the store (release connections).
      */
     void close();

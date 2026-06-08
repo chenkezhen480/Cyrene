@@ -104,6 +104,8 @@ harness-server        ← HTTP API entry point (com.harness.server.Main, Javalin
   - **知识库批量回滚:** `PgVectorRagRetriever.insertBatchWithLinks()` 显式事务回滚 + `KnowledgeIngestService` 清理孤立文件
 - **JWT 滑动窗口刷新** — `ChatHandler` 在 JWT 剩余有效期 < `HARNESS_AUTH_JWT_REFRESH_THRESHOLD_MINUTES`（默认 60 分钟）时自动刷新，新 token 通过 `X-New-Token` 响应头返回。
 - **Audit traces are cross-cutting.** TraceCollector created per agent run, persisted via TraceStore (sqlite/mysql/file/none). Key decision points (fallback triggers, rerank timing, lookback counts) recorded in `AgentTrace.metadata`.
+- **Audit cleanup.** `AuditCleanupScheduler` runs periodically (default every 60 min) to delete traces older than `HARNESS_AUDIT_RETENTION_DAYS` (default 30, set 0 to disable). Also runs once on startup. Manual trigger via `DELETE /api/traces/cleanup`. Management endpoints: `GET /api/traces/stats` (count + retention), `DELETE /api/traces/{traceId}` (delete one).
+- **Server workers.** `HARNESS_SERVER_WORKERS` (default `availableProcessors * 2`) configures the Jetty thread pool size via `config.jetty.threadPool`.
 - **Fat JARs via maven-shade-plugin.** CLI and server modules produce executable uber-JARs.
 - **Skill Loading** — 可复用能力包机制，三层架构：System prompt（身份）→ Skill（操作规范）→ MCP/builtin tools（实现）。Skill 文件为 Markdown + YAML frontmatter 格式，启动时扫描 `HARNESS_SKILL_DIR`（默认 `./skills`）目录建立轻量索引（name + description），注入 system prompt。LLM 通过 `load_skill` 工具按需加载全文或搜索片段（`name` + 可选 `query` 正则搜索，返回最多 5 个匹配及 ±3 行上下文）。用户上传的 `.md` skill 文件注册为临时 skill（session 级别）。Skill 内容在小压缩（`stripToolMessages`）中保留不删除，大压缩后从 `loadedSkills` 缓存重新注入。Skill session 数据跟随会话 TTL 过期（`CACHE_SESSION_TTL_HOURS`，默认 12h 空闲），不随请求结束清除。关键类：`SkillLoader`（YAML 解析）、`SkillRegistry`（索引 + session 级缓存 + TTL 淘汰）、`LoadSkillTool`（统一工具，支持全文加载和搜索模式）。
 
@@ -245,6 +247,8 @@ Layer 5: Audit
   4. Session TTL: idle sessions expired after `HARNESS_CACHE_SESSION_TTL_HOURS` (default 12h)
 - **跨缓存联动:** onEvict 回调机制 — messageCache 淘汰会话时自动触发 skillRegistry.clearSession()，确保 skill 缓存跟随会话生命周期
 - **数据结构:** TreeMap 时间索引实现 O(log n) 最旧会话查找，per-user 维度通过 userSessions + userMemoryBytes 跟踪
+- **Redis 分布式缓存:** 设置 `HARNESS_MEMORY_REDIS_URL` 启用 Redis 替换内存缓存（多实例部署）。Redis 仅替换缓存层，持久层（`HARNESS_MEMORY_STORE`）不变。Jedis 连接池单例（`RedisConnectionPool`），Redis 不可用时自动降级为 cache-miss。Key 结构：`{prefix}:msg:{sessionId}`（JSON + TTL）、`{prefix}:meta:{sessionId}`（HASH）、`{prefix}:user_sessions:{userId}`（SET）、`{prefix}:access`（ZSET）、`{prefix}:user_bytes:{userId}` / `{prefix}:global_bytes`（计数器）。
+- **Env vars (Redis):** `HARNESS_MEMORY_REDIS_URL`（如 `redis://localhost:6379`）、`HARNESS_MEMORY_REDIS_PASSWORD`、`HARNESS_MEMORY_REDIS_DB`（默认 0）、`HARNESS_MEMORY_REDIS_KEY_PREFIX`（默认 `harness`）、`HARNESS_MEMORY_REDIS_TTL_MINUTES`（默认 720）
 
 ### Knowledge Base Upload & Management (harness-input + harness-preprocess + harness-server)
 Independent knowledge base ingestion pipeline via `POST /api/knowledge/upload` (multipart form). Management via `GET/DELETE /api/knowledge/{collection}` and `DELETE /api/knowledge/{collection}/{documentId}`. Flow:
@@ -364,6 +368,9 @@ Same pattern for Vision/Voice/Embedding/Rerank providers.
 | DELETE | `/api/knowledge/{collection}/{documentId}` | Delete a specific document |
 | GET | `/api/trace/{id}` | Get trace by ID |
 | GET | `/api/traces` | List recent traces (query param: `limit`) |
+| GET | `/api/traces/stats` | Trace count and retention config |
+| DELETE | `/api/traces/cleanup` | Manual cleanup of expired traces |
+| DELETE | `/api/traces/{traceId}` | Delete a specific trace by ID |
 | GET | `/api/health` | Health check |
 
 **Chat SSE events:** Blocking mode: `event: done` (full result JSON), `event: error` (error JSON). Streaming mode (`context.outputMode=streaming`): `event: start` (sessionId), `event: token` (partial text), `event: step` (ReAct step info), `event: done` (final result), `event: error`. JWT mode returns refreshed token in `X-New-Token` header when remaining lifetime < threshold.

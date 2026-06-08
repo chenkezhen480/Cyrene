@@ -96,5 +96,26 @@ public class FileTraceStore implements TraceStore {
     }
 
     @Override
+    public boolean deleteById(String traceId) {
+        Path file = traceDir.resolve(traceId + ".json");
+        try {
+            return Files.deleteIfExists(file);
+        } catch (IOException e) {
+            log.error("Failed to delete trace {}: {}", traceId, e.getMessage(), e);
+            return false;
+        }
+    }
+
+    @Override
+    public int count() {
+        try (var stream = Files.list(traceDir)) {
+            return (int) stream.filter(p -> p.toString().endsWith(".json")).count();
+        } catch (IOException e) {
+            log.error("Failed to count traces: {}", e.getMessage(), e);
+            return 0;
+        }
+    }
+
+    @Override
     public void close() {}
 }

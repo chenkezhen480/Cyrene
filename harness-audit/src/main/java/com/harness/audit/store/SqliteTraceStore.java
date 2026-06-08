@@ -137,6 +137,29 @@ public class SqliteTraceStore implements TraceStore {
     }
 
     @Override
+    public boolean deleteById(String traceId) {
+        String sql = "DELETE FROM agent_traces WHERE trace_id = ?";
+        try (Connection conn = getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, traceId);
+            return ps.executeUpdate() > 0;
+        } catch (SQLException e) {
+            log.error("Failed to delete trace {}: {}", traceId, e.getMessage(), e);
+            return false;
+        }
+    }
+
+    @Override
+    public int count() {
+        String sql = "SELECT COUNT(*) FROM agent_traces";
+        try (Connection conn = getConnection(); Statement stmt = conn.createStatement(); ResultSet rs = stmt.executeQuery(sql)) {
+            return rs.next() ? rs.getInt(1) : 0;
+        } catch (SQLException e) {
+            log.error("Failed to count traces: {}", e.getMessage(), e);
+            return 0;
+        }
+    }
+
+    @Override
     public void close() {
         // SQLite connections are auto-closed
     }

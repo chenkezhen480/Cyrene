@@ -4,6 +4,7 @@ import com.harness.agent.AgentOrchestrator;
 import com.harness.core.model.AgentResult;
 import com.harness.core.model.ReActStep;
 import com.harness.env.EnvConfig;
+import com.harness.env.EnvKey;
 
 import java.util.Arrays;
 import java.util.Collections;
@@ -21,8 +22,8 @@ public class Main {
         // Load env config (supports .env file override via args)
         EnvConfig.init(Collections.emptyMap());
 
-        if (!EnvConfig.get().getBool("HARNESS_CLI_ENABLED", true)) {
-            System.out.println("CLI disabled (HARNESS_CLI_ENABLED=false), exiting");
+        if (!EnvConfig.get().getBool(EnvKey.CLI_ENABLED, true)) {
+            System.out.println("CLI disabled (" + EnvKey.CLI_ENABLED + "=false), exiting");
             return;
         }
 

@@ -6,7 +6,7 @@
 
     <groupId>com.harness</groupId>
     <artifactId>harness-agent</artifactId>
-    <version>0.3.1</version>
+    <version>0.3.2</version>
     <packaging>pom</packaging>
 
     <name>Cyrene Agent</name>
@@ -43,6 +43,7 @@
         <postgresql.version>42.7.1</postgresql.version>
         <javalin.version>6.1.3</javalin.version>
         <jjwt.version>0.12.5</jjwt.version>
+        <jedis.version>5.1.0</jedis.version>
     </properties>
 
     <dependencyManagement>
@@ -160,6 +161,13 @@
                 <groupId>org.postgresql</groupId>
                 <artifactId>postgresql</artifactId>
                 <version>${postgresql.version}</version>
+            </dependency>
+
+            <!-- Redis -->
+            <dependency>
+                <groupId>redis.clients</groupId>
+                <artifactId>jedis</artifactId>
+                <version>${jedis.version}</version>
             </dependency>
 
             <!-- HTTP Server -->

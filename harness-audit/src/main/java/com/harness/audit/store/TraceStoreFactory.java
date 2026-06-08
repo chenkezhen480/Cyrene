@@ -30,6 +30,8 @@ public final class TraceStoreFactory {
         @Override public java.util.Optional<AgentTrace> findById(String traceId) { return java.util.Optional.empty(); }
         @Override public java.util.List<AgentTrace> listRecent(int limit) { return java.util.List.of(); }
         @Override public int cleanup(int retentionDays) { return 0; }
+        @Override public boolean deleteById(String traceId) { return false; }
+        @Override public int count() { return 0; }
         @Override public void close() {}
     }
 }
