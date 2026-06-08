@@ -5,7 +5,6 @@ import com.harness.env.EnvConfig;
 import com.harness.env.EnvKey;
 import com.harness.env.PgConnectionPool;
 import dev.langchain4j.data.embedding.Embedding;
-import dev.langchain4j.data.segment.TextSegment;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

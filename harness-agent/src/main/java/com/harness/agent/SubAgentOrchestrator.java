@@ -13,7 +13,6 @@ import com.harness.tool.ToolRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.*;
@@ -34,7 +33,7 @@ public class SubAgentOrchestrator {
     private final ToolExecutor toolExecutor;
     private final int maxConcurrent;
 
-    private final ExecutorService executor;
+    private volatile ExecutorService executor;
     private final Map<String, CompletableFuture<SubAgentResult>> submittedTasks = new ConcurrentHashMap<>();
 
     // Parent cancellation token, set per-run by AgentOrchestrator
@@ -51,12 +50,23 @@ public class SubAgentOrchestrator {
         this.toolRegistry = toolRegistry;
         this.toolExecutor = toolExecutor;
         this.maxConcurrent = EnvConfig.get().getInt(EnvKey.AGENT_MAX_SUBAGENTS, 3);
-        this.executor = Executors.newFixedThreadPool(maxConcurrent, r -> {
-            Thread t = new Thread(r, "sub-agent-worker");
-            t.setDaemon(true);
-            return t;
-        });
         log.info("[SubAgent] Orchestrator initialized: maxConcurrent={}", maxConcurrent);
+    }
+
+    private ExecutorService getOrCreateExecutor() {
+        if (executor == null) {
+            synchronized (this) {
+                if (executor == null) {
+                    executor = Executors.newFixedThreadPool(maxConcurrent, r -> {
+                        Thread t = new Thread(r, "sub-agent-worker");
+                        t.setDaemon(true);
+                        return t;
+                    });
+                    log.info("[SubAgent] Thread pool created: maxConcurrent={}", maxConcurrent);
+                }
+            }
+        }
+        return executor;
     }
 
     /**
@@ -180,7 +190,7 @@ public class SubAgentOrchestrator {
                     parentToken.untrackThread(currentThread);
                 }
             }
-        }, executor);
+        }, getOrCreateExecutor());
     }
 
     /**
@@ -204,14 +214,16 @@ public class SubAgentOrchestrator {
      * Shutdown the executor service.
      */
     public void shutdown() {
-        executor.shutdown();
-        try {
-            if (!executor.awaitTermination(5, TimeUnit.SECONDS)) {
+        if (executor != null) {
+            executor.shutdown();
+            try {
+                if (!executor.awaitTermination(5, TimeUnit.SECONDS)) {
+                    executor.shutdownNow();
+                }
+            } catch (InterruptedException e) {
                 executor.shutdownNow();
+                Thread.currentThread().interrupt();
             }
-        } catch (InterruptedException e) {
-            executor.shutdownNow();
-            Thread.currentThread().interrupt();
         }
         log.info("[SubAgent] Orchestrator shut down");
     }

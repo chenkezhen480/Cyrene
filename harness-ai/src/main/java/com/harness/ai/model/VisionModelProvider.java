@@ -1,8 +1,6 @@
 package com.harness.ai.model;
 
 import dev.langchain4j.data.image.Image;
-import dev.langchain4j.data.message.AiMessage;
-import dev.langchain4j.data.message.UserMessage;
 import java.util.List;
 
 /**

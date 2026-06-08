@@ -36,6 +36,7 @@ public class ContextBuilder {
     private final Reranker reranker;
     private final SemanticContextRetriever semanticRetriever;
     private final QueryRewriter queryRewriter;
+    private final PgVectorRagRetriever pgVectorRetriever;
 
     public ContextBuilder(RerankModelProvider rerankModelProvider,
                           EmbeddingModelProvider embeddingModelProvider,
@@ -48,11 +49,13 @@ public class ContextBuilder {
             this.multiRouteRetriever = new MultiRouteRetriever(routes);
             this.ragRetriever = null;
             PgVectorRagRetriever pgVector = RetrievalRouteFactory.findPgVectorRetriever(routes);
+            this.pgVectorRetriever = pgVector;
             this.semanticRetriever = pgVector != null ? new SemanticContextRetriever(pgVector) : null;
         } else {
             this.ragRetriever = new RagRetriever(embeddingModelProvider);
             this.multiRouteRetriever = null;
             PgVectorRagRetriever pgVector = ragRetriever.getPgVectorRetriever();
+            this.pgVectorRetriever = pgVector;
             this.semanticRetriever = pgVector != null ? new SemanticContextRetriever(pgVector) : null;
         }
 
@@ -160,6 +163,10 @@ public class ContextBuilder {
             sb.append(doc.content()).append("\n");
         }
         return sb.toString();
+    }
+
+    public PgVectorRagRetriever pgVectorRetriever() {
+        return pgVectorRetriever;
     }
 
     public record ContextResult(

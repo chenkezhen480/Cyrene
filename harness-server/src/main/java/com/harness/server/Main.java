@@ -4,7 +4,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.harness.agent.AgentOrchestrator;
 import com.harness.audit.store.AuditCleanupScheduler;
 import com.harness.audit.store.TraceStore;
-import com.harness.audit.store.TraceStoreFactory;
 import com.harness.core.model.AgentTrace;
 import com.harness.core.model.CancellationToken;
 import com.harness.env.EnvConfig;
@@ -82,10 +81,10 @@ public class Main {
         AgentOrchestrator agent = new AgentOrchestrator();
         Runtime.getRuntime().addShutdownHook(new Thread(agent::shutdown));
 
-        // Knowledge base upload service
-        PgVectorRagRetriever pgVector = new PgVectorRagRetriever(agent.embeddingModel());
+        // Knowledge base upload service — reuse agent's instances
+        PgVectorRagRetriever pgVector = agent.pgVectorRetriever();
         KnowledgeIngestService ingestService = new KnowledgeIngestService(agent.embeddingModel(), pgVector);
-        TraceStore traceStore = TraceStoreFactory.create();
+        TraceStore traceStore = agent.traceStore();
 
         // Shared cancellation token registry for in-flight chat requests
         ConcurrentHashMap<String, CancellationToken> activeRequests = new ConcurrentHashMap<>();
@@ -131,7 +130,7 @@ public class Main {
         app.post("/api/chat", chatHandler::handle);
 
         // Session management endpoints
-        SessionHandler sessionHandler = new SessionHandler(agent.sessionStore(), agent.messageStore(), agent.messageCache(), agent.skillRegistry());
+        SessionHandler sessionHandler = new SessionHandler(agent.sessionStore(), agent.messageStore(), agent.messageCache());
         app.post("/api/sessions", sessionHandler::create);
         app.get("/api/sessions", sessionHandler::list);
         app.get("/api/sessions/{sessionId}", sessionHandler::detail);

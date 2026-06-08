@@ -24,19 +24,39 @@ public class OpenAiRerankModelProvider implements RerankModelProvider {
     private final String apiKey;
     private final String baseUrl;
     private final String model;
-    private final OkHttpClient client;
-    private final ObjectMapper mapper;
+    private volatile OkHttpClient client;
+    private volatile ObjectMapper mapper;
 
     public OpenAiRerankModelProvider() {
         EnvConfig cfg = EnvConfig.get();
         this.apiKey = cfg.requireString(EnvKey.MODEL_RERANK_API_KEY);
         this.baseUrl = cfg.getString(EnvKey.MODEL_RERANK_BASE_URL, "https://api.openai.com/v1");
         this.model = cfg.getString(EnvKey.MODEL_RERANK_MODEL, "rerank-english-v3.0");
-        this.client = new OkHttpClient.Builder()
-                .connectTimeout(30, TimeUnit.SECONDS)
-                .readTimeout(60, TimeUnit.SECONDS)
-                .build();
-        this.mapper = new ObjectMapper();
+    }
+
+    private OkHttpClient getClient() {
+        if (client == null) {
+            synchronized (this) {
+                if (client == null) {
+                    client = new OkHttpClient.Builder()
+                            .connectTimeout(30, TimeUnit.SECONDS)
+                            .readTimeout(60, TimeUnit.SECONDS)
+                            .build();
+                }
+            }
+        }
+        return client;
+    }
+
+    private ObjectMapper getMapper() {
+        if (mapper == null) {
+            synchronized (this) {
+                if (mapper == null) {
+                    mapper = new ObjectMapper();
+                }
+            }
+        }
+        return mapper;
     }
 
     @Override
@@ -50,8 +70,10 @@ public class OpenAiRerankModelProvider implements RerankModelProvider {
     public List<RankedResult> rerank(String query, List<String> documents, int topN) {
         if (documents == null || documents.isEmpty()) return List.of();
 
+        ObjectMapper m = getMapper();
+        OkHttpClient c = getClient();
         try {
-            ObjectNode body = mapper.createObjectNode();
+            ObjectNode body = m.createObjectNode();
             body.put("model", model);
             body.put("query", query);
             body.put("top_n", Math.min(topN, documents.size()));
@@ -65,16 +87,16 @@ public class OpenAiRerankModelProvider implements RerankModelProvider {
                     .url(url)
                     .addHeader("Authorization", "Bearer " + apiKey)
                     .addHeader("Content-Type", "application/json")
-                    .post(RequestBody.create(mapper.writeValueAsString(body), JSON_TYPE))
+                    .post(RequestBody.create(m.writeValueAsString(body), JSON_TYPE))
                     .build();
 
-            try (Response response = client.newCall(request).execute()) {
+            try (Response response = c.newCall(request).execute()) {
                 if (!response.isSuccessful()) {
                     log.error("Rerank API returned {}: {}", response.code(), response.body() != null ? response.body().string() : "");
                     return fallbackByIndex(documents, topN);
                 }
 
-                JsonNode json = mapper.readTree(response.body().string());
+                JsonNode json = m.readTree(response.body().string());
                 JsonNode results = json.get("results");
                 if (results == null || !results.isArray()) {
                     log.warn("Unexpected rerank response format");

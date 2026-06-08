@@ -15,10 +15,10 @@ mvn clean package -pl harness-core -am
 mvn clean compile
 
 # Run CLI (interactive REPL)
-java -jar harness-cli/target/harness-cli-0.3.1.jar
+java -jar harness-cli/target/harness-cli-0.3.3.jar
 
 # Run HTTP server (Javalin, default port 8080)
-java -jar harness-server/target/harness-server-0.3.1.jar
+java -jar harness-server/target/harness-server-0.3.3.jar
 
 # Run tests (currently no test files exist)
 mvn test

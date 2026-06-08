@@ -5,7 +5,6 @@ import com.harness.core.model.Session;
 import com.harness.preprocess.memory.MessageStore;
 import com.harness.preprocess.memory.SessionMessageCache;
 import com.harness.preprocess.memory.SessionStore;
-import com.harness.tool.skill.SkillRegistry;
 import io.javalin.http.Context;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -23,14 +22,12 @@ public class SessionHandler {
     private final SessionStore sessionStore;
     private final MessageStore messageStore;
     private final SessionMessageCache cache;
-    private final SkillRegistry skillRegistry;
 
     public SessionHandler(SessionStore sessionStore, MessageStore messageStore,
-                          SessionMessageCache cache, SkillRegistry skillRegistry) {
+                          SessionMessageCache cache) {
         this.sessionStore = sessionStore;
         this.messageStore = messageStore;
         this.cache = cache;
-        this.skillRegistry = skillRegistry;
     }
 
     /**

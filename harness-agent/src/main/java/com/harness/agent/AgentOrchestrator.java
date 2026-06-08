@@ -128,25 +128,32 @@ public class AgentOrchestrator {
         this.traceStore = TraceStoreFactory.create();
         this.replyAuditor = new ReplyAuditor();
 
-        // Memory subsystem
-        this.sessionStore = MemoryStoreFactory.createSessionStore();
-        this.messageStore = MemoryStoreFactory.createMessageStore();
-        this.preferenceStore = MemoryStoreFactory.createPreferenceStore();
-        this.sessionLifecycle = new SessionLifecycleManager(sessionStore, messageStore);
-        this.refinementWorker = new PreferenceRefinementWorker(messageStore, preferenceStore, chatModelProvider);
-        this.memoryCompressor = new MemoryCompressor(messageStore, sessionStore, chatModelProvider);
-        this.messageCache = MemoryStoreFactory.createMessageCache();
-        this.messageCache.setOnEvict(skillRegistry::clearSession);
-        this.messageWriteWorker = new MessageWriteWorker(messageStore);
-
-        // Start background workers if memory enabled
+        // Memory subsystem — skip entirely when disabled
         if (MemoryStoreFactory.isEnabled()) {
+            this.sessionStore = MemoryStoreFactory.createSessionStore();
+            this.messageStore = MemoryStoreFactory.createMessageStore();
+            this.preferenceStore = MemoryStoreFactory.createPreferenceStore();
+            this.sessionLifecycle = new SessionLifecycleManager(sessionStore, messageStore);
+            this.refinementWorker = new PreferenceRefinementWorker(messageStore, preferenceStore, chatModelProvider);
+            this.memoryCompressor = new MemoryCompressor(messageStore, sessionStore, chatModelProvider);
+            this.messageCache = MemoryStoreFactory.createMessageCache();
+            this.messageCache.setOnEvict(skillRegistry::clearSession);
+            this.messageWriteWorker = new MessageWriteWorker(messageStore);
             refinementWorker.start();
             messageWriteWorker.start();
             cleanupScheduler = new SessionCleanupScheduler(sessionStore, sessionLifecycle, refinementWorker, messageCache, skillRegistry);
             cleanupScheduler.start();
         } else {
-            cleanupScheduler = null;
+            this.sessionStore = null;
+            this.messageStore = null;
+            this.preferenceStore = null;
+            this.sessionLifecycle = null;
+            this.refinementWorker = null;
+            this.memoryCompressor = null;
+            this.messageCache = new InMemorySessionMessageCache();
+            this.messageCache.setOnEvict(skillRegistry::clearSession);
+            this.messageWriteWorker = null;
+            this.cleanupScheduler = null;
         }
 
         log.info("Agent initialized: chat={}, vision={}, voice={}, embedding={}, rerank={}, tools={}, memory={}",
@@ -234,7 +241,6 @@ public class AgentOrchestrator {
             // ===== Layer 1.5: Session lifecycle =====
             List<MemoryMessage> shorttermMessages = List.of();
             List<Preference> longtermPrefs = List.of();
-            boolean compressed = false;
 
             // RAG retrieval always runs; memory loading is conditional
             CompletableFuture<ContextBuilder.ContextResult> ragFuture = CompletableFuture.supplyAsync(() ->
@@ -330,7 +336,6 @@ public class AgentOrchestrator {
                 var compressResult = memoryCompressor.compressIfNeeded(
                         sessionId, shorttermMessages, shorttermTokens, totalUsed, totalBudget);
                 if (compressResult.type() != MemoryCompressor.CompressionResult.CompressionType.NONE) {
-                    compressed = true;
                     log.info("[Memory] Compression triggered: type={}, before={}, after={}",
                             compressResult.type(), compressResult.messagesBefore(), compressResult.messagesAfter());
                     Map<String, String> meta = new HashMap<>(trace.builder().build().metadata());
@@ -478,7 +483,6 @@ public class AgentOrchestrator {
             // Layer 1.5: Session lifecycle
             List<MemoryMessage> shorttermMessages = List.of();
             List<Preference> longtermPrefs = List.of();
-            boolean compressed = false;
 
             // RAG retrieval always runs; memory loading is conditional
             CompletableFuture<ContextBuilder.ContextResult> ragFuture = CompletableFuture.supplyAsync(() ->
@@ -561,7 +565,6 @@ public class AgentOrchestrator {
                 var compressResult = memoryCompressor.compressIfNeeded(
                         sessionId, shorttermMessages, shorttermTokens, totalUsed, totalBudget);
                 if (compressResult.type() != MemoryCompressor.CompressionResult.CompressionType.NONE) {
-                    compressed = true;
                     log.info("[Memory] Compression triggered: type={}, before={}, after={}",
                             compressResult.type(), compressResult.messagesBefore(), compressResult.messagesAfter());
                     shorttermMessages = messageStore.loadForContext(sessionId);
@@ -760,9 +763,11 @@ public class AgentOrchestrator {
         List<McpServerConfig> servers = McpServerConfig.loadAll();
         if (servers.isEmpty()) return;
 
-        log.info("Discovering tools from {} MCP server(s)...", servers.size());
-        McpToolDiscovery discovery = new McpToolDiscovery();
-        discovery.discoverAndRegister(servers, toolRegistry);
+        log.info("Discovering tools from {} MCP server(s) (async)...", servers.size());
+        CompletableFuture.runAsync(() -> {
+            McpToolDiscovery discovery = new McpToolDiscovery();
+            discovery.discoverAndRegister(servers, toolRegistry);
+        });
     }
 
     private void initSkills() {
@@ -823,6 +828,8 @@ public class AgentOrchestrator {
     public SubAgentOrchestrator subAgentOrchestrator() { return subAgentOrchestrator; }
     public SessionMessageCache messageCache() { return messageCache; }
     public SkillRegistry skillRegistry() { return skillRegistry; }
+    public TraceStore traceStore() { return traceStore; }
+    public com.harness.preprocess.rag.PgVectorRagRetriever pgVectorRetriever() { return contextBuilder.pgVectorRetriever(); }
 
     /**
      * Convert MemoryMessage list to LangChain4j ChatMessage list for ReAct history injection.
@@ -854,8 +861,8 @@ public class AgentOrchestrator {
     public void shutdown() {
         subAgentOrchestrator.shutdown();
         if (cleanupScheduler != null) cleanupScheduler.stop();
-        messageWriteWorker.stop();  // Flush pending writes before stopping
-        refinementWorker.stop();
+        if (messageWriteWorker != null) messageWriteWorker.stop();  // Flush pending writes before stopping
+        if (refinementWorker != null) refinementWorker.stop();
         messageCache.evictExpired();
         skillRegistry.evictExpired();
         traceStore.close();
