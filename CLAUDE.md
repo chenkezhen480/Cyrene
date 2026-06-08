@@ -15,10 +15,10 @@ mvn clean package -pl harness-core -am
 mvn clean compile
 
 # Run CLI (interactive REPL)
-java -jar harness-cli/target/harness-cli-0.2.9.jar
+java -jar harness-cli/target/harness-cli-0.3.0.jar
 
 # Run HTTP server (Javalin, default port 8080)
-java -jar harness-server/target/harness-server-0.2.9.jar
+java -jar harness-server/target/harness-server-0.3.0.jar
 
 # Run tests (currently no test files exist)
 mvn test
@@ -105,6 +105,7 @@ harness-server        ← HTTP API entry point (com.harness.server.Main, Javalin
 - **JWT 滑动窗口刷新** — `ChatHandler` 在 JWT 剩余有效期 < `HARNESS_AUTH_JWT_REFRESH_THRESHOLD_MINUTES`（默认 60 分钟）时自动刷新，新 token 通过 `X-New-Token` 响应头返回。
 - **Audit traces are cross-cutting.** TraceCollector created per agent run, persisted via TraceStore (sqlite/mysql/file/none). Key decision points (fallback triggers, rerank timing, lookback counts) recorded in `AgentTrace.metadata`.
 - **Fat JARs via maven-shade-plugin.** CLI and server modules produce executable uber-JARs.
+- **Skill Loading** — 可复用能力包机制，三层架构：System prompt（身份）→ Skill（操作规范）→ MCP/builtin tools（实现）。Skill 文件为 Markdown + YAML frontmatter 格式，启动时扫描 `HARNESS_SKILL_DIR`（默认 `./skills`）目录建立轻量索引（name + description），注入 system prompt。LLM 通过 `load_skill` 工具按需加载全文或搜索片段（`name` + 可选 `query` 正则搜索，返回最多 5 个匹配及 ±3 行上下文）。用户上传的 `.md` skill 文件注册为临时 skill（session 级别）。Skill 内容在小压缩（`stripToolMessages`）中保留不删除，大压缩后从 `loadedSkills` 缓存重新注入。Skill session 数据跟随会话 TTL 过期（`CACHE_SESSION_TTL_HOURS`，默认 12h 空闲），不随请求结束清除。关键类：`SkillLoader`（YAML 解析）、`SkillRegistry`（索引 + session 级缓存 + TTL 淘汰）、`LoadSkillTool`（统一工具，支持全文加载和搜索模式）。
 
 ## Subsystems
 
@@ -194,7 +195,7 @@ Layer 2: Preprocess
 Layer 3+4: ReAct Loop
   ├─ AI 决策 (ChatModel + history messages injected between system and user)
   ├─ 工具执行 (ToolExecutor)
-  ├─ 小压缩: ReAct 循环内部去除工具代码块 (stripToolMessages，iteration > 2 时触发)
+  ├─ 小压缩: ReAct 循环内部去除工具代码块 (stripToolMessages，iteration > HARNESS_CTX_COMPRESS_MINOR 时触发 + 循环结束后收尾清理)
   └─ Inspection: 每轮工具调用后检查结果状态
 
 Post-processing
@@ -222,7 +223,7 @@ Layer 5: Audit
 **Models (com.harness.core.model):** `Session`, `MemoryMessage`, `Preference`
 
 **Compression (two types, different layers):**
-- **小压缩 (Minor, code-based, ReAct 层):** `ReActEngine.stripToolMessages()` — iteration > 2 时去除 `ToolExecutionResultMessage` 和含 `toolExecutionRequests` 的 `AiMessage`，释放上下文空间。不涉及 AI 调用，纯代码操作。
+- **小压缩 (Minor, code-based, ReAct 层):** `ReActEngine.stripToolMessages()` — ReAct 循环中当迭代轮次 > `HARNESS_CTX_COMPRESS_MINOR`（默认 2）时触发，去除 `ToolExecutionResultMessage` 和含 `toolExecutionRequests` 的 `AiMessage`。`load_skill` 结果被显式保留（skill 内容不随其他工具结果删除）。可通过 `HARNESS_CTX_COMPRESS_MINOR_ENABLED=true/false` 开关。循环结束后自动执行一轮收尾清理。不涉及 AI 调用，纯代码操作。
 - **大压缩 (Major, AI-based, 预处理层):** `MemoryCompressor.compressIfNeeded()` — 整体上下文 > `HARNESS_CTX_COMPRESS_MAJOR`（默认 85%）时触发。使用时间衰减标签（RECENT/MIDDLE/OLD）智能提炼旧消息，压缩至 `HARNESS_CTX_COMPRESS_MAJOR_TARGET`（默认 30%）。仅压缩旧消息，当前用户消息在压缩之后保存，不会被压缩。
 - 原始消息永不删除，只新增 `is_summary=true` 的摘要行。
 
@@ -277,6 +278,51 @@ Multi-agent architecture supporting parallel sub-task execution. LLM spawns sub-
 - `MultiAgentOrchestrator` — programmatic wrapper for external sub-agent access
 
 **Dependency resolution:** Tasks declare dependencies by task ID. Dependent tasks wait for all dependencies to complete; if any dependency fails, the dependent task is skipped with a failure result. Independent tasks run in parallel.
+
+### Skill Loading (harness-tool + harness-agent)
+Reusable capability packages defining operational procedures for the LLM. Three-layer architecture: System prompt (identity) → Skill (procedures) → MCP/builtin tools (implementations).
+
+**Skill file format (Markdown + YAML frontmatter):**
+```markdown
+---
+name: code-review
+description: 当用户要求审查代码质量、安全性或可维护性时使用
+version: "1.0.0"
+tools:
+  - web_search
+  - spawn_subagent
+parameters:
+  focus: security
+---
+
+# 代码审查规范
+## 审查步骤
+1. 理解代码变更的背景和目的
+2. 检查安全漏洞...
+```
+
+**Two-phase loading:**
+- Phase 1 (startup): `SkillLoader.scanIndex(dir)` parses only frontmatter `name` + `description` → lightweight `SkillIndex`
+- Phase 2 (on-demand): LLM calls `load_skill(name)` or `load_skill(name, query)` → returns full content or regex-matched snippets
+
+**Key classes (com.harness.tool.skill):**
+- `SkillLoader` — YAML frontmatter parser (`scanIndex`, `loadFull`, `loadFromContent`, `isSkillFile`)
+- `SkillRegistry` — session-scoped storage with TTL expiration. Lookup order: `loadedSkills` cache → `temporarySkills` → persistent disk. `evictExpired()` for periodic cleanup.
+- `LoadSkillTool` — unified tool: `name` only → full load; `name` + `query` → regex search (case-insensitive, ±3 lines context, max 5 matches)
+
+**Lifecycle:**
+1. Startup: scan `HARNESS_SKILL_DIR` (default `./skills`) → persistent index
+2. System prompt injection: skill names + descriptions listed for LLM awareness
+3. On-demand: `load_skill` → full content loaded, cached in `loadedSkills`
+4. Minor compression: `load_skill` results preserved (not stripped with other tool results)
+5. Major compression: all messages compressed → loaded skills re-injected from `loadedSkills` cache
+6. Expiration: session skill data expires with `CACHE_SESSION_TTL_HOURS` (default 12h idle)
+
+**Upload flow:** User-uploaded `.md` files with valid YAML frontmatter are registered as temporary skills (session-scoped) before sessionId resolution, then associated with the session.
+
+**Env vars:** `HARNESS_SKILL_DIR` (default `./skills`), `HARNESS_CACHE_SESSION_TTL_HOURS` (default 12)
+
+**Models (com.harness.core.model):** `Skill`, `SkillIndex`
 
 ## Adding a New LLM Provider
 

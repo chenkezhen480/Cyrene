@@ -44,6 +44,8 @@ public class ReActEngine {
     private final Inspector inspector;
     private final int maxIterations;
     private final boolean stopOnToolError;
+    private final boolean minorCompressEnabled;
+    private final int minorCompressThreshold;
 
     public ReActEngine(ChatModelProvider chatModelProvider, ToolRegistry toolRegistry, ToolExecutor toolExecutor) {
         this(chatModelProvider, toolRegistry, toolExecutor, null, null);
@@ -67,6 +69,8 @@ public class ReActEngine {
         EnvConfig cfg = EnvConfig.get();
         this.maxIterations = cfg.getInt(EnvKey.REACT_MAX_ITERATIONS, 10);
         this.stopOnToolError = cfg.getBool(EnvKey.REACT_STOP_ON_TOOL_ERROR, false);
+        this.minorCompressEnabled = cfg.getBool(EnvKey.CTX_COMPRESS_MINOR_ENABLED, true);
+        this.minorCompressThreshold = cfg.getInt(EnvKey.CTX_COMPRESS_MINOR, 2);
     }
 
     private ChatModel selectModel(Boolean enableThinking) {
@@ -122,7 +126,7 @@ public class ReActEngine {
             }
 
             // Lightweight context cleanup: remove tool blocks if context is getting large
-            if (i > 2) {
+            if (minorCompressEnabled && i > minorCompressThreshold) {
                 stripToolMessages(messages);
             }
 
@@ -183,6 +187,7 @@ public class ReActEngine {
                     listener.onStep(finalStep);
                 }
                 messages.add(aiMessage);
+                stripToolMessages(messages);  // post-loop cleanup
                 return new ReActResult(answer, allSteps);
             }
 
@@ -252,6 +257,7 @@ public class ReActEngine {
         long totalMs = System.currentTimeMillis() - loopStart;
         log.warn("[L3-ReAct] Reached max iterations ({}), returning last output", maxIterations);
         log.info("[L3-ReAct] Finished in {}ms, steps={}", totalMs, allSteps.size());
+        stripToolMessages(messages);  // post-loop cleanup
         return new ReActResult(lastOutput, allSteps);
     }
 
@@ -296,7 +302,7 @@ public class ReActEngine {
                 return new ReActResult(cancelledOutput, allSteps);
             }
 
-            if (i > 2) {
+            if (minorCompressEnabled && i > minorCompressThreshold) {
                 stripToolMessages(messages);
             }
 
@@ -379,6 +385,7 @@ public class ReActEngine {
                     listener.onStep(finalStep);
                 }
                 messages.add(aiMessage);
+                stripToolMessages(messages);  // post-loop cleanup
                 return new ReActResult(answer, allSteps);
             }
 
@@ -446,6 +453,7 @@ public class ReActEngine {
         long totalMs = System.currentTimeMillis() - loopStart;
         log.warn("[L3-ReAct] Streaming: reached max iterations ({}), returning last output", maxIterations);
         log.info("[L3-ReAct] Finished in {}ms, steps={}", totalMs, allSteps.size());
+        stripToolMessages(messages);  // post-loop cleanup
         return new ReActResult(lastOutput, allSteps);
     }
 
@@ -499,11 +507,16 @@ public class ReActEngine {
     /**
      * Strip tool call/result messages from the conversation to free context space.
      * Keeps SystemMessage, UserMessage, and text-only AiMessages.
-     * Removes: ToolExecutionResultMessage, AiMessage with toolExecutionRequests.
+     * Preserves load_skill results across minor compression.
      */
     private void stripToolMessages(List<ChatMessage> messages) {
         int before = messages.size();
         messages.removeIf(msg -> {
+            // Preserve load_skill results — skill content stays in context
+            if (msg instanceof ToolExecutionResultMessage toolResult
+                    && "load_skill".equals(toolResult.toolName())) {
+                return false;
+            }
             if (msg instanceof ToolExecutionResultMessage) return true;
             if (msg instanceof AiMessage ai && ai.toolExecutionRequests() != null && !ai.toolExecutionRequests().isEmpty()) return true;
             return false;

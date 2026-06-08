@@ -162,7 +162,6 @@ public final class EnvKey {
     public static final String CTX_COMPRESS_MINOR_ENABLED      = "HARNESS_CTX_COMPRESS_MINOR_ENABLED";
     public static final String CTX_COMPRESS_MAJOR              = "HARNESS_CTX_COMPRESS_MAJOR";
     public static final String CTX_COMPRESS_MAJOR_TARGET        = "HARNESS_CTX_COMPRESS_MAJOR_TARGET";
-    public static final String CTX_COMPRESS_MINOR_TARGET        = "HARNESS_CTX_COMPRESS_MINOR_TARGET";
     public static final String SYSTEM_PROMPT                   = "HARNESS_SYSTEM_PROMPT";
     public static final String MEMORY_REFINEMENT_MIN_SCORE     = "HARNESS_MEMORY_REFINEMENT_MIN_SCORE";
     public static final String MEMORY_CLEANUP_INTERVAL_MINUTES = "HARNESS_MEMORY_CLEANUP_INTERVAL_MINUTES";
@@ -193,4 +192,7 @@ public final class EnvKey {
     public static final String KNOWLEDGE_PDF_ENABLED         = "HARNESS_KNOWLEDGE_PDF_ENABLED";
     public static final String KNOWLEDGE_DOCX_ENABLED        = "HARNESS_KNOWLEDGE_DOCX_ENABLED";
     public static final String KNOWLEDGE_XLSX_ENABLED        = "HARNESS_KNOWLEDGE_XLSX_ENABLED";
+
+    // ==================== Skill ====================
+    public static final String SKILL_DIR = "HARNESS_SKILL_DIR";
 }

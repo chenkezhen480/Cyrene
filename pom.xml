@@ -6,7 +6,7 @@
 
     <groupId>com.harness</groupId>
     <artifactId>harness-agent</artifactId>
-    <version>0.2.9</version>
+    <version>0.3.0</version>
     <packaging>pom</packaging>
 
     <name>Cyrene Agent</name>

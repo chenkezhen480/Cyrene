@@ -19,6 +19,9 @@ import com.harness.tool.builtin.FfmpegTool;
 import com.harness.tool.builtin.WebSearchTool;
 import com.harness.tool.mcp.McpServerConfig;
 import com.harness.tool.mcp.McpToolDiscovery;
+import com.harness.tool.skill.LoadSkillTool;
+import com.harness.tool.skill.SkillLoader;
+import com.harness.tool.skill.SkillRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -26,6 +29,7 @@ import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.UserMessage;
 
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -79,6 +83,10 @@ public class AgentOrchestrator {
     private final SessionCleanupScheduler cleanupScheduler;
     private final SessionMessageCache messageCache;
     private final MessageWriteWorker messageWriteWorker;
+
+    // Skill subsystem
+    private final SkillRegistry skillRegistry;
+
     private String activeSessionId;  // CLI mode: reuse across calls
 
     public AgentOrchestrator() {
@@ -101,6 +109,10 @@ public class AgentOrchestrator {
         registerBuiltinTools();
         registerMcpTools();
         this.toolExecutor = new ToolExecutor(toolRegistry);
+
+        // Skill subsystem (load index, register load_skill tool)
+        this.skillRegistry = new SkillRegistry();
+        initSkills();
 
         // Sub-agent orchestrator (initialized before ReActEngine so spawn_subagent is available)
         this.subAgentOrchestrator = new SubAgentOrchestrator(
@@ -181,6 +193,7 @@ public class AgentOrchestrator {
                 text != null ? text.length() : 0, requestedSessionId, attachCount);
 
         TraceCollector trace = new TraceCollector(traceStore);
+        String sessionId = null;
 
         try {
             // Layer 1: Input
@@ -198,10 +211,26 @@ public class AgentOrchestrator {
                 }
                 enhancedText = sb.toString();
             }
+
+            // Pre-detect skill files from attachments (register after sessionId is resolved)
+            List<com.harness.core.model.Skill> pendingSkills = new ArrayList<>();
+            if (attachments != null) {
+                for (var attachment : attachments) {
+                    if (attachment.name() != null && attachment.name().endsWith(".md")) {
+                        String content = extractAttachmentContent(attachment);
+                        if (content != null && SkillLoader.isSkillFile(content)) {
+                            com.harness.core.model.Skill skill = SkillLoader.loadFromContent(content);
+                            if (skill != null) {
+                                pendingSkills.add(skill);
+                            }
+                        }
+                    }
+                }
+            }
+
             final String ragInput = enhancedText;
 
             // ===== Layer 1.5: Session lifecycle =====
-            String sessionId = null;
             List<MemoryMessage> shorttermMessages = List.of();
             List<Preference> longtermPrefs = List.of();
             boolean compressed = false;
@@ -266,24 +295,35 @@ public class AgentOrchestrator {
                 longtermPrefs = longtermFuture.join();
             } else {
                 ragFuture.join();
+                // Memory disabled — use requested/active sessionId for skill isolation
+                sessionId = requestedSessionId != null ? requestedSessionId : activeSessionId;
             }
+
+            // Register pending skill files with resolved sessionId
+            for (com.harness.core.model.Skill pending : pendingSkills) {
+                skillRegistry.addTemporary(sessionId, pending);
+            }
+
+            // Set ThreadLocal for skill tools session-scoped lookup
+            final String finalSessionId = sessionId;
+            LoadSkillTool.setCurrentSession(finalSessionId);
 
             // ===== Layer 2: Preprocess =====
             ContextBuilder.ContextResult ctx = ragFuture.join();
             trace.recordPreprocess(null, ctx.ragHitIds(), null);
-            String systemPrompt = buildSystemPrompt(ctx, longtermPrefs, systemPromptOverride);
+            String systemPrompt = buildSystemPrompt(ctx, longtermPrefs, systemPromptOverride, sessionId);
             log.debug("[Orchestrator] System prompt: {} chars, rag={}, longterm={}",
                     systemPrompt.length(), ctx.hasContext(), !longtermPrefs.isEmpty());
             trace.recordLlmMeta(chatModelProvider.modelName(), "v1");
 
             // 大压缩检查（旧消息 + 估算新用户消息 + RAG + system + 长期记忆）
+            int totalBudget = chatModelProvider.chatModel() != null ? chatModelProvider.contextWindow() : 8000;
             if (sessionId != null) {
                 int shorttermTokens = estimateTokens(shorttermMessages);
                 int ragTokens = ctx.contextBlock() != null ? estimateTokens(ctx.contextBlock()) : 0;
                 int inputTokens = estimateTokens(enhancedText);
                 int systemTokens = estimateTokens(systemPrompt);
                 int totalUsed = shorttermTokens + ragTokens + inputTokens + systemTokens;
-                int totalBudget = chatModelProvider.chatModel() != null ? 128000 : 8000;
                 log.debug("[Orchestrator] Token estimate: shortterm={}, rag={}, input={}, system={}, total={}/{}",
                         shorttermTokens, ragTokens, inputTokens, systemTokens, totalUsed, totalBudget);
                 var compressResult = memoryCompressor.compressIfNeeded(
@@ -300,6 +340,19 @@ public class AgentOrchestrator {
                     // 压缩后重建缓存（从DB加载含摘要的状态）
                     shorttermMessages = messageStore.loadForContext(sessionId);
                     messageCache.put(sessionId, shorttermMessages);
+
+                    // 大压缩后重新注入已加载的skill内容（skill内容不在DB中，需要重新加载）
+                    List<com.harness.core.model.Skill> loadedSkills = skillRegistry.getLoadedSkills(sessionId);
+                    if (!loadedSkills.isEmpty()) {
+                        log.info("[Memory] Re-injecting {} loaded skills after major compression", loadedSkills.size());
+                        List<MemoryMessage> skillMessages = new ArrayList<>(shorttermMessages);
+                        for (com.harness.core.model.Skill skill : loadedSkills) {
+                            String skillContent = buildSkillContentForReinjection(skill);
+                            skillMessages.add(new MemoryMessage(0, sessionId, "system", skillContent, false, null));
+                        }
+                        shorttermMessages = skillMessages;
+                        messageCache.put(sessionId, shorttermMessages);
+                    }
                 }
 
                 // 用户消息：异步写DB + 同步更新缓存
@@ -358,6 +411,8 @@ public class AgentOrchestrator {
             trace.recordOutput("Error: " + e.getMessage(), RiskLevel.HIGH, false);
             trace.finish();
             throw e;
+        } finally {
+            LoadSkillTool.clearCurrentSession();
         }
     }
 
@@ -382,6 +437,7 @@ public class AgentOrchestrator {
                 text != null ? text.length() : 0, requestedSessionId, attachCount);
 
         TraceCollector trace = new TraceCollector(traceStore);
+        String sessionId = null;
 
         try {
             // Layer 1: Input
@@ -399,10 +455,26 @@ public class AgentOrchestrator {
                 }
                 enhancedText = sb.toString();
             }
+
+            // Pre-detect skill files from attachments (register after sessionId is resolved)
+            List<com.harness.core.model.Skill> pendingSkills = new ArrayList<>();
+            if (attachments != null) {
+                for (var attachment : attachments) {
+                    if (attachment.name() != null && attachment.name().endsWith(".md")) {
+                        String content = extractAttachmentContent(attachment);
+                        if (content != null && SkillLoader.isSkillFile(content)) {
+                            com.harness.core.model.Skill skill = SkillLoader.loadFromContent(content);
+                            if (skill != null) {
+                                pendingSkills.add(skill);
+                            }
+                        }
+                    }
+                }
+            }
+
             final String ragInput = enhancedText;
 
             // Layer 1.5: Session lifecycle
-            String sessionId = null;
             List<MemoryMessage> shorttermMessages = List.of();
             List<Preference> longtermPrefs = List.of();
             boolean compressed = false;
@@ -461,22 +533,30 @@ public class AgentOrchestrator {
                 longtermPrefs = longtermFuture.join();
             } else {
                 ragFuture.join();
+                sessionId = requestedSessionId != null ? requestedSessionId : activeSessionId;
             }
+
+            // Register pending skill files with resolved sessionId
+            for (com.harness.core.model.Skill pending : pendingSkills) {
+                skillRegistry.addTemporary(sessionId, pending);
+            }
+            final String finalSessionId = sessionId;
+            LoadSkillTool.setCurrentSession(finalSessionId);
 
             // Layer 2: Preprocess
             ContextBuilder.ContextResult ctx = ragFuture.join();
             trace.recordPreprocess(null, ctx.ragHitIds(), null);
-            String systemPrompt = buildSystemPrompt(ctx, longtermPrefs, systemPromptOverride);
+            String systemPrompt = buildSystemPrompt(ctx, longtermPrefs, systemPromptOverride, sessionId);
             trace.recordLlmMeta(chatModelProvider.modelName(), "v1");
 
             // Compression check
+            int totalBudget = chatModelProvider.chatModel() != null ? chatModelProvider.contextWindow() : 8000;
             if (sessionId != null) {
                 int shorttermTokens = estimateTokens(shorttermMessages);
                 int ragTokens = ctx.contextBlock() != null ? estimateTokens(ctx.contextBlock()) : 0;
                 int inputTokens = estimateTokens(enhancedText);
                 int systemTokens = estimateTokens(systemPrompt);
                 int totalUsed = shorttermTokens + ragTokens + inputTokens + systemTokens;
-                int totalBudget = chatModelProvider.chatModel() != null ? 128000 : 8000;
                 var compressResult = memoryCompressor.compressIfNeeded(
                         sessionId, shorttermMessages, shorttermTokens, totalUsed, totalBudget);
                 if (compressResult.type() != MemoryCompressor.CompressionResult.CompressionType.NONE) {
@@ -485,6 +565,19 @@ public class AgentOrchestrator {
                             compressResult.type(), compressResult.messagesBefore(), compressResult.messagesAfter());
                     shorttermMessages = messageStore.loadForContext(sessionId);
                     messageCache.put(sessionId, shorttermMessages);
+
+                    // 大压缩后重新注入已加载的skill内容（skill内容不在DB中，需要重新加载）
+                    List<com.harness.core.model.Skill> loadedSkills = skillRegistry.getLoadedSkills(sessionId);
+                    if (!loadedSkills.isEmpty()) {
+                        log.info("[Memory] Re-injecting {} loaded skills after major compression", loadedSkills.size());
+                        List<MemoryMessage> skillMessages = new ArrayList<>(shorttermMessages);
+                        for (com.harness.core.model.Skill skill : loadedSkills) {
+                            String skillContent = buildSkillContentForReinjection(skill);
+                            skillMessages.add(new MemoryMessage(0, sessionId, "system", skillContent, false, null));
+                        }
+                        shorttermMessages = skillMessages;
+                        messageCache.put(sessionId, shorttermMessages);
+                    }
                 }
 
                 messageWriteWorker.submit(sessionId, "user", enhancedText, false);
@@ -492,7 +585,6 @@ public class AgentOrchestrator {
             }
 
             // Emit start event with sessionId (first event for client)
-            final String finalSessionId = sessionId;
             callback.onEvent(StreamEvent.start(finalSessionId));
 
             // Layer 3+4: Streaming ReAct loop
@@ -573,16 +665,29 @@ public class AgentOrchestrator {
                 try { trace.finish(); } catch (Exception ignored) {}
             });
             callback.onEvent(StreamEvent.error(e.getMessage()));
+        } finally {
+            LoadSkillTool.clearCurrentSession();
         }
     }
 
-    private String buildSystemPrompt(ContextBuilder.ContextResult ctx, List<Preference> longtermPrefs, String systemPromptOverride) {
+    private String buildSystemPrompt(ContextBuilder.ContextResult ctx, List<Preference> longtermPrefs, String systemPromptOverride, String sessionId) {
         StringBuilder sb = new StringBuilder();
         String basePrompt = (systemPromptOverride != null && !systemPromptOverride.isBlank())
                 ? systemPromptOverride
                 : EnvConfig.get().getString(EnvKey.SYSTEM_PROMPT,
                         "You are a helpful AI assistant with access to tools. Use tools when needed to answer questions. Think step by step. If a tool fails, try an alternative approach.");
         sb.append(basePrompt).append("\n\n");
+
+        // Inject skill index — name + when-to-use description
+        if (skillRegistry.size(sessionId) > 0) {
+            sb.append("你有以下技能可以使用（通过 load_skill 工具加载）：\n");
+            for (SkillIndex idx : skillRegistry.listAll(sessionId)) {
+                sb.append("- ").append(idx.name()).append("：").append(idx.description()).append("\n");
+            }
+            sb.append("\nload_skill 用法：\n");
+            sb.append("  - load_skill(name): 返回完整内容\n");
+            sb.append("  - load_skill(name, query): 搜索并返回匹配片段（推荐，更高效）\n\n");
+        }
 
         // Inject long-term memory (user preferences), capped at MEMORY_LONGTERM_MAX_TOKENS
         if (!longtermPrefs.isEmpty()) {
@@ -623,6 +728,16 @@ public class AgentOrchestrator {
         return total;
     }
 
+    private String extractAttachmentContent(MultimodalParser.RawAttachment attachment) {
+        if (attachment.data() == null) return null;
+        try {
+            return new String(attachment.data(), java.nio.charset.StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            log.debug("Failed to extract attachment content: {}", e.getMessage());
+            return null;
+        }
+    }
+
     private RiskLevel determineRisk(ReActEngine.ReActResult result) {
         boolean hasToolErrors = result.steps().stream()
                 .flatMap(s -> s.toolResults().stream())
@@ -649,6 +764,47 @@ public class AgentOrchestrator {
         discovery.discoverAndRegister(servers, toolRegistry);
     }
 
+    private void initSkills() {
+        EnvConfig cfg = EnvConfig.get();
+        String skillDir = cfg.getString(EnvKey.SKILL_DIR, "./skills");
+        skillRegistry.loadIndex(Path.of(skillDir));
+        // Always register skill tool — temporary skills may need them even without persistent skills
+        toolRegistry.register(new LoadSkillTool(skillRegistry, toolRegistry));
+        if (skillRegistry.size() > 0) {
+            log.info("Skill system initialized: {} persistent skills from {}", skillRegistry.size(), skillDir);
+        } else {
+            log.info("Skill tools registered (no persistent skills found in {})", skillDir);
+        }
+    }
+
+    /**
+     * Build skill content string for re-injection after major compression.
+     * Formats skill as a system message that preserves the full skill instructions.
+     */
+    private String buildSkillContentForReinjection(com.harness.core.model.Skill skill) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("[Skill: ").append(skill.name()).append("]\n");
+        sb.append("[Description: ").append(skill.description()).append("]\n");
+        if (skill.version() != null) {
+            sb.append("[Version: ").append(skill.version()).append("]\n");
+        }
+        sb.append("\n[Instructions]\n");
+        sb.append(skill.systemPrompt()).append("\n");
+        if (skill.tools() != null && !skill.tools().isEmpty()) {
+            sb.append("\n[Bound Tools: ").append(String.join(", ", skill.tools())).append("]\n");
+        }
+        if (skill.parameters() != null && !skill.parameters().isEmpty()) {
+            sb.append("[Parameters: ");
+            List<String> paramPairs = new ArrayList<>();
+            for (Map.Entry<String, Object> entry : skill.parameters().entrySet()) {
+                paramPairs.add(entry.getKey() + "=" + entry.getValue());
+            }
+            sb.append(String.join(", ", paramPairs));
+            sb.append("]\n");
+        }
+        return sb.toString();
+    }
+
     // Expose model providers for external use (e.g., direct vision/voice calls)
     public ChatModelProvider chatModel() { return chatModelProvider; }
     public VisionModelProvider visionModel() { return visionModelProvider; }
@@ -669,6 +825,7 @@ public class AgentOrchestrator {
     /**
      * Convert MemoryMessage list to LangChain4j ChatMessage list for ReAct history injection.
      * Summary rows are converted to AiMessage to preserve compressed context.
+     * Skill content (system messages starting with "[Skill:") is preserved as AiMessage.
      */
     private List<ChatMessage> convertToChatMessages(List<MemoryMessage> memoryMessages) {
         List<ChatMessage> chatMessages = new ArrayList<>();
@@ -681,7 +838,12 @@ public class AgentOrchestrator {
             switch (msg.role()) {
                 case "user" -> chatMessages.add(UserMessage.from(msg.content()));
                 case "assistant" -> chatMessages.add(AiMessage.from(msg.content()));
-                // system/tool messages skipped in history for simplicity
+                case "system" -> {
+                    // Skill content re-injected after major compression
+                    if (msg.content() != null && msg.content().startsWith("[Skill:")) {
+                        chatMessages.add(AiMessage.from(msg.content()));
+                    }
+                }
             }
         }
         return chatMessages;
