@@ -70,8 +70,6 @@ public final class EnvKey {
 
     // ==================== Rerank ====================
     public static final String RERANK_ENABLED        = "HARNESS_RERANK_ENABLED";
-    public static final String RERANK_PROVIDER       = "HARNESS_RERANK_PROVIDER";
-    public static final String RERANK_MODEL          = "HARNESS_RERANK_MODEL";
     public static final String RERANK_TOP_N          = "HARNESS_RERANK_TOP_N";
 
     // ==================== MCP ====================

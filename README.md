@@ -83,10 +83,12 @@ Rerank 重排序（可选）
 
 ### 会话记忆与智能压缩
 
-- **短期记忆**：按会话 LRU 缓存对话历史
-- **长期记忆**：从已结束会话中 AI 提取的用户偏好
+- **短期记忆**：按会话 LRU 缓存对话历史，支持分布式 Redis 缓存
+- **长期记忆**：从已结束会话中 AI 提取的用户偏好，自动注入 System Prompt
 - **小压缩**：ReAct 循环中去除工具调用块（纯代码，零成本）
-- **大压缩**：上下文窗口接近上限时 AI 智能提炼旧消息（时间衰减加权）
+- **大压缩**：上下文窗口接近上限时 AI 智能提炼旧消息（时间衰减加权：RECENT / MIDDLE / OLD）
+
+**压缩流程：** 先压缩旧消息 → 从 DB 重建缓存 → 再保存当前用户消息。当前用户消息永远不会被压缩。
 
 ### 多模态回退
 
@@ -133,12 +135,19 @@ LLM 通过 `spawn_subagent` 工具派生子任务，支持依赖解析与并行�
 - Maven 3.8+
 - PostgreSQL + pgvector 扩展（RAG，可选）
 - MySQL 8+（审计 + 会话记忆，可选）
+- Redis（分布式缓存，可选）
 
 ### 构建
 
 ```bash
 # 构建所有模块（生成 cli 和 server 的 fat JAR）
 mvn clean package -DskipTests
+
+# 运行测试
+mvn test
+
+# 运行集成测试（需要数据库）
+mvn test -Pintegration
 ```
 
 ### 配置
@@ -146,20 +155,36 @@ mvn clean package -DskipTests
 ```bash
 cp .env.example .env
 # 编辑 .env，至少配置：
-#   HARNESS_MODEL_CHAT_PROVIDER
 #   HARNESS_MODEL_CHAT_API_KEY
+#   HARNESS_MODEL_CHAT_PROVIDER
+#   HARNESS_MODEL_CHAT_BASE_URL
+#   HARNESS_MODEL_CHAT_MODEL
 ```
 
 `.env` 由 `EnvConfig` 从工作目录自动加载；系统环境变量优先级更高。
+
+#### 环境变量分类
+
+| 级别 | 变量 | 说明 |
+|------|------|------|
+| **必填** | `HARNESS_MODEL_CHAT_API_KEY` | 对话模型密钥，所有 Provider 构造函数 requireString，不配直接崩溃 |
+| **必填** | `HARNESS_MODEL_CHAT_BASE_URL` | API 地址，非 OpenAI 官方必须配（如 DashScope） |
+| **必填** | `HARNESS_MODEL_CHAT_MODEL` | 模型名称，不配默认 gpt-4o |
+| 功能必填 | `HARNESS_SERVER_ENABLED` / `HARNESS_CLI_ENABLED` | 至少开一个，否则无入口 |
+| 功能必填 | `HARNESS_AUTH_TOKEN` | auth_mode=token 时必填 |
+| 功能必填 | `HARNESS_RAG_PG_*` | 需要 RAG 知识库时必填 |
+| 功能必填 | `HARNESS_AUDIT_DB_*` | 需要审计持久化时必填 |
+| 功能必填 | `HARNESS_MODEL_EMBEDDING_*` | 需要知识库上传/检索时必填 |
+| 可选 | 其余所有变量 | 有合理默认值或功能可关闭 |
 
 ### 运行
 
 ```bash
 # 启动 HTTP 服务（默认端口 8080）
-java -jar harness-server/target/harness-server-0.2.9.jar
+java -jar harness-server/target/harness-server-0.3.4.jar
 
 # 启动 CLI 交互式 REPL
-java -jar harness-cli/target/harness-cli-0.2.9.jar
+java -jar harness-cli/target/harness-cli-0.3.4.jar
 ```
 
 Windows 用户可直接在项目根目录放置 `.env` 后运行上述 `java -jar` 命令，无需手动 export 环境变量。
@@ -191,6 +216,9 @@ curl -X POST http://localhost:8080/api/chat \
 | `DELETE` | `/api/knowledge/{collection}/{documentId}` | 删除指定文档 |
 | `GET` | `/api/trace/{id}` | 按 ID 查询 Trace |
 | `GET` | `/api/traces` | 列出最近 Trace |
+| `GET` | `/api/traces/stats` | Trace 统计与保留配置 |
+| `DELETE` | `/api/traces/cleanup` | 手动清理过期 Trace |
+| `DELETE` | `/api/traces/{traceId}` | 删除指定 Trace |
 | `GET` | `/api/health` | 健康检查 |
 
 ### 对话请求示例
@@ -237,14 +265,14 @@ curl -X POST http://localhost:8080/api/knowledge/upload \
 ## 模块架构
 
 ```
-harness-env           ← 基础层：所有 HARNESS_* 环境变量 + HikariCP 连接池
+harness-env           ← 基础层：所有 HARNESS_* 环境变量 + HikariCP 连接池 + Redis 连接池
 harness-core          ← 核心模型：AgentMessage、AgentTrace、ReActStep、ToolSpec 等
     ├── harness-input        ← 认证(JWT) + 多模态解析 + 大文件合并摘要 + 文本提取 + 分块
     ├── harness-preprocess   ← RAG 查询改写 + 多路召回 + 语义上下文 + Rerank + 记忆管理
-    ├── harness-tool         ← 工具接口、注册表、执行器、MCP 适配
+    ├── harness-tool         ← 工具接口、注册表、执行器、MCP 适配、Skill 加载
     ├── harness-audit        ← TraceCollector + TraceStore
     └── harness-ai           ← LangChain4j 集成、6 种模型、ReActEngine、重试容错
-harness-agent         ← AgentOrchestrator（串联所有层）
+harness-agent         ← AgentOrchestrator（串联所有层）+ 子代理编排
 harness-server        ← HTTP API 入口（Javalin, SSE 流式）
 harness-cli           ← CLI 交互式入口
 ```
@@ -261,7 +289,9 @@ harness-cli           ← CLI 交互式入口
 | RAG 基础 | `HARNESS_RAG_PG_*` | PostgreSQL pgvector 连接、集合、TopK、相似度阈值 |
 | RAG 查询改写 | `HARNESS_RAG_QUERY_REWRITE` | `none` / `hyde` / `multi-query` / `step-back` |
 | RAG 多路召回 | `HARNESS_RAG_MULTI_ROUTE` | `true` 开启多路并行，`HARNESS_RAG_FULLTEXT_ENABLED` 开启全文检索 |
-| 记忆 | `HARNESS_MEMORY_STORE` | `mysql` 或 `none`（默认） |
+| 记忆 | `HARNESS_MEMORY_STORE` | `mysql` / `sqlite` / `none`（默认） |
+| 缓存 | `HARNESS_MEMORY_REDIS_URL` | 设置后启用 Redis 分布式缓存（多实例部署） |
+| 压缩 | `HARNESS_CTX_COMPRESS_*` | 小压缩（ReAct 层）+ 大压缩（AI 层）阈值 |
 | 工具 | `HARNESS_TOOL_*` | 内置工具开关与 Web 搜索引擎优先级 |
 | MCP | `HARNESS_MCP_CONFIG_FILE` | MCP 服务器 JSON 配置文件 |
 
@@ -271,6 +301,21 @@ harness-cli           ← CLI 交互式入口
 - MySQL 用户表：[`sql/schema-users-mysql.sql`](sql/schema-users-mysql.sql)
 - PostgreSQL pgvector RAG：[`sql/schema-pgvector.sql`](sql/schema-pgvector.sql)
 - 表注释：[`sql/add-comments.sql`](sql/add-comments.sql)
+
+## 测试
+
+```bash
+# 单元测试（纯逻辑，无需外部依赖）
+mvn test
+
+# 集成测试（需要 MySQL + PostgreSQL + Redis）
+mvn test -Pintegration
+
+# 覆盖率报告
+mvn jacoco:report
+```
+
+测试框架：JUnit 5 + Mockito + AssertJ。集成测试使用 `@Tag("integration")` 注解，通过 `-Pintegration` Profile 运行。
 
 ## 扩展指南
 
@@ -299,10 +344,8 @@ harness-cli           ← CLI 交互式入口
 
 ## 已知限制
 
-- **Redis 缓存**：`HARNESS_MEMORY_REDIS_*` 环境变量已预留，尚未实现
 - **Realtime 模型**：接口已预留，暂无 Provider 实现
 - **知识图谱召回**：`RetrievalRoute` 接口已预留，暂无后端实现
-- **测试覆盖**：当前测试文件较少，建议自行补充关键路径测试
 
 ## 技术栈
 
@@ -311,6 +354,7 @@ harness-cli           ← CLI 交互式入口
 - **Javalin 6.1.3** — HTTP 服务（SSE 流式）
 - **PostgreSQL + pgvector** — RAG 向量存储 + 全文检索
 - **MySQL + HikariCP** — 审计 Trace + 会话记忆
+- **Redis + Jedis** — 分布式会话缓存
 - **Jackson** — JSON 序列化
 - **OkHttp** — HTTP 客户端（语音/API/Rerank/联网搜索）
 - **Apache POI + PDFBox** — 文档文本提取（PDF、DOCX、XLSX）

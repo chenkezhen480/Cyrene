@@ -28,3 +28,6 @@ Thumbs.db
 # Trace DB
 harness_trace.db
 harness_traces/
+
+# JaCoCo
+jacoco.exec

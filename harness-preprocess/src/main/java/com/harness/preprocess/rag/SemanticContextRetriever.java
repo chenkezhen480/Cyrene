@@ -69,10 +69,11 @@ public class SemanticContextRetriever {
             List<String> lookbackIds = new ArrayList<>();
 
             // Check semantic completeness, look back up to maxLookback times
+            String currentId = chunk.id();
             for (int i = 0; i < maxLookback; i++) {
                 if (isSemanticallyComplete(content)) break;
 
-                String prevId = getPrevChunkId(chunk.id());
+                String prevId = getPrevChunkId(currentId);
                 if (prevId == null || lookedUp.containsKey(prevId)) break;
 
                 RagRetriever.RagDocument prevChunk = fetchById(prevId);
@@ -82,6 +83,7 @@ public class SemanticContextRetriever {
                 content = prevChunk.content() + "\n\n" + content;
                 lookbackIds.add(prevId);
                 lookbackCount++;
+                currentId = prevId;
             }
 
             if (lookbackCount > 0) {
