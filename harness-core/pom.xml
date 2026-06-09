@@ -11,8 +11,8 @@
     </parent>
 
     <artifactId>harness-core</artifactId>
-    <name>Harness Core</name>
-    <description>Core models and abstractions for Harness Agent</description>
+    <name>Cyrene Core</name>
+    <description>Core models and abstractions for Cyrene Agent</description>
 
     <dependencies>
         <dependency>

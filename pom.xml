@@ -10,7 +10,7 @@
     <packaging>pom</packaging>
 
     <name>Cyrene Agent</name>
-    <description>基于 Harness 架构的通用开源 AI Agent 框架</description>
+    <description>基于 Cyrene 架构的通用开源 AI Agent 框架</description>
 
     <modules>
         <module>harness-env</module>

@@ -1,5 +1,5 @@
 -- ============================================================
--- Harness Agent - RAG知识库向量表 (PostgreSQL pgvector)
+-- Cyrene Agent - RAG知识库向量表 (PostgreSQL pgvector)
 -- Run: psql -U postgres -f schema-pgvector.sql
 -- ============================================================
 

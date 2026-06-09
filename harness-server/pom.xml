@@ -11,8 +11,8 @@
     </parent>
 
     <artifactId>harness-server</artifactId>
-    <name>Harness Server</name>
-    <description>HTTP API server for Harness Agent</description>
+    <name>Cyrene Server</name>
+    <description>HTTP API server for Cyrene Agent</description>
 
     <properties>
         <maven.install.skip>true</maven.install.skip>

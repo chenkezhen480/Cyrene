@@ -11,7 +11,7 @@
     </parent>
 
     <artifactId>harness-agent-lib</artifactId>
-    <name>Harness Agent Library</name>
+    <name>Cyrene Agent Library</name>
     <description>Core agent orchestration library</description>
 
     <dependencies>

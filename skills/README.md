@@ -1,6 +1,6 @@
 # Skills 目录
 
-此目录用于存放 Skill 文件，供 Harness Agent 加载使用。
+此目录用于存放 Skill 文件，供 Cyrene Agent 加载使用。
 
 ## 什么是 Skill？
 

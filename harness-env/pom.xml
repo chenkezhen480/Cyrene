@@ -11,8 +11,8 @@
     </parent>
 
     <artifactId>harness-env</artifactId>
-    <name>Harness Env</name>
-    <description>Environment variable configuration for Harness Agent</description>
+    <name>Cyrene Env</name>
+    <description>Environment variable configuration for Cyrene Agent</description>
 
     <dependencies>
         <dependency>

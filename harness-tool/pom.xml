@@ -11,7 +11,7 @@
     </parent>
 
     <artifactId>harness-tool</artifactId>
-    <name>Harness Tool</name>
+    <name>Cyrene Tool</name>
     <description>Tool registry, MCP protocol and built-in tools</description>
 
     <dependencies>

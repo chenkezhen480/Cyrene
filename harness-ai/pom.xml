@@ -11,7 +11,7 @@
     </parent>
 
     <artifactId>harness-ai</artifactId>
-    <name>Harness AI</name>
+    <name>Cyrene AI</name>
     <description>LangChain4j-based AI layer with 6 model type abstractions</description>
 
     <dependencies>

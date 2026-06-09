@@ -11,8 +11,8 @@
     </parent>
 
     <artifactId>harness-cli</artifactId>
-    <name>Harness CLI</name>
-    <description>Command-line interface for Harness Agent</description>
+    <name>Cyrene CLI</name>
+    <description>Command-line interface for Cyrene Agent</description>
 
     <properties>
         <maven.install.skip>true</maven.install.skip>

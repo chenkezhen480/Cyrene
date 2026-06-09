@@ -11,7 +11,7 @@
     </parent>
 
     <artifactId>harness-preprocess</artifactId>
-    <name>Harness Preprocess</name>
+    <name>Cyrene Preprocess</name>
     <description>RAG retrieval, reranking and context injection</description>
 
     <dependencies>

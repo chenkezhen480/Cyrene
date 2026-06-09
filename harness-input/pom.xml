@@ -11,7 +11,7 @@
     </parent>
 
     <artifactId>harness-input</artifactId>
-    <name>Harness Input</name>
+    <name>Cyrene Input</name>
     <description>Input processing, authentication and multimodal parsing</description>
 
     <dependencies>

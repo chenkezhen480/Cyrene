@@ -11,7 +11,7 @@
     </parent>
 
     <artifactId>harness-audit</artifactId>
-    <name>Harness Audit</name>
+    <name>Cyrene Audit</name>
     <description>Trace collection and persistence for agent runs</description>
 
     <dependencies>
