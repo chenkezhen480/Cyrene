@@ -378,12 +378,12 @@ Same pattern for Vision/Voice/Embedding/Rerank providers.
 ## Dependencies
 
 - LangChain4j 1.15.0 (BOM-managed)
-- Jackson 2.16.1 (JSON)
+- Jackson 2.19.0 (JSON)
 - OkHttp 4.12.0 (HTTP client for voice/API calls/rerank/web search)
 - Javalin 6.1.3 (HTTP server)
 - JJWT 0.12.5 (JWT creation/verification, harness-input)
 - dotenv-java 2.3.2 (.env file auto-loading, harness-env)
-- Apache PDFBox 2.0.32 (PDF text extraction, harness-input)
-- Apache POI 5.2.5 (DOCX/XLSX parsing, harness-input)
+- Apache PDFBox 3.0.7 (PDF text extraction, harness-input)
+- Apache POI 5.5.1 (DOCX/XLSX parsing, harness-input)
 - SQLite/MySQL/PostgreSQL JDBC drivers
 - SLF4J 2.0.16 + Logback 1.5.18

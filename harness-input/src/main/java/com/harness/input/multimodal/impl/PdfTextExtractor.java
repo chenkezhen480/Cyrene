@@ -1,10 +1,8 @@
 package com.harness.input.multimodal.impl;
 
 import com.harness.input.multimodal.TextExtractor;
-import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.text.PDFTextStripper;
-
-import java.io.ByteArrayInputStream;
 
 public class PdfTextExtractor implements TextExtractor {
 
@@ -15,7 +13,7 @@ public class PdfTextExtractor implements TextExtractor {
 
     @Override
     public String extract(byte[] data, String mimeType) throws Exception {
-        try (PDDocument document = PDDocument.load(new ByteArrayInputStream(data))) {
+        try (var document = Loader.loadPDF(data)) {
             PDFTextStripper stripper = new PDFTextStripper();
             return stripper.getText(document);
         }
