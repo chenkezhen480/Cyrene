@@ -30,11 +30,16 @@ public class PgConnectionPool {
         return dataSource.getConnection();
     }
 
-    private static void init() {
+    /** 启动时调用，主动建立连接池 */
+    public static void init() {
         EnvConfig cfg = EnvConfig.get();
-        String dbUrl = cfg.getString(EnvKey.RAG_PG_URL, "jdbc:postgresql://localhost:5432/agent");
-        String dbUser = cfg.getString(EnvKey.RAG_PG_USER, "postgres");
-        String dbPass = cfg.getString(EnvKey.RAG_PG_PASS, "");
+        // 通用变量优先，PG 专用变量作为 fallback
+        String dbUrl = cfg.getString(EnvKey.RAG_URL);
+        if (dbUrl == null || dbUrl.trim().isEmpty()) {
+            dbUrl = cfg.getString(EnvKey.RAG_PG_URL, "jdbc:postgresql://localhost:5432/agent");
+        }
+        String dbUser = cfg.getString(EnvKey.RAG_USER, cfg.getString(EnvKey.RAG_PG_USER, "postgres"));
+        String dbPass = cfg.getString(EnvKey.RAG_PASS, cfg.getString(EnvKey.RAG_PG_PASS, ""));
 
         HikariConfig hikariConfig = new HikariConfig();
         hikariConfig.setJdbcUrl(dbUrl);

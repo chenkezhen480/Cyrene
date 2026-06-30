@@ -21,7 +21,6 @@
         <module>harness-tool</module>
         <module>harness-audit</module>
         <module>harness-agent</module>
-        <module>harness-cli</module>
         <module>harness-server</module>
     </modules>
 
@@ -103,11 +102,6 @@
             <dependency>
                 <groupId>com.harness</groupId>
                 <artifactId>harness-agent-lib</artifactId>
-                <version>${project.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>com.harness</groupId>
-                <artifactId>harness-cli</artifactId>
                 <version>${project.version}</version>
             </dependency>
 

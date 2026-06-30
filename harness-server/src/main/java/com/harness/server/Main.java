@@ -9,7 +9,6 @@ import com.harness.core.model.CancellationToken;
 import com.harness.env.EnvConfig;
 import com.harness.env.EnvKey;
 import com.harness.preprocess.knowledge.KnowledgeIngestService;
-import com.harness.preprocess.rag.PgVectorRagRetriever;
 import io.javalin.Javalin;
 import org.eclipse.jetty.util.thread.QueuedThreadPool;
 import org.slf4j.Logger;
@@ -82,8 +81,7 @@ public class Main {
         Runtime.getRuntime().addShutdownHook(new Thread(agent::shutdown));
 
         // Knowledge base upload service — reuse agent's instances
-        PgVectorRagRetriever pgVector = agent.pgVectorRetriever();
-        KnowledgeIngestService ingestService = new KnowledgeIngestService(agent.embeddingModel(), pgVector);
+        KnowledgeIngestService ingestService = new KnowledgeIngestService(agent.embeddingModel(), agent.vectorStore());
         TraceStore traceStore = agent.traceStore();
 
         // Shared cancellation token registry for in-flight chat requests
@@ -120,7 +118,7 @@ public class Main {
         app.post("/api/knowledge/upload", knowledgeHandler::handle);
 
         // Knowledge base management endpoints
-        KnowledgeManagementHandler knowledgeMgmtHandler = new KnowledgeManagementHandler(pgVector);
+        KnowledgeManagementHandler knowledgeMgmtHandler = new KnowledgeManagementHandler(agent.vectorStore());
         app.get("/api/knowledge/{collection}", knowledgeMgmtHandler::listDocuments);
         app.delete("/api/knowledge/{collection}", knowledgeMgmtHandler::deleteCollection);
         app.delete("/api/knowledge/{collection}/{documentId}", knowledgeMgmtHandler::deleteDocument);

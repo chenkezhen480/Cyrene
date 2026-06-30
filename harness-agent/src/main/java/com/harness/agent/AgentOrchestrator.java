@@ -9,6 +9,8 @@ import com.harness.audit.store.TraceStoreFactory;
 import com.harness.core.model.*;
 import com.harness.env.EnvConfig;
 import com.harness.env.EnvKey;
+import com.harness.env.MysqlConnectionPool;
+import com.harness.env.RedisConnectionPool;
 import com.harness.input.InputProcessor;
 import com.harness.input.multimodal.MultimodalParser;
 import com.harness.preprocess.ContextBuilder;
@@ -90,6 +92,14 @@ public class AgentOrchestrator {
     private String activeSessionId;  // CLI mode: reuse across calls
 
     public AgentOrchestrator() {
+        // Database connections (主动建立，按需连接)
+        if (MemoryStoreFactory.isEnabled()) {
+            MysqlConnectionPool.init();
+        }
+        if (EnvConfig.get().getString(EnvKey.MEMORY_REDIS_URL) != null) {
+            RedisConnectionPool.init();
+        }
+
         // Create all model providers
         this.chatModelProvider = ModelProviderFactory.createChat();
         this.visionModelProvider = ModelProviderFactory.createVision();
@@ -829,7 +839,7 @@ public class AgentOrchestrator {
     public SessionMessageCache messageCache() { return messageCache; }
     public SkillRegistry skillRegistry() { return skillRegistry; }
     public TraceStore traceStore() { return traceStore; }
-    public com.harness.preprocess.rag.PgVectorRagRetriever pgVectorRetriever() { return contextBuilder.pgVectorRetriever(); }
+    public com.harness.preprocess.rag.VectorStore vectorStore() { return contextBuilder.vectorStore(); }
 
     /**
      * Convert MemoryMessage list to LangChain4j ChatMessage list for ReAct history injection.

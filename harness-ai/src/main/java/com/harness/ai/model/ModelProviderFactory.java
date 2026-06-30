@@ -3,6 +3,9 @@ package com.harness.ai.model;
 import com.harness.ai.model.impl.*;
 import com.harness.env.EnvConfig;
 import com.harness.env.EnvKey;
+import dev.langchain4j.model.chat.ChatModel;
+import dev.langchain4j.model.chat.StreamingChatModel;
+import java.util.concurrent.Semaphore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -29,7 +32,17 @@ public final class ModelProviderFactory {
             default -> throw new IllegalStateException("Unknown chat model provider: " + provider);
         };
         log.info("[Model] Chat model={}, contextWindow={}", chatProvider.modelName(), chatProvider.contextWindow());
-        return chatProvider;
+
+        // Wrap with Semaphore for LLM API concurrency control
+        // 同一个 provider 的 chat/streaming 共享一个 Semaphore（同一个 API 端点）
+        int maxConcurrent = EnvConfig.get().getInt(EnvKey.MODEL_API_MAX_CONCURRENT, 10);
+        Semaphore semaphore = new Semaphore(maxConcurrent, true);
+        log.info("[Semaphore] LLM API concurrency limit={}, fair=true", maxConcurrent);
+        ChatModel chatModel = new SemaphoreChatModel(chatProvider.chatModel(), semaphore);
+        StreamingChatModel streamingRaw = chatProvider.streamingModel();
+        StreamingChatModel streamingModel = streamingRaw != null
+                ? new SemaphoreStreamingChatModel(streamingRaw, semaphore) : null;
+        return new SemaphoreChatModelProvider(chatProvider, chatModel, streamingModel);
     }
 
     /**

@@ -5,7 +5,7 @@ import com.harness.env.EnvConfig;
 import com.harness.env.EnvKey;
 import com.harness.input.multimodal.TextChunker;
 import com.harness.input.multimodal.impl.TextExtractorRegistry;
-import com.harness.preprocess.rag.PgVectorRagRetriever;
+import com.harness.preprocess.rag.VectorStore;
 import dev.langchain4j.data.embedding.Embedding;
 import dev.langchain4j.data.segment.TextSegment;
 import org.slf4j.Logger;
@@ -21,14 +21,14 @@ public class KnowledgeIngestService {
     private static final Logger log = LoggerFactory.getLogger(KnowledgeIngestService.class);
 
     private final EmbeddingModelProvider embeddingProvider;
-    private final PgVectorRagRetriever pgVector;
+    private final VectorStore vectorStore;
     private final FileStorageService fileStorage;
     private final String defaultCollection;
     private final long maxFileSizeMb;
 
-    public KnowledgeIngestService(EmbeddingModelProvider embeddingProvider, PgVectorRagRetriever pgVector) {
+    public KnowledgeIngestService(EmbeddingModelProvider embeddingProvider, VectorStore vectorStore) {
         this.embeddingProvider = embeddingProvider;
-        this.pgVector = pgVector;
+        this.vectorStore = vectorStore;
         this.fileStorage = new FileStorageService();
 
         EnvConfig cfg = EnvConfig.get();
@@ -87,25 +87,26 @@ public class KnowledgeIngestService {
         // Step 4: Store original file to disk
         String storedPath = fileStorage.store(fileData, fileName, coll);
 
-        // Step 5: Build linked document entries and insert into pgvector
-        List<PgVectorRagRetriever.DocumentLinkEntry> entries = new ArrayList<>();
+        // Step 5: Build documents and upsert via VectorStore
+        List<VectorStore.Document> docs = new ArrayList<>();
         for (int i = 0; i < chunks.size(); i++) {
             Map<String, Object> metadata = new HashMap<>();
             metadata.put("file_name", fileName);
             metadata.put("chunk_index", i);
             metadata.put("total_chunks", chunks.size());
 
-            entries.add(new PgVectorRagRetriever.DocumentLinkEntry(
+            docs.add(new VectorStore.Document(
+                    null,
                     chunks.get(i),
                     fileName,
+                    0,
+                    metadata,
                     embeddings.get(i).vector(),
-                    coll,
-                    i,
-                    metadata
+                    i
             ));
         }
         try {
-            pgVector.insertBatchWithLinks(entries);
+            vectorStore.upsert(coll, docs);
         } catch (Exception e) {
             // Rollback: clean up the stored file since DB insert failed
             log.warn("[Ingest] DB insert failed, cleaning up stored file: {}", storedPath);

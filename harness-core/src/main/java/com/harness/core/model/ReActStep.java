@@ -23,7 +23,8 @@ public record ReActStep(
             TOOL_ERROR,     // Tool execution failed
             WRONG_TOOL,     // Wrong tool was selected
             INSUFFICIENT,   // Result doesn't fully answer the question
-            NEEDS_RETRY     // Should retry with different params
+            NEEDS_RETRY,    // Should retry with different params
+            LOOP_DETECTED   // Repeated tool calls detected — force stop
         }
     }
 }

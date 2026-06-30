@@ -3,6 +3,7 @@ package com.harness.ai.react;
 import com.harness.ai.model.ChatModelProvider;
 import com.harness.ai.model.VisionModelProvider;
 import com.harness.ai.model.VoiceModelProvider;
+import dev.langchain4j.model.openai.OpenAiChatRequestParameters;
 import com.harness.ai.model.impl.FallbackChatModel;
 import com.harness.core.model.*;
 import com.harness.env.EnvConfig;
@@ -13,6 +14,7 @@ import dev.langchain4j.data.message.*;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.StreamingChatModel;
 import dev.langchain4j.model.chat.request.ChatRequest;
+import dev.langchain4j.model.chat.request.ChatRequestParameters;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
 import dev.langchain4j.model.chat.request.json.JsonObjectSchema;
@@ -24,6 +26,7 @@ import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
 /**
@@ -37,7 +40,6 @@ public class ReActEngine {
     private static final int TOOL_MAX_RETRIES = 3;
 
     private final ChatModel chatModel;
-    private final ChatModel chatModelNoThinking;
     private final StreamingChatModel streamingChatModel;
     private final ToolRegistry toolRegistry;
     private final ToolExecutor toolExecutor;
@@ -46,6 +48,7 @@ public class ReActEngine {
     private final boolean stopOnToolError;
     private final boolean minorCompressEnabled;
     private final int minorCompressThreshold;
+    private final int reflectionInterval;
 
     public ReActEngine(ChatModelProvider chatModelProvider, ToolRegistry toolRegistry, ToolExecutor toolExecutor) {
         this(chatModelProvider, toolRegistry, toolExecutor, null, null);
@@ -54,13 +57,10 @@ public class ReActEngine {
     public ReActEngine(ChatModelProvider chatModelProvider, ToolRegistry toolRegistry, ToolExecutor toolExecutor,
                        VisionModelProvider visionProvider, VoiceModelProvider voiceProvider) {
         ChatModel rawModel = chatModelProvider.chatModel();
-        ChatModel rawNoThinking = chatModelProvider.chatModelNoThinking();
         if (visionProvider != null || voiceProvider != null) {
             this.chatModel = new FallbackChatModel(rawModel, visionProvider, voiceProvider, chatModelProvider.modelName());
-            this.chatModelNoThinking = new FallbackChatModel(rawNoThinking, visionProvider, voiceProvider, chatModelProvider.modelName());
         } else {
             this.chatModel = rawModel;
-            this.chatModelNoThinking = rawNoThinking;
         }
         this.streamingChatModel = chatModelProvider.streamingModel();
         this.toolRegistry = toolRegistry;
@@ -71,11 +71,7 @@ public class ReActEngine {
         this.stopOnToolError = cfg.getBool(EnvKey.REACT_STOP_ON_TOOL_ERROR, false);
         this.minorCompressEnabled = cfg.getBool(EnvKey.CTX_COMPRESS_MINOR_ENABLED, true);
         this.minorCompressThreshold = cfg.getInt(EnvKey.CTX_COMPRESS_MINOR, 2);
-    }
-
-    private ChatModel selectModel(Boolean enableThinking) {
-        if (enableThinking != null && !enableThinking) return chatModelNoThinking;
-        return chatModel;
+        this.reflectionInterval = cfg.getInt(EnvKey.REACT_REFLECTION_INTERVAL, 3);
     }
 
     public ReActResult execute(String systemPrompt, String userMessage, AgentTrace.Builder traceBuilder) {
@@ -102,7 +98,6 @@ public class ReActEngine {
                                com.harness.core.model.CancellationToken cancellationToken,
                                Boolean enableThinking) {
         long loopStart = System.currentTimeMillis();
-        ChatModel activeModel = selectModel(enableThinking);
         log.info("[L3-ReAct] Starting ReAct loop: maxIterations={}, historyMessages={}, tools={}, thinking={}",
                 maxIterations, historyMessages.size(), toolRegistry.size(), enableThinking);
 
@@ -113,6 +108,9 @@ public class ReActEngine {
 
         List<ToolSpecification> toolSpecs = toToolSpecifications(toolRegistry.getAll());
         List<ReActStep> allSteps = new ArrayList<>();
+
+        // Build per-request thinking parameters (request-level overrides model-level)
+        ChatRequestParameters thinkingParams = buildThinkingParams(enableThinking);
 
         for (int i = 1; i <= maxIterations; i++) {
             log.info("[L3-ReAct] Iteration {}/{}", i, maxIterations);
@@ -131,6 +129,7 @@ public class ReActEngine {
             }
 
             ChatRequest.Builder reqBuilder = ChatRequest.builder().messages(messages);
+            if (thinkingParams != null) reqBuilder.parameters(thinkingParams);
             if (!toolSpecs.isEmpty()) {
                 reqBuilder.toolSpecifications(toolSpecs);
             }
@@ -139,7 +138,7 @@ public class ReActEngine {
             ChatResponse response;
             if (cancellationToken != null) cancellationToken.trackCurrentThread();
             try {
-                response = activeModel.chat(reqBuilder.build());
+                response = chatModel.chat(reqBuilder.build());
             } catch (Exception e) {
                 if (cancellationToken != null && cancellationToken.isCancelled()) {
                     log.info("[L3-ReAct] LLM call interrupted by cancellation");
@@ -250,6 +249,18 @@ public class ReActEngine {
                 log.warn("[L3-ReAct] Tool error at iteration {}, stopping", i);
                 break;
             }
+
+            // LOOP_DETECTED: 强制停止，发起一次无工具的总结调用
+            if (inspection.status() == ReActStep.InspectionResult.InspectionStatus.LOOP_DETECTED) {
+                log.warn("[L3-ReAct] Loop detected at iteration {}, forcing summary", i);
+                String summary = forceSummary(messages, chatModel);
+                allSteps.add(new ReActStep(i, summary, "summary", List.of(), List.of(), summary,
+                        new ReActStep.InspectionResult(ReActStep.InspectionResult.InspectionStatus.PASS, "loop summary")));
+                return new ReActResult(summary, allSteps);
+            }
+
+            // 反思注入：每隔 N 步注入一条反思消息
+            maybeInjectReflection(messages, i, reflectionInterval, userMessage);
         }
 
         String lastOutput = allSteps.isEmpty() ? "Max iterations reached" :
@@ -275,8 +286,8 @@ public class ReActEngine {
                                       AgentTrace.Builder traceBuilder, ReActListener listener,
                                       com.harness.core.model.CancellationToken cancellationToken,
                                       Boolean enableThinking) {
-        if (streamingChatModel == null || (enableThinking != null && !enableThinking)) {
-            log.warn("[L3-ReAct] Falling back to blocking mode (streaming unavailable or thinking disabled)");
+        if (streamingChatModel == null) {
+            log.warn("[L3-ReAct] Falling back to blocking mode (streaming unavailable)");
             return execute(systemPrompt, userMessage, historyMessages, traceBuilder, listener, cancellationToken, enableThinking);
         }
 
@@ -291,6 +302,9 @@ public class ReActEngine {
 
         List<ToolSpecification> toolSpecs = toToolSpecifications(toolRegistry.getAll());
         List<ReActStep> allSteps = new ArrayList<>();
+
+        // Build per-request thinking parameters (request-level overrides model-level)
+        ChatRequestParameters thinkingParams = buildThinkingParams(enableThinking);
 
         for (int i = 1; i <= maxIterations; i++) {
             log.info("[L3-ReAct] Streaming iteration {}/{}", i, maxIterations);
@@ -307,6 +321,7 @@ public class ReActEngine {
             }
 
             ChatRequest.Builder reqBuilder = ChatRequest.builder().messages(messages);
+            if (thinkingParams != null) reqBuilder.parameters(thinkingParams);
             if (!toolSpecs.isEmpty()) {
                 reqBuilder.toolSpecifications(toolSpecs);
             }
@@ -446,6 +461,18 @@ public class ReActEngine {
                 log.warn("[L3-ReAct] Tool error at iteration {}, stopping", i);
                 break;
             }
+
+            // LOOP_DETECTED: 强制停止，发起一次无工具的总结调用
+            if (inspection.status() == ReActStep.InspectionResult.InspectionStatus.LOOP_DETECTED) {
+                log.warn("[L3-ReAct] Streaming: Loop detected at iteration {}, forcing summary", i);
+                String summary = forceSummary(messages, chatModel);
+                allSteps.add(new ReActStep(i, summary, "summary", List.of(), List.of(), summary,
+                        new ReActStep.InspectionResult(ReActStep.InspectionResult.InspectionStatus.PASS, "loop summary")));
+                return new ReActResult(summary, allSteps);
+            }
+
+            // 反思注入：每隔 N 步注入一条反思消息
+            maybeInjectReflection(messages, i, reflectionInterval, userMessage);
         }
 
         String lastOutput = allSteps.isEmpty() ? "Max iterations reached" :
@@ -527,6 +554,48 @@ public class ReActEngine {
         }
     }
 
+    /**
+     * 反思注入：每隔 N 步注入一条反思消息，帮助 LLM 检查是否陷入循环或偏离目标。
+     * 注入的消息仅存在于当前 ReAct 调用的 messages 列表中，不会被持久化。
+     */
+    private void maybeInjectReflection(List<ChatMessage> messages, int step, int reflectionInterval, String userInput) {
+        if (reflectionInterval <= 0) return;
+        if (step % reflectionInterval != 0 || step == 0) return;
+
+        String reflectionPrompt = """
+            [System Reflection]
+            Review the steps taken so far.
+            1. Are we stuck in a loop or repeating the same tool calls?
+            2. Are we actually making progress toward the user's original goal?
+            Think briefly and adjust your next action. If the task is impossible, output the final answer now.
+
+            Original task: %s
+            Steps executed so far: %d
+            """.formatted(userInput, step);
+
+        messages.add(UserMessage.from(reflectionPrompt));
+        log.info("[L3-ReAct] Injected reflection at step {}", step);
+    }
+
+    /**
+     * 强制总结：用当前 messages 列表发起一次不带工具的 LLM 调用，让 LLM 基于已有信息做总结性回复。
+     * 用于 LOOP_DETECTED 时的收尾。
+     */
+    private String forceSummary(List<ChatMessage> messages, ChatModel model) {
+        try {
+            // 添加总结提示
+            messages.add(UserMessage.from(
+                    "[System] A loop was detected. You MUST now output a final answer based on the information gathered so far. Do NOT call any more tools."));
+
+            ChatRequest request = ChatRequest.builder().messages(messages).build();
+            ChatResponse response = model.chat(request);
+            return response.aiMessage().text();
+        } catch (Exception e) {
+            log.error("[L3-ReAct] Force summary failed: {}", e.getMessage());
+            return "Unable to complete the task due to repeated tool call loops. Please try rephrasing your request.";
+        }
+    }
+
     private List<ToolSpecification> toToolSpecifications(List<ToolSpec> specs) {
         return specs.stream().map(s -> {
             JsonObjectSchema params = buildJsonSchema(s.parameters());
@@ -604,6 +673,19 @@ public class ReActEngine {
             log.warn("[L3-ReAct] Failed to parse tool args: {}", e.getMessage());
             return com.fasterxml.jackson.databind.node.NullNode.getInstance();
         }
+    }
+
+    /**
+     * Build per-request thinking parameters for OpenAI.
+     * Request-level customParameters override model-level settings.
+     *
+     * @return ChatRequestParameters with thinking override, or null if no override needed
+     */
+    private ChatRequestParameters buildThinkingParams(Boolean enableThinking) {
+        if (enableThinking == null) return null; // use model default
+        return OpenAiChatRequestParameters.builder()
+                .customParameters(Map.of("enable_thinking", enableThinking))
+                .build();
     }
 
     private String truncate(String s) {

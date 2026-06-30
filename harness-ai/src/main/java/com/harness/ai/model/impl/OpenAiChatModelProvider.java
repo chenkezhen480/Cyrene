@@ -49,20 +49,6 @@ public class OpenAiChatModelProvider implements ChatModelProvider {
     }
 
     @Override
-    public ChatModel chatModelNoThinking() {
-        return new RetryingChatModel(OpenAiChatModel.builder()
-                .apiKey(apiKey)
-                .baseUrl(baseUrl)
-                .modelName(model)
-                .maxTokens(maxTokens)
-                .temperature(temperature)
-                .logRequests(true)
-                .logResponses(true)
-                .customParameters(Map.of("enable_thinking", false))
-                .build());
-    }
-
-    @Override
     public StreamingChatModel streamingModel() {
         return OpenAiStreamingChatModel.builder()
                 .apiKey(apiKey)

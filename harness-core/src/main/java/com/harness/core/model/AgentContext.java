@@ -43,4 +43,14 @@ public record AgentContext(
         if (val instanceof String s) return Boolean.parseBoolean(s);
         return null;  // not specified, use env default
     }
+
+    /**
+     * Per-request reflection interval override.
+     * context JSON: {"reflectionInterval": 5} 覆盖 env 默认值
+     */
+    public Integer reflectionInterval() {
+        Object val = data.get("reflectionInterval");
+        if (val instanceof Number n) return n.intValue();
+        return null;  // use env default
+    }
 }

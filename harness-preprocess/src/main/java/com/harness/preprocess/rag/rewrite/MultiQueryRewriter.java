@@ -33,7 +33,7 @@ public class MultiQueryRewriter implements QueryRewriter {
     private final int count;
 
     public MultiQueryRewriter(ChatModelProvider chatModelProvider) {
-        this.model = chatModelProvider.chatModelNoThinking();
+        this.model = chatModelProvider.chatModel();
         this.count = EnvConfig.get().getInt(EnvKey.RAG_QUERY_REWRITE_COUNT, 3);
     }
 

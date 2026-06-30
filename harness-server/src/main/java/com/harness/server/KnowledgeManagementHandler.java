@@ -1,7 +1,7 @@
 package com.harness.server;
 
 import com.harness.preprocess.knowledge.FileStorageService;
-import com.harness.preprocess.rag.PgVectorRagRetriever;
+import com.harness.preprocess.rag.VectorStore;
 import io.javalin.http.Context;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -19,11 +19,11 @@ public class KnowledgeManagementHandler {
 
     private static final Logger log = LoggerFactory.getLogger(KnowledgeManagementHandler.class);
 
-    private final PgVectorRagRetriever pgVector;
+    private final VectorStore vectorStore;
     private final FileStorageService fileStorage;
 
-    public KnowledgeManagementHandler(PgVectorRagRetriever pgVector) {
-        this.pgVector = pgVector;
+    public KnowledgeManagementHandler(VectorStore vectorStore) {
+        this.vectorStore = vectorStore;
         this.fileStorage = new FileStorageService();
     }
 
@@ -38,7 +38,7 @@ public class KnowledgeManagementHandler {
         }
 
         try {
-            List<PgVectorRagRetriever.RagDocumentSummary> docs = pgVector.listByCollection(collection);
+            List<VectorStore.Document> docs = vectorStore.listByCollection(collection);
             ctx.json(Map.of(
                     "collection", collection,
                     "count", docs.size(),
@@ -61,7 +61,7 @@ public class KnowledgeManagementHandler {
         }
 
         try {
-            int deleted = pgVector.deleteByCollection(collection);
+            vectorStore.delete(collection);
 
             // Also try to delete the file storage directory for this collection
             try {
@@ -70,10 +70,10 @@ public class KnowledgeManagementHandler {
                 log.debug("[Server] File storage cleanup for collection '{}' skipped: {}", collection, e.getMessage());
             }
 
-            log.info("[Server] Deleted collection '{}': {} documents removed", collection, deleted);
+            log.info("[Server] Deleted collection '{}'", collection);
             ctx.json(Map.of(
                     "collection", collection,
-                    "deletedCount", deleted
+                    "deletedCount", -1
             ));
         } catch (Exception e) {
             log.error("[Server] Failed to delete collection '{}': {}", collection, e.getMessage(), e);
@@ -93,7 +93,7 @@ public class KnowledgeManagementHandler {
         }
 
         try {
-            boolean deleted = pgVector.deleteById(documentId);
+            boolean deleted = vectorStore.deleteById(documentId);
             if (deleted) {
                 log.info("[Server] Deleted document {} from collection '{}'", documentId, collection);
                 ctx.json(Map.of(

@@ -30,7 +30,8 @@ public class MysqlConnectionPool {
         return dataSource.getConnection();
     }
 
-    private static void init() {
+    /** 启动时调用，主动建立连接池 */
+    public static void init() {
         EnvConfig cfg = EnvConfig.get();
         String dbUrl = cfg.getString(EnvKey.AUDIT_DB_URL, "jdbc:mysql://localhost:3306/agent");
         String dbUser = cfg.getString(EnvKey.AUDIT_DB_USER, "root");

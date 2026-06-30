@@ -17,18 +17,22 @@ import static org.mockito.Mockito.when;
 @ExtendWith(MockitoExtension.class)
 class SemanticContextRetrieverTest {
 
-    @Mock PgVectorRagRetriever pgVectorRetriever;
+    @Mock VectorStore vectorStore;
 
     SemanticContextRetriever retriever;
 
     @BeforeEach
     void setUp() {
         EnvConfig.init(Map.of("HARNESS_RAG_CONTEXT_LOOKBACK_MAX", "2"));
-        retriever = new SemanticContextRetriever(pgVectorRetriever);
+        retriever = new SemanticContextRetriever(vectorStore);
     }
 
     private RagRetriever.RagDocument doc(String id, String content) {
         return new RagRetriever.RagDocument(id, content, "test.pdf", 0.9);
+    }
+
+    private VectorStore.Document vecDoc(String id, String content) {
+        return new VectorStore.Document(id, content, "test.pdf", 0.9, null);
     }
 
     // ---- Complete chunks (no lookback needed) ----
@@ -45,7 +49,6 @@ class SemanticContextRetrieverTest {
 
     @Test
     void enhance_completeChunk_noLookback() {
-        // Ends with terminal punctuation — complete
         RagRetriever.RagDocument chunk = doc("c1", "This is a complete sentence.");
         var result = retriever.enhance(List.of(chunk));
 
@@ -65,7 +68,6 @@ class SemanticContextRetrieverTest {
 
     @Test
     void enhance_structuralEnding_noLookback() {
-        // Ends with '}' — structural complete
         RagRetriever.RagDocument chunk = doc("c1", "int main() { return 0; }");
         var result = retriever.enhance(List.of(chunk));
 
@@ -76,12 +78,11 @@ class SemanticContextRetrieverTest {
 
     @Test
     void enhance_truncatedChunk_lookback() {
-        // Chunk starts with lowercase 'and' — continuation, incomplete
         RagRetriever.RagDocument incomplete = doc("c2", "and then the system crashed");
-        RagRetriever.RagDocument prev = doc("c1", "The server was running normally");
+        VectorStore.Document prev = vecDoc("c1", "The server was running normally");
 
-        when(pgVectorRetriever.getPrevChunkId("c2")).thenReturn("c1");
-        when(pgVectorRetriever.retrieveById("c1")).thenReturn(prev);
+        when(vectorStore.getPrevChunkId("c2")).thenReturn("c1");
+        when(vectorStore.fetchById("c1")).thenReturn(prev);
 
         var result = retriever.enhance(List.of(incomplete));
 
@@ -95,10 +96,10 @@ class SemanticContextRetrieverTest {
     @Test
     void enhance_chineseContinuation_lookback() {
         RagRetriever.RagDocument incomplete = doc("c2", "但是还有其他因素");
-        RagRetriever.RagDocument prev = doc("c1", "主要原因是温度过高");
+        VectorStore.Document prev = vecDoc("c1", "主要原因是温度过高");
 
-        when(pgVectorRetriever.getPrevChunkId("c2")).thenReturn("c1");
-        when(pgVectorRetriever.retrieveById("c1")).thenReturn(prev);
+        when(vectorStore.getPrevChunkId("c2")).thenReturn("c1");
+        when(vectorStore.fetchById("c1")).thenReturn(prev);
 
         var result = retriever.enhance(List.of(incomplete));
 
@@ -109,10 +110,10 @@ class SemanticContextRetrieverTest {
     @Test
     void enhance_commaStart_lookback() {
         RagRetriever.RagDocument incomplete = doc("c2", ", which was unexpected");
-        RagRetriever.RagDocument prev = doc("c1", "The result was negative");
+        VectorStore.Document prev = vecDoc("c1", "The result was negative");
 
-        when(pgVectorRetriever.getPrevChunkId("c2")).thenReturn("c1");
-        when(pgVectorRetriever.retrieveById("c1")).thenReturn(prev);
+        when(vectorStore.getPrevChunkId("c2")).thenReturn("c1");
+        when(vectorStore.fetchById("c1")).thenReturn(prev);
 
         var result = retriever.enhance(List.of(incomplete));
 
@@ -122,7 +123,7 @@ class SemanticContextRetrieverTest {
     @Test
     void enhance_noPrevId_stops() {
         RagRetriever.RagDocument incomplete = doc("c2", "and then nothing");
-        when(pgVectorRetriever.getPrevChunkId("c2")).thenReturn(null);
+        when(vectorStore.getPrevChunkId("c2")).thenReturn(null);
 
         var result = retriever.enhance(List.of(incomplete));
 
@@ -131,15 +132,14 @@ class SemanticContextRetrieverTest {
 
     @Test
     void enhance_maxLookbackRespected() {
-        // With fix: uses currentId (prev chunk) for each iteration, enabling multi-level lookback
         RagRetriever.RagDocument c3 = doc("c3", "however this is incomplete");
-        RagRetriever.RagDocument c2 = doc("c2", "still not complete");
-        RagRetriever.RagDocument c1 = doc("c1", "The beginning.");
+        VectorStore.Document c2 = vecDoc("c2", "still not complete");
+        VectorStore.Document c1 = vecDoc("c1", "The beginning.");
 
-        when(pgVectorRetriever.getPrevChunkId("c3")).thenReturn("c2");
-        when(pgVectorRetriever.retrieveById("c2")).thenReturn(c2);
-        when(pgVectorRetriever.getPrevChunkId("c2")).thenReturn("c1");
-        when(pgVectorRetriever.retrieveById("c1")).thenReturn(c1);
+        when(vectorStore.getPrevChunkId("c3")).thenReturn("c2");
+        when(vectorStore.fetchById("c2")).thenReturn(c2);
+        when(vectorStore.getPrevChunkId("c2")).thenReturn("c1");
+        when(vectorStore.fetchById("c1")).thenReturn(c1);
 
         var result = retriever.enhance(List.of(c3));
 
@@ -151,10 +151,10 @@ class SemanticContextRetrieverTest {
     void enhance_multipleChunks_independent() {
         RagRetriever.RagDocument complete = doc("c1", "Complete sentence.");
         RagRetriever.RagDocument incomplete = doc("c2", "but not complete");
-        RagRetriever.RagDocument prev = doc("c0", "Something before");
+        VectorStore.Document prev = vecDoc("c0", "Something before");
 
-        when(pgVectorRetriever.getPrevChunkId("c2")).thenReturn("c0");
-        when(pgVectorRetriever.retrieveById("c0")).thenReturn(prev);
+        when(vectorStore.getPrevChunkId("c2")).thenReturn("c0");
+        when(vectorStore.fetchById("c0")).thenReturn(prev);
 
         var result = retriever.enhance(List.of(complete, incomplete));
 

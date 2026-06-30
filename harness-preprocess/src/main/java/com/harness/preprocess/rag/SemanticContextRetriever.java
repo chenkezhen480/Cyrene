@@ -41,11 +41,11 @@ public class SemanticContextRetriever {
             "additionally ", "consequently ", "hence ", "accordingly "
     };
 
-    private final PgVectorRagRetriever pgVectorRetriever;
+    private final VectorStore vectorStore;
     private final int maxLookback;
 
-    public SemanticContextRetriever(PgVectorRagRetriever pgVectorRetriever) {
-        this.pgVectorRetriever = pgVectorRetriever;
+    public SemanticContextRetriever(VectorStore vectorStore) {
+        this.vectorStore = vectorStore;
         EnvConfig cfg = EnvConfig.get();
         this.maxLookback = cfg.getInt(EnvKey.RAG_CONTEXT_LOOKBACK_MAX, 2);
     }
@@ -56,7 +56,7 @@ public class SemanticContextRetriever {
      */
     public List<EnhancedChunk> enhance(List<RagRetriever.RagDocument> chunks) {
         if (chunks == null || chunks.isEmpty()) return List.of();
-        if (maxLookback <= 0 || pgVectorRetriever == null) {
+        if (maxLookback <= 0 || vectorStore == null) {
             return chunks.stream().map(c -> new EnhancedChunk(c, List.of(), 0)).toList();
         }
 
@@ -152,9 +152,9 @@ public class SemanticContextRetriever {
     }
 
     private String getPrevChunkId(String chunkId) {
-        if (pgVectorRetriever == null) return null;
+        if (vectorStore == null) return null;
         try {
-            return pgVectorRetriever.getPrevChunkId(chunkId);
+            return vectorStore.getPrevChunkId(chunkId);
         } catch (Exception e) {
             log.debug("Failed to get prev chunk id for {}: {}", chunkId, e.getMessage());
             return null;
@@ -162,9 +162,11 @@ public class SemanticContextRetriever {
     }
 
     private RagRetriever.RagDocument fetchById(String id) {
-        if (pgVectorRetriever == null) return null;
+        if (vectorStore == null) return null;
         try {
-            return pgVectorRetriever.retrieveById(id);
+            VectorStore.Document doc = vectorStore.fetchById(id);
+            if (doc == null) return null;
+            return new RagRetriever.RagDocument(doc.id(), doc.content(), doc.source(), doc.score());
         } catch (Exception e) {
             log.debug("Failed to fetch chunk by id {}: {}", id, e.getMessage());
             return null;

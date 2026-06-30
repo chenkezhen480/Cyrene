@@ -5,14 +5,9 @@ import com.harness.ai.model.EmbeddingModelProvider;
 import com.harness.ai.model.RerankModelProvider;
 import com.harness.env.EnvConfig;
 import com.harness.env.EnvKey;
-import com.harness.preprocess.rag.MultiRouteRetriever;
-import com.harness.preprocess.rag.PgVectorRagRetriever;
-import com.harness.preprocess.rag.RagRetriever;
-import com.harness.preprocess.rag.SemanticContextRetriever;
+import com.harness.preprocess.rag.*;
 import com.harness.preprocess.rag.rewrite.QueryRewriter;
 import com.harness.preprocess.rag.rewrite.QueryRewriterFactory;
-import com.harness.preprocess.rag.route.RetrievalRoute;
-import com.harness.preprocess.rag.route.RetrievalRouteFactory;
 import com.harness.preprocess.rerank.Reranker;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -25,40 +20,21 @@ import java.util.stream.Collectors;
  * Layer 2: Preprocessing.
  * Orchestrates RAG retrieval + semantic enhancement + reranking to build context for the AI layer.
  * Supports optional query rewriting (HyDE, Multi-Query, Step-Back) before retrieval.
- * Supports multi-route parallel retrieval (pgvector + fulltext + knowledge graph).
  */
 public class ContextBuilder {
 
     private static final Logger log = LoggerFactory.getLogger(ContextBuilder.class);
 
-    private final RagRetriever ragRetriever;           // null in multi-route mode
-    private final MultiRouteRetriever multiRouteRetriever; // null in single-route mode
+    private final VectorStore vectorStore;
     private final Reranker reranker;
     private final SemanticContextRetriever semanticRetriever;
     private final QueryRewriter queryRewriter;
-    private final PgVectorRagRetriever pgVectorRetriever;
 
     public ContextBuilder(RerankModelProvider rerankModelProvider,
                           EmbeddingModelProvider embeddingModelProvider,
                           ChatModelProvider chatModelProvider) {
-        EnvConfig cfg = EnvConfig.get();
-        boolean multiRoute = cfg.getBool(EnvKey.RAG_MULTI_ROUTE, false);
-
-        if (multiRoute) {
-            List<RetrievalRoute> routes = RetrievalRouteFactory.createEnabledRoutes(embeddingModelProvider);
-            this.multiRouteRetriever = new MultiRouteRetriever(routes);
-            this.ragRetriever = null;
-            PgVectorRagRetriever pgVector = RetrievalRouteFactory.findPgVectorRetriever(routes);
-            this.pgVectorRetriever = pgVector;
-            this.semanticRetriever = pgVector != null ? new SemanticContextRetriever(pgVector) : null;
-        } else {
-            this.ragRetriever = new RagRetriever(embeddingModelProvider);
-            this.multiRouteRetriever = null;
-            PgVectorRagRetriever pgVector = ragRetriever.getPgVectorRetriever();
-            this.pgVectorRetriever = pgVector;
-            this.semanticRetriever = pgVector != null ? new SemanticContextRetriever(pgVector) : null;
-        }
-
+        this.vectorStore = VectorStoreFactory.create(embeddingModelProvider);
+        this.semanticRetriever = vectorStore != null ? new SemanticContextRetriever(vectorStore) : null;
         this.reranker = new Reranker(rerankModelProvider);
         this.queryRewriter = QueryRewriterFactory.create(chatModelProvider);
     }
@@ -78,7 +54,7 @@ public class ContextBuilder {
             log.info("[L2-RAG] Query rewrite [{}]: {} queries", queryRewriter.strategyName(), queries.size());
         }
 
-        // Step 1: RAG retrieval (support multi-query + multi-route)
+        // Step 1: RAG retrieval (support multi-query)
         List<RagRetriever.RagDocument> ragDocs;
         if (queries.size() == 1) {
             ragDocs = doRetrieve(queries.get(0));
@@ -132,7 +108,7 @@ public class ContextBuilder {
         metadata.put("lookback_count", String.valueOf(totalLookback));
         metadata.put("query_rewrite", queryRewriter.strategyName());
         metadata.put("query_count", String.valueOf(queries.size()));
-        metadata.put("multi_route", String.valueOf(multiRouteRetriever != null));
+        metadata.put("provider", vectorStore != null ? vectorStore.providerName() : "none");
         if (!lookbackChunkIds.isEmpty()) {
             metadata.put("lookback_chunk_ids", String.join(",", lookbackChunkIds));
         }
@@ -145,10 +121,14 @@ public class ContextBuilder {
     }
 
     private List<RagRetriever.RagDocument> doRetrieve(String query) {
-        if (multiRouteRetriever != null) {
-            return multiRouteRetriever.retrieve(query);
-        }
-        return ragRetriever.retrieve(query);
+        if (vectorStore == null) return List.of();
+        EnvConfig cfg = EnvConfig.get();
+        String collection = cfg.getString(EnvKey.RAG_COLLECTION, "default");
+        int topK = cfg.getInt(EnvKey.RAG_TOP_K, 5);
+        List<VectorStore.Document> docs = vectorStore.searchText(collection, query, topK);
+        return docs.stream()
+                .map(d -> new RagRetriever.RagDocument(d.id(), d.content(), d.source(), d.score()))
+                .toList();
     }
 
     private String formatContext(List<RagRetriever.RagDocument> docs) {
@@ -165,8 +145,8 @@ public class ContextBuilder {
         return sb.toString();
     }
 
-    public PgVectorRagRetriever pgVectorRetriever() {
-        return pgVectorRetriever;
+    public VectorStore vectorStore() {
+        return vectorStore;
     }
 
     public record ContextResult(

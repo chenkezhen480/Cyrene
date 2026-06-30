@@ -28,7 +28,7 @@ public class StepBackQueryRewriter implements QueryRewriter {
     private final ChatModel model;
 
     public StepBackQueryRewriter(ChatModelProvider chatModelProvider) {
-        this.model = chatModelProvider.chatModelNoThinking();
+        this.model = chatModelProvider.chatModel();
     }
 
     @Override

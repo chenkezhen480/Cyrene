@@ -1,5 +1,6 @@
 package com.harness.ai.react;
 
+import com.harness.core.model.ReActStep;
 import com.harness.core.model.ReActStep.InspectionResult;
 import com.harness.core.model.ReActStep.InspectionResult.InspectionStatus;
 import com.harness.core.model.ToolCall;
@@ -145,7 +146,53 @@ public class Inspector {
                     + ". Try a different query, different parameters, or an alternative tool.";
             case NEEDS_RETRY -> "[Inspection] Retry needed: " + result.reason()
                     + ". Try again with adjusted parameters.";
+            case LOOP_DETECTED -> "[Inspection] Loop detected: " + result.reason()
+                    + ". You MUST output the final answer now based on available information.";
             case PASS -> null;
         };
+    }
+
+    /**
+     * 检测连续重复的工具调用（相同工具名+相同参数）。
+     *
+     * @param recentSteps 最近的 ReAct 步骤列表
+     * @param threshold 连续重复次数阈值
+     * @return 如果检测到循环返回 InspectionResult，否则返回 null
+     */
+    public static InspectionResult detectLoop(List<ReActStep> recentSteps, int threshold) {
+        if (recentSteps == null || recentSteps.size() < threshold) {
+            return null;
+        }
+
+        // 取最近 N 步
+        List<ReActStep> tail = recentSteps.subList(recentSteps.size() - threshold, recentSteps.size());
+
+        // 检查是否所有步骤都调用了相同的工具且参数一致
+        String firstAction = tail.get(0).action();
+        String firstArgs = extractArgsSignature(tail.get(0).toolCalls());
+
+        if (firstAction == null || firstAction.isBlank()) return null;
+
+        for (int i = 1; i < tail.size(); i++) {
+            String action = tail.get(i).action();
+            String args = extractArgsSignature(tail.get(i).toolCalls());
+            if (!firstAction.equals(action) || !firstArgs.equals(args)) {
+                return null;  // 不是循环
+            }
+        }
+
+        log.warn("[Inspector] Loop detected: {} consecutive calls to '{}' with same args", threshold, firstAction);
+        return new InspectionResult(
+                InspectionStatus.LOOP_DETECTED,
+                String.format("Tool '%s' called %d times consecutively with identical parameters", firstAction, threshold));
+    }
+
+    private static String extractArgsSignature(List<ToolCall> toolCalls) {
+        if (toolCalls == null || toolCalls.isEmpty()) return "";
+        StringBuilder sb = new StringBuilder();
+        for (ToolCall tc : toolCalls) {
+            sb.append(tc.toolName()).append(":").append(tc.arguments()).append(";");
+        }
+        return sb.toString();
     }
 }

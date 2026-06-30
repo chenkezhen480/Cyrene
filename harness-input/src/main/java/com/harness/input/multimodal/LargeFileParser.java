@@ -44,7 +44,7 @@ public class LargeFileParser {
 
     public LargeFileParser(ChatModelProvider chatProvider, VisionModelProvider visionProvider, VoiceModelProvider voiceProvider) {
         this.chatProvider = chatProvider;
-        this.noThinkingModel = chatProvider.chatModelNoThinking();
+        this.noThinkingModel = chatProvider.chatModel();
 
         EnvConfig cfg = EnvConfig.get();
         int contextWindow = chatProvider.contextWindow();

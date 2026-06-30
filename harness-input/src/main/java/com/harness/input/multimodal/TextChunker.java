@@ -181,4 +181,53 @@ public final class TextChunker {
     private static int defaultChunkTokenSize() {
         return EnvConfig.get().getInt(EnvKey.INPUT_CHUNK_TOKEN_SIZE, 1024);
     }
+
+    /**
+     * 单遍贪心合并：相邻 chunk 若合计 token < chunkTokenSize 则合并。
+     * 硬边界保护：遇到 Markdown 标题或分割线开头的 chunk 则强制断开。
+     *
+     * @param chunks 原始 chunk 列表
+     * @param chunkTokenSize 目标 token 数
+     * @return 合并后的 chunk 列表
+     */
+    public static List<String> mergeSmallChunks(List<String> chunks, int chunkTokenSize) {
+        if (chunks == null || chunks.size() <= 1) return chunks;
+        List<String> merged = new ArrayList<>();
+        StringBuilder current = new StringBuilder();
+        int currentTokens = 0;
+
+        for (String chunk : chunks) {
+            int chunkTokens = estimateTokens(chunk);
+            boolean isHardBoundary = startsWithHeading(chunk) || startsWithDivider(chunk);
+
+            if (currentTokens > 0 && currentTokens + chunkTokens <= chunkTokenSize && !isHardBoundary) {
+                current.append("\n\n").append(chunk);
+                currentTokens += chunkTokens;
+            } else {
+                if (currentTokens > 0) merged.add(current.toString().strip());
+                current = new StringBuilder(chunk);
+                currentTokens = chunkTokens;
+            }
+        }
+        if (currentTokens > 0) merged.add(current.toString().strip());
+        return merged;
+    }
+
+    private static boolean startsWithHeading(String chunk) {
+        if (chunk == null || chunk.isEmpty()) return false;
+        String firstLine = chunk.stripLeading();
+        int nl = firstLine.indexOf('\n');
+        if (nl > 0) firstLine = firstLine.substring(0, nl);
+        // Markdown 标题：# ## ### 等
+        if (firstLine.matches("^#{1,6}\\s+.*")) return true;
+        // 数字编号标题：1. / 1、 / (1) / 第X章 / 第X节
+        if (firstLine.matches("^(第.+[章节]|\\d+[.、)）]\\s*).*")) return true;
+        return false;
+    }
+
+    private static boolean startsWithDivider(String chunk) {
+        if (chunk == null || chunk.isEmpty()) return false;
+        String trimmed = chunk.stripLeading();
+        return trimmed.startsWith("---") || trimmed.startsWith("***") || trimmed.startsWith("___");
+    }
 }

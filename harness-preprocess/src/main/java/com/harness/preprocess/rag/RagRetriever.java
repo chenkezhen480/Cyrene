@@ -19,12 +19,10 @@ public class RagRetriever {
     private static final Logger log = LoggerFactory.getLogger(RagRetriever.class);
 
     private final String provider;
-    private final String url;
-    private final String apiKey;
     private final String collection;
     private final int topK;
-    private final double scoreThreshold;
-    private final PgVectorRagRetriever pgVectorRetriever;
+    private final VectorStore vectorStore;
+    private final EmbeddingModelProvider embeddingProvider;
 
     public RagRetriever() {
         this(null);
@@ -33,13 +31,10 @@ public class RagRetriever {
     public RagRetriever(EmbeddingModelProvider embeddingProvider) {
         EnvConfig cfg = EnvConfig.get();
         this.provider = cfg.getString(EnvKey.RAG_PROVIDER, "none");
-        this.url = cfg.getString(EnvKey.RAG_URL, "");
-        this.apiKey = cfg.getString(EnvKey.RAG_API_KEY, "");
         this.collection = cfg.getString(EnvKey.RAG_COLLECTION, "default");
         this.topK = cfg.getInt(EnvKey.RAG_TOP_K, 5);
-        this.scoreThreshold = cfg.getDouble(EnvKey.RAG_SCORE_THRESHOLD, 0.7);
-        this.pgVectorRetriever = "pgvector".equalsIgnoreCase(provider)
-                ? new PgVectorRagRetriever(embeddingProvider) : null;
+        this.vectorStore = VectorStoreFactory.create(embeddingProvider);
+        this.embeddingProvider = embeddingProvider;
     }
 
     /**
@@ -47,64 +42,44 @@ public class RagRetriever {
      * Returns empty list if RAG is disabled (provider=none).
      */
     public List<RagDocument> retrieve(String query) {
-        if ("none".equalsIgnoreCase(provider)) {
+        if ("none".equalsIgnoreCase(provider) || vectorStore == null) {
+            return Collections.emptyList();
+        }
+        if (embeddingProvider == null || !embeddingProvider.isAvailable()) {
+            log.warn("RAG retrieve requires an embedding provider. Set HARNESS_MODEL_EMBEDDING_PROVIDER.");
             return Collections.emptyList();
         }
 
         log.debug("RAG retrieve: provider={}, collection={}, topK={}, query={}", provider, collection, topK, query);
 
-        return switch (provider.toLowerCase()) {
-            case "qdrant" -> retrieveFromQdrant(query);
-            case "elasticsearch" -> retrieveFromElasticsearch(query);
-            case "pinecone" -> retrieveFromPinecone(query);
-            case "pgvector" -> retrieveFromPgVector(query);
-            case "local" -> retrieveFromLocal(query);
-            default -> {
-                log.warn("Unknown RAG provider: {}, returning empty results", provider);
-                yield Collections.emptyList();
-            }
-        };
-    }
-
-    private List<RagDocument> retrieveFromPgVector(String query) {
-        if (pgVectorRetriever == null) {
-            log.warn("pgvector retriever not initialized");
+        try {
+            float[] embedding = embeddingProvider.embed(query).vector();
+            List<VectorStore.Document> docs = vectorStore.searchVector(collection, embedding, topK);
+            return docs.stream()
+                    .map(d -> new RagDocument(d.id(), d.content(), d.source(), d.score()))
+                    .toList();
+        } catch (Exception e) {
+            log.warn("RAG retrieve failed: {}", e.getMessage());
             return Collections.emptyList();
         }
-        return pgVectorRetriever.retrieveByText(query);
-    }
-
-    private List<RagDocument> retrieveFromQdrant(String query) {
-        // TODO: Implement Qdrant client via HTTP API
-        // POST {url}/collections/{collection}/points/search
-        log.info("Qdrant RAG not yet implemented, returning empty");
-        return Collections.emptyList();
-    }
-
-    private List<RagDocument> retrieveFromElasticsearch(String query) {
-        // TODO: Implement Elasticsearch client
-        log.info("Elasticsearch RAG not yet implemented, returning empty");
-        return Collections.emptyList();
-    }
-
-    private List<RagDocument> retrieveFromPinecone(String query) {
-        // TODO: Implement Pinecone client
-        log.info("Pinecone RAG not yet implemented, returning empty");
-        return Collections.emptyList();
-    }
-
-    private List<RagDocument> retrieveFromLocal(String query) {
-        // TODO: Implement local vector store (e.g., using ONNX embeddings + HNSW)
-        log.info("Local RAG not yet implemented, returning empty");
-        return Collections.emptyList();
     }
 
     /**
-     * Get the pgvector retriever for direct operations (insert, delete, etc.).
+     * Get the vector store for direct operations.
+     */
+    public VectorStore getVectorStore() {
+        return vectorStore;
+    }
+
+    /**
+     * Get the PgVectorStore if the provider is pgvector (for chunk linking operations).
      * Returns null if provider is not pgvector.
      */
-    public PgVectorRagRetriever getPgVectorRetriever() {
-        return pgVectorRetriever;
+    public PgVectorStore getPgVectorStore() {
+        if (vectorStore instanceof PgVectorStore pg) {
+            return pg;
+        }
+        return null;
     }
 
     public String getProvider() {

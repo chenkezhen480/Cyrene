@@ -28,7 +28,7 @@ public class HydeQueryRewriter implements QueryRewriter {
     private final ChatModel model;
 
     public HydeQueryRewriter(ChatModelProvider chatModelProvider) {
-        this.model = chatModelProvider.chatModelNoThinking();
+        this.model = chatModelProvider.chatModel();
     }
 
     @Override

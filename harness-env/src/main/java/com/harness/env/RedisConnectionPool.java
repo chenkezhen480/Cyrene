@@ -30,7 +30,8 @@ public class RedisConnectionPool {
         return pool.getResource();
     }
 
-    private static void init() {
+    /** 启动时调用，主动建立连接池 */
+    public static void init() {
         EnvConfig cfg = EnvConfig.get();
         String redisUrl = cfg.getString(EnvKey.MEMORY_REDIS_URL, "redis://localhost:6379");
         String password = cfg.getString(EnvKey.MEMORY_REDIS_PASSWORD, "");
