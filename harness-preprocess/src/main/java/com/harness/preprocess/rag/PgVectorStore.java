@@ -139,7 +139,7 @@ public class PgVectorStore implements VectorStore {
                                 "created_at", rs.getTimestamp("created_at") != null ? rs.getTimestamp("created_at").toString() : "")
                 ));
             }
-            log.info("Listed {} documents in collection '{}'", results.size(), collectionName);
+            log.debug("Listed {} documents in collection '{}'", results.size(), collectionName);
         } catch (SQLException e) {
             log.error("Failed to list collection '{}': {}", collectionName, e.getMessage(), e);
         }
@@ -181,7 +181,7 @@ public class PgVectorStore implements VectorStore {
                         null
                 ));
             }
-            log.info("pgvector search returned {} documents (collection={}, topK={})", results.size(), collection, topK);
+            log.debug("pgvector search returned {} documents (collection={}, topK={})", results.size(), collection, topK);
         } catch (SQLException e) {
             log.error("pgvector search failed: {}", e.getMessage(), e);
         }
@@ -230,7 +230,7 @@ public class PgVectorStore implements VectorStore {
                     }
                 }
             }
-            log.info("pgvector keyword search returned {} documents", results.size());
+            log.debug("pgvector keyword search returned {} documents", results.size());
         } catch (SQLException e) {
             log.warn("[PgVectorStore] Keyword search failed: {}", e.getMessage());
         }
@@ -271,7 +271,7 @@ public class PgVectorStore implements VectorStore {
                 .limit(topK)
                 .toList();
 
-        log.info("Hybrid search: vector={}, keyword={}, merged={}", vectorDocs.size(), keywordDocs.size(), result.size());
+        log.debug("Hybrid search: vector={}, keyword={}, merged={}", vectorDocs.size(), keywordDocs.size(), result.size());
         return result;
     }
 
@@ -375,7 +375,7 @@ public class PgVectorStore implements VectorStore {
                         ts != null ? ts.toInstant() : null
                 ));
             }
-            log.info("Listed {} documents in collection '{}'", results.size(), collectionName);
+            log.debug("Listed {} documents in collection '{}'", results.size(), collectionName);
         } catch (SQLException e) {
             log.error("Failed to list collection '{}': {}", collectionName, e.getMessage(), e);
         }

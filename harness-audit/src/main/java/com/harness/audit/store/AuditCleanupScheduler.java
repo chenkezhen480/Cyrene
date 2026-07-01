@@ -60,7 +60,7 @@ public class AuditCleanupScheduler {
         try {
             int deleted = traceStore.cleanup(retentionDays);
             if (deleted > 0) {
-                log.info("[Audit] Cleaned up {} traces older than {} days", deleted, retentionDays);
+                log.debug("[Audit] Cleaned up {} traces older than {} days", deleted, retentionDays);
             }
         } catch (Exception e) {
             log.error("[Audit] Cleanup failed: {}", e.getMessage(), e);

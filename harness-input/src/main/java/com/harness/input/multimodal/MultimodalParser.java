@@ -64,7 +64,7 @@ public class MultimodalParser {
             return List.of();
         }
 
-        log.info("[L1-Multimodal] Parsing {} attachments", rawAttachments.size());
+        log.debug("[L1-Multimodal] Parsing {} attachments", rawAttachments.size());
         List<ParsedAttachment> result = new ArrayList<>();
         for (RawAttachment raw : rawAttachments) {
             RawAttachment resolved = resolveUrl(raw);
@@ -133,7 +133,7 @@ public class MultimodalParser {
      */
     private RawAttachment resolveUrl(RawAttachment raw) {
         if (raw.url() != null && !raw.url().isBlank() && (raw.data() == null || raw.data().length == 0)) {
-            log.info("[L1-Multimodal] URL attachment detected: {}", raw.url());
+            log.debug("[L1-Multimodal] URL attachment detected: {}", raw.url());
             try {
                 UrlDownloader.DownloadResult dl = urlDownloader.download(raw.url(), raw.name(), raw.mimeType());
                 return new RawAttachment(dl.name(), dl.data(), dl.mimeType(), null);

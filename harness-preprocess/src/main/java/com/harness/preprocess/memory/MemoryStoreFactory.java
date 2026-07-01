@@ -2,8 +2,6 @@ package com.harness.preprocess.memory;
 
 import com.harness.env.EnvConfig;
 import com.harness.env.EnvKey;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 /**
  * Factory for creating memory store instances based on HARNESS_AUDIT_STORE env var.
@@ -12,8 +10,6 @@ import org.slf4j.LoggerFactory;
  * When set to "none", all stores return NoOp implementations.
  */
 public final class MemoryStoreFactory {
-
-    private static final Logger log = LoggerFactory.getLogger(MemoryStoreFactory.class);
 
     private MemoryStoreFactory() {}
 
@@ -58,7 +54,7 @@ public final class MemoryStoreFactory {
     public static SessionMessageCache createMessageCache() {
         String redisUrl = EnvConfig.get().getString(EnvKey.MEMORY_REDIS_URL);
         if (redisUrl != null && !redisUrl.isBlank()) {
-            log.info("[Memory] Using Redis session message cache: {}", redisUrl);
+
             return new RedisSessionMessageCache();
         }
         return new InMemorySessionMessageCache();

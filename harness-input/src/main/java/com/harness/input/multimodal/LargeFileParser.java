@@ -57,18 +57,18 @@ public class LargeFileParser {
     }
 
     public ParsedContent parse(byte[] fileData, String fileName, String mimeType) {
-        log.info("Large file parsing: file={}, size={}KB, mimeType={}", fileName, fileData.length / 1024, mimeType);
+        log.debug("Large file parsing: file={}, size={}KB, mimeType={}", fileName, fileData.length / 1024, mimeType);
 
         // Step 1: Extract raw text
         String rawText = TextExtractorRegistry.extract(fileData, fileName, mimeType);
 
         // Step 2: Semantic splitting
         List<String> chunks = TextChunker.split(rawText);
-        log.info("Split into {} chunks (blockTokenBudget={})", chunks.size(), blockTokenBudget);
+
 
         // Step 3: Greedy merge into blocks
         List<String> blocks = mergeIntoBlocks(chunks);
-        log.info("Merged into {} blocks", blocks.size());
+
 
         // Step 4: Summarize blocks (parallel)
         List<String> summaries = summarizeBlocks(blocks);

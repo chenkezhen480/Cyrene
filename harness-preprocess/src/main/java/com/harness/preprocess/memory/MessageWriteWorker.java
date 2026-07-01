@@ -121,7 +121,7 @@ public class MessageWriteWorker {
             for (WriteTask task : failedTasks) {
                 try {
                     messageStore.save(task.sessionId(), task.role(), task.content(), task.isSummary());
-                    log.info("Fallback write succeeded for message (session={}, role={})", task.sessionId(), task.role());
+                    log.debug("Fallback write succeeded for message (session={}, role={})", task.sessionId(), task.role());
                 } catch (Exception e) {
                     log.error("Fallback write also failed for message (session={}, role={}, content={}): {}",
                             task.sessionId(), task.role(), truncate(task.content(), 100), e.getMessage(), e);

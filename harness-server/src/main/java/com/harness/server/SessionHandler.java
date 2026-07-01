@@ -46,7 +46,7 @@ public class SessionHandler {
             sessionStore.updateTitle(session.id(), title.trim());
             session = sessionStore.findById(session.id()).orElse(session);
         }
-        log.info("[Server] Created session {} for user {}, title={}", session.id(), userId, session.title());
+        log.debug("[Server] Created session {} for user {}, title={}", session.id(), userId, session.title());
         ctx.status(201).json(session);
     }
 

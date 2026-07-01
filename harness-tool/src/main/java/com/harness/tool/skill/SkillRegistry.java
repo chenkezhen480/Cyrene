@@ -67,7 +67,7 @@ public class SkillRegistry {
         temporarySkills.computeIfAbsent(sessionId, k -> new ConcurrentHashMap<>())
                 .put(skill.name(), skill);
         touchSession(sessionId);
-        log.info("Temporary skill registered: {} (session={})", skill.name(), sessionId);
+        log.debug("Temporary skill registered: {} (session={})", skill.name(), sessionId);
     }
 
     /**

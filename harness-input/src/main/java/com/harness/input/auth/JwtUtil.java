@@ -107,7 +107,7 @@ public class JwtUtil {
         long thresholdMs = thresholdMinutes * 60L * 1000L;
         boolean needsRefresh = remainingMs < thresholdMs;
         if (needsRefresh) {
-            log.info("[Auth-JWT] Token refresh needed: remainingMs={}, thresholdMs={}", remainingMs, thresholdMs);
+            log.debug("[Auth-JWT] Token refresh needed: remainingMs={}, thresholdMs={}", remainingMs, thresholdMs);
         }
         return needsRefresh;
     }

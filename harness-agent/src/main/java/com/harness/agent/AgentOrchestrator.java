@@ -18,6 +18,7 @@ import com.harness.preprocess.memory.*;
 import com.harness.tool.ToolExecutor;
 import com.harness.tool.ToolRegistry;
 import com.harness.tool.builtin.FfmpegTool;
+import com.harness.tool.builtin.SavePreferenceTool;
 import com.harness.tool.builtin.WebSearchTool;
 import com.harness.tool.mcp.McpServerConfig;
 import com.harness.tool.mcp.McpToolDiscovery;
@@ -153,6 +154,9 @@ public class AgentOrchestrator {
             messageWriteWorker.start();
             cleanupScheduler = new SessionCleanupScheduler(sessionStore, sessionLifecycle, refinementWorker, messageCache, skillRegistry);
             cleanupScheduler.start();
+            // Register preference save tool when memory is enabled
+            toolRegistry.register(new SavePreferenceTool(
+                    (userId, category, content, sessionId) -> preferenceStore.upsert(userId, category, content, sessionId)));
         } else {
             this.sessionStore = null;
             this.messageStore = null;
@@ -207,7 +211,7 @@ public class AgentOrchestrator {
                            Boolean enableThinking) {
         long runStart = System.currentTimeMillis();
         int attachCount = attachments != null ? attachments.size() : 0;
-        log.info("[Orchestrator] Run start: textLen={}, sessionId={}, attachments={}",
+        log.debug("[Orchestrator] Run start: textLen={}, sessionId={}, attachments={}",
                 text != null ? text.length() : 0, requestedSessionId, attachCount);
 
         TraceCollector trace = new TraceCollector(traceStore);
@@ -263,7 +267,7 @@ public class AgentOrchestrator {
                 sessionId = lifecycle.session().id();
                 activeSessionId = sessionId;
                 final String sid = sessionId;
-                log.info("[Memory] Session resolved: id={}, isNew={}, timedOut={}",
+                log.debug("[Memory] Session resolved: id={}, isNew={}, timedOut={}",
                         sessionId, lifecycle.isNewSession(), lifecycle.timedOutSessionIds().size());
                 trace.builder().sessionId(sessionId);
                 Map<String, String> meta = new HashMap<>(trace.builder().build().metadata());
@@ -324,25 +328,32 @@ public class AgentOrchestrator {
             // Set ThreadLocal for skill tools session-scoped lookup
             final String finalSessionId = sessionId;
             LoadSkillTool.setCurrentSession(finalSessionId);
+            SavePreferenceTool.setCurrentUserId(userId);
+            SavePreferenceTool.setCurrentSessionId(finalSessionId);
 
             // ===== Layer 2: Preprocess =====
             ContextBuilder.ContextResult ctx = ragFuture.join();
             trace.recordPreprocess(null, ctx.ragHitIds(), null);
-            String systemPrompt = buildSystemPrompt(ctx, longtermPrefs, systemPromptOverride, sessionId);
-            log.debug("[Orchestrator] System prompt: {} chars, rag={}, longterm={}",
-                    systemPrompt.length(), ctx.hasContext(), !longtermPrefs.isEmpty());
+            String systemPrompt = buildSystemPrompt(longtermPrefs, systemPromptOverride, sessionId);
+            log.debug("[Orchestrator] System prompt: {} chars, longterm={}",
+                    systemPrompt.length(), !longtermPrefs.isEmpty());
+
+            // Inject RAG context into user message (not system prompt) to preserve prompt cache
+            String finalUserMessage = enhancedText;
+            if (ctx.hasContext()) {
+                finalUserMessage = enhancedText + "\n\n" + ctx.contextBlock();
+            }
             trace.recordLlmMeta(chatModelProvider.modelName(), "v1");
 
             // 大压缩检查（旧消息 + 估算新用户消息 + RAG + system + 长期记忆）
             int totalBudget = chatModelProvider.chatModel() != null ? chatModelProvider.contextWindow() : 8000;
             if (sessionId != null && userId != null) {
                 int shorttermTokens = estimateTokens(shorttermMessages);
-                int ragTokens = ctx.contextBlock() != null ? estimateTokens(ctx.contextBlock()) : 0;
-                int inputTokens = estimateTokens(enhancedText);
+                int inputTokens = estimateTokens(finalUserMessage);  // includes RAG context
                 int systemTokens = estimateTokens(systemPrompt);
-                int totalUsed = shorttermTokens + ragTokens + inputTokens + systemTokens;
-                log.debug("[Orchestrator] Token estimate: shortterm={}, rag={}, input={}, system={}, total={}/{}",
-                        shorttermTokens, ragTokens, inputTokens, systemTokens, totalUsed, totalBudget);
+                int totalUsed = shorttermTokens + inputTokens + systemTokens;
+                log.debug("[Orchestrator] Token estimate: shortterm={}, input={}, system={}, total={}/{}",
+                        shorttermTokens, inputTokens, systemTokens, totalUsed, totalBudget);
                 var compressResult = memoryCompressor.compressIfNeeded(
                         sessionId, shorttermMessages, shorttermTokens, totalUsed, totalBudget);
                 if (compressResult.type() != MemoryCompressor.CompressionResult.CompressionType.NONE) {
@@ -360,7 +371,7 @@ public class AgentOrchestrator {
                     // 大压缩后重新注入已加载的skill内容（skill内容不在DB中，需要重新加载）
                     List<com.harness.core.model.Skill> loadedSkills = skillRegistry.getLoadedSkills(sessionId);
                     if (!loadedSkills.isEmpty()) {
-                        log.info("[Memory] Re-injecting {} loaded skills after major compression", loadedSkills.size());
+                        log.debug("[Memory] Re-injecting {} loaded skills after major compression", loadedSkills.size());
                         List<MemoryMessage> skillMessages = new ArrayList<>(shorttermMessages);
                         for (com.harness.core.model.Skill skill : loadedSkills) {
                             String skillContent = buildSkillContentForReinjection(skill);
@@ -381,7 +392,7 @@ public class AgentOrchestrator {
             // Set parent cancellation token for sub-agents
             subAgentOrchestrator.setParentToken(cancellationToken);
             List<ChatMessage> historyChatMessages = convertToChatMessages(shorttermMessages);
-            ReActEngine.ReActResult result = reactEngine.execute(systemPrompt, enhancedText, historyChatMessages, trace.builder(), null, cancellationToken, enableThinking);
+            ReActEngine.ReActResult result = reactEngine.execute(systemPrompt, finalUserMessage, historyChatMessages, trace.builder(), null, cancellationToken, enableThinking);
             result.steps().forEach(trace::addStep);
 
             RiskLevel risk = determineRisk(result);
@@ -449,7 +460,7 @@ public class AgentOrchestrator {
                           StreamCallback callback, Boolean enableThinking) {
         long runStart = System.currentTimeMillis();
         int attachCount = attachments != null ? attachments.size() : 0;
-        log.info("[Orchestrator] Stream run start: textLen={}, sessionId={}, attachments={}",
+        log.debug("[Orchestrator] Stream run start: textLen={}, sessionId={}, attachments={}",
                 text != null ? text.length() : 0, requestedSessionId, attachCount);
 
         TraceCollector trace = new TraceCollector(traceStore);
@@ -505,7 +516,7 @@ public class AgentOrchestrator {
                 sessionId = lifecycle.session().id();
                 activeSessionId = sessionId;
                 final String sid = sessionId;
-                log.info("[Memory] Session resolved: id={}, isNew={}, timedOut={}",
+                log.debug("[Memory] Session resolved: id={}, isNew={}, timedOut={}",
                         sessionId, lifecycle.isNewSession(), lifecycle.timedOutSessionIds().size());
                 trace.builder().sessionId(sessionId);
                 Map<String, String> meta = new HashMap<>(trace.builder().build().metadata());
@@ -557,21 +568,28 @@ public class AgentOrchestrator {
             }
             final String finalSessionId = sessionId;
             LoadSkillTool.setCurrentSession(finalSessionId);
+            SavePreferenceTool.setCurrentUserId(userId);
+            SavePreferenceTool.setCurrentSessionId(finalSessionId);
 
             // Layer 2: Preprocess
             ContextBuilder.ContextResult ctx = ragFuture.join();
             trace.recordPreprocess(null, ctx.ragHitIds(), null);
-            String systemPrompt = buildSystemPrompt(ctx, longtermPrefs, systemPromptOverride, sessionId);
+            String systemPrompt = buildSystemPrompt(longtermPrefs, systemPromptOverride, sessionId);
             trace.recordLlmMeta(chatModelProvider.modelName(), "v1");
+
+            // Inject RAG context into user message (not system prompt) to preserve prompt cache
+            String finalUserMessage = enhancedText;
+            if (ctx.hasContext()) {
+                finalUserMessage = enhancedText + "\n\n" + ctx.contextBlock();
+            }
 
             // Compression check
             int totalBudget = chatModelProvider.chatModel() != null ? chatModelProvider.contextWindow() : 8000;
             if (sessionId != null && userId != null) {
                 int shorttermTokens = estimateTokens(shorttermMessages);
-                int ragTokens = ctx.contextBlock() != null ? estimateTokens(ctx.contextBlock()) : 0;
-                int inputTokens = estimateTokens(enhancedText);
+                int inputTokens = estimateTokens(finalUserMessage);  // includes RAG context
                 int systemTokens = estimateTokens(systemPrompt);
-                int totalUsed = shorttermTokens + ragTokens + inputTokens + systemTokens;
+                int totalUsed = shorttermTokens + inputTokens + systemTokens;
                 var compressResult = memoryCompressor.compressIfNeeded(
                         sessionId, shorttermMessages, shorttermTokens, totalUsed, totalBudget);
                 if (compressResult.type() != MemoryCompressor.CompressionResult.CompressionType.NONE) {
@@ -583,7 +601,7 @@ public class AgentOrchestrator {
                     // 大压缩后重新注入已加载的skill内容（skill内容不在DB中，需要重新加载）
                     List<com.harness.core.model.Skill> loadedSkills = skillRegistry.getLoadedSkills(sessionId);
                     if (!loadedSkills.isEmpty()) {
-                        log.info("[Memory] Re-injecting {} loaded skills after major compression", loadedSkills.size());
+                        log.debug("[Memory] Re-injecting {} loaded skills after major compression", loadedSkills.size());
                         List<MemoryMessage> skillMessages = new ArrayList<>(shorttermMessages);
                         for (com.harness.core.model.Skill skill : loadedSkills) {
                             String skillContent = buildSkillContentForReinjection(skill);
@@ -618,7 +636,7 @@ public class AgentOrchestrator {
             };
 
             ReActEngine.ReActResult result = reactEngine.streamExecute(
-                    systemPrompt, enhancedText, historyChatMessages, trace.builder(), listener, cancellationToken, enableThinking);
+                    systemPrompt, finalUserMessage, historyChatMessages, trace.builder(), listener, cancellationToken, enableThinking);
             result.steps().forEach(trace::addStep);
 
             RiskLevel risk = determineRisk(result);
@@ -684,7 +702,7 @@ public class AgentOrchestrator {
         }
     }
 
-    private String buildSystemPrompt(ContextBuilder.ContextResult ctx, List<Preference> longtermPrefs, String systemPromptOverride, String sessionId) {
+    private String buildSystemPrompt(List<Preference> longtermPrefs, String systemPromptOverride, String sessionId) {
         StringBuilder sb = new StringBuilder();
         String basePrompt = (systemPromptOverride != null && !systemPromptOverride.isBlank())
                 ? systemPromptOverride
@@ -718,10 +736,6 @@ public class AgentOrchestrator {
             sb.append(prefBlock).append("\n");
         }
 
-        // Inject RAG context
-        if (ctx.hasContext()) {
-            sb.append(ctx.contextBlock());
-        }
         return sb.toString();
     }
 
@@ -773,7 +787,6 @@ public class AgentOrchestrator {
         List<McpServerConfig> servers = McpServerConfig.loadAll();
         if (servers.isEmpty()) return;
 
-        log.info("Discovering tools from {} MCP server(s) (async)...", servers.size());
         CompletableFuture.runAsync(() -> {
             McpToolDiscovery discovery = new McpToolDiscovery();
             discovery.discoverAndRegister(servers, toolRegistry);

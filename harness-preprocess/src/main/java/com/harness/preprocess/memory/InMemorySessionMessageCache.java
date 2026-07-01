@@ -272,7 +272,7 @@ public class InMemorySessionMessageCache implements SessionMessageCache {
             evictSessionInternal(oldest, true);
         }
 
-        log.info("[Cache] After global eviction: sessions={}, globalMB={}",
+        log.debug("[Cache] After global eviction: sessions={}, globalMB={}",
                 cache.size(), globalEstimatedBytes / (1024 * 1024));
     }
 

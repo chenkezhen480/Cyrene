@@ -46,12 +46,12 @@ public class ContextBuilder {
      * @return context result with RAG hits and formatted context string
      */
     public ContextResult build(String userText) {
-        log.info("[L2-RAG] Building context for text ({} chars)", userText != null ? userText.length() : 0);
+        log.debug("[L2-RAG] Building context for text ({} chars)", userText != null ? userText.length() : 0);
 
         // Step 0: Query rewriting
         List<String> queries = queryRewriter.rewrite(userText);
         if (queries.size() > 1) {
-            log.info("[L2-RAG] Query rewrite [{}]: {} queries", queryRewriter.strategyName(), queries.size());
+            log.debug("[L2-RAG] Query rewrite [{}]: {} queries", queryRewriter.strategyName(), queries.size());
         }
 
         // Step 1: RAG retrieval (support multi-query)
@@ -70,7 +70,7 @@ public class ContextBuilder {
                     .sorted(Comparator.comparingDouble(RagRetriever.RagDocument::score).reversed())
                     .toList();
         }
-        log.info("[L2-RAG] Retrieved {} docs", ragDocs.size());
+        log.debug("[L2-RAG] Retrieved {} docs", ragDocs.size());
 
         // Step 2: Semantic enhancement (lookback for truncated chunks)
         int totalLookback = 0;
@@ -91,12 +91,12 @@ public class ContextBuilder {
         long rerankStart = System.currentTimeMillis();
         List<RagRetriever.RagDocument> reranked = reranker.rerank(userText, ragDocs);
         long rerankMs = System.currentTimeMillis() - rerankStart;
-        log.info("[L2-RAG] Reranked {} → {} docs in {}ms", ragDocs.size(), reranked.size(), rerankMs);
+        log.debug("[L2-RAG] Reranked {} → {} docs in {}ms", ragDocs.size(), reranked.size(), rerankMs);
 
         // Step 4: Format context string for injection into prompt
         String contextBlock = formatContext(reranked);
         if (contextBlock.isEmpty()) {
-            log.info("[L2-RAG] No RAG results, skipping context injection");
+            log.debug("[L2-RAG] No RAG results, skipping context injection");
         } else {
             log.debug("[L2-RAG] Context block: {} chars", contextBlock.length());
         }

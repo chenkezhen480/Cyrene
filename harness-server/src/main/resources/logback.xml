@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+
+    <!-- Console appender with color-coded output -->
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{HH:mm:ss.SSS} %highlight(%-5level) %cyan(%logger{20}) - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <!-- ==================== Root ==================== -->
+    <root level="DEBUG">
+        <appender-ref ref="CONSOLE"/>
+    </root>
+
+    <!-- ==================== Cyrene Agent ==================== -->
+    <logger name="com.harness.agent" level="DEBUG"/>
+    <logger name="com.harness.server" level="DEBUG"/>
+    <logger name="com.harness.ai" level="DEBUG"/>
+    <logger name="com.harness.preprocess" level="DEBUG"/>
+    <logger name="com.harness.input" level="DEBUG"/>
+    <logger name="com.harness.tool" level="DEBUG"/>
+    <logger name="com.harness.audit" level="DEBUG"/>
+    <logger name="com.harness.env" level="DEBUG"/>
+
+    <!-- ==================== Third-party ==================== -->
+    <logger name="com.zaxxer.hikari" level="DEBUG"/>
+    <logger name="io.javalin" level="DEBUG"/>
+    <logger name="org.eclipse.jetty" level="DEBUG"/>
+    <logger name="okhttp3" level="DEBUG"/>
+    <logger name="dev.langchain4j" level="DEBUG"/>
+    <logger name="io.milvus" level="DEBUG"/>
+    <logger name="com.fasterxml.jackson" level="DEBUG"/>
+
+</configuration>

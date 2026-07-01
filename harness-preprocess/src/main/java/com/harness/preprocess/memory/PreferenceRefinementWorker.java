@@ -96,7 +96,7 @@ public class PreferenceRefinementWorker {
     }
 
     private void processTask(RefinementTask task) {
-        log.info("Processing refinement for session {}, user {}", task.sessionId(), task.userId());
+        log.debug("Processing refinement for session {}, user {}", task.sessionId(), task.userId());
 
         // Load session messages
         List<MemoryMessage> messages = messageStore.loadForContext(task.sessionId());

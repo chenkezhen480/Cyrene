@@ -47,7 +47,7 @@ public class ChatHandler {
             ChatRequest req = ctx.bodyAsClass(ChatRequest.class);
             int attachCount = req.attachments() != null ? req.attachments().size() : 0;
             String sessionId = ctx.header("X-Session-Id");
-            log.info("[Server] POST /api/chat: textLen={}, sessionId={}, attachments={}",
+            log.debug("[Server] POST /api/chat: textLen={}, sessionId={}, attachments={}",
                     req.text() != null ? req.text().length() : 0, sessionId, attachCount);
 
             // Auth gate: skip if mode=none, validate JWT if mode=jwt
@@ -63,7 +63,7 @@ public class ChatHandler {
                 try {
                     Claims claims = jwtUtil.verifyTokenClaims(rawToken);
                     String userId = claims.getSubject();
-                    log.info("[Server] JWT verified: userId={}", userId);
+                    log.debug("[Server] JWT verified: userId={}", userId);
 
                     // Sliding window refresh: if remaining lifetime < threshold, issue new token
                     if (jwtUtil.shouldRefresh(claims, refreshThresholdMinutes)) {
@@ -139,8 +139,6 @@ public class ChatHandler {
                                     log.debug("[Server] Failed to write SSE event: {}", e.getMessage());
                                 }
                             }, enableThinking);
-                    long duration = System.currentTimeMillis() - start;
-                    log.info("[Server] Streaming chat completed: duration={}ms", duration);
                 } else {
                     // Blocking mode: run agent
                     AgentResult result = agent.run(finalRawToken, req.text(),

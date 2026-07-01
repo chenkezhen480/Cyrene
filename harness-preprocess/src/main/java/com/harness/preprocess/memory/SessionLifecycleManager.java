@@ -88,7 +88,7 @@ public class SessionLifecycleManager {
             if (isTimedOut(s)) {
                 sessionStore.close(s.id(), Session.SessionStatus.timeout);
                 timedOutIds.add(s.id());
-                log.info("Closed timed-out session {} for user {} (lastActive={})", s.id(), userId, s.lastActive());
+                log.debug("Closed timed-out session {} for user {} (lastActive={})", s.id(), userId, s.lastActive());
 
                 // Mark as pending if worthy, so the cleanup scheduler can claim it
                 if (isWorthyOfRefinement(s.id())) {

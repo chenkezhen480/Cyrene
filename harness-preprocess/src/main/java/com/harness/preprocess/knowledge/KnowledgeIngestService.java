@@ -51,20 +51,18 @@ public class KnowledgeIngestService {
             throw new IllegalArgumentException("File size " + sizeMb + "MB exceeds limit " + maxFileSizeMb + "MB");
         }
 
-        log.info("Starting ingest: file={}, size={}KB, mimeType={}, collection={}", fileName, fileData.length / 1024, mimeType, coll);
+        log.debug("Starting ingest: file={}, size={}KB, mimeType={}, collection={}", fileName, fileData.length / 1024, mimeType, coll);
 
         // Step 1: Extract text from file
         String rawText = TextExtractorRegistry.extract(fileData, fileName, mimeType);
         if (rawText == null || rawText.isBlank()) {
             throw new IllegalArgumentException("No text content extracted from file: " + fileName);
         }
-        log.info("Extracted {} chars of text", rawText.length());
 
         // Step 2: Split into chunks, then merge small ones
         int chunkSize = EnvConfig.get().getInt(EnvKey.KNOWLEDGE_CHUNK_SIZE, 1024);
         List<String> rawChunks = TextChunker.split(rawText, chunkSize);
         List<String> chunks = TextChunker.mergeSmallChunks(rawChunks, chunkSize);
-        log.info("Split into {} raw chunks, merged into {} chunks (chunkSize={})", rawChunks.size(), chunks.size(), chunkSize);
 
         // Step 3: Generate embeddings (batched to avoid API body size limits)
         List<TextSegment> segments = chunks.stream()
@@ -75,15 +73,13 @@ public class KnowledgeIngestService {
         for (int i = 0; i < segments.size(); i += batchSize) {
             int end = Math.min(i + batchSize, segments.size());
             List<TextSegment> batch = segments.subList(i, end);
-            log.info("Embedding batch {}/{}: chunks {}-{}", (i / batchSize) + 1,
-                    (segments.size() + batchSize - 1) / batchSize, i, end - 1);
+
             embeddings.addAll(embeddingProvider.embedAll(batch));
         }
         if (embeddings.size() != chunks.size()) {
             throw new IllegalStateException("Embedding count mismatch: expected " + chunks.size()
                     + " but got " + embeddings.size());
         }
-        log.info("Generated {} embeddings (dim={})", embeddings.size(), embeddingProvider.dimension());
 
         // Step 4: Store original file to disk
         String storedPath = fileStorage.store(fileData, fileName, coll);

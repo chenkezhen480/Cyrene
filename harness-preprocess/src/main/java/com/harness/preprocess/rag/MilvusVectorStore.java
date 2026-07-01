@@ -166,7 +166,7 @@ public class MilvusVectorStore implements VectorStore {
                         Map.of("chunk_index", entity.get("chunk_index") != null
                                 ? entity.get("chunk_index").toString() : "")));
             }
-            log.info("[Milvus] Listed {} documents in collection '{}'", docs.size(), collection);
+            log.debug("[Milvus] Listed {} documents in collection '{}'", docs.size(), collection);
             return docs;
         } catch (Exception e) {
             log.error("[Milvus] Failed to list collection '{}': {}", collection, e.getMessage(), e);
@@ -340,7 +340,7 @@ public class MilvusVectorStore implements VectorStore {
                     score != null ? score : 0.0,
                     null));
         }
-        log.info("[Milvus] Search returned {} documents", docs.size());
+        log.debug("[Milvus] Search returned {} documents", docs.size());
         return docs;
     }
 

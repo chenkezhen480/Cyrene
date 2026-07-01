@@ -85,7 +85,7 @@ public class TraceCollector {
 
         try {
             store.save(trace);
-            log.info("Trace saved: id={}, steps={}, duration={}ms",
+            log.debug("Trace saved: id={}, steps={}, duration={}ms",
                     trace.traceId(), trace.steps().size(), trace.totalDurationMs());
         } catch (Exception e) {
             log.error("Failed to save trace: {}", e.getMessage(), e);

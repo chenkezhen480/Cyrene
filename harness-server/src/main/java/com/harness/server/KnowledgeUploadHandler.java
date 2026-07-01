@@ -46,7 +46,7 @@ public class KnowledgeUploadHandler {
                 fileName = ctx.formParam("file") != null ? ctx.formParam("file") : "uploaded_file_" + System.currentTimeMillis();
             }
             String mimeType = uploadedFile.contentType();
-            log.info("[Server] POST /api/knowledge/upload: file={}, size={}KB, mimeType={}, collection={}",
+            log.debug("[Server] POST /api/knowledge/upload: file={}, size={}KB, mimeType={}, collection={}",
                     fileName, fileData.length / 1024, mimeType, collection);
 
             IngestResult result = ingestService.ingest(fileData, fileName, mimeType, collection);
@@ -72,7 +72,6 @@ public class KnowledgeUploadHandler {
                         .metadata(meta)
                         .build();
                 traceStore.save(trace);
-                log.info("[Server] Knowledge trace saved: traceId={}", trace.traceId());
             } catch (Exception e) {
                 log.warn("[Server] Failed to save knowledge trace: {}", e.getMessage());
             }

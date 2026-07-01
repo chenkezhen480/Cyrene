@@ -25,21 +25,21 @@ public class TextExtractorRegistry {
         if (mimeType == null || mimeType.equals("application/octet-stream")) {
             effectiveMime = guessMimeType(fileName);
             if (effectiveMime != null) {
-                log.info("Guessed mimeType={} from fileName={}", effectiveMime, fileName);
+                log.debug("Guessed mimeType={} from fileName={}", effectiveMime, fileName);
             }
         }
 
         for (TextExtractor extractor : EXTRACTORS) {
             if (extractor.supports(effectiveMime)) {
                 try {
-                    log.info("Extracting text using {} (mimeType={}, file={})", extractor.getClass().getSimpleName(), effectiveMime, fileName);
+                    log.debug("Extracting text using {} (mimeType={}, file={})", extractor.getClass().getSimpleName(), effectiveMime, fileName);
                     return extractor.extract(data, effectiveMime);
                 } catch (Exception e) {
                     log.warn("Extraction failed with {}: {}", extractor.getClass().getSimpleName(), e.getMessage());
                 }
             }
         }
-        log.info("No extractor matched for mimeType={}, falling back to UTF-8", effectiveMime);
+        log.debug("No extractor matched for mimeType={}, falling back to UTF-8", effectiveMime);
         return new String(data, StandardCharsets.UTF_8);
     }
 

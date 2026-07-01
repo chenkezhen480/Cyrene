@@ -61,7 +61,7 @@ public class McpToolDiscovery {
 
         for (McpToolAdapter adapter : adapters) {
             registry.register(adapter);
-            log.info("Registered MCP tool: {} (from {})", adapter.spec().name(), server.name());
+            log.debug("Registered MCP tool: {} (from {})", adapter.spec().name(), server.name());
         }
         log.info("MCP server '{}': discovered and registered {} tools", server.name(), adapters.size());
     }

@@ -60,7 +60,7 @@ public class Authenticator {
         }
         try {
             String userId = jwtUtil.verifyToken(token);
-            log.info("[L1-Auth] JWT auth succeeded: userId={}", userId);
+            log.debug("[L1-Auth] JWT auth succeeded: userId={}", userId);
             return userId;
         } catch (Exception e) {
             log.warn("[L1-Auth] JWT auth failed: {}", e.getMessage());

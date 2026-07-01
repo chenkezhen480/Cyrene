@@ -42,7 +42,7 @@ public class FileStorageService {
 
         try {
             Files.write(filePath, data);
-            log.info("Stored file: {} ({}KB)", filePath, data.length / 1024);
+            log.debug("Stored file: {} ({}KB)", filePath, data.length / 1024);
             return filePath.toString();
         } catch (IOException e) {
             throw new RuntimeException("Failed to store file: " + filePath, e);

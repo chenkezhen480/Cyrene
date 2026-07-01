@@ -62,7 +62,7 @@ public class SubAgentOrchestrator {
                         t.setDaemon(true);
                         return t;
                     });
-                    log.info("[SubAgent] Thread pool created: maxConcurrent={}", maxConcurrent);
+                    log.debug("[SubAgent] Thread pool created: maxConcurrent={}", maxConcurrent);
                 }
             }
         }
@@ -80,7 +80,7 @@ public class SubAgentOrchestrator {
      * Submit a single sub-agent task. Returns a future that completes when the task finishes.
      */
     public CompletableFuture<SubAgentResult> submitTask(SubAgentTask task) {
-        log.info("[SubAgent] Submitting task: id={}, deps={}", task.taskId(), task.dependencies());
+        log.debug("[SubAgent] Submitting task: id={}, deps={}", task.taskId(), task.dependencies());
 
         // Check parent cancellation before submitting
         if (parentToken != null && parentToken.isCancelled()) {
@@ -125,7 +125,7 @@ public class SubAgentOrchestrator {
      * Returns a map of taskId -> future result.
      */
     public Map<String, CompletableFuture<SubAgentResult>> submitTasks(List<SubAgentTask> tasks) {
-        log.info("[SubAgent] Submitting {} tasks", tasks.size());
+        log.debug("[SubAgent] Submitting {} tasks", tasks.size());
         for (SubAgentTask task : tasks) {
             CompletableFuture<SubAgentResult> future = submitTask(task);
             submittedTasks.put(task.taskId(), future);
@@ -162,7 +162,7 @@ public class SubAgentOrchestrator {
                 parentToken.trackThread(currentThread);
             }
             long start = System.currentTimeMillis();
-            log.info("[SubAgent] Executing task: id={}", task.taskId());
+            log.debug("[SubAgent] Executing task: id={}", task.taskId());
             try {
                 // Each sub-agent gets its own ReActEngine with shared tools
                 ReActEngine engine = new ReActEngine(chatModelProvider, toolRegistry, toolExecutor,

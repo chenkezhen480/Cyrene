@@ -71,7 +71,7 @@ public class UrlDownloader {
     public DownloadResult download(String url, String hintName, String hintMimeType) {
         validateUrl(url);
 
-        log.info("[UrlDownloader] Downloading: {}", url);
+        log.debug("[UrlDownloader] Downloading: {}", url);
         Request request = new Request.Builder()
                 .url(url)
                 .header("User-Agent", "HarnessAgent/1.0")
@@ -97,7 +97,7 @@ public class UrlDownloader {
             Path savedPath = downloadDir.resolve(diskName);
             Files.write(savedPath, data);
 
-            log.info("[UrlDownloader] Downloaded {} ({}KB), saved to {}", name, data.length / 1024, savedPath);
+            log.debug("[UrlDownloader] Downloaded {} ({}KB), saved to {}", name, data.length / 1024, savedPath);
             return new DownloadResult(name, data, mimeType, savedPath);
 
         } catch (AgentException e) {

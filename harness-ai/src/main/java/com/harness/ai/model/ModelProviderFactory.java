@@ -51,7 +51,6 @@ public final class ModelProviderFactory {
     public static VisionModelProvider createVision() {
         String provider = EnvConfig.get().getString(EnvKey.MODEL_VISION_PROVIDER, "");
         if (provider.isBlank()) {
-            log.info("No separate vision model configured, vision will use chat model");
             return new NoOpVisionModelProvider();
         }
         log.info("Creating vision model provider: {}", provider);
@@ -68,7 +67,6 @@ public final class ModelProviderFactory {
     public static VoiceModelProvider createVoice() {
         String provider = EnvConfig.get().getString(EnvKey.MODEL_VOICE_PROVIDER, "");
         if (provider.isBlank()) {
-            log.info("No voice model configured");
             return new NoOpVoiceModelProvider();
         }
         log.info("Creating voice model provider: {}", provider);
@@ -84,7 +82,6 @@ public final class ModelProviderFactory {
     public static EmbeddingModelProvider createEmbedding() {
         String provider = EnvConfig.get().getString(EnvKey.MODEL_EMBEDDING_PROVIDER, "");
         if (provider.isBlank()) {
-            log.info("No embedding model configured");
             return new NoOpEmbeddingModelProvider();
         }
         log.info("Creating embedding model provider: {}", provider);
@@ -101,7 +98,6 @@ public final class ModelProviderFactory {
     public static RerankModelProvider createRerank() {
         String provider = EnvConfig.get().getString(EnvKey.MODEL_RERANK_PROVIDER, "");
         if (provider.isBlank()) {
-            log.info("No rerank model configured");
             return new NoOpRerankModelProvider();
         }
         log.info("Creating rerank model provider: {}", provider);

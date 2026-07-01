@@ -94,7 +94,7 @@ public class McpToolAdapter implements Tool {
      * Reconnect by creating a fresh OkHttpClient, discarding any stale pooled connections.
      */
     private void reconnect() {
-        log.info("MCP reconnecting to server '{}' (new HTTP client)", serverConfig.name());
+        log.debug("MCP reconnecting to server '{}' (new HTTP client)", serverConfig.name());
         this.http = buildHttpClient();
     }
 

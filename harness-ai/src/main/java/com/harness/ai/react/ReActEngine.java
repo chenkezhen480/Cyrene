@@ -100,7 +100,7 @@ public class ReActEngine {
                                com.harness.core.model.CancellationToken cancellationToken,
                                Boolean enableThinking) {
         long loopStart = System.currentTimeMillis();
-        log.info("[L3-ReAct] Starting ReAct loop: maxIterations={}, historyMessages={}, tools={}, thinking={}",
+        log.debug("[L3-ReAct] Starting ReAct loop: maxIterations={}, historyMessages={}, tools={}, thinking={}",
                 maxIterations, historyMessages.size(), toolRegistry.size(), enableThinking);
 
         List<ChatMessage> messages = new ArrayList<>();
@@ -115,7 +115,7 @@ public class ReActEngine {
         ChatRequestParameters thinkingParams = buildThinkingParams(enableThinking);
 
         for (int i = 1; i <= maxIterations; i++) {
-            log.info("[L3-ReAct] Iteration {}/{}", i, maxIterations);
+            log.debug("[L3-ReAct] Iteration {}/{}", i, maxIterations);
 
             // Check for cancellation between iterations
             if (cancellationToken != null && cancellationToken.isCancelled()) {
@@ -164,7 +164,7 @@ public class ReActEngine {
 
             if (response.metadata() != null && response.metadata().tokenUsage() != null) {
                 var usage = response.metadata().tokenUsage();
-                log.info("[L3-ReAct] LLM call in {}ms, tokens: in={}, out={}",
+                log.debug("[L3-ReAct] LLM call in {}ms, tokens: in={}, out={}",
                         llmMs, usage.inputTokenCount(), usage.outputTokenCount());
                 traceBuilder.totalTokens(
                         (traceBuilder.build().totalTokens())
@@ -178,7 +178,6 @@ public class ReActEngine {
             if (aiMessage.toolExecutionRequests() == null || aiMessage.toolExecutionRequests().isEmpty()) {
                 String answer = aiMessage.text();
                 long totalMs = System.currentTimeMillis() - loopStart;
-                log.info("[L3-ReAct] Complete at iteration {}, answer: {}", i, truncate(answer));
                 log.info("[L3-ReAct] Finished in {}ms, steps={}, outputLen={}", totalMs, allSteps.size(), answer != null ? answer.length() : 0);
                 ReActStep finalStep = new ReActStep(i, answer, "final_answer",
                         List.of(), List.of(), answer,
@@ -194,7 +193,7 @@ public class ReActEngine {
 
             messages.add(aiMessage);
             List<ToolExecutionRequest> toolReqs = aiMessage.toolExecutionRequests();
-            log.info("[L3-ReAct] LLM requested {} tool calls", toolReqs.size());
+            log.debug("[L3-ReAct] LLM requested {} tool calls", toolReqs.size());
             if (aiMessage.text() != null && !aiMessage.text().isBlank()) {
                 log.debug("[L3-ReAct] LLM reasoning: {}", truncate(aiMessage.text()));
             }
@@ -215,7 +214,7 @@ public class ReActEngine {
                 ToolCall tc = ToolCall.of(toolReq.name(), argsNode);
                 toolCalls.add(tc);
 
-                log.info("[L3-ReAct] Executing tool: {}", tc.toolName());
+                log.debug("[L3-ReAct] Executing tool: {}", tc.toolName());
                 log.debug("[L3-ReAct] Tool args: {}", truncate(tc.arguments().toString()));
                 ToolResult result = executeWithRetry(tc, listener, cancellationToken);
                 log.debug("[L3-ReAct] Tool [{}] result: success={}, output={}",
@@ -250,7 +249,7 @@ public class ReActEngine {
             }
 
             if (inspection.status() != ReActStep.InspectionResult.InspectionStatus.PASS) {
-                log.info("[L3-ReAct] Inspection result: status={}, reason={}", inspection.status(), inspection.reason());
+                log.debug("[L3-ReAct] Inspection result: status={}, reason={}", inspection.status(), inspection.reason());
                 String hint = Inspector.buildInspectionHint(inspection);
                 if (hint != null) {
                     messages.add(UserMessage.from(hint));
@@ -305,7 +304,7 @@ public class ReActEngine {
         }
 
         long loopStart = System.currentTimeMillis();
-        log.info("[L3-ReAct] Starting STREAMING ReAct loop: maxIterations={}, tools={}",
+        log.debug("[L3-ReAct] Starting STREAMING ReAct loop: maxIterations={}, tools={}",
                 maxIterations, toolRegistry.size());
 
         List<ChatMessage> messages = new ArrayList<>();
@@ -320,7 +319,7 @@ public class ReActEngine {
         ChatRequestParameters thinkingParams = buildThinkingParams(enableThinking);
 
         for (int i = 1; i <= maxIterations; i++) {
-            log.info("[L3-ReAct] Streaming iteration {}/{}", i, maxIterations);
+            log.debug("[L3-ReAct] Streaming iteration {}/{}", i, maxIterations);
 
             if (cancellationToken != null && cancellationToken.isCancelled()) {
                 log.info("[L3-ReAct] Cancellation detected at iteration {}", i);
@@ -391,7 +390,7 @@ public class ReActEngine {
 
             if (response.metadata() != null && response.metadata().tokenUsage() != null) {
                 var usage = response.metadata().tokenUsage();
-                log.info("[L3-ReAct] Streaming LLM call in {}ms, tokens: in={}, out={}",
+                log.debug("[L3-ReAct] Streaming LLM call in {}ms, tokens: in={}, out={}",
                         llmMs, usage.inputTokenCount(), usage.outputTokenCount());
                 traceBuilder.totalTokens(
                         (traceBuilder.build().totalTokens())
@@ -403,7 +402,6 @@ public class ReActEngine {
             if (aiMessage.toolExecutionRequests() == null || aiMessage.toolExecutionRequests().isEmpty()) {
                 String answer = aiMessage.text();
                 long totalMs = System.currentTimeMillis() - loopStart;
-                log.info("[L3-ReAct] Streaming complete at iteration {}, answer: {}", i, truncate(answer));
                 log.info("[L3-ReAct] Finished in {}ms, steps={}", totalMs, allSteps.size());
                 ReActStep finalStep = new ReActStep(i, answer, "final_answer",
                         List.of(), List.of(), answer,
@@ -420,7 +418,7 @@ public class ReActEngine {
             // Tool execution round
             messages.add(aiMessage);
             List<ToolExecutionRequest> toolReqs = aiMessage.toolExecutionRequests();
-            log.info("[L3-ReAct] Streaming: LLM requested {} tool calls", toolReqs.size());
+            log.debug("[L3-ReAct] Streaming: LLM requested {} tool calls", toolReqs.size());
 
             List<ToolCall> toolCalls = new ArrayList<>();
             List<ToolResult> toolResults = new ArrayList<>();
@@ -442,7 +440,7 @@ public class ReActEngine {
                 ToolCall tc = ToolCall.of(toolReq.name(), argsNode);
                 toolCalls.add(tc);
 
-                log.info("[L3-ReAct] Executing tool: {}", tc.toolName());
+                log.debug("[L3-ReAct] Executing tool: {}", tc.toolName());
                 ToolResult result = executeWithRetry(tc, listener, cancellationToken);
                 toolResults.add(result);
 
@@ -473,7 +471,7 @@ public class ReActEngine {
             }
 
             if (inspection.status() != ReActStep.InspectionResult.InspectionStatus.PASS) {
-                log.info("[L3-ReAct] Inspection: status={}, reason={}", inspection.status(), inspection.reason());
+                log.debug("[L3-ReAct] Inspection: status={}, reason={}", inspection.status(), inspection.reason());
                 String hint = Inspector.buildInspectionHint(inspection);
                 if (hint != null) {
                     messages.add(UserMessage.from(hint));
@@ -545,7 +543,7 @@ public class ReActEngine {
             }
             result = toolExecutor.execute(toolCall);
             if (result.success()) {
-                log.info("[L3-ReAct] Tool [{}] succeeded on retry {}", toolCall.toolName(), attempt);
+                log.debug("[L3-ReAct] Tool [{}] succeeded on retry {}", toolCall.toolName(), attempt);
                 return result;
             }
         }
@@ -573,7 +571,7 @@ public class ReActEngine {
         });
         int removed = before - messages.size();
         if (removed > 0) {
-            log.info("Stripped {} tool messages from context ({} → {})", removed, before, messages.size());
+            log.debug("Stripped {} tool messages from context ({} → {})", removed, before, messages.size());
         }
     }
 
@@ -597,7 +595,7 @@ public class ReActEngine {
             """.formatted(userInput, step);
 
         messages.add(UserMessage.from(reflectionPrompt));
-        log.info("[L3-ReAct] Injected reflection at step {}", step);
+        log.debug("[L3-ReAct] Injected reflection at step {}", step);
     }
 
     /**

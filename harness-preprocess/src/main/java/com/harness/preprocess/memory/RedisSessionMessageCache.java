@@ -295,7 +295,7 @@ public class RedisSessionMessageCache implements SessionMessageCache {
             globalBytes = globalBytesStr != null ? Long.parseLong(globalBytesStr) : 0;
         }
 
-        log.info("[Redis-Cache] After global eviction: globalMB={}", globalBytes / (1024 * 1024));
+        log.debug("[Redis-Cache] After global eviction: globalMB={}", globalBytes / (1024 * 1024));
     }
 
     /**

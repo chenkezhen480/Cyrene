@@ -53,7 +53,7 @@ public class AuthHandler {
 
             String identifier = req.userId() != null && !req.userId().isBlank()
                     ? req.userId() : req.username();
-            log.info("[Server] POST /api/auth/token: identifier={}", identifier);
+            log.debug("[Server] POST /api/auth/token: identifier={}", identifier);
 
             // Verify credentials against users table
             String userId = verifyCredentials(identifier, req.password());

@@ -97,7 +97,7 @@ public class SessionCleanupScheduler {
             int cacheEvicted = messageCache.evictExpired();
             int skillEvicted = skillRegistry.evictExpired();
             if (cacheEvicted > 0 || skillEvicted > 0) {
-                log.info("[Cleanup] Cache eviction: messageCache={}, skillRegistry={}", cacheEvicted, skillEvicted);
+                log.debug("[Cleanup] Cache eviction: messageCache={}, skillRegistry={}", cacheEvicted, skillEvicted);
             }
 
             // Step 1: Recover stuck refinements before processing new ones
@@ -109,14 +109,14 @@ public class SessionCleanupScheduler {
                 return;
             }
 
-            log.info("Found {} timed-out sessions", timedOut.size());
+            log.debug("Found {} timed-out sessions", timedOut.size());
             for (Session session : timedOut) {
                 // Check if already claimed or in progress (skip if so)
                 if (sessionStore.claimForRefinement(session.id())) {
-                    log.info("Claimed session {} for refinement (user={}, lastActive={})",
+                    log.debug("Claimed session {} for refinement (user={}, lastActive={})",
                             session.id(), session.userId(), session.lastActive());
                     refinementWorker.submit(session.id(), session.userId());
-                    log.info("Submitted session {} for preference refinement", session.id());
+                    log.debug("Submitted session {} for preference refinement", session.id());
                 } else {
                     log.debug("Session {} already claimed or not pending refinement, skipping", session.id());
                 }

@@ -43,7 +43,7 @@ public class InputProcessor {
      */
     public InputResult process(String token, String text, List<MultimodalParser.RawAttachment> attachments) {
         int attachCount = attachments != null ? attachments.size() : 0;
-        log.info("[L1-Input] Processing: textLen={}, attachments={}", text != null ? text.length() : 0, attachCount);
+        log.debug("[L1-Input] Processing: textLen={}, attachments={}", text != null ? text.length() : 0, attachCount);
 
         // Step 1: Authenticate
         String userId = authenticator.authenticate(token);
@@ -71,7 +71,7 @@ public class InputProcessor {
         // Step 4: Build unified message
         AgentMessage message = new AgentMessage(AgentMessage.Role.USER, text, agentAttachments, null, null);
 
-        log.info("[L1-Input] Done: userId={}, attachments={}, parsedContents={}", userId, agentAttachments.size(), parsedContents.size());
+        log.debug("[L1-Input] Done: userId={}, attachments={}, parsedContents={}", userId, agentAttachments.size(), parsedContents.size());
         return new InputResult(userId, message, parsedContents);
     }
 

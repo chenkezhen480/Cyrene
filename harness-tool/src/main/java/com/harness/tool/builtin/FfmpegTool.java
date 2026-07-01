@@ -54,7 +54,7 @@ public class FfmpegTool implements Tool {
             throw new ToolExecutionException("ffmpeg", "Missing required parameter: args");
         }
 
-        log.info("FFmpeg: {} {}", ffmpegPath, args);
+        log.debug("FFmpeg: {} {}", ffmpegPath, args);
 
         try {
             // Build command: ffmpegPath + user-provided args

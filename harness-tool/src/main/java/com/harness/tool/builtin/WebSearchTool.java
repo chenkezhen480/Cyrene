@@ -109,7 +109,7 @@ public class WebSearchTool implements Tool {
                 continue;
             }
             try {
-                log.info("Web search: engine={}, query={}", engine.name(), query);
+                log.debug("Web search: engine={}, query={}", engine.name(), query);
                 String result = engine.search(query);
                 if (result != null && !result.isBlank()) {
                     return result;

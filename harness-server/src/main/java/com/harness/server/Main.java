@@ -110,7 +110,6 @@ public class Main {
         if ("jwt".equals(authMode)) {
             AuthHandler authHandler = new AuthHandler();
             app.post("/api/auth/token", authHandler::handle);
-            log.info("[Server] Auth endpoint registered: POST /api/auth/token (mode=jwt)");
         }
 
         // Knowledge base upload endpoint

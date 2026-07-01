@@ -51,7 +51,7 @@ public class ToolExecutor {
         try {
             String output = tool.execute(toolCall.arguments());
             long duration = System.currentTimeMillis() - start;
-            log.info("[L3-Tool] [{}] executed in {}ms", name, duration);
+            log.debug("[L3-Tool] [{}] executed in {}ms", name, duration);
             log.debug("[L3-Tool] [{}] result: {}", name,
                     output != null && output.length() > 200 ? output.substring(0, 200) + "..." : output);
             return ToolResult.ok(toolCall.id(), name, output, duration);

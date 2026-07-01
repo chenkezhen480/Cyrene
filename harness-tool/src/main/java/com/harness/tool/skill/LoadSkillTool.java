@@ -152,7 +152,7 @@ public class LoadSkillTool implements Tool {
             sb.append("]\n");
         }
 
-        log.info("Skill loaded (full): {} (tools={}, warnings={})",
+        log.debug("Skill loaded (full): {} (tools={}, warnings={})",
                 skill.name(),
                 skill.tools() != null ? skill.tools().size() : 0,
                 warnings.size());
@@ -213,7 +213,7 @@ public class LoadSkillTool implements Tool {
             count++;
         }
 
-        log.info("Skill search: {} (query={}, matches={})", skill.name(), query, count);
+        log.debug("Skill search: {} (query={}, matches={})", skill.name(), query, count);
         return sb.toString();
     }
 

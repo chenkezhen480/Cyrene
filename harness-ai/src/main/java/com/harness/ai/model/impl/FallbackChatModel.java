@@ -85,7 +85,7 @@ public class FallbackChatModel implements ChatModel {
             newReq.maxOutputTokens(request.maxOutputTokens());
         }
 
-        log.info("Fallback: sending transformed request to delegate model");
+        log.debug("Fallback: sending transformed request to delegate model");
         return delegate.chat(newReq.build());
     }
 
