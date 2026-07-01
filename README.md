@@ -181,7 +181,7 @@ cp .env.example .env
 
 ```bash
 # 启动 HTTP 服务（默认端口 8080）
-java -jar harness-server/target/harness-server-0.3.6.jar
+java -jar harness-server/target/harness-server-${revision}.jar
 ```
 
 Windows 用户可直接在项目根目录放置 `.env` 后运行上述 `java -jar` 命令，无需手动 export 环境变量。

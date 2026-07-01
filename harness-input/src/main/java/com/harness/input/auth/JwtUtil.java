@@ -32,7 +32,7 @@ public class JwtUtil {
         this.issuer = cfg.getString(EnvKey.AUTH_JWT_ISSUER, "harness-agent");
 
         if (secret.isBlank()) {
-            throw new IllegalStateException("HARNESS_AUTH_JWT_SECRET is required for JWT auth");
+            throw new IllegalStateException(EnvKey.AUTH_JWT_SECRET + " is required for JWT auth");
         }
 
         // Decode base64 secret if it's base64-encoded, otherwise use raw bytes

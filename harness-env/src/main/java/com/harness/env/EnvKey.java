@@ -89,8 +89,12 @@ public final class EnvKey {
     public static final String RAG_PASS              = "HARNESS_RAG_PASS";
     /** 向量维度，默认 1536 */
     public static final String RAG_EMBED_DIM         = "HARNESS_RAG_EMBED_DIM";
+    /** 向量维度默认值 */
+    public static final int RAG_EMBED_DIM_DEFAULT    = 1024;
     /** BM25/全文检索在混合检索中的权重（0.0-1.0），默认 0.3 */
     public static final String RAG_BM25_WEIGHT       = "HARNESS_RAG_BM25_WEIGHT";
+
+
     /** 全文检索语言配置，默认 english，中文场景用 simple */
     public static final String RAG_LANG              = "HARNESS_RAG_LANG";
 

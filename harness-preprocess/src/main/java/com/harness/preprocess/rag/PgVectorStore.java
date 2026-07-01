@@ -51,7 +51,7 @@ public class PgVectorStore implements VectorStore {
         this.topK = cfg.getInt(EnvKey.RAG_TOP_K, 5);
         this.scoreThreshold = cfg.getDouble(EnvKey.RAG_SCORE_THRESHOLD, 0.7);
         this.embedDim = cfg.getInt(EnvKey.RAG_EMBED_DIM,
-                cfg.getInt(EnvKey.RAG_PG_EMBED_DIM, 1536));
+                cfg.getInt(EnvKey.RAG_PG_EMBED_DIM, EnvKey.RAG_EMBED_DIM_DEFAULT));
         this.embeddingProvider = embeddingProvider;
     }
 

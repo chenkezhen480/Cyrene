@@ -66,7 +66,7 @@ public class Main {
             }
         }
         if (!serverEnabled) {
-            log.info("Server disabled (HARNESS_SERVER_ENABLED=false), exiting");
+            log.info("Server disabled ({}=false), exiting", EnvKey.SERVER_ENABLED);
             return;
         }
         if ("none".equals(authMode)) {

@@ -42,7 +42,7 @@ public class KnowledgeIngestService {
 
         // Pre-flight: embedding provider must be available
         if (!embeddingProvider.isAvailable()) {
-            throw new IllegalStateException("Embedding model not configured. Set HARNESS_MODEL_EMBEDDING_PROVIDER.");
+            throw new IllegalStateException("Embedding model not configured. Set " + EnvKey.MODEL_EMBEDDING_PROVIDER + ".");
         }
 
         // Validate file size

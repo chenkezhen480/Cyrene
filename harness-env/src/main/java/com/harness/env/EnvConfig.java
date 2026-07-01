@@ -118,4 +118,15 @@ public final class EnvConfig {
     public Map<String, String> all() {
         return Collections.unmodifiableMap(store);
     }
+
+    // ==================== 连接池共享配置 ====================
+    /** HikariCP 默认连接池参数，Pg/Mysql 共用 */
+    public static void applyDefaultPoolSettings(com.zaxxer.hikari.HikariConfig hc, String poolName) {
+        hc.setMaximumPoolSize(10);
+        hc.setMinimumIdle(2);
+        hc.setConnectionTimeout(5000);
+        hc.setIdleTimeout(300_000);   // 5 min
+        hc.setMaxLifetime(600_000);   // 10 min
+        hc.setPoolName(poolName);
+    }
 }

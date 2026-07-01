@@ -42,7 +42,7 @@ public class MilvusVectorStore implements VectorStore {
 
     public MilvusVectorStore(EmbeddingModelProvider embeddingProvider) {
         EnvConfig cfg = EnvConfig.get();
-        this.collectionName = cfg.getString(EnvKey.RAG_COLLECTION, "knowledge_documents");
+        this.collectionName = "knowledge_documents"; // Milvus 物理集合名，不可配置
         this.logicalCollection = cfg.getString(EnvKey.RAG_COLLECTION, "default");
         this.topK = cfg.getInt(EnvKey.RAG_TOP_K, 5);
         this.scoreThreshold = cfg.getDouble(EnvKey.RAG_SCORE_THRESHOLD, 0.7);
@@ -258,7 +258,7 @@ public class MilvusVectorStore implements VectorStore {
     @Override
     public List<Document> searchText(String collection, String query, int topK) {
         if (embeddingProvider == null || !embeddingProvider.isAvailable()) {
-            log.warn("searchText() requires an embedding provider. Set HARNESS_MODEL_EMBEDDING_PROVIDER.");
+            log.warn("searchText() requires an embedding provider. Set {}.", EnvKey.MODEL_EMBEDDING_PROVIDER);
             return List.of();
         }
         try {

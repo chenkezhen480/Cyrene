@@ -110,7 +110,7 @@ public class FallbackChatModel implements ChatModel {
                         fallbackMeta.put("fallback_triggered", "true");
                         fallbackMeta.put("fallback_reason", "IMAGE_INPUT not supported");
                         fallbackMeta.put("fallback_provider", visionProvider.providerName());
-                        log.info("[harness] ChatModel 不支持 IMAGE_INPUT，已自动降级至 VisionModelProvider");
+                        log.info("[Model] ChatModel 不支持 IMAGE_INPUT，已自动降级至 VisionModelProvider");
                     } catch (Exception e) {
                         log.error("Vision fallback failed: {}", e.getMessage());
                         newContents.add(TextContent.from("[Image could not be processed]"));
@@ -133,7 +133,7 @@ public class FallbackChatModel implements ChatModel {
                         fallbackMeta.put("fallback_triggered", "true");
                         fallbackMeta.put("fallback_reason", "AUDIO_INPUT not supported");
                         fallbackMeta.put("fallback_provider", voiceProvider.providerName());
-                        log.info("[harness] ChatModel 不支持 AUDIO_INPUT，已自动降级至 VoiceModelProvider");
+                        log.info("[Model] ChatModel 不支持 AUDIO_INPUT，已自动降级至 VoiceModelProvider");
                     } catch (Exception e) {
                         log.error("Voice fallback failed: {}", e.getMessage());
                         newContents.add(TextContent.from("[Audio could not be processed]"));

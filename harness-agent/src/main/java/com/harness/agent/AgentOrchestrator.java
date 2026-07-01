@@ -13,6 +13,7 @@ import com.harness.env.MysqlConnectionPool;
 import com.harness.env.RedisConnectionPool;
 import com.harness.input.InputProcessor;
 import com.harness.input.multimodal.MultimodalParser;
+import com.harness.input.multimodal.TextChunker;
 import com.harness.preprocess.ContextBuilder;
 import com.harness.preprocess.memory.*;
 import com.harness.tool.ToolExecutor;
@@ -739,13 +740,8 @@ public class AgentOrchestrator {
         return sb.toString();
     }
 
-    /**
-     * Rough token estimate: ~4 chars per token (English), ~2 chars per token (CJK).
-     * Uses conservative 3 chars/token as average.
-     */
     private int estimateTokens(String text) {
-        if (text == null || text.isEmpty()) return 0;
-        return text.length() / 3;
+        return TextChunker.estimateTokens(text);
     }
 
     private int estimateTokens(List<MemoryMessage> messages) {

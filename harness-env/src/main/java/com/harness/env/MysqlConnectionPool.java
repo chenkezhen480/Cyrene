@@ -41,12 +41,7 @@ public class MysqlConnectionPool {
         hikariConfig.setJdbcUrl(dbUrl);
         hikariConfig.setUsername(dbUser);
         hikariConfig.setPassword(dbPass);
-        hikariConfig.setMaximumPoolSize(10);
-        hikariConfig.setMinimumIdle(2);
-        hikariConfig.setConnectionTimeout(5000);
-        hikariConfig.setIdleTimeout(300000);   // 5 min
-        hikariConfig.setMaxLifetime(600000);    // 10 min
-        hikariConfig.setPoolName("harness-mysql");
+        EnvConfig.applyDefaultPoolSettings(hikariConfig, "harness-mysql");
 
         dataSource = new HikariDataSource(hikariConfig);
         log.info("[DB] HikariCP pool initialized: url={}, maxPool={}", dbUrl, hikariConfig.getMaximumPoolSize());

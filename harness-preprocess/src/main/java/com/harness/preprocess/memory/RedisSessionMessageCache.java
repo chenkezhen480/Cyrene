@@ -49,7 +49,7 @@ public class RedisSessionMessageCache implements SessionMessageCache {
         this.globalMaxMemoryBytes = (long) cfg.getInt(EnvKey.CACHE_MAX_MB_GLOBAL, 4096) * 1024 * 1024;
         this.evictionTargetRatio = cfg.getInt(EnvKey.CACHE_EVICTION_TARGET_RATIO, 50) / 100.0;
 
-        log.info("[Redis-Cache] RedisSessionMessageCache initialized: prefix={}, ttl={}s, maxPerUser={}, maxMBPerUser={}, globalMaxMB={}",
+        log.info("[Cache] RedisSessionMessageCache initialized: prefix={}, ttl={}s, maxPerUser={}, maxMBPerUser={}, globalMaxMB={}",
                 prefix, ttlSeconds, maxSessionsPerUser, maxMemoryBytesPerUser / (1024 * 1024), globalMaxMemoryBytes / (1024 * 1024));
     }
 
@@ -69,7 +69,7 @@ public class RedisSessionMessageCache implements SessionMessageCache {
             jedis.zadd(accessKey(), System.currentTimeMillis(), sessionId);
             return messages;
         } catch (Exception e) {
-            log.warn("[Redis-Cache] getIfPresent failed for session {}: {}", sessionId, e.getMessage());
+            log.warn("[Cache] getIfPresent failed for session {}: {}", sessionId, e.getMessage());
             return null;
         }
     }
@@ -117,7 +117,7 @@ public class RedisSessionMessageCache implements SessionMessageCache {
             enforcePerUserLimits(jedis, userId);
             enforceGlobalMemoryLimit(jedis);
         } catch (Exception e) {
-            log.warn("[Redis-Cache] put failed for session {}: {}", sessionId, e.getMessage());
+            log.warn("[Cache] put failed for session {}: {}", sessionId, e.getMessage());
         }
     }
 
@@ -157,7 +157,7 @@ public class RedisSessionMessageCache implements SessionMessageCache {
             enforcePerUserLimits(jedis, userId);
             enforceGlobalMemoryLimit(jedis);
         } catch (Exception e) {
-            log.warn("[Redis-Cache] append failed for session {}: {}", sessionId, e.getMessage());
+            log.warn("[Cache] append failed for session {}: {}", sessionId, e.getMessage());
         }
     }
 
@@ -166,7 +166,7 @@ public class RedisSessionMessageCache implements SessionMessageCache {
         try (Jedis jedis = RedisConnectionPool.getConnection()) {
             evictSessionInternal(jedis, sessionId, true);
         } catch (Exception e) {
-            log.warn("[Redis-Cache] remove failed for session {}: {}", sessionId, e.getMessage());
+            log.warn("[Cache] remove failed for session {}: {}", sessionId, e.getMessage());
         }
     }
 
@@ -175,7 +175,7 @@ public class RedisSessionMessageCache implements SessionMessageCache {
         try (Jedis jedis = RedisConnectionPool.getConnection()) {
             return (int) jedis.zcard(accessKey());
         } catch (Exception e) {
-            log.warn("[Redis-Cache] size failed: {}", e.getMessage());
+            log.warn("[Cache] size failed: {}", e.getMessage());
             return 0;
         }
     }
@@ -193,11 +193,11 @@ public class RedisSessionMessageCache implements SessionMessageCache {
                 }
             }
             if (evicted > 0) {
-                log.info("[Redis-Cache] Evicted {} expired sessions (TTL={}s)", evicted, ttlSeconds);
+                log.info("[Cache] Evicted {} expired sessions (TTL={}s)", evicted, ttlSeconds);
             }
             return evicted;
         } catch (Exception e) {
-            log.warn("[Redis-Cache] evictExpired failed: {}", e.getMessage());
+            log.warn("[Cache] evictExpired failed: {}", e.getMessage());
             return 0;
         }
     }
@@ -208,7 +208,7 @@ public class RedisSessionMessageCache implements SessionMessageCache {
             String val = jedis.get(globalBytesKey());
             return val != null ? Long.parseLong(val) : 0;
         } catch (Exception e) {
-            log.warn("[Redis-Cache] getGlobalEstimatedBytes failed: {}", e.getMessage());
+            log.warn("[Cache] getGlobalEstimatedBytes failed: {}", e.getMessage());
             return 0;
         }
     }
@@ -237,13 +237,13 @@ public class RedisSessionMessageCache implements SessionMessageCache {
             jedis.decrBy(globalBytesKey(), freed);
         }
 
-        log.debug("[Redis-Cache] Evicted session: {}, freed {} bytes (user={}, notify={})", sessionId, freed, userId, notifyEvict);
+        log.debug("[Cache] Evicted session: {}, freed {} bytes (user={}, notify={})", sessionId, freed, userId, notifyEvict);
 
         if (notifyEvict && onEvict != null) {
             try {
                 onEvict.accept(sessionId);
             } catch (Exception e) {
-                log.warn("[Redis-Cache] onEvict callback failed for session {}: {}", sessionId, e.getMessage());
+                log.warn("[Cache] onEvict callback failed for session {}: {}", sessionId, e.getMessage());
             }
         }
     }
@@ -254,7 +254,7 @@ public class RedisSessionMessageCache implements SessionMessageCache {
         while (sessionCount > maxSessionsPerUser) {
             String oldest = findOldestUserSession(jedis, userId);
             if (oldest == null) break;
-            log.warn("[Redis-Cache] Per-user session limit exceeded: user={}, sessions={}, max={}, evicting {}",
+            log.warn("[Cache] Per-user session limit exceeded: user={}, sessions={}, max={}, evicting {}",
                     userId, sessionCount, maxSessionsPerUser, oldest);
             evictSessionInternal(jedis, oldest, true);
             sessionCount = jedis.scard(userSessionsKey(userId));
@@ -266,7 +266,7 @@ public class RedisSessionMessageCache implements SessionMessageCache {
         while (userBytes > maxMemoryBytesPerUser) {
             String oldest = findOldestUserSession(jedis, userId);
             if (oldest == null) break;
-            log.warn("[Redis-Cache] Per-user memory limit exceeded: user={}, bytes={}MB > {}MB, evicting {}",
+            log.warn("[Cache] Per-user memory limit exceeded: user={}, bytes={}MB > {}MB, evicting {}",
                     userId, userBytes / (1024 * 1024), maxMemoryBytesPerUser / (1024 * 1024), oldest);
             evictSessionInternal(jedis, oldest, true);
             userBytesStr = jedis.get(userBytesKey(userId));
@@ -281,7 +281,7 @@ public class RedisSessionMessageCache implements SessionMessageCache {
 
         if (globalBytes <= globalMaxMemoryBytes) return;
 
-        log.warn("[Redis-Cache] Global memory limit exceeded: {}MB > {}MB, evicting to {}MB",
+        log.warn("[Cache] Global memory limit exceeded: {}MB > {}MB, evicting to {}MB",
                 globalBytes / (1024 * 1024), globalMaxMemoryBytes / (1024 * 1024), targetBytes / (1024 * 1024));
 
         while (globalBytes > targetBytes) {
@@ -295,7 +295,7 @@ public class RedisSessionMessageCache implements SessionMessageCache {
             globalBytes = globalBytesStr != null ? Long.parseLong(globalBytesStr) : 0;
         }
 
-        log.debug("[Redis-Cache] After global eviction: globalMB={}", globalBytes / (1024 * 1024));
+        log.debug("[Cache] After global eviction: globalMB={}", globalBytes / (1024 * 1024));
     }
 
     /**

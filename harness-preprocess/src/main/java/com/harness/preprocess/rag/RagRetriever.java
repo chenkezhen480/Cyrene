@@ -46,7 +46,7 @@ public class RagRetriever {
             return Collections.emptyList();
         }
         if (embeddingProvider == null || !embeddingProvider.isAvailable()) {
-            log.warn("RAG retrieve requires an embedding provider. Set HARNESS_MODEL_EMBEDDING_PROVIDER.");
+            log.warn("RAG retrieve requires an embedding provider. Set {}.", EnvKey.MODEL_EMBEDDING_PROVIDER);
             return Collections.emptyList();
         }
 

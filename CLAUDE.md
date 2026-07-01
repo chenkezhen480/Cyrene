@@ -15,7 +15,7 @@ mvn clean package -pl harness-core -am
 mvn clean compile
 
 # Run HTTP server (Javalin, default port 8080)
-java -jar harness-server/target/harness-server-0.3.6.jar
+java -jar harness-server/target/harness-server-${revision}.jar
 
 # Run tests (currently no test files exist)
 mvn test

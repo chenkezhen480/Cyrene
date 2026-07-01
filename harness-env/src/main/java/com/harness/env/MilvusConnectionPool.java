@@ -43,7 +43,7 @@ public class MilvusConnectionPool {
                 .build();
 
         client = new MilvusClientV2(config);
-        log.info("[DB] Milvus v2 client initialized: url={}, db={}", url, database);
+        log.info("[Milvus] Milvus v2 client initialized: url={}, db={}", url, database);
     }
 
     /**
@@ -59,12 +59,12 @@ public class MilvusConnectionPool {
         try {
             defaultClient.createDatabase(CreateDatabaseReq.builder()
                     .databaseName(database).build());
-            log.info("[DB] Milvus database '{}' created", database);
+            log.info("[Milvus] Milvus database '{}' created", database);
         } catch (Exception e) {
             if (e.getMessage() != null && e.getMessage().contains("already exist")) {
-                log.debug("[DB] Milvus database '{}' already exists", database);
+                log.debug("[Milvus] Milvus database '{}' already exists", database);
             } else {
-                log.warn("[DB] Failed to create database '{}': {}", database, e.getMessage());
+                log.warn("[Milvus] Failed to create database '{}': {}", database, e.getMessage());
             }
         } finally {
             defaultClient.close();
@@ -82,9 +82,9 @@ public class MilvusConnectionPool {
         if (client != null) {
             try {
                 client.close();
-                log.info("[DB] Milvus client shut down");
+                log.info("[Milvus] Milvus client shut down");
             } catch (Exception e) {
-                log.warn("[DB] Failed to close Milvus client: {}", e.getMessage());
+                log.warn("[Milvus] Failed to close Milvus client: {}", e.getMessage());
             }
             client = null;
         }
