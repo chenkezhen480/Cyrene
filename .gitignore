@@ -31,3 +31,9 @@ harness_traces/
 
 # JaCoCo
 jacoco.exec
+
+# flatten-maven-plugin
+.flattened-pom.xml
+
+# Knowledge uploads (runtime data)
+knowledge-uploads/
