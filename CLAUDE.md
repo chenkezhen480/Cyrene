@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Build & Run
 
 ```bash
-# Build all modules (produces fat JARs for cli and server)
+# Build all modules (produces fat JAR for server)
 mvn clean package
 
 # Build single module
@@ -14,11 +14,8 @@ mvn clean package -pl harness-core -am
 # Compile only (no tests, no packaging)
 mvn clean compile
 
-# Run CLI (interactive REPL)
-java -jar harness-cli/target/harness-cli-0.3.3.jar
-
 # Run HTTP server (Javalin, default port 8080)
-java -jar harness-server/target/harness-server-0.3.3.jar
+java -jar harness-server/target/harness-server-0.3.6.jar
 
 # Run tests (currently no test files exist)
 mvn test
@@ -45,19 +42,18 @@ Memory integration points: session lifecycle (timeout + cache load), preprocess 
 harness-env           ← foundation, all HARNESS_* env var access via EnvConfig + shared HikariCP connection pools (MysqlConnectionPool, PgConnectionPool)
 harness-core          ← models (AgentMessage, AgentTrace, ReActStep, ToolSpec, ParsedContent, etc.)
     ├── harness-input        ← auth (Authenticator) + multimodal parsing (MultimodalParser) + text extraction (TextExtractorRegistry) + text chunking (TextChunker) + large file parsing (LargeFileParser)
-    ├── harness-preprocess   ← RAG retrieval (PgVectorRagRetriever) + semantic context (SemanticContextRetriever) + rerank + context injection (ContextBuilder)
+    ├── harness-preprocess   ← RAG retrieval (VectorStore: PgVectorStore/MilvusVectorStore) + semantic context (SemanticContextRetriever) + rerank + context injection (ContextBuilder)
     ├── harness-tool         ← Tool interface, ToolRegistry, ToolExecutor, MCP adapter (McpToolAdapter), built-in tools
     ├── harness-audit        ← TraceCollector + TraceStore (sqlite/mysql/file/none via TraceStoreFactory)
-    └── harness-ai           ← LangChain4j integration, 6 model type abstractions, ModelProviderFactory, ReActEngine, FallbackChatModel
+    └── harness-ai           ← LangChain4j integration, 6 model type abstractions, ModelProviderFactory, ReActEngine, FallbackChatModel, SemaphoreChatModel
 harness-agent         ← Agent orchestration library (com.harness.agent.AgentOrchestrator)
-harness-cli           ← CLI entry point (com.harness.cli.Main)
 harness-server        ← HTTP API entry point (com.harness.server.Main, Javalin)
 ```
 
 `harness-ai` depends on `harness-tool` (ReActEngine calls ToolExecutor).
 `harness-input` and `harness-preprocess` depend on `harness-ai` (for model provider interfaces).
 `harness-preprocess` depends on `harness-input` (for `TextChunker` and `TextExtractorRegistry`).
-`harness-cli` and `harness-server` both depend on `harness-agent` (AgentOrchestrator).
+`harness-server` depends on `harness-agent` (AgentOrchestrator).
 
 ## Key Conventions
 
@@ -74,7 +70,7 @@ harness-server        ← HTTP API entry point (com.harness.server.Main, Javalin
   | 6 | Realtime | `RealtimeModelProvider` | (reserved) |
 
 - **Tools implement `com.harness.tool.Tool` interface** — `spec()` returns ToolSpec, `execute(JsonNode)` returns String. Register in ToolRegistry. MCP tools adapted via McpToolAdapter.
-- **ReActEngine** uses LangChain4j 1.15.0 `ChatModel.chat(ChatRequest)` with `ToolSpecification` (JsonObjectSchema). Wraps ChatModel in `FallbackChatModel` when vision/voice providers are available. Supports streaming via `StreamingChatModel` (`streamExecute()` method). Tool calls retry up to 3 times on error; success with empty data passes to LLM without retry.
+- **ReActEngine** uses LangChain4j 1.15.0 `ChatModel.chat(ChatRequest)` with `ToolSpecification` (JsonObjectSchema). Wraps ChatModel in `FallbackChatModel` when vision/voice providers are available. Wraps in `SemaphoreChatModel` for API concurrency limiting (`HARNESS_MODEL_API_MAX_CONCURRENT`, default 10). Supports streaming via `StreamingChatModel` (`streamExecute()` method). Tool calls retry up to 3 times on error; success with empty data passes to LLM without retry.
 - **Thinking Mode Control** — `HARNESS_MODEL_CHAT_THINKING` env var (default `true`) controls whether to enable thinking/reasoning mode for the chat model. `ChatModelProvider.chatModelNoThinking()` returns a model with thinking disabled (used by `LargeFileParser` for cost savings). Per-request override via `AgentContext.enableThinking()` (set in `context.enableThinking` JSON field). Providers pass `enable_thinking` via `customParameters(Map)` to OpenAI-compatible APIs (DashScope etc.). `ReActEngine.selectModel(Boolean)` picks thinking/non-thinking model; streaming mode falls back to blocking when thinking is disabled.
 - **File Content Injection** — File attachments are extracted and injected into the LLM context via `enhancedText` in `AgentOrchestrator`. Small files (< `HARNESS_INPUT_FILE_SIZE_THRESHOLD_KB`, default 100KB) use `TextExtractorRegistry.extract()` directly; large files use `LargeFileParser` merge-then-summarize approach: semantic splitting → greedy merge to `MODEL_CHAT_CONTEXT_WINDOW × LARGE_FILE_CONTEXT_RATIO` (default 40%) → parallel summarization → final merge. Works independently of RAG knowledge base configuration.
 - **ReAct Inspection** — 每轮工具调用后由 `Inspector` 启发式检查结果状态，记录在 `ReActStep.InspectionResult` 中：
@@ -85,9 +81,10 @@ harness-server        ← HTTP API entry point (com.harness.server.Main, Javalin
   | `TOOL_ERROR` | 工具执行失败 | `!result.success()` |
   | `WRONG_TOOL` | 选错了工具 | 输出为 null/空白 |
   | `INSUFFICIENT` | 结果不够完整 | 输出过短 (<50字符) 或含 "no results" 等短语 |
-  | `NEEDS_RETRY` | 应该换参数重试 | 输出含异常堆栈痕迹 |
+  | `LOOP_DETECTED` | 循环调用同一工具 | 连续相同工具+参数 |
 
   非 PASS 状态会注入 `Inspector.buildInspectionHint()` 作为下一轮的提示。`HARNESS_REACT_STOP_ON_TOOL_ERROR=true` 时遇到 `TOOL_ERROR` 立即停止循环；默认 `false` 继续下一轮让 LLM 自行决策。
+- **ReAct Reflection** — 定期注入反思提示，让 LLM 检查当前进展并调整策略。`HARNESS_REACT_REFLECTION_INTERVAL`（默认 3）控制每隔几轮注入一次反思。`HARNESS_REACT_LOOP_DETECTION_THRESHOLD`（默认 3）控制连续相同工具+参数调用的循环检测阈值。
 - **ReActListener** — SSE 流式回调接口，`onStep(ReActStep)` 在每轮迭代完成后调用。扩展方法：`onToken(String)` 每个 token 块回调，`onToolCallStart(String toolName, String arguments)` 工具调用开始回调。
 - **Streaming Output** — `AgentOrchestrator.streamRun()` 提供流式输出模式，通过 `StreamCallback` 实时推送 `StreamEvent`（START/TOKEN/STEP/DONE/ERROR）。`AgentContext` record 包装 `Map<String, Object>` context 参数，`isStreaming()` 判断输出模式。流式模式下后处理（trace.finish、sessionStore.updateLastActive）异步化。
 - **CancellationToken** — 线程安全的取消令牌，支持轮询（`isCancelled()`）和线程中断（`Thread.interrupt()`）双重取消机制。`cancel()` 会中断所有已注册的工作线程（包括子代理线程）。ReAct 循环在每轮迭代间、LLM 调用后、工具执行前均检查取消状态；`DELETE /api/chat/{sessionId}` 触发取消。
@@ -101,12 +98,12 @@ harness-server        ← HTTP API entry point (com.harness.server.Main, Javalin
   - **MCP 断线重连:** `McpToolAdapter` 捕获 IOException 后重建 OkHttpClient 并重试 1 次
   - **消息写入重试:** `MessageWriteWorker` 三层降级：重试 3 次 → 单条同步写 → 死信队列（`getDeadLetterQueue()` API）
   - **Refinement 卡住恢复:** `SessionCleanupScheduler.resetStuckRefinements()` 每轮清理前检测 `in_progress` 超过阈值的记录，CAS 重置为 `pending`
-  - **知识库批量回滚:** `PgVectorRagRetriever.insertBatchWithLinks()` 显式事务回滚 + `KnowledgeIngestService` 清理孤立文件
+  - **知识库批量回滚:** `PgVectorStore.insertBatch()` 显式事务回滚 + `KnowledgeIngestService` 清理孤立文件 (Milvus uses batch insert, no transaction rollback needed)
 - **JWT 滑动窗口刷新** — `ChatHandler` 在 JWT 剩余有效期 < `HARNESS_AUTH_JWT_REFRESH_THRESHOLD_MINUTES`（默认 60 分钟）时自动刷新，新 token 通过 `X-New-Token` 响应头返回。
 - **Audit traces are cross-cutting.** TraceCollector created per agent run, persisted via TraceStore (sqlite/mysql/file/none). Key decision points (fallback triggers, rerank timing, lookback counts) recorded in `AgentTrace.metadata`.
 - **Audit cleanup.** `AuditCleanupScheduler` runs periodically (default every 60 min) to delete traces older than `HARNESS_AUDIT_RETENTION_DAYS` (default 30, set 0 to disable). Also runs once on startup. Manual trigger via `DELETE /api/traces/cleanup`. Management endpoints: `GET /api/traces/stats` (count + retention), `DELETE /api/traces/{traceId}` (delete one).
 - **Server workers.** `HARNESS_SERVER_WORKERS` (default `availableProcessors * 2`) configures the Jetty thread pool size via `config.jetty.threadPool`.
-- **Fat JARs via maven-shade-plugin.** CLI and server modules produce executable uber-JARs.
+- **Fat JARs via maven-shade-plugin.** Server module produces executable uber-JAR.
 - **Skill Loading** — 可复用能力包机制，三层架构：System prompt（身份）→ Skill（操作规范）→ MCP/builtin tools（实现）。Skill 文件为 Markdown + YAML frontmatter 格式，启动时扫描 `HARNESS_SKILL_DIR`（默认 `./skills`）目录建立轻量索引（name + description），注入 system prompt。LLM 通过 `load_skill` 工具按需加载全文或搜索片段（`name` + 可选 `query` 正则搜索，返回最多 5 个匹配及 ±3 行上下文）。用户上传的 `.md` skill 文件注册为临时 skill（session 级别）。Skill 内容在小压缩（`stripToolMessages`）中保留不删除，大压缩后从 `loadedSkills` 缓存重新注入。Skill session 数据跟随会话 TTL 过期（`CACHE_SESSION_TTL_HOURS`，默认 12h 空闲），不随请求结束清除。关键类：`SkillLoader`（YAML 解析）、`SkillRegistry`（索引 + session 级缓存 + TTL 淘汰）、`LoadSkillTool`（统一工具，支持全文加载和搜索模式）。
 
 ## Subsystems
@@ -135,10 +132,13 @@ LLM call count: for a 1MB file (~333K tokens), this produces ~326 chunks → mer
 `FallbackChatModel` wraps the main ChatModel. When a request contains ImageContent/AudioContent but the model lacks the capability (checked via `ModalCapabilityRegistry`), it transparently falls back to VisionModelProvider (image→text) or VoiceModelProvider (audio→text). Override model capabilities via `HARNESS_MODEL_CHAT_CAPABILITIES`.
 
 ### Semantic Context Retrieval (harness-preprocess)
-`SemanticContextRetriever` checks retrieved chunks for semantic completeness using pure heuristic analysis (no LLM calls). Truncated chunks trigger lookback to previous chunks via `prev_chunk_id` in pgvector. Completeness detection: terminal punctuation (`。！？…""''` etc.) → structural endings (`]}`) → opening continuation word detection (35 Chinese continuations like `而且/但是/因此`, 27 English like `and/but/then`). Max lookback controlled by `HARNESS_RAG_CONTEXT_LOOKBACK_MAX` (default 2).
+`SemanticContextRetriever` checks retrieved chunks for semantic completeness using pure heuristic analysis (no LLM calls). Truncated chunks trigger lookback to previous chunks via `prev_chunk_id` in pgvector/Milvus. Completeness detection: terminal punctuation (`。！？…""''` etc.) → structural endings (`]}`) → opening continuation word detection (35 Chinese continuations like `而且/但是/因此`, 27 English like `and/but/then`). Max lookback controlled by `HARNESS_RAG_CONTEXT_LOOKBACK_MAX` (default 2).
 
 ### Rerank Integration (harness-ai + harness-preprocess)
 `OpenAiRerankModelProvider` calls OpenAI-compatible `/rerank` endpoint. Integrated into `ContextBuilder` pipeline: RAG retrieval → semantic enhancement → rerank → format. Timing and doc counts recorded in metadata.
+
+- `HARNESS_RERANK_ENABLED` — enable/disable rerank (default `false`)
+- `HARNESS_RERANK_TOP_N` — number of top results to keep after rerank (default `3`)
 
 ### Query Rewriting (harness-preprocess)
 Pluggable pre-retrieval query transformation. `QueryRewriter` interface with `List<String> rewrite(String)` — returns one or more rewritten queries. Controlled by `HARNESS_RAG_QUERY_REWRITE` (default `none`).
@@ -154,24 +154,38 @@ All strategies use `chatModelNoThinking()` for cost savings. LLM failure falls b
 
 Key classes: `QueryRewriter` (interface), `QueryRewriterFactory`, `NoOpQueryRewriter`, `HydeQueryRewriter`, `MultiQueryRewriter`, `StepBackQueryRewriter`.
 
-### Multi-Route Retrieval (harness-preprocess)
-Parallel fan-out to multiple retrieval backends, merge and deduplicate results. Enabled via `HARNESS_RAG_MULTI_ROUTE` (default `false`). When disabled, uses the existing single-provider `RagRetriever` path.
+### Unified Vector Store (harness-preprocess)
+Unified `VectorStore` interface abstracting vector database backends. Provider selected via `HARNESS_RAG_PROVIDER` (default `pgvector`).
 
-**RetrievalRoute interface:** `List<RagDocument> retrieve(String query)`, `routeName()`, `isAvailable()`.
+**VectorStore interface:** `List<RagDocument> retrieve(String query, int topK)`, `void insertBatch(List<RagDocument> docs)`, `void deleteByFile(String fileId)`.
 
-| Route | Env Control | Backend |
-|-------|-------------|---------|
-| PgVectorRoute | `HARNESS_RAG_PROVIDER=pgvector` | pgvector cosine similarity (existing) |
-| FulltextRoute | `HARNESS_RAG_FULLTEXT_ENABLED=true` | PostgreSQL `tsvector`/`tsquery` keyword search |
-| KnowledgeGraphRoute | `HARNESS_RAG_KNOWLEDGE_GRAPH_ENABLED=true` | Stub (not yet implemented) |
+| Provider | Env Control | Backend |
+|----------|-------------|---------|
+| PgVectorStore | `HARNESS_RAG_PROVIDER=pgvector` | pgvector cosine similarity + optional fulltext search |
+| MilvusVectorStore | `HARNESS_RAG_PROVIDER=milvus` | Milvus vector DB with BM25 sparse + dense vector hybrid search |
 
-`MultiRouteRetriever` fans out via `CompletableFuture.allOf()`, merges by document ID (keep highest score). Individual route failures are caught and logged — graceful degradation.
+**Unified RAG config:**
+- `HARNESS_RAG_PROVIDER` — vector store backend (`pgvector` or `milvus`, default `pgvector`)
+- `HARNESS_RAG_URL` — database/Milvus server URL
+- `HARNESS_RAG_DATABASE` — database name (Milvus: auto-created if not exists)
+- `HARNESS_RAG_USER` — database username
+- `HARNESS_RAG_PASS` — database password
+- `HARNESS_RAG_API_KEY` — API key (for cloud vector DB services)
+- `HARNESS_RAG_COLLECTION` — knowledge collection name
+- `HARNESS_RAG_EMBED_DIM` — vector dimension (default `1536`)
+- `HARNESS_RAG_TOP_K` — number of results to retrieve (default `5`)
+- `HARNESS_RAG_SCORE_THRESHOLD` — minimum similarity score threshold
+- `HARNESS_RAG_BM25_WEIGHT` — BM25 sparse vector weight for hybrid search (default `0.3`, Milvus only)
+- `HARNESS_RAG_LANG` — fulltext language config (default `english`, use `simple` for Chinese)
+- `HARNESS_RAG_MILVUS_METRIC_TYPE` — distance metric (default `COSINE`, Milvus only)
 
-Fulltext route requires `content_tsv` tsvector column + GIN index on `knowledge_documents` table (see `sql/schema-pgvector.sql`). Language config via `HARNESS_RAG_FULLTEXT_LANG` (default `english`, use `simple` for Chinese).
+> **Deprecated:** `HARNESS_RAG_PG_URL`, `HARNESS_RAG_PG_USER`, `HARNESS_RAG_PG_PASS`, `HARNESS_RAG_PG_TABLE`, `HARNESS_RAG_PG_EMBED_DIM` — use the unified `HARNESS_RAG_*` equivalents above. `HARNESS_RAG_MULTI_ROUTE` and `HARNESS_RAG_FULLTEXT_ENABLED` are also deprecated (multi-route retrieval removed; fulltext is now a provider-side feature).
 
-Key classes: `RetrievalRoute` (interface), `RetrievalRouteFactory`, `PgVectorRoute`, `FulltextRoute`, `KnowledgeGraphRoute`, `MultiRouteRetriever`.
+Fulltext search requires `content_tsv` tsvector column + GIN index on `knowledge_documents` table (see `sql/schema-pgvector.sql`).
 
-### Memory & Context Management (harness-preprocess + harness-cli)
+Key classes: `VectorStore` (interface), `VectorStoreFactory`, `PgVectorStore`, `MilvusVectorStore`.
+
+### Memory & Context Management (harness-preprocess + harness-server)
 Session-based conversation memory with short-term and long-term subsystems. Enabled via `HARNESS_AUDIT_STORE=mysql` (default `none`). Shared storage config with Trace.
 
 **Context allocation strategy:** Short-term memory and RAG content are included as-is (no dynamic budget redistribution between them). When total context exceeds `HARNESS_CTX_COMPRESS_MAJOR` (default 85%), only short-term messages are compressed. Long-term memory is injected into the system prompt, capped at `HARNESS_MEMORY_LONGTERM_MAX_TOKENS` (default 800). Base system prompt is configurable via `HARNESS_SYSTEM_PROMPT` env var.
@@ -187,7 +201,7 @@ Layer 1.5: Session Lifecycle
   └─ 并行加载: 短期记忆 + 长期偏好 + RAG 检索 (CompletableFuture.allOf)
 
 Layer 2: Preprocess
-  ├─ RAG 知识库检索 (ContextBuilder → QueryRewriter → [MultiRouteRetriever | RagRetriever] → SemanticContextRetriever → Rerank)
+  ├─ RAG 知识库检索 (ContextBuilder → QueryRewriter → VectorStore → SemanticContextRetriever → Rerank)
   ├─ 加载长期记忆 (PreferenceStore.loadByUser)
   ├─ System 消息组装: HARNESS_SYSTEM_PROMPT 基础提示词 + 长期记忆（受 MEMORY_LONGTERM_MAX_TOKENS 限制）+ RAG 上下文
   ├─ 短期记忆 + RAG 有多少放多少，总上下文 > HARNESS_CTX_COMPRESS_MAJOR（默认 85%）时触发大压缩
@@ -230,7 +244,7 @@ Layer 5: Audit
 - 原始消息永不删除，只新增 `is_summary=true` 的摘要行。
 
 **Performance optimizations (v0.2.7):**
-- **HikariCP connection pool** — `MysqlConnectionPool` + `PgConnectionPool` singletons in `harness-env`, shared by MySQL stores and PgVectorRagRetriever respectively. One pool per JVM per DB (maxPool=10, minIdle=2). Eliminates per-operation TCP+handshake overhead.
+- **HikariCP connection pool** — `MysqlConnectionPool` + `PgConnectionPool` singletons in `harness-env`, shared by MySQL stores and PgVectorStore respectively. One pool per JVM per DB (maxPool=10, minIdle=2). Eliminates per-operation TCP+handshake overhead. Milvus uses `MilvusConnectionPool` singleton (auto-creates database if not exists).
 - **Memory/RAG parallel loading** — Short-term memory (`messageStore.loadForContext`), long-term prefs (`preferenceStore.loadByUser`), and RAG retrieval (`contextBuilder.build`) run concurrently via `CompletableFuture.allOf()`. RAG starts immediately before session lifecycle resolves.
 - **Refinement SQL consolidation** — `MessageStore.loadSessionStats()` replaces 7-8 individual queries with a single GROUP BY. `SessionLifecycleManager.isWorthyOfRefinement()` uses consolidated stats. Refinement check is fire-and-forget async (`CompletableFuture.runAsync`), non-blocking.
 - **Session title** — `Session` record includes `title` field. Auto-set from user's first message (truncated to 100 chars). DB column: `sessions.title VARCHAR(256)`.
@@ -250,27 +264,32 @@ Layer 5: Audit
 - **Redis 分布式缓存:** 设置 `HARNESS_MEMORY_REDIS_URL` 启用 Redis 替换内存缓存（多实例部署）。Redis 仅替换缓存层，持久层（`HARNESS_AUDIT_STORE`）不变。Jedis 连接池单例（`RedisConnectionPool`），Redis 不可用时自动降级为 cache-miss。Key 结构：`{prefix}:msg:{sessionId}`（JSON + TTL）、`{prefix}:meta:{sessionId}`（HASH）、`{prefix}:user_sessions:{userId}`（SET）、`{prefix}:access`（ZSET）、`{prefix}:user_bytes:{userId}` / `{prefix}:global_bytes`（计数器）。
 - **Env vars (Redis):** `HARNESS_MEMORY_REDIS_URL`（如 `redis://localhost:6379`）、`HARNESS_MEMORY_REDIS_PASSWORD`、`HARNESS_MEMORY_REDIS_DB`（默认 0）、`HARNESS_MEMORY_REDIS_KEY_PREFIX`（默认 `harness`）、`HARNESS_MEMORY_REDIS_TTL_MINUTES`（默认 720）
 
+### API Rate Limiting (harness-ai)
+`SemaphoreChatModel` / `SemaphoreStreamingChatModel` wrap the ChatModel with Java Semaphore-based concurrency control, preventing too many simultaneous LLM API calls. Configured via `HARNESS_MODEL_API_MAX_CONCURRENT` (default 10). Integrated transparently by `SemaphoreChatModelProvider`.
+
+Key classes: `SemaphoreChatModel`, `SemaphoreStreamingChatModel`, `SemaphoreChatModelProvider`.
+
 ### Knowledge Base Upload & Management (harness-input + harness-preprocess + harness-server)
 Independent knowledge base ingestion pipeline via `POST /api/knowledge/upload` (multipart form). Management via `GET/DELETE /api/knowledge/{collection}` and `DELETE /api/knowledge/{collection}/{documentId}`. Flow:
 
 ```
 File (multipart) → TextExtractorRegistry → TextChunker.split
-  → EmbeddingModelProvider.embedAll → FileStorageService (disk) + PgVectorRagRetriever.insertBatchWithLinks (pgvector)
+  → EmbeddingModelProvider.embedAll → FileStorageService (disk) + VectorStore.insertBatch
 ```
 
 **Supported formats:** TXT, Markdown, CSV, JSON, XML (PlainTextExtractor), PDF (PdfTextExtractor via Apache PDFBox), DOCX/XLSX (OfficeTextExtractor via Apache POI). Falls back to UTF-8 for unmatched types.
 
 **Key classes:**
 - `TextExtractor` interface + `TextExtractorRegistry` (harness-input) — format-specific text extraction
-- `TextChunker` (harness-input) — semantic boundary text chunking utility (paragraph → sentence → line → fixed token fallback), shared by both LargeFileParser and KnowledgeIngestService. Each semantic unit becomes its own chunk without merging across boundaries.
+- `TextChunker` (harness-input) — semantic boundary text chunking utility (paragraph → sentence → line → fixed token fallback), shared by both LargeFileParser and KnowledgeIngestService. Each semantic unit becomes its own chunk without merging across boundaries. Normalizes `\r\n` → `\n` before splitting.
 - `KnowledgeIngestService` (harness-preprocess) — orchestrator: extract → chunk → embed → store
 - `FileStorageService` (harness-preprocess) — persists files to `{HARNESS_KNOWLEDGE_UPLOAD_DIR}/{collection}/`
-- `PgVectorRagRetriever.insertBatchWithLinks()` — inserts chunks with `chunk_index`, `prev_chunk_id`, `next_chunk_id` linking
+- `VectorStore.insertBatch()` — inserts chunks with `chunk_index`, `prev_chunk_id`, `next_chunk_id` linking (unified interface, delegates to PgVectorStore or MilvusVectorStore)
 - `KnowledgeUploadHandler` (harness-server) — Javalin handler for the upload endpoint
 - `KnowledgeManagementHandler` (harness-server) — Javalin handler for list/delete endpoints
 - `MediaProcessor` interface (harness-input) — reserved for future video/voice processing
 
-**Chunk linking:** Chunks are inserted in a single transaction with `RETURNING id`, then batch-updated with prev/next links to enable `SemanticContextRetriever` lookback.
+**Chunk linking:** Chunks are inserted in a single transaction with `RETURNING id` (pgvector) or batch insert (Milvus), then batch-updated with prev/next links to enable `SemanticContextRetriever` lookback.
 
 ### Sub-Agent Orchestrator (harness-agent)
 Multi-agent architecture supporting parallel sub-task execution. LLM spawns sub-agents via the `spawn_subagent` tool; each sub-agent runs an independent ReActEngine instance sharing the same ToolRegistry.
@@ -347,6 +366,7 @@ Same pattern for Vision/Voice/Embedding/Rerank providers.
 - MySQL (总表，不含 users): `sql/schema-mysql.sql` (database: `agent`, tables: `agent_traces`, `sessions`, `messages`, `user_preferences`)
 - MySQL users: `sql/schema-users-mysql.sql` (database: `agent`, table: `users` with SHA-256 password hash)
 - PostgreSQL pgvector RAG: `sql/schema-pgvector.sql` (extension: vector, table: `knowledge_documents` with `chunk_index`, `prev_chunk_id`, `next_chunk_id` columns for semantic lookback)
+- Milvus RAG: auto-created collection with BM25 sparse + dense vector hybrid search (no schema file needed)
 - Schema comments: `sql/add-comments.sql` — ALTER TABLE statements to add Chinese COMMENT annotations to all existing tables
 
 ## HTTP Server Endpoints
@@ -386,4 +406,5 @@ Same pattern for Vision/Voice/Embedding/Rerank providers.
 - Apache PDFBox 3.0.7 (PDF text extraction, harness-input)
 - Apache POI 5.5.1 (DOCX/XLSX parsing, harness-input)
 - SQLite/MySQL/PostgreSQL JDBC drivers
+- Milvus SDK 2.5.4 (Milvus vector DB client, harness-preprocess)
 - SLF4J 2.0.16 + Logback 1.5.18
