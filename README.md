@@ -131,7 +131,7 @@ LLM 通过 `spawn_subagent` 工具派生子任务，支持依赖解析与并行�
 
 ### 环境要求
 
-- Java 17+
+- Java 21+
 - Maven 3.8+
 - PostgreSQL + pgvector 扩展（RAG，可选）
 - MySQL 8+（审计 + 会话记忆，可选）
@@ -181,10 +181,7 @@ cp .env.example .env
 
 ```bash
 # 启动 HTTP 服务（默认端口 8080）
-java -jar harness-server/target/harness-server-0.3.4.jar
-
-# 启动 CLI 交互式 REPL
-java -jar harness-cli/target/harness-cli-0.3.4.jar
+java -jar harness-server/target/harness-server-0.3.6.jar
 ```
 
 Windows 用户可直接在项目根目录放置 `.env` 后运行上述 `java -jar` 命令，无需手动 export 环境变量。
@@ -349,7 +346,7 @@ mvn jacoco:report
 
 ## 技术栈
 
-- **Java 17** + Maven 多模块
+- **Java 21** + Maven 多模块
 - **LangChain4j 1.15.0** — LLM 集成、工具规格、Chat Model
 - **Javalin 6.1.3** — HTTP 服务（SSE 流式）
 - **PostgreSQL + pgvector** — RAG 向量存储 + 全文检索
