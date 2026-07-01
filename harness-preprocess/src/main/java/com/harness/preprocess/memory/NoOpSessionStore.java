@@ -8,7 +8,7 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * No-op session store. Used when HARNESS_MEMORY_STORE=none.
+ * No-op session store. Used when HARNESS_AUDIT_STORE=none.
  */
 public class NoOpSessionStore implements SessionStore {
     @Override public Session create(String userId) { return null; }

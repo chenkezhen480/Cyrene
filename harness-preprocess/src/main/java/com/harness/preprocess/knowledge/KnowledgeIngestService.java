@@ -32,7 +32,7 @@ public class KnowledgeIngestService {
         this.fileStorage = new FileStorageService();
 
         EnvConfig cfg = EnvConfig.get();
-        this.defaultCollection = cfg.getString(EnvKey.KNOWLEDGE_DEFAULT_COLLECTION, "default");
+        this.defaultCollection = cfg.getString(EnvKey.RAG_COLLECTION, "default");
         this.maxFileSizeMb = cfg.getLong(EnvKey.KNOWLEDGE_MAX_FILE_SIZE_MB, 50);
     }
 
@@ -60,10 +60,11 @@ public class KnowledgeIngestService {
         }
         log.info("Extracted {} chars of text", rawText.length());
 
-        // Step 2: Split into chunks
+        // Step 2: Split into chunks, then merge small ones
         int chunkSize = EnvConfig.get().getInt(EnvKey.KNOWLEDGE_CHUNK_SIZE, 1024);
-        List<String> chunks = TextChunker.split(rawText, chunkSize);
-        log.info("Split into {} chunks (chunkSize={})", chunks.size(), chunkSize);
+        List<String> rawChunks = TextChunker.split(rawText, chunkSize);
+        List<String> chunks = TextChunker.mergeSmallChunks(rawChunks, chunkSize);
+        log.info("Split into {} raw chunks, merged into {} chunks (chunkSize={})", rawChunks.size(), chunks.size(), chunkSize);
 
         // Step 3: Generate embeddings (batched to avoid API body size limits)
         List<TextSegment> segments = chunks.stream()

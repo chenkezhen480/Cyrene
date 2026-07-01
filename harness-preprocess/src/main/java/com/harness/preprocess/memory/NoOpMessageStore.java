@@ -5,7 +5,7 @@ import com.harness.core.model.MemoryMessage;
 import java.util.List;
 
 /**
- * No-op message store. Used when HARNESS_MEMORY_STORE=none.
+ * No-op message store. Used when HARNESS_AUDIT_STORE=none.
  */
 public class NoOpMessageStore implements MessageStore {
     @Override public void save(String sessionId, String role, String content, boolean isSummary) {}

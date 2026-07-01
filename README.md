@@ -289,7 +289,7 @@ harness-cli           ← CLI 交互式入口
 | RAG 基础 | `HARNESS_RAG_PG_*` | PostgreSQL pgvector 连接、集合、TopK、相似度阈值 |
 | RAG 查询改写 | `HARNESS_RAG_QUERY_REWRITE` | `none` / `hyde` / `multi-query` / `step-back` |
 | RAG 多路召回 | `HARNESS_RAG_MULTI_ROUTE` | `true` 开启多路并行，`HARNESS_RAG_FULLTEXT_ENABLED` 开启全文检索 |
-| 记忆 | `HARNESS_MEMORY_STORE` | `mysql` / `sqlite` / `none`（默认） |
+| 存储（记忆+Trace） | `HARNESS_AUDIT_STORE` | `mysql` / `sqlite` / `none`（默认） |
 | 缓存 | `HARNESS_MEMORY_REDIS_URL` | 设置后启用 Redis 分布式缓存（多实例部署） |
 | 压缩 | `HARNESS_CTX_COMPRESS_*` | 小压缩（ReAct 层）+ 大压缩（AI 层）阈值 |
 | 工具 | `HARNESS_TOOL_*` | 内置工具开关与 Web 搜索引擎优先级 |

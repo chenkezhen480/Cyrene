@@ -6,8 +6,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Factory for creating memory store instances based on HARNESS_MEMORY_STORE env var.
- * Supported backends: mysql, sqlite, none (default).
+ * Factory for creating memory store instances based on HARNESS_AUDIT_STORE env var.
+ * Shared with TraceStoreFactory — one storage type controls both memory and trace.
+ * Supported backends: mysql, none (default).
  * When set to "none", all stores return NoOp implementations.
  */
 public final class MemoryStoreFactory {
@@ -17,30 +18,27 @@ public final class MemoryStoreFactory {
     private MemoryStoreFactory() {}
 
     public static SessionStore createSessionStore() {
-        String store = EnvConfig.get().getString(EnvKey.MEMORY_STORE, "none");
+        String store = EnvConfig.get().getString(EnvKey.AUDIT_STORE, "none");
         return switch (store.toLowerCase()) {
             case "mysql" -> new MysqlSessionStore();
-            case "sqlite" -> new MysqlSessionStore(); // TODO: implement SqliteSessionStore
             case "none" -> new NoOpSessionStore();
             default -> throw new IllegalStateException("Unknown memory store: " + store);
         };
     }
 
     public static MessageStore createMessageStore() {
-        String store = EnvConfig.get().getString(EnvKey.MEMORY_STORE, "none");
+        String store = EnvConfig.get().getString(EnvKey.AUDIT_STORE, "none");
         return switch (store.toLowerCase()) {
             case "mysql" -> new MysqlMessageStore();
-            case "sqlite" -> new MysqlMessageStore(); // TODO: implement SqliteMessageStore
             case "none" -> new NoOpMessageStore();
             default -> throw new IllegalStateException("Unknown memory store: " + store);
         };
     }
 
     public static PreferenceStore createPreferenceStore() {
-        String store = EnvConfig.get().getString(EnvKey.MEMORY_STORE, "none");
+        String store = EnvConfig.get().getString(EnvKey.AUDIT_STORE, "none");
         return switch (store.toLowerCase()) {
             case "mysql" -> new MysqlPreferenceStore();
-            case "sqlite" -> new MysqlPreferenceStore(); // TODO: implement SqlitePreferenceStore
             case "none" -> new NoOpPreferenceStore();
             default -> throw new IllegalStateException("Unknown memory store: " + store);
         };
@@ -50,7 +48,7 @@ public final class MemoryStoreFactory {
      * Returns true if memory store is enabled (not "none").
      */
     public static boolean isEnabled() {
-        String store = EnvConfig.get().getString(EnvKey.MEMORY_STORE, "none");
+        String store = EnvConfig.get().getString(EnvKey.AUDIT_STORE, "none");
         return !"none".equalsIgnoreCase(store);
     }
 

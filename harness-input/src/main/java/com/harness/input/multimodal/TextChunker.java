@@ -36,6 +36,9 @@ public final class TextChunker {
         List<String> chunks = new ArrayList<>();
         if (text == null || text.isBlank()) return chunks;
 
+        // Normalize line endings: \r\n → \n
+        text = text.replace("\r\n", "\n").replace("\r", "\n");
+
         // Step 1: Split by semantic boundaries (paragraphs, headings, horizontal rules)
         List<String> semanticUnits = splitBySemanticBoundaries(text);
 
@@ -190,6 +193,13 @@ public final class TextChunker {
      * @param chunkTokenSize 目标 token 数
      * @return 合并后的 chunk 列表
      */
+    /**
+     * 单遍贪心合并：相邻 chunk 若合计 token <= chunkTokenSize 则合并。
+     *
+     * @param chunks 原始 chunk 列表
+     * @param chunkTokenSize 目标 token 数
+     * @return 合并后的 chunk 列表
+     */
     public static List<String> mergeSmallChunks(List<String> chunks, int chunkTokenSize) {
         if (chunks == null || chunks.size() <= 1) return chunks;
         List<String> merged = new ArrayList<>();
@@ -198,9 +208,8 @@ public final class TextChunker {
 
         for (String chunk : chunks) {
             int chunkTokens = estimateTokens(chunk);
-            boolean isHardBoundary = startsWithHeading(chunk) || startsWithDivider(chunk);
 
-            if (currentTokens > 0 && currentTokens + chunkTokens <= chunkTokenSize && !isHardBoundary) {
+            if (currentTokens > 0 && currentTokens + chunkTokens <= chunkTokenSize) {
                 current.append("\n\n").append(chunk);
                 currentTokens += chunkTokens;
             } else {
@@ -213,21 +222,4 @@ public final class TextChunker {
         return merged;
     }
 
-    private static boolean startsWithHeading(String chunk) {
-        if (chunk == null || chunk.isEmpty()) return false;
-        String firstLine = chunk.stripLeading();
-        int nl = firstLine.indexOf('\n');
-        if (nl > 0) firstLine = firstLine.substring(0, nl);
-        // Markdown 标题：# ## ### 等
-        if (firstLine.matches("^#{1,6}\\s+.*")) return true;
-        // 数字编号标题：1. / 1、 / (1) / 第X章 / 第X节
-        if (firstLine.matches("^(第.+[章节]|\\d+[.、)）]\\s*).*")) return true;
-        return false;
-    }
-
-    private static boolean startsWithDivider(String chunk) {
-        if (chunk == null || chunk.isEmpty()) return false;
-        String trimmed = chunk.stripLeading();
-        return trimmed.startsWith("---") || trimmed.startsWith("***") || trimmed.startsWith("___");
-    }
 }

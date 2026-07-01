@@ -13,7 +13,7 @@ import java.util.Set;
 
 /**
  * Post-tool-execution inspector that evaluates tool call results.
- * Assigns an InspectionStatus (PASS, TOOL_ERROR, WRONG_TOOL, INSUFFICIENT, NEEDS_RETRY)
+ * Assigns an InspectionStatus (PASS, TOOL_ERROR, WRONG_TOOL, INSUFFICIENT)
  * with a human-readable reason.
  *
  * All inspection is heuristic-based (no model calls). If inspection itself fails,
@@ -73,15 +73,6 @@ public class Inspector {
             }
         }
 
-        // Check for NEEDS_RETRY: tool threw an exception or returned a stack trace
-        for (ToolResult result : toolResults) {
-            if (result.output() != null && looksLikeException(result.output())) {
-                return new InspectionResult(
-                        InspectionStatus.NEEDS_RETRY,
-                        "Tool '" + result.toolName() + "' returned an exception trace");
-            }
-        }
-
         // Check for WRONG_TOOL: null/empty output when a tool should have produced something
         for (ToolResult result : toolResults) {
             if (result.output() == null || result.output().isBlank()) {
@@ -115,21 +106,6 @@ public class Inspector {
     }
 
     /**
-     * Heuristic: does the output look like a Java/Python/JS exception or stack trace?
-     */
-    private boolean looksLikeException(String output) {
-        String lower = output.toLowerCase();
-        return lower.contains("exception")
-                || lower.contains("stacktrace")
-                || lower.contains("stack trace")
-                || lower.contains("traceback")
-                || lower.contains("at com.")
-                || lower.contains("at org.")
-                || lower.contains("at java.")
-                || (lower.contains("error") && lower.contains("\n\tat "));
-    }
-
-    /**
      * Build a context hint message to inject into the next ReAct iteration
      * when inspection returns a non-PASS status. This helps the LLM adjust its strategy.
      */
@@ -144,8 +120,6 @@ public class Inspector {
                     + ". Consider using a different tool that is better suited for this task.";
             case INSUFFICIENT -> "[Inspection] Insufficient result: " + result.reason()
                     + ". Try a different query, different parameters, or an alternative tool.";
-            case NEEDS_RETRY -> "[Inspection] Retry needed: " + result.reason()
-                    + ". Try again with adjusted parameters.";
             case LOOP_DETECTED -> "[Inspection] Loop detected: " + result.reason()
                     + ". You MUST output the final answer now based on available information.";
             case PASS -> null;

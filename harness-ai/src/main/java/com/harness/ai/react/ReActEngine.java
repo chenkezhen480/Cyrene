@@ -49,6 +49,7 @@ public class ReActEngine {
     private final boolean minorCompressEnabled;
     private final int minorCompressThreshold;
     private final int reflectionInterval;
+    private final int loopDetectionThreshold;
 
     public ReActEngine(ChatModelProvider chatModelProvider, ToolRegistry toolRegistry, ToolExecutor toolExecutor) {
         this(chatModelProvider, toolRegistry, toolExecutor, null, null);
@@ -72,6 +73,7 @@ public class ReActEngine {
         this.minorCompressEnabled = cfg.getBool(EnvKey.CTX_COMPRESS_MINOR_ENABLED, true);
         this.minorCompressThreshold = cfg.getInt(EnvKey.CTX_COMPRESS_MINOR, 2);
         this.reflectionInterval = cfg.getInt(EnvKey.REACT_REFLECTION_INTERVAL, 3);
+        this.loopDetectionThreshold = cfg.getInt(EnvKey.REACT_LOOP_DETECTION_THRESHOLD, 3);
     }
 
     public ReActResult execute(String systemPrompt, String userMessage, AgentTrace.Builder traceBuilder) {
@@ -234,6 +236,17 @@ public class ReActEngine {
             allSteps.add(step);
             if (listener != null) {
                 listener.onStep(step);
+            }
+
+            // 循环检测：连续 N 次相同工具调用
+            if (loopDetectionThreshold > 0) {
+                ReActStep.InspectionResult loopResult = Inspector.detectLoop(allSteps, loopDetectionThreshold);
+                if (loopResult != null) {
+                    inspection = loopResult;
+                    // 覆盖 step 中的 inspection 结果
+                    allSteps.set(allSteps.size() - 1, new ReActStep(i, aiMessage.text(),
+                            step.action(), toolCalls, toolResults, step.observation(), loopResult));
+                }
             }
 
             if (inspection.status() != ReActStep.InspectionResult.InspectionStatus.PASS) {
@@ -447,6 +460,16 @@ public class ReActEngine {
             allSteps.add(step);
             if (listener != null) {
                 listener.onStep(step);
+            }
+
+            // 循环检测：连续 N 次相同工具调用
+            if (loopDetectionThreshold > 0) {
+                ReActStep.InspectionResult loopResult = Inspector.detectLoop(allSteps, loopDetectionThreshold);
+                if (loopResult != null) {
+                    inspection = loopResult;
+                    allSteps.set(allSteps.size() - 1, new ReActStep(i, aiMessage.text(),
+                            step.action(), toolCalls, toolResults, step.observation(), loopResult));
+                }
             }
 
             if (inspection.status() != ReActStep.InspectionResult.InspectionStatus.PASS) {

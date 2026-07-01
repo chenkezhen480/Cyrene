@@ -57,26 +57,36 @@ public class MilvusVectorStore implements VectorStore {
     public void upsert(String collection, List<Document> docs) {
         String coll = collection != null ? collection : logicalCollection;
 
-        // 生成 UUID 作为 id，保证后续 chunk 链接可用
+        // 生成 UUID 作为 id
         List<String> ids = new ArrayList<>();
         for (int i = 0; i < docs.size(); i++) {
-            ids.add(UUID.randomUUID().toString().replace("-", "").substring(0, 64));
+            ids.add(UUID.randomUUID().toString().replace("-", ""));
         }
 
-        // Step 1: 插入所有 chunks
+        // 一次性插入所有 chunks（含 prev/next 链接）
         List<JsonObject> rows = new ArrayList<>();
         for (int i = 0; i < docs.size(); i++) {
             Document doc = docs.get(i);
+            if (doc.embedding() == null || doc.embedding().length == 0) {
+                throw new IllegalArgumentException("Milvus upsert requires embedding for all documents. Doc at index " + i + " has no embedding.");
+            }
+            if (doc.content() == null || doc.content().isBlank()) {
+                throw new IllegalArgumentException("Milvus upsert requires content for all documents. Doc at index " + i + " has no content.");
+            }
             JsonObject row = new JsonObject();
             row.addProperty("id", ids.get(i));
             row.addProperty("content", doc.content());
             row.addProperty("source", doc.source());
             row.addProperty("collection", coll);
-            if (doc.embedding() != null) {
-                row.add("embedding", floatArrayToJsonArray(doc.embedding()));
-            }
+            row.add("embedding", floatArrayToJsonArray(doc.embedding()));
             row.addProperty("chunk_index", doc.chunkIndex() >= 0 ? doc.chunkIndex() : i);
             row.addProperty("metadata", doc.metadata() != null ? mapToJson(doc.metadata()) : "{}");
+            if (i > 0) {
+                row.addProperty("prev_chunk_id", ids.get(i - 1));
+            }
+            if (i < docs.size() - 1) {
+                row.addProperty("next_chunk_id", ids.get(i + 1));
+            }
             rows.add(row);
         }
 
@@ -85,25 +95,7 @@ public class MilvusVectorStore implements VectorStore {
                 .data(rows)
                 .build());
 
-        // Step 2: 更新 chunk 链接 (prev/next)
-        List<JsonObject> linkRows = new ArrayList<>();
-        for (int i = 0; i < ids.size(); i++) {
-            JsonObject row = new JsonObject();
-            row.addProperty("id", ids.get(i));
-            if (i > 0) {
-                row.addProperty("prev_chunk_id", ids.get(i - 1));
-            }
-            if (i < ids.size() - 1) {
-                row.addProperty("next_chunk_id", ids.get(i + 1));
-            }
-            linkRows.add(row);
-        }
-        client.upsert(UpsertReq.builder()
-                .collectionName(collectionName)
-                .data(linkRows)
-                .build());
-
-        log.info("[Milvus] Upserted {} linked documents into collection '{}'", docs.size(), coll);
+        log.info("[Milvus] Inserted {} linked documents into collection '{}'", docs.size(), coll);
     }
 
     @Override
@@ -160,7 +152,7 @@ public class MilvusVectorStore implements VectorStore {
             QueryResp resp = client.query(QueryReq.builder()
                     .collectionName(collectionName)
                     .filter("collection == \"" + escapeExpr(collection) + "\"")
-                    .outputFields(List.of("id", "source", "chunk_index"))
+                    .outputFields(List.of("id", "content", "source", "chunk_index"))
                     .limit(1000L)
                     .build());
             List<Document> docs = new ArrayList<>();
@@ -168,7 +160,7 @@ public class MilvusVectorStore implements VectorStore {
                 Map<String, Object> entity = row.getEntity();
                 docs.add(new Document(
                         entity.get("id") != null ? entity.get("id").toString() : "",
-                        null,
+                        entity.get("content") != null ? entity.get("content").toString() : "",
                         entity.get("source") != null ? entity.get("source").toString() : "",
                         0,
                         Map.of("chunk_index", entity.get("chunk_index") != null
@@ -229,6 +221,9 @@ public class MilvusVectorStore implements VectorStore {
 
     @Override
     public List<Document> searchHybrid(String collection, String query, float[] embedding, int topK) {
+        if (embedding == null || embedding.length == 0 || query == null || query.isBlank()) {
+            return List.of();
+        }
         try {
             AnnSearchReq denseReq = AnnSearchReq.builder()
                     .vectorFieldName("embedding")

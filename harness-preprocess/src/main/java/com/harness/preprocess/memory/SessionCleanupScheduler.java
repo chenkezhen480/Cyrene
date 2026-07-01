@@ -23,7 +23,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * 2. Batch close with status=timeout
  * 3. Quality check each → submit worthy ones to refinement worker
  *
- * HARNESS_MEMORY_STORE=none → scheduler does not start.
+ * HARNESS_AUDIT_STORE=none → scheduler does not start.
  */
 public class SessionCleanupScheduler {
 

@@ -26,7 +26,7 @@ class MysqlPreferenceStoreIT {
                 "HARNESS_AUDIT_DB_URL", "jdbc:mysql://localhost:3306/agent?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai",
                 "HARNESS_AUDIT_DB_USER", "root",
                 "HARNESS_AUDIT_DB_PASS", "1234",
-                "HARNESS_MEMORY_STORE", "mysql"
+                "HARNESS_AUDIT_STORE", "mysql"
         ));
     }
 

@@ -77,6 +77,8 @@ public final class EnvKey {
     public static final String RAG_API_KEY           = "HARNESS_RAG_API_KEY";
     /** 集合/表名过滤，默认 default */
     public static final String RAG_COLLECTION        = "HARNESS_RAG_COLLECTION";
+    /** Milvus 数据库名，默认 default（PG 不使用） */
+    public static final String RAG_DATABASE          = "HARNESS_RAG_DATABASE";
     /** 检索返回最大文档数，默认 5 */
     public static final String RAG_TOP_K             = "HARNESS_RAG_TOP_K";
     /** 最低相似度阈值，默认 0.7 */
@@ -166,6 +168,8 @@ public final class EnvKey {
     public static final String REACT_STOP_ON_TOOL_ERROR  = "HARNESS_REACT_STOP_ON_TOOL_ERROR";
     /** 反思间隔轮数（每隔 N 步注入反思消息），默认 3（0=禁用） */
     public static final String REACT_REFLECTION_INTERVAL = "HARNESS_REACT_REFLECTION_INTERVAL";
+    /** 循环检测阈值（连续 N 次相同工具调用判定为循环），默认 3（0=禁用） */
+    public static final String REACT_LOOP_DETECTION_THRESHOLD = "HARNESS_REACT_LOOP_DETECTION_THRESHOLD";
 
     // ==================== Sub-Agent ====================
     /** 每个编排器最大并发子代理任务数，默认 3 */
@@ -175,7 +179,8 @@ public final class EnvKey {
     /** LLM API 最大并发调用数（Semaphore 保护上游 RPM/TPM 限制），默认 10 */
     public static final String MODEL_API_MAX_CONCURRENT  = "HARNESS_MODEL_API_MAX_CONCURRENT";
 
-    // ==================== Audit ====================
+    // ==================== Storage（统一存储配置，记忆 + Trace 共享） ====================
+    /** 存储类型：mysql | sqlite | none（默认）。同时控制记忆和 Trace 存储后端 */
     public static final String AUDIT_STORE           = "HARNESS_AUDIT_STORE";
     public static final String AUDIT_DB_URL          = "HARNESS_AUDIT_DB_URL";
     public static final String AUDIT_DB_USER         = "HARNESS_AUDIT_DB_USER";
@@ -220,8 +225,6 @@ public final class EnvKey {
     public static final String MODEL_CHAT_CAPABILITIES  = "HARNESS_MODEL_CHAT_CAPABILITIES";
 
     // ==================== Memory (会话记忆管理) ====================
-    /** 会话记忆存储类型：mysql | sqlite | none（默认） */
-    public static final String MEMORY_STORE                    = "HARNESS_MEMORY_STORE";
     /** 会话超时时间（分钟），默认 30 */
     public static final String SESSION_TIMEOUT_MINUTES         = "HARNESS_SESSION_TIMEOUT_MINUTES";
     /** 触发长期记忆提炼的最少消息数，默认 5 */
@@ -273,8 +276,6 @@ public final class EnvKey {
     // ==================== Knowledge Base ====================
     /** 知识库文件上传目录 */
     public static final String KNOWLEDGE_UPLOAD_DIR          = "HARNESS_KNOWLEDGE_UPLOAD_DIR";
-    /** 默认知识库集合名称，默认 default */
-    public static final String KNOWLEDGE_DEFAULT_COLLECTION  = "HARNESS_KNOWLEDGE_DEFAULT_COLLECTION";
     /** 上传文件最大大小（MB），默认 50 */
     public static final String KNOWLEDGE_MAX_FILE_SIZE_MB    = "HARNESS_KNOWLEDGE_MAX_FILE_SIZE_MB";
     /** 文本分块大小，默认 1000 */

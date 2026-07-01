@@ -172,7 +172,7 @@ Fulltext route requires `content_tsv` tsvector column + GIN index on `knowledge_
 Key classes: `RetrievalRoute` (interface), `RetrievalRouteFactory`, `PgVectorRoute`, `FulltextRoute`, `KnowledgeGraphRoute`, `MultiRouteRetriever`.
 
 ### Memory & Context Management (harness-preprocess + harness-cli)
-Session-based conversation memory with short-term and long-term subsystems. Enabled via `HARNESS_MEMORY_STORE=mysql` (default `none`).
+Session-based conversation memory with short-term and long-term subsystems. Enabled via `HARNESS_AUDIT_STORE=mysql` (default `none`). Shared storage config with Trace.
 
 **Context allocation strategy:** Short-term memory and RAG content are included as-is (no dynamic budget redistribution between them). When total context exceeds `HARNESS_CTX_COMPRESS_MAJOR` (default 85%), only short-term messages are compressed. Long-term memory is injected into the system prompt, capped at `HARNESS_MEMORY_LONGTERM_MAX_TOKENS` (default 800). Base system prompt is configurable via `HARNESS_SYSTEM_PROMPT` env var.
 
@@ -213,8 +213,8 @@ Layer 5: Audit
 **Key classes (com.harness.preprocess.memory):**
 - `SessionStore` / `MessageStore` / `PreferenceStore` — persistence interfaces
 - `MysqlSessionStore` / `MysqlMessageStore` / `MysqlPreferenceStore` — MySQL implementations, all use shared `MysqlConnectionPool` (HikariCP, in harness-env)
-- `NoOp*Store` — no-op implementations when `HARNESS_MEMORY_STORE=none`
-- `MemoryStoreFactory` — creates stores based on `HARNESS_MEMORY_STORE` env var
+- `NoOp*Store` — no-op implementations when `HARNESS_AUDIT_STORE=none`
+- `MemoryStoreFactory` — creates stores based on `HARNESS_AUDIT_STORE` env var (shared with TraceStoreFactory)
 - `SessionLifecycleManager` — passive timeout detection + session resolution + refinement quality scoring (4 signals: conversation turns, tool usage, avg reply length, user questions). Uses consolidated `MessageStore.loadSessionStats()` (single GROUP BY query, replaces 7-8 individual queries).
 - `SessionMessageCache` — LRU cache for active session messages with per-user and global eviction: per-user session count (default 10), per-user memory (default 2MB), global memory (default 4GB, evict to 50% target), session TTL (default 12h idle expiry). Uses TreeMap for O(log n) oldest-session lookup. onEvict callback synchronizes cross-cache cleanup (SkillRegistry).
 - `MemoryCompressor` — major compression only: AI-based intelligent extraction with time-decay weighting
@@ -247,7 +247,7 @@ Layer 5: Audit
   4. Session TTL: idle sessions expired after `HARNESS_CACHE_SESSION_TTL_HOURS` (default 12h)
 - **跨缓存联动:** onEvict 回调机制 — messageCache 淘汰会话时自动触发 skillRegistry.clearSession()，确保 skill 缓存跟随会话生命周期
 - **数据结构:** TreeMap 时间索引实现 O(log n) 最旧会话查找，per-user 维度通过 userSessions + userMemoryBytes 跟踪
-- **Redis 分布式缓存:** 设置 `HARNESS_MEMORY_REDIS_URL` 启用 Redis 替换内存缓存（多实例部署）。Redis 仅替换缓存层，持久层（`HARNESS_MEMORY_STORE`）不变。Jedis 连接池单例（`RedisConnectionPool`），Redis 不可用时自动降级为 cache-miss。Key 结构：`{prefix}:msg:{sessionId}`（JSON + TTL）、`{prefix}:meta:{sessionId}`（HASH）、`{prefix}:user_sessions:{userId}`（SET）、`{prefix}:access`（ZSET）、`{prefix}:user_bytes:{userId}` / `{prefix}:global_bytes`（计数器）。
+- **Redis 分布式缓存:** 设置 `HARNESS_MEMORY_REDIS_URL` 启用 Redis 替换内存缓存（多实例部署）。Redis 仅替换缓存层，持久层（`HARNESS_AUDIT_STORE`）不变。Jedis 连接池单例（`RedisConnectionPool`），Redis 不可用时自动降级为 cache-miss。Key 结构：`{prefix}:msg:{sessionId}`（JSON + TTL）、`{prefix}:meta:{sessionId}`（HASH）、`{prefix}:user_sessions:{userId}`（SET）、`{prefix}:access`（ZSET）、`{prefix}:user_bytes:{userId}` / `{prefix}:global_bytes`（计数器）。
 - **Env vars (Redis):** `HARNESS_MEMORY_REDIS_URL`（如 `redis://localhost:6379`）、`HARNESS_MEMORY_REDIS_PASSWORD`、`HARNESS_MEMORY_REDIS_DB`（默认 0）、`HARNESS_MEMORY_REDIS_KEY_PREFIX`（默认 `harness`）、`HARNESS_MEMORY_REDIS_TTL_MINUTES`（默认 720）
 
 ### Knowledge Base Upload & Management (harness-input + harness-preprocess + harness-server)

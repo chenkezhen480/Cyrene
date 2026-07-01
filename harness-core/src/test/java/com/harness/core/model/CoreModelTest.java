@@ -117,7 +117,7 @@ class CoreModelTest {
                 ReActStep.InspectionResult.InspectionStatus.TOOL_ERROR,
                 ReActStep.InspectionResult.InspectionStatus.WRONG_TOOL,
                 ReActStep.InspectionResult.InspectionStatus.INSUFFICIENT,
-                ReActStep.InspectionResult.InspectionStatus.NEEDS_RETRY);
+                ReActStep.InspectionResult.InspectionStatus.LOOP_DETECTED);
     }
 
     // ---- ParsedContent ----

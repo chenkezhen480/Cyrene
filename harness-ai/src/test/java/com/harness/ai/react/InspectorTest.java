@@ -50,15 +50,16 @@ class InspectorTest {
     }
 
     @Test
-    void inspect_exceptionTrace_returnsNeedsRetry() {
+    void inspect_exceptionTrace_returnsPass() {
         ToolCall call = toolCall("search");
         ToolResult result = ToolResult.ok("id1", "search",
                 "java.lang.NullPointerException\n\tat com.example.Service.method(Service.java:42)", 100);
 
         var inspection = inspector.inspect(List.of(call), List.of(result));
 
-        assertThat(inspection.status()).isEqualTo(InspectionStatus.NEEDS_RETRY);
-        assertThat(inspection.reason()).contains("search");
+        // Tool returned success=true, exception traces in output are the tool's responsibility.
+        // Actual failures (success=false) are retried by executeWithRetry().
+        assertThat(inspection.status()).isEqualTo(InspectionStatus.PASS);
     }
 
     @Test
@@ -153,11 +154,4 @@ class InspectorTest {
         assertThat(hint).contains("Insufficient");
     }
 
-    @Test
-    void buildInspectionHint_needsRetry_returnsHint() {
-        var result = new InspectionResult(InspectionStatus.NEEDS_RETRY, "exception trace");
-        String hint = Inspector.buildInspectionHint(result);
-
-        assertThat(hint).contains("Retry needed");
-    }
 }

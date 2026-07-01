@@ -72,7 +72,7 @@ public class MilvusCollectionInitializer {
                 .maxLength(64).isPrimaryKey(true).autoID(false).build());
         schema.addField(AddFieldReq.builder()
                 .fieldName("content").dataType(DataType.VarChar)
-                .maxLength(65535).build());
+                .maxLength(65535).enableAnalyzer(true).build());
         schema.addField(AddFieldReq.builder()
                 .fieldName("source").dataType(DataType.VarChar)
                 .maxLength(512).build());
