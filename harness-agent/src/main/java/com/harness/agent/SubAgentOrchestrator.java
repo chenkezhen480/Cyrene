@@ -8,6 +8,7 @@ import com.harness.core.model.AgentTrace;
 import com.harness.core.model.CancellationToken;
 import com.harness.env.EnvConfig;
 import com.harness.env.EnvKey;
+import com.harness.tool.HttpApiTool;
 import com.harness.tool.ToolExecutor;
 import com.harness.tool.ToolRegistry;
 import org.slf4j.Logger;
@@ -152,15 +153,21 @@ public class SubAgentOrchestrator {
 
     /**
      * Execute a single sub-agent task using a fresh ReActEngine instance.
-     * Propagates parent cancellation token to the sub-agent.
+     * Propagates parent cancellation token and credentials to the sub-agent.
      */
     private CompletableFuture<SubAgentResult> executeTask(SubAgentTask task) {
+        // Capture parent credentials before dispatching to sub-agent thread
+        // (ThreadLocal is per-thread; sub-agent runs on a different thread)
+        final java.util.Map<String, String> parentCredentials = HttpApiTool.getCurrentCredentialsSnapshot();
+
         return CompletableFuture.supplyAsync(() -> {
             Thread currentThread = Thread.currentThread();
             // Register with parent token so cancel() interrupts sub-agent threads too
             if (parentToken != null) {
                 parentToken.trackThread(currentThread);
             }
+            // Propagate parent credentials to sub-agent thread
+            HttpApiTool.setCurrentCredentials(parentCredentials);
             long start = System.currentTimeMillis();
             log.debug("[SubAgent] Executing task: id={}", task.taskId());
             try {
@@ -186,6 +193,7 @@ public class SubAgentOrchestrator {
                 log.error("[SubAgent] Task {} failed in {}ms: {}", task.taskId(), duration, e.getMessage());
                 return SubAgentResult.failure(task.taskId(), e.getMessage(), List.of(), duration);
             } finally {
+                HttpApiTool.clearCurrentCredentials();
                 if (parentToken != null) {
                     parentToken.untrackThread(currentThread);
                 }

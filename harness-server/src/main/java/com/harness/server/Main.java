@@ -14,6 +14,8 @@ import org.eclipse.jetty.util.thread.QueuedThreadPool;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -98,9 +100,18 @@ public class Main {
         QueuedThreadPool pool = new QueuedThreadPool(workers, workers, 60000);
         pool.setName("harness-server");
 
+        int idleTimeoutMs = EnvConfig.get().getInt(EnvKey.SERVER_IDLE_TIMEOUT, 300_000); // default 5 min
         Javalin app = Javalin.create(config -> {
             config.jsonMapper(new io.javalin.json.JavalinJackson(mapper, false));
             config.jetty.threadPool = pool;
+            config.jetty.modifyServer(server -> {
+                for (org.eclipse.jetty.server.Connector c : server.getConnectors()) {
+                    if (c instanceof org.eclipse.jetty.server.ServerConnector sc) {
+                        sc.setIdleTimeout(idleTimeoutMs);
+                    }
+                }
+            });
+            config.staticFiles.add("/public", io.javalin.http.staticfiles.Location.CLASSPATH);
         }).start(host, port);
 
         // Health check
@@ -198,6 +209,43 @@ public class Main {
             }
         });
 
-        log.info("Harness Server started on {}:{} (workers={})", host, port, workers);
+        // Project API Discovery endpoints
+        ProjectDiscoveryHandler discoveryHandler = new ProjectDiscoveryHandler(mapper, agent);
+        app.post("/api/project-discovery/scan", discoveryHandler::scan);
+        app.post("/api/project-discovery/generate", discoveryHandler::generate);
+        app.get("/api/project-discovery/config", discoveryHandler::getConfig);
+        app.put("/api/project-discovery/config", discoveryHandler::updateConfig);
+        app.post("/api/project-discovery/reload", discoveryHandler::reload);
+
+        log.info("Harness Server started on {}:{} (workers={}, idleTimeout={}s)", host, port, workers, idleTimeoutMs / 1000);
+
+        // First-launch detection: open browser if no project-apis.json exists in local env
+        if (EnvConfig.get().getBool(EnvKey.PROJECT_DISCOVERY_ENABLED, true)) {
+            String apisConfigPath = EnvConfig.get().getString(EnvKey.PROJECT_APIS_CONFIG_FILE, "./project-apis.json");
+            Path apisConfig = Path.of(apisConfigPath);
+            if (!Files.exists(apisConfig) && isLocalEnvironment()) {
+                tryOpenBrowser("http://localhost:" + port);
+            }
+        }
+    }
+
+    private static boolean isLocalEnvironment() {
+        try {
+            return java.awt.Desktop.isDesktopSupported()
+                    && java.awt.Desktop.getDesktop().isSupported(java.awt.Desktop.Action.BROWSE)
+                    && !Files.exists(Path.of("/.dockerenv"))
+                    && System.getenv("KUBERNETES_SERVICE_HOST") == null;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private static void tryOpenBrowser(String url) {
+        try {
+            java.awt.Desktop.getDesktop().browse(new java.net.URI(url));
+            log.info("[Server] Opened browser for first-launch setup: {}", url);
+        } catch (Exception e) {
+            log.debug("[Server] Auto-open browser failed (non-fatal): {}", e.getMessage());
+        }
     }
 }

@@ -202,6 +202,7 @@ public final class EnvKey {
     public static final String SERVER_ENABLED        = "HARNESS_SERVER_ENABLED";
     public static final String SERVER_HOST           = "HARNESS_SERVER_HOST";
     public static final String SERVER_PORT           = "HARNESS_SERVER_PORT";
+    public static final String SERVER_IDLE_TIMEOUT   = "HARNESS_SERVER_IDLE_TIMEOUT";
     /** Jetty 线程池大小，默认 availableProcessors * 2（最少 8） */
     public static final String SERVER_WORKERS        = "HARNESS_SERVER_WORKERS";
 
@@ -237,10 +238,6 @@ public final class EnvKey {
     public static final String MEMORY_MIN_USER_CHARS           = "HARNESS_MEMORY_MIN_USER_CHARS";
     /** 长期记忆（用户偏好）注入 system prompt 的最大 token 数，默认 800 */
     public static final String MEMORY_LONGTERM_MAX_TOKENS      = "HARNESS_MEMORY_LONGTERM_MAX_TOKENS";
-    /** 小压缩迭代轮次阈值（当前迭代 > 此值时触发），默认 2 */
-    public static final String CTX_COMPRESS_MINOR              = "HARNESS_CTX_COMPRESS_MINOR";
-    /** 小压缩开关，默认 true */
-    public static final String CTX_COMPRESS_MINOR_ENABLED      = "HARNESS_CTX_COMPRESS_MINOR_ENABLED";
     /** 大压缩触发阈值（总上下文 > 此百分比时触发），默认 85 */
     public static final String CTX_COMPRESS_MAJOR              = "HARNESS_CTX_COMPRESS_MAJOR";
     /** 大压缩目标百分比，默认 30 */
@@ -291,4 +288,16 @@ public final class EnvKey {
     // ==================== Skill ====================
     /** Skill 文件目录，默认 ./skills */
     public static final String SKILL_DIR = "HARNESS_SKILL_DIR";
+
+    // ==================== Project Discovery ====================
+    /** 功能总开关，默认 true */
+    public static final String PROJECT_DISCOVERY_ENABLED        = "HARNESS_PROJECT_DISCOVERY_ENABLED";
+    /** 声明式配置文件路径，默认 ./project-apis.json */
+    public static final String PROJECT_APIS_CONFIG_FILE         = "HARNESS_PROJECT_APIS_CONFIG_FILE";
+    /** 单次发现任务最大工具调用次数，默认 60 */
+    public static final String PROJECT_DISCOVERY_MAX_TOOL_CALLS = "HARNESS_PROJECT_DISCOVERY_MAX_TOOL_CALLS";
+    /** 单次发现任务超时（分钟），默认 10 */
+    public static final String PROJECT_DISCOVERY_TIMEOUT_MINUTES = "HARNESS_PROJECT_DISCOVERY_TIMEOUT_MINUTES";
+    /** 追加的敏感文件排除 glob，逗号分隔 */
+    public static final String PROJECT_DISCOVERY_EXCLUDE_PATTERNS = "HARNESS_PROJECT_DISCOVERY_EXCLUDE_PATTERNS";
 }

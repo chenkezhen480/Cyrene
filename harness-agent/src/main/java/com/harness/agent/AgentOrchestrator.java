@@ -16,6 +16,7 @@ import com.harness.input.multimodal.MultimodalParser;
 import com.harness.input.multimodal.TextChunker;
 import com.harness.preprocess.ContextBuilder;
 import com.harness.preprocess.memory.*;
+import com.harness.tool.HttpApiTool;
 import com.harness.tool.ToolExecutor;
 import com.harness.tool.ToolRegistry;
 import com.harness.tool.builtin.FfmpegTool;
@@ -26,6 +27,10 @@ import com.harness.tool.mcp.McpToolDiscovery;
 import com.harness.tool.skill.LoadSkillTool;
 import com.harness.tool.skill.SkillLoader;
 import com.harness.tool.skill.SkillRegistry;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.harness.core.model.ProjectApiConfig;
+import com.harness.core.model.ReActStep;
+import com.harness.core.model.ToolResult;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -125,6 +130,9 @@ public class AgentOrchestrator {
         // Skill subsystem (load index, register load_skill tool)
         this.skillRegistry = new SkillRegistry();
         initSkills();
+
+        // Load project API discovery config (HttpApiTools for confirmed endpoints)
+        loadProjectApiConfig();
 
         // Sub-agent orchestrator (initialized before ReActEngine so spawn_subagent is available)
         this.subAgentOrchestrator = new SubAgentOrchestrator(
@@ -346,17 +354,34 @@ public class AgentOrchestrator {
             }
             trace.recordLlmMeta(chatModelProvider.modelName(), "v1");
 
-            // 大压缩检查（旧消息 + 估算新用户消息 + RAG + system + 长期记忆）
+            // 压缩检查：先小压缩（删缓存中的 tool 消息），再大压缩（AI 摘要）
             int totalBudget = chatModelProvider.chatModel() != null ? chatModelProvider.contextWindow() : 8000;
             if (sessionId != null && userId != null) {
+                // 小压缩：从缓存中删除 tool 消息
+                int stripped = stripToolMessagesFromCache(sessionId, userId);
+                if (stripped > 0) {
+                    // 缓存已更新，重新加载 shorttermMessages
+                    shorttermMessages = messageCache.getIfPresent(sessionId);
+                    if (shorttermMessages == null) {
+                        shorttermMessages = messageStore.loadForContext(sessionId);
+                    }
+                }
+
                 int shorttermTokens = estimateTokens(shorttermMessages);
                 int inputTokens = estimateTokens(finalUserMessage);  // includes RAG context
                 int systemTokens = estimateTokens(systemPrompt);
                 int totalUsed = shorttermTokens + inputTokens + systemTokens;
                 log.debug("[Orchestrator] Token estimate: shortterm={}, input={}, system={}, total={}/{}",
                         shorttermTokens, inputTokens, systemTokens, totalUsed, totalBudget);
-                var compressResult = memoryCompressor.compressIfNeeded(
-                        sessionId, shorttermMessages, shorttermTokens, totalUsed, totalBudget);
+
+                // 大压缩：小压缩后仍超过（大压缩阈值-10）% 时触发
+                int majorThreshold = EnvConfig.get().getInt(EnvKey.CTX_COMPRESS_MAJOR, 85);
+                var compressResult = new MemoryCompressor.CompressionResult(
+                        MemoryCompressor.CompressionResult.CompressionType.NONE, 0, 0);
+                if ((int) (totalUsed * 100.0 / totalBudget) >= majorThreshold - 10) {
+                    compressResult = memoryCompressor.compressIfNeeded(
+                            sessionId, shorttermMessages, shorttermTokens, totalUsed, totalBudget);
+                }
                 if (compressResult.type() != MemoryCompressor.CompressionResult.CompressionType.NONE) {
                     log.info("[Memory] Compression triggered: type={}, before={}, after={}",
                             compressResult.type(), compressResult.messagesBefore(), compressResult.messagesAfter());
@@ -395,6 +420,9 @@ public class AgentOrchestrator {
             List<ChatMessage> historyChatMessages = convertToChatMessages(shorttermMessages);
             ReActEngine.ReActResult result = reactEngine.execute(systemPrompt, finalUserMessage, historyChatMessages, trace.builder(), null, cancellationToken, enableThinking);
             result.steps().forEach(trace::addStep);
+
+            // Tool 消息进缓存（不落 DB），供下一轮 preprocess 小压缩
+            cacheToolMessages(result, sessionId, userId);
 
             RiskLevel risk = determineRisk(result);
             trace.recordOutput(result.output(), risk, true);
@@ -584,15 +612,31 @@ public class AgentOrchestrator {
                 finalUserMessage = enhancedText + "\n\n" + ctx.contextBlock();
             }
 
-            // Compression check
+            // 压缩检查：先小压缩（删缓存中的 tool 消息），再大压缩（AI 摘要）
             int totalBudget = chatModelProvider.chatModel() != null ? chatModelProvider.contextWindow() : 8000;
             if (sessionId != null && userId != null) {
+                // 小压缩：从缓存中删除 tool 消息
+                int stripped = stripToolMessagesFromCache(sessionId, userId);
+                if (stripped > 0) {
+                    shorttermMessages = messageCache.getIfPresent(sessionId);
+                    if (shorttermMessages == null) {
+                        shorttermMessages = messageStore.loadForContext(sessionId);
+                    }
+                }
+
                 int shorttermTokens = estimateTokens(shorttermMessages);
                 int inputTokens = estimateTokens(finalUserMessage);  // includes RAG context
                 int systemTokens = estimateTokens(systemPrompt);
                 int totalUsed = shorttermTokens + inputTokens + systemTokens;
-                var compressResult = memoryCompressor.compressIfNeeded(
-                        sessionId, shorttermMessages, shorttermTokens, totalUsed, totalBudget);
+
+                // 大压缩：小压缩后仍超过（大压缩阈值-10）% 时触发
+                int majorThreshold = EnvConfig.get().getInt(EnvKey.CTX_COMPRESS_MAJOR, 85);
+                var compressResult = new MemoryCompressor.CompressionResult(
+                        MemoryCompressor.CompressionResult.CompressionType.NONE, 0, 0);
+                if ((int) (totalUsed * 100.0 / totalBudget) >= majorThreshold - 10) {
+                    compressResult = memoryCompressor.compressIfNeeded(
+                            sessionId, shorttermMessages, shorttermTokens, totalUsed, totalBudget);
+                }
                 if (compressResult.type() != MemoryCompressor.CompressionResult.CompressionType.NONE) {
                     log.info("[Memory] Compression triggered: type={}, before={}, after={}",
                             compressResult.type(), compressResult.messagesBefore(), compressResult.messagesAfter());
@@ -639,6 +683,9 @@ public class AgentOrchestrator {
             ReActEngine.ReActResult result = reactEngine.streamExecute(
                     systemPrompt, finalUserMessage, historyChatMessages, trace.builder(), listener, cancellationToken, enableThinking);
             result.steps().forEach(trace::addStep);
+
+            // Tool 消息进缓存（不落 DB），供下一轮 preprocess 小压缩
+            cacheToolMessages(result, finalSessionId, userId);
 
             RiskLevel risk = determineRisk(result);
             trace.recordOutput(result.output(), risk, true);
@@ -803,6 +850,54 @@ public class AgentOrchestrator {
     }
 
     /**
+     * Load project-apis.json and register confirmed endpoints as HttpApiTools.
+     */
+    private void loadProjectApiConfig() {
+        EnvConfig cfg = EnvConfig.get();
+        if (!cfg.getBool(EnvKey.PROJECT_DISCOVERY_ENABLED, true)) {
+            log.info("[Discovery] Project API discovery disabled");
+            return;
+        }
+        String configPath = cfg.getString(EnvKey.PROJECT_APIS_CONFIG_FILE, "./project-apis.json");
+        java.nio.file.Path path = Path.of(configPath);
+        if (!java.nio.file.Files.exists(path)) {
+            log.debug("[Discovery] No project-apis.json found at {}, skipping", configPath);
+            return;
+        }
+        try {
+            ObjectMapper mapper = new ObjectMapper();
+            ProjectApiConfig config = mapper.readValue(path.toFile(), ProjectApiConfig.class);
+            toolRegistry.loadFromConfig(config);
+            log.info("[Discovery] Loaded project APIs from {}: {} endpoints",
+                    configPath, config.endpoints().size());
+        } catch (Exception e) {
+            log.error("[Discovery] Failed to load project-apis.json: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * Hot-reload project API config (called by server endpoint).
+     */
+    public void reloadProjectApiConfig() {
+        EnvConfig cfg = EnvConfig.get();
+        String configPath = cfg.getString(EnvKey.PROJECT_APIS_CONFIG_FILE, "./project-apis.json");
+        java.nio.file.Path path = Path.of(configPath);
+        if (!java.nio.file.Files.exists(path)) {
+            toolRegistry.unregisterHttpApi();
+            log.info("[Discovery] project-apis.json not found, unregistered all HttpApiTools");
+            return;
+        }
+        try {
+            ObjectMapper mapper = new ObjectMapper();
+            ProjectApiConfig config = mapper.readValue(path.toFile(), ProjectApiConfig.class);
+            toolRegistry.hotReload(config);
+            log.info("[Discovery] Hot-reloaded project APIs: {} endpoints", config.endpoints().size());
+        } catch (Exception e) {
+            log.error("[Discovery] Failed to hot-reload project-apis.json: {}", e.getMessage());
+        }
+    }
+
+    /**
      * Build skill content string for re-injection after major compression.
      * Formats skill as a system message that preserves the full skill instructions.
      */
@@ -875,6 +970,52 @@ public class AgentOrchestrator {
             }
         }
         return chatMessages;
+    }
+
+    /**
+     * 从 ReActResult 中提取 tool 消息，追加到缓存（不落 DB）。
+     * 下一轮 preprocess 时可被小压缩清理。
+     */
+    private void cacheToolMessages(ReActEngine.ReActResult result, String sessionId, String userId) {
+        if (sessionId == null || userId == null) return;
+        for (ReActStep step : result.steps()) {
+            if (step.toolCalls() == null || step.toolCalls().isEmpty()) continue;
+            // 保存 assistant 的工具调用请求
+            String toolCallDesc = step.toolCalls().stream()
+                    .map(tc -> tc.toolName() + "(" + tc.arguments() + ")")
+                    .reduce((a, b) -> a + ", " + b).orElse("");
+            messageCache.append(sessionId, userId,
+                    new MemoryMessage(0, sessionId, "assistant", "[Tool call] " + toolCallDesc, false, null));
+            // 保存工具执行结果
+            if (step.toolResults() != null) {
+                for (ToolResult tr : step.toolResults()) {
+                    String content = tr.success() ? tr.output() : "ERROR: " + tr.error();
+                    messageCache.append(sessionId, userId,
+                            new MemoryMessage(0, sessionId, "tool", "[" + tr.toolName() + "] " + content, false, null));
+                }
+            }
+        }
+    }
+
+    /**
+     * 小压缩：从缓存中删除 tool 消息，返回删除的消息数。
+     * 在预处理层调用，先于大压缩。
+     */
+    private int stripToolMessagesFromCache(String sessionId, String userId) {
+        List<MemoryMessage> cached = messageCache.getIfPresent(sessionId);
+        if (cached == null || cached.isEmpty()) return 0;
+        int before = cached.size();
+        List<MemoryMessage> stripped = cached.stream()
+                .filter(m -> !"tool".equals(m.role()))
+                .filter(m -> !(m.role().equals("assistant") && m.content() != null && m.content().startsWith("[Tool call]")))
+                .toList();
+        if (stripped.size() < before) {
+            int removed = before - stripped.size();
+            messageCache.put(sessionId, userId, stripped);
+            log.info("[Memory] Minor compression: stripped {} tool messages from cache ({} → {})", removed, before, stripped.size());
+            return removed;
+        }
+        return 0;
     }
 
     public void shutdown() {

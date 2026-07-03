@@ -1,5 +1,6 @@
 package com.harness.core.model;
 
+import java.util.HashMap;
 import java.util.Map;
 
 /**
@@ -12,6 +13,7 @@ public record AgentContext(
     public static final String KEY_USER_ID = "userId";
     public static final String KEY_OUTPUT_MODE = "outputMode";
     public static final String KEY_ENABLE_THINKING = "enableThinking";
+    public static final String KEY_CREDENTIALS = "credentials";
     public static final String VALUE_MODE_BLOCKING = "blocking";
     public static final String VALUE_MODE_STREAMING = "streaming";
 
@@ -52,5 +54,33 @@ public record AgentContext(
         Object val = data.get("reflectionInterval");
         if (val instanceof Number n) return n.intValue();
         return null;  // use env default
+    }
+
+    /**
+     * Per-request credentials map for user_passthrough auth.
+     * Keys match {@code credentialKey} in {@code project-apis.json} endpoint declarations.
+     * Values are the raw tokens to inject into downstream HTTP requests.
+     */
+    @SuppressWarnings("unchecked")
+    public Map<String, String> credentials() {
+        Object val = data.get(KEY_CREDENTIALS);
+        if (val instanceof Map<?, ?> m) {
+            Map<String, String> result = new HashMap<>();
+            m.forEach((k, v) -> {
+                if (k != null && v != null) result.put(k.toString(), v.toString());
+            });
+            return result;
+        }
+        return Map.of();
+    }
+
+    /**
+     * Create a shallow clone with credentials cleared (for sub-agent isolation).
+     */
+    @SuppressWarnings("unchecked")
+    public AgentContext withClearedCredentials() {
+        Map<String, Object> copy = new HashMap<>(data);
+        copy.put(KEY_CREDENTIALS, Map.of());
+        return new AgentContext(copy);
     }
 }

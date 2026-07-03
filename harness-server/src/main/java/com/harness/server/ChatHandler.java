@@ -7,6 +7,7 @@ import com.harness.env.EnvConfig;
 import com.harness.env.EnvKey;
 import com.harness.input.auth.JwtUtil;
 import com.harness.input.multimodal.MultimodalParser;
+import com.harness.tool.HttpApiTool;
 import io.javalin.http.Context;
 import io.jsonwebtoken.Claims;
 import jakarta.servlet.http.HttpServletResponse;
@@ -101,6 +102,9 @@ public class ChatHandler {
             AgentContext agentContext = AgentContext.of(req.context());
             Boolean enableThinking = agentContext.enableThinking();
 
+            // Set credentials for HttpApiTool (user_passthrough auth)
+            HttpApiTool.setCurrentCredentials(agentContext.credentials());
+
             try (OutputStream out = res.getOutputStream()) {
                 if (agentContext.isStreaming()) {
                     // Streaming mode: emit tokens as SSE events in real-time
@@ -185,6 +189,7 @@ public class ChatHandler {
                     log.debug("[Server] Failed to write error event to stream: {}", ex.getMessage());
                 }
             } finally {
+                HttpApiTool.clearCurrentCredentials();
                 activeRequests.remove(requestId);
                 String alias = resolvedSessionIdRef.get();
                 if (alias != null) {
