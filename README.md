@@ -9,11 +9,11 @@
 **一键发现项目接口：**
 
 > Web UI首次启动时，指定项目目录即可自动扫描所有 Controller 接口，生成 `project-apis.json` 配置文件。支持 Spring Boot、Express、Flask 等主流框架，自动解析 DTO/VO 类继承结构。
-![初始界面](docs/assets/屏幕截图 2026-07-04 131522.png)
+![初始界面](docs/assets/init-scan.png)
 
-![扫描结果展示](docs/assets/屏幕截图 2026-07-04 133335.png)
+![扫描结果展示](docs/assets/scan-result.png)
 
-![接口详情](docs/assets/屏幕截图 2026-07-04 130939.png)
+![接口详情](docs/assets/api-detail.png)
 
 ## 为什么选择 Cyrene Agent？
 

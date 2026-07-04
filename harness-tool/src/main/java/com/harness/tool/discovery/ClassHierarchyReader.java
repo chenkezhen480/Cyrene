@@ -220,6 +220,9 @@ public class ClassHierarchyReader {
      * @return list of ClassInfo from child → parent → grandparent (depth 0, 1, 2)
      */
     public List<ClassInfo> readHierarchy(String className) {
+        if (!Files.isDirectory(sourceRoot)) {
+            throw new IllegalArgumentException("项目目录不存在: " + sourceRoot);
+        }
         List<ClassInfo> hierarchy = new ArrayList<>();
         Set<String> visited = new HashSet<>();
         readRecursive(className, 0, hierarchy, visited);

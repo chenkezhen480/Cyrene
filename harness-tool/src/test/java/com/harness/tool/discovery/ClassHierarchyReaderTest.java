@@ -3,22 +3,62 @@ package com.harness.tool.discovery;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
  * Test ClassHierarchyReader with cross-module parent class lookup.
+ * Requires the zhiduyuan project to be present at the expected sibling path.
+ * Integration tests are skipped automatically when the project directory is not found (e.g. CI).
  */
 class ClassHierarchyReaderTest {
 
-    // Test with the zhiduyuan module as sourceRoot — parent classes are in ruoyi-common
-    private static final Path MODULE_ROOT = Path.of(
-            "C:/projects/ZhiDuYuan/zhiduyuan/RuoYi-Vue-Plus-5.X/ruoyi-modules/zhiduyuan");
+    // Test with the zhiduyuan module as sourceRoot — parent classes are in ruoyi-common.
+    // Must specify via -Dzhiduyuan.module.root=/path/to/ruoyi-modules/zhiduyuan
+    private static final String ROOT_PROP = System.getProperty("zhiduyuan.module.root");
+    private static final Path MODULE_ROOT = ROOT_PROP != null ? Path.of(ROOT_PROP) : null;
+
+    private static void requireModuleRoot() {
+        assumeTrue(MODULE_ROOT != null,
+                "Skipping: -Dzhiduyuan.module.root not set");
+        assumeTrue(Files.isDirectory(MODULE_ROOT),
+                "Skipping: zhiduyuan project not found at " + MODULE_ROOT);
+    }
+
+    @Test
+    void testPathNotExistReturnsError() {
+        Path fakePath = Path.of("/non/existent/project/path");
+        ClassHierarchyReader reader = new ClassHierarchyReader(fakePath);
+
+        IllegalArgumentException ex = assertThrows(
+                IllegalArgumentException.class,
+                () -> reader.readHierarchy("AnyClass"));
+        assertTrue(ex.getMessage().contains("项目目录不存在"),
+                "Error message should indicate path not found, got: " + ex.getMessage());
+        assertTrue(ex.getMessage().contains(fakePath.toString()),
+                "Error message should include the path");
+    }
+
+    @Test
+    void testToolPathNotExistReturnsErrorMessage() throws Exception {
+        Path fakePath = Path.of("/non/existent/project/path");
+        ReadClassHierarchyTool tool = new ReadClassHierarchyTool(fakePath);
+        ObjectMapper mapper = new ObjectMapper();
+
+        String result = tool.execute(mapper.readTree("{\"className\": \"AnyClass\"}"));
+        assertTrue(result.startsWith("ERROR:"),
+                "Tool should return ERROR for non-existent path, got: " + result);
+        assertTrue(result.contains("项目目录不存在"),
+                "Error should mention path not found");
+    }
 
     @Test
     void testFindClassInModule() {
+        requireModuleRoot();
         ClassHierarchyReader reader = new ClassHierarchyReader(MODULE_ROOT);
 
         // AiSessionBo is in the zhiduyuan module itself
@@ -36,6 +76,7 @@ class ClassHierarchyReaderTest {
 
     @Test
     void testCrossModuleParentLookup() {
+        requireModuleRoot();
         ClassHierarchyReader reader = new ClassHierarchyReader(MODULE_ROOT);
 
         // AiSessionBo extends BaseEntity which is in ruoyi-common (different module)
@@ -64,6 +105,7 @@ class ClassHierarchyReaderTest {
 
     @Test
     void testMergedFields() {
+        requireModuleRoot();
         ClassHierarchyReader reader = new ClassHierarchyReader(MODULE_ROOT);
 
         List<ClassHierarchyReader.FieldInfo> merged = reader.readMergedFields("AiSessionBo");
@@ -84,6 +126,7 @@ class ClassHierarchyReaderTest {
 
     @Test
     void testJsonSchemaOutput() throws Exception {
+        requireModuleRoot();
         ObjectMapper mapper = new ObjectMapper();
         ClassHierarchyReader reader = new ClassHierarchyReader(MODULE_ROOT);
         ReadClassHierarchyTool tool = new ReadClassHierarchyTool(MODULE_ROOT);
