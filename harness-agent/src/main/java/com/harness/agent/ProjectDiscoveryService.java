@@ -5,8 +5,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.harness.ai.model.ChatModelProvider;
 import com.harness.ai.react.ReActEngine;
 import com.harness.core.model.*;
-import com.harness.env.EnvConfig;
-import com.harness.env.EnvKey;
 import com.harness.tool.ToolExecutor;
 import com.harness.tool.ToolRegistry;
 import com.harness.tool.discovery.*;
@@ -14,21 +12,23 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.nio.file.Path;
+import java.time.Instant;
 import java.util.*;
-import java.util.concurrent.*;
 
 /**
  * Orchestrates the project API discovery flow.
  *
  * <ol>
  *   <li>Probe for OpenAPI/Swagger spec → deterministic parse if found</li>
- *   <li>If no spec, run a dedicated sub-agent with discovery tools to scan the codebase</li>
- *   <li>Return discovered endpoints as a draft {@link ProjectApiConfig}</li>
+ *   <li>If no spec, LLM-guided scan using 3 tools:
+ *       <ul>
+ *         <li>{@code code_glob} — locate controller/route files</li>
+ *         <li>{@code code_grep} — find endpoint annotations</li>
+ *         <li>{@code read_class_hierarchy} — read DTO/VO classes with inheritance</li>
+ *       </ul>
+ *   </li>
+ *   <li>LLM extracts endpoints and builds JSON Schema from class hierarchy</li>
  * </ol>
- *
- * <p>The discovery sub-agent uses a <b>separate, temporary {@link ToolRegistry}</b> containing only
- * the three discovery primitives. It does NOT share the main ToolRegistry — discovery tools must
- * not leak into the agent's regular tool set.
  */
 public class ProjectDiscoveryService {
 
@@ -43,17 +43,15 @@ public class ProjectDiscoveryService {
     /**
      * Run the discovery flow on a project root directory.
      *
-     * <p>If an OpenAPI spec is found, it's parsed deterministically (no LLM).
-     * Otherwise, a dedicated sub-agent with discovery tools scans the codebase.
-     *
      * @param sourceRoot absolute path to the project root
+     * @param baseUrl    global base URL for all endpoints (nullable)
      * @return discovered endpoints (not yet confirmed by human)
      */
     public ProjectApiConfig discover(Path sourceRoot, String baseUrl) {
         sourceRoot = sourceRoot.toAbsolutePath().normalize();
         log.info("[Discovery] Starting discovery for: {}, baseUrl={}", sourceRoot, baseUrl);
 
-        // Phase 1: Try OpenAPI spec first
+        // Phase 1: Try OpenAPI spec first (deterministic, no LLM)
         OpenApiSpecParser specParser = new OpenApiSpecParser();
         Optional<Path> specPath = specParser.findSpec(sourceRoot);
 
@@ -69,152 +67,149 @@ public class ProjectDiscoveryService {
             }
         }
 
-        // Phase 2: No spec — run code scan via dedicated sub-agent
-        log.info("[Discovery] No OpenAPI spec found, starting code scan");
-        return scanBySubAgent(sourceRoot, baseUrl);
+        // Phase 2: No spec — LLM-guided scan with tools
+        log.info("[Discovery] No OpenAPI spec found, starting LLM-guided code scan");
+        return scanByLLMWithTools(sourceRoot, baseUrl);
     }
 
-    /**
-     * Apply baseUrl to all endpoints in a config.
-     */
-    private ProjectApiConfig applyBaseUrl(ProjectApiConfig config, String baseUrl) {
-        if (baseUrl == null || baseUrl.isBlank()) return config;
-        List<ApiEndpoint> updated = config.endpoints().stream()
-                .map(ep -> new ApiEndpoint(ep.id(), ep.name(), ep.description(), ep.method(),
-                        ep.path(), baseUrl, ep.source(), ep.authMode(), ep.credentialKey(),
-                        ep.tokenInjection(), ep.parameters(), ep.confirmed(), ep.riskAcknowledged()))
-                .toList();
-        return new ProjectApiConfig(config.discoveredAt(), config.sourceRoot(), updated);
-    }
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    //  Phase 2: LLM-guided scan with 3 tools
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
     /**
-     * Run a dedicated sub-agent with discovery tools to scan the codebase.
-     * Creates a temporary, isolated ToolRegistry with only the three discovery primitives.
+     * LLM-guided scan: LLM decides glob/grep patterns, tools execute,
+     * then read_class_hierarchy for DTO/VO classes.
      */
-    private ProjectApiConfig scanBySubAgent(Path sourceRoot, String baseUrl) {
-        EnvConfig cfg = EnvConfig.get();
-        int maxToolCalls = cfg.getInt(EnvKey.PROJECT_DISCOVERY_MAX_TOOL_CALLS, 60);
-        int timeoutMinutes = cfg.getInt(EnvKey.PROJECT_DISCOVERY_TIMEOUT_MINUTES, 10);
-
-        // Parse additional exclude patterns from env
-        Set<String> additionalExcludes = Set.of();
-        String excludePatterns = cfg.getString(EnvKey.PROJECT_DISCOVERY_EXCLUDE_PATTERNS);
-        if (excludePatterns != null && !excludePatterns.isBlank()) {
-            additionalExcludes = Set.of(excludePatterns.split(","));
-        }
-
-        // Build isolated ToolRegistry with discovery tools only
+    private ProjectApiConfig scanByLLMWithTools(Path sourceRoot, String baseUrl) {
+        // Build tool registry with 3 discovery tools
+        Set<String> excludes = Set.of();  // sensitive file exclusions are built into each tool
         ToolRegistry discoveryRegistry = new ToolRegistry();
-        discoveryRegistry.register(new CodeGlobTool(sourceRoot, additionalExcludes));
-        discoveryRegistry.register(new CodeGrepTool(sourceRoot, additionalExcludes));
-        discoveryRegistry.register(new CodeReadTool(sourceRoot, additionalExcludes));
+        discoveryRegistry.register(new CodeGlobTool(sourceRoot, excludes));
+        discoveryRegistry.register(new CodeGrepTool(sourceRoot, excludes));
+        discoveryRegistry.register(new ReadClassHierarchyTool(sourceRoot));
         ToolExecutor discoveryExecutor = new ToolExecutor(discoveryRegistry);
 
-        // Create independent ReActEngine for discovery
-        ReActEngine discoveryEngine = new ReActEngine(
+        // Create ReActEngine with discovery tools
+        ReActEngine engine = new ReActEngine(
                 chatModelProvider, discoveryRegistry, discoveryExecutor, null, null);
 
-        // Build discovery prompt
-        String systemPrompt = buildDiscoveryPrompt(sourceRoot, maxToolCalls);
-        String userMessage = "Scan this project and discover all API endpoints. " +
-                             "Focus on REST API route registrations (Spring annotations, Express routes, Flask decorators, etc.).";
+        String systemPrompt = buildDiscoveryPrompt(sourceRoot);
+        String userMessage = "请扫描此项目，发现所有 REST API 接口并构建完整的参数 JSON Schema。";
 
-        // Run discovery with independent lifecycle (not tied to any chat request)
         AgentTrace.Builder traceBuilder = AgentTrace.builder();
         CancellationToken cancellationToken = new CancellationToken();
 
         try {
-            ReActEngine.ReActResult result = discoveryEngine.execute(
+            ReActEngine.ReActResult result = engine.execute(
                     systemPrompt, userMessage, List.of(),
                     traceBuilder, null, cancellationToken, null);
 
-            // Parse LLM output into endpoints
             List<ApiEndpoint> endpoints = parseEndpointsFromOutput(result.output(), sourceRoot, baseUrl);
-
-            // Extract project description from output, fallback to directory name
             String projectDescription = extractProjectDescription(result.output());
             if (projectDescription == null || projectDescription.isBlank()) {
                 projectDescription = sourceRoot.getFileName().toString();
             }
 
-            log.info("[Discovery] Code scan complete: {} endpoints discovered, {} tool calls, description: {}",
-                    endpoints.size(), result.steps().stream().mapToInt(s -> s.toolCalls().size()).sum(),
-                    projectDescription);
+            int toolCalls = result.steps().stream().mapToInt(s -> s.toolCalls().size()).sum();
+            log.info("[Discovery] Scan complete: {} endpoints, {} tool calls, description: {}",
+                    endpoints.size(), toolCalls, projectDescription);
 
             return new ProjectApiConfig(
-                    java.time.Instant.now().toString(),
+                    Instant.now().toString(),
                     projectDescription,
+                    baseUrl,
                     endpoints
             );
 
         } catch (Exception e) {
-            log.error("[Discovery] Code scan failed: {}", e.getMessage(), e);
-            // Return empty config with directory name as description
+            log.error("[Discovery] Scan failed: {}", e.getMessage(), e);
             return new ProjectApiConfig(
-                    java.time.Instant.now().toString(),
+                    Instant.now().toString(),
                     sourceRoot.getFileName().toString(),
+                    baseUrl,
                     List.of()
             );
         }
     }
 
     /**
-     * Build the system prompt for the discovery sub-agent.
+     * Build the system prompt for LLM-guided discovery.
      */
-    private String buildDiscoveryPrompt(Path sourceRoot, int maxToolCalls) {
+    private String buildDiscoveryPrompt(Path sourceRoot) {
         return """
-            You are a code-scanning agent that discovers REST API endpoints in a project.
+            你是一个代码扫描 agent，任务是发现项目中的所有 REST API 接口。
 
-            Your task: find ALL API endpoint registrations in the project at %s.
+            项目路径: %s
 
-            EFFICIENT WORKFLOW (follow this strictly):
-            Phase 1 - LOCATE controllers (1-2 tool calls):
-              1. code_glob("**/*Controller.java") to find all controller files
-              2. If none found, try code_glob for *.py, *.js, *.ts or code_grep for @RestController
+            你可以使用以下工具：
+            - code_glob(pattern) — 按 glob 模式查找文件，返回匹配的文件路径列表
+            - code_grep(regex, glob?) — 按正则搜索文件内容，返回匹配行及上下文（±7行）
+            - read_class_hierarchy(className) — 读取一个类及其父类（最多2层），返回合并后的字段列表和 JSON Schema
 
-            Phase 2 - READ controllers using code_read:
-              Call code_read on multiple controller files in parallel (multiple tool calls per request).
-              Use lines "1-120" to read only the class-level @RequestMapping and method-level mappings.
-              Extract endpoints directly from the source code — do NOT use code_grep again.
+            ═══ 工作流程 ═══
 
-            Phase 3 - OUTPUT your findings immediately. Do NOT search further.
+            第一步：定位控制器文件
+              用 code_glob 找到所有控制器/路由文件。
+              示例：code_glob("**/*Controller.java")
 
-            For each endpoint found, extract:
-            - name: Java method name (e.g. getOrderDetail)
-            - description: from comments or @Operation annotation
-            - method: HTTP method (GET/POST/PUT/DELETE)
-            - path: combine class-level @RequestMapping + method-level mapping (e.g. /system/user/list)
-            - parameters: brief description from method signature
+            第二步：搜索接口注解
+              用 code_grep 在控制器文件中搜索路由注解。
+              示例：code_grep(regex="@GetMapping|@PostMapping|@PutMapping|@DeleteMapping", glob="**/*Controller.java")
 
-            CRITICAL RULES:
-            - Maximum %d tool calls. Budget your calls wisely.
-            - Call code_read on multiple files in parallel (one tool call per file, multiple per request).
-            - Read only lines 1-120 of each controller to get the mappings section.
-            - After reading all controller files, STOP and output results.
-            - Do NOT do additional grep searches after reading files.
-            - Do NOT read sensitive files (.env, *.pem, *.key).
+            第三步：读取 DTO/VO 类结构
+              从第二步的结果中，识别出参数类型名称（如 UserDTO、CourseVO、QueryForm 等）。
+              对每个类型调用 read_class_hierarchy 获取完整字段结构（含继承的父类字段）。
+              示例：read_class_hierarchy(className="UserDTO")
 
-            Output format:
-            First, output a project summary line:
-            PROJECT: <one-line description of what this project does, e.g. "若依管理系统-用户权限模块">
+            第四步：输出结果
+              整合所有信息，输出结构化的接口定义。
 
-            Then repeat for each endpoint:
+            ═══ 输出格式 ═══
+
+            先输出项目描述：
+            PROJECT: <一行项目描述，如 "若依管理系统-用户权限模块">
+
+            然后每个接口重复以下格式：
             ENDPOINT:
-            - name: <name>
-            - description: <description>
+            - name: <接口名称>
+            - description: <接口描述>
             - method: <GET|POST|PUT|DELETE>
-            - path: <url path>
-            - parameters: JSON Schema object describing the parameters. Example:
-              {"type":"object","properties":{"userId":{"type":"integer","description":"用户ID"},"userName":{"type":"string","description":"用户名"}},"required":["userName"]}
-              For endpoints with no parameters: {"type":"object","properties":{}}
-              For request body (POST/PUT), describe the body fields as top-level properties.
-            - returnType: brief description of the response type, e.g. "List<UserVO>" or "AjaxResult<PageInfo>"
-            """.formatted(sourceRoot, maxToolCalls);
+            - path: <URL路径>
+            - parameters: <有效的 JSON Schema 对象>
+            - returnType: <返回类型，如 AjaxResult<List<UserVO>>>
+
+            parameters 字段必须使用 read_class_hierarchy 返回的 JSON Schema，不要自己猜测字段。
+            无参数时：{"type":"object","properties":{}}
+
+            ⚠️ 重要规则：
+            - 必须为每个引用的 DTO/VO 类调用 read_class_hierarchy，确保参数结构完整
+            - 必须提取所有接口，不要遗漏
+            - parameters 必须是有效的 JSON 格式
+            - read_class_hierarchy 能正常返回结果时，继续用它读取下一个类，不要回退到 glob 或 grep
+            - 如果 read_class_hierarchy 返回 "Class not found"，先用 code_glob 查找文件路径，再重试
+            - 尽量在一次响应中调用多个工具（如同时读取多个 DTO 类），减少轮次
+            """.formatted(sourceRoot);
+    }
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    //  Output parsing
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    /**
+     * Apply baseUrl at config level. Endpoint-level baseUrl is cleared (use global).
+     */
+    private ProjectApiConfig applyBaseUrl(ProjectApiConfig config, String baseUrl) {
+        if (baseUrl == null || baseUrl.isBlank()) return config;
+        List<ApiEndpoint> updated = config.endpoints().stream()
+                .map(ep -> new ApiEndpoint(ep.id(), ep.name(), ep.description(), ep.method(),
+                        ep.path(), null, ep.source(), ep.authMode(), ep.credentialKey(),
+                        ep.tokenInjection(), ep.parameters(), ep.confirmed(), ep.riskAcknowledged()))
+                .toList();
+        return new ProjectApiConfig(config.discoveredAt(), config.sourceRoot(), baseUrl, updated);
     }
 
     /**
      * Extract project description from the LLM's output.
-     * Looks for a line starting with "PROJECT:" and returns the description text.
      */
     private String extractProjectDescription(String output) {
         if (output == null || output.isBlank()) return null;
@@ -229,14 +224,12 @@ public class ProjectDiscoveryService {
 
     /**
      * Parse endpoint definitions from the LLM's text output.
-     * This is a best-effort extraction — the LLM may not always produce perfectly structured output.
      */
     private List<ApiEndpoint> parseEndpointsFromOutput(String output, Path sourceRoot, String baseUrl) {
         if (output == null || output.isBlank()) return List.of();
 
         List<ApiEndpoint> endpoints = new ArrayList<>();
         var mapper = new ObjectMapper();
-        // Split by ENDPOINT: marker
         String[] blocks = output.split("(?m)^ENDPOINT:");
         int id = 1;
 
@@ -251,10 +244,8 @@ public class ProjectDiscoveryService {
                 String returnType = extractField(block, "returnType");
 
                 if (name.isEmpty() || path.isEmpty()) continue;
-
                 if (method.isEmpty()) method = "GET";
 
-                // Try to parse parameters as JSON Schema; fallback to wrapping as description
                 JsonNode schema;
                 if (!params.isEmpty()) {
                     String trimmed = params.trim();
@@ -262,7 +253,6 @@ public class ProjectDiscoveryService {
                         try {
                             schema = mapper.readTree(trimmed);
                         } catch (Exception e) {
-                            // Not valid JSON, wrap as description
                             schema = buildFallbackSchema(mapper, params);
                         }
                     } else {
@@ -272,12 +262,10 @@ public class ProjectDiscoveryService {
                     schema = buildFallbackSchema(mapper, "无参数");
                 }
 
-                // Embed returnType as x-returnType extension if present
                 if (returnType != null && !returnType.isBlank() && schema.isObject()) {
                     ((com.fasterxml.jackson.databind.node.ObjectNode) schema).put("x-returnType", returnType);
                 }
 
-                // 从 path 中提取模块前缀，生成唯一 name（如 course_category_list）
                 String uniqueName = buildUniqueName(path, name);
 
                 endpoints.add(new ApiEndpoint(
@@ -286,11 +274,11 @@ public class ProjectDiscoveryService {
                         desc.isEmpty() ? method + " " + path : desc,
                         method.toUpperCase(),
                         path,
-                        baseUrl != null ? baseUrl : "",
+                        null,   // baseUrl — 使用全局 config.baseUrl
                         "code_scan",
-                        AuthMode.USER_PASSTHROUGH,   // 默认用户身份，可人工修改
-                        null,   // credentialKey — 待人工填写
-                        null,   // tokenInjection — 待人工配置
+                        AuthMode.USER_PASSTHROUGH,
+                        "Authorization",
+                        new TokenInjection("header", "Authorization", "Bearer "),
                         schema,
                         false,  // confirmed — 草稿状态，必须人工审核后才可启用
                         false   // riskAcknowledged
@@ -303,9 +291,6 @@ public class ProjectDiscoveryService {
         return endpoints;
     }
 
-    /**
-     * Build a fallback parameters schema when the LLM output is not valid JSON Schema.
-     */
     private JsonNode buildFallbackSchema(ObjectMapper mapper, String description) {
         var schema = mapper.createObjectNode();
         schema.put("type", "object");
@@ -319,20 +304,15 @@ public class ProjectDiscoveryService {
 
     /**
      * Build a unique tool name from path + method name.
-     * e.g. /zhiduyuan/course/category/list + list → course_category_list
-     * e.g. /zhiduyuan/quiz/bank/{bankId} + getInfo → quiz_bank_getInfo
      */
     private String buildUniqueName(String path, String methodName) {
-        // Extract meaningful segments from path (skip prefix like /zhiduyuan)
         String[] segments = path.split("/");
         List<String> parts = new ArrayList<>();
         for (String seg : segments) {
             if (seg.isEmpty() || seg.startsWith("{")) continue;
-            // Skip common prefixes
             if (seg.equals("zhiduyuan") || seg.equals("api") || seg.equals("v1")) continue;
             parts.add(seg);
         }
-        // Append method name if not already the last segment
         String lastPart = parts.isEmpty() ? "" : parts.get(parts.size() - 1);
         if (!lastPart.equalsIgnoreCase(methodName)) {
             parts.add(methodName);
@@ -341,8 +321,7 @@ public class ProjectDiscoveryService {
     }
 
     /**
-     * Extract a field value from a text block (e.g., "- name: getOrderDetail").
-     * Supports multi-line values for JSON objects (parameters field).
+     * Extract a field value from a text block.
      */
     private String extractField(String block, String fieldName) {
         String[] lines = block.split("\n");
@@ -355,7 +334,6 @@ public class ProjectDiscoveryService {
                 value = trimmed.substring(fieldName.length() + 1).trim();
             }
             if (value != null) {
-                // For JSON objects, collect multi-line content until closing brace
                 if (value.startsWith("{") && !value.endsWith("}")) {
                     StringBuilder sb = new StringBuilder(value);
                     for (int j = i + 1; j < lines.length; j++) {

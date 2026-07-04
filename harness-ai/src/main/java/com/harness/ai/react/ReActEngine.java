@@ -55,6 +55,15 @@ public class ReActEngine {
 
     public ReActEngine(ChatModelProvider chatModelProvider, ToolRegistry toolRegistry, ToolExecutor toolExecutor,
                        VisionModelProvider visionProvider, VoiceModelProvider voiceProvider) {
+        this(chatModelProvider, toolRegistry, toolExecutor, visionProvider, voiceProvider, -1);
+    }
+
+    /**
+     * @param maxIterationsOverride if > 0, overrides the global HARNESS_REACT_MAX_ITERATIONS setting
+     */
+    public ReActEngine(ChatModelProvider chatModelProvider, ToolRegistry toolRegistry, ToolExecutor toolExecutor,
+                       VisionModelProvider visionProvider, VoiceModelProvider voiceProvider,
+                       int maxIterationsOverride) {
         ChatModel rawModel = chatModelProvider.chatModel();
         if (visionProvider != null || voiceProvider != null) {
             this.chatModel = new FallbackChatModel(rawModel, visionProvider, voiceProvider, chatModelProvider.modelName());
@@ -66,7 +75,8 @@ public class ReActEngine {
         this.toolExecutor = toolExecutor;
         this.inspector = new Inspector();
         EnvConfig cfg = EnvConfig.get();
-        this.maxIterations = cfg.getInt(EnvKey.REACT_MAX_ITERATIONS, 10);
+        int globalMax = cfg.getInt(EnvKey.REACT_MAX_ITERATIONS, 10);
+        this.maxIterations = maxIterationsOverride > 0 ? maxIterationsOverride : globalMax;
         this.stopOnToolError = cfg.getBool(EnvKey.REACT_STOP_ON_TOOL_ERROR, false);
         this.reflectionInterval = cfg.getInt(EnvKey.REACT_REFLECTION_INTERVAL, 3);
         this.loopDetectionThreshold = cfg.getInt(EnvKey.REACT_LOOP_DETECTION_THRESHOLD, 3);

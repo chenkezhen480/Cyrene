@@ -66,8 +66,8 @@ public class ProjectDiscoveryHandler {
 
             ctx.json(Map.of(
                     "status", "ok",
-                    "sourceRoot", root.toString(),
-                    "baseUrl", baseUrl,
+                    "sourceRoot", config.sourceRoot(),
+                    "baseUrl", config.baseUrl() != null ? config.baseUrl() : "",
                     "endpoints", config.endpoints(),
                     "discoveredAt", config.discoveredAt()
             ));

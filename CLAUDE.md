@@ -17,10 +17,11 @@ mvn clean compile
 # Run HTTP server (Javalin, default port 8080)
 java -jar harness-server/target/harness-server-${revision}.jar
 
-# Run tests (currently no test files exist)
+# Run tests
 mvn test
-mvn test -pl harness-core          # single module
+mvn test -pl harness-tool          # single module
 mvn test -Dtest=ClassName          # single test class
+mvn test -Dtest=ClassHierarchyReaderTest -pl harness-tool -am  # discovery test
 ```
 
 Before running, copy `.env.example` to `.env` and configure at minimum:
@@ -43,11 +44,11 @@ harness-env           ← foundation, all HARNESS_* env var access via EnvConfig
 harness-core          ← models (AgentMessage, AgentTrace, ReActStep, ToolSpec, ParsedContent, etc.)
     ├── harness-input        ← auth (Authenticator) + multimodal parsing (MultimodalParser) + text extraction (TextExtractorRegistry) + text chunking (TextChunker) + large file parsing (LargeFileParser)
     ├── harness-preprocess   ← RAG retrieval (VectorStore: PgVectorStore/MilvusVectorStore) + semantic context (SemanticContextRetriever) + rerank + context injection (ContextBuilder)
-    ├── harness-tool         ← Tool interface, ToolRegistry, ToolExecutor, MCP adapter (McpToolAdapter), built-in tools
+    ├── harness-tool         ← Tool interface, ToolRegistry, ToolExecutor, MCP adapter (McpToolAdapter), built-in tools, discovery tools (CodeGlobTool, CodeGrepTool, ReadClassHierarchyTool)
     ├── harness-audit        ← TraceCollector + TraceStore (sqlite/mysql/file/none via TraceStoreFactory)
     └── harness-ai           ← LangChain4j integration, 6 model type abstractions, ModelProviderFactory, ReActEngine, FallbackChatModel, SemaphoreChatModel
-harness-agent         ← Agent orchestration library (com.harness.agent.AgentOrchestrator)
-harness-server        ← HTTP API entry point (com.harness.server.Main, Javalin)
+harness-agent         ← Agent orchestration library (com.harness.agent.AgentOrchestrator) + ProjectDiscoveryService (LLM-guided API discovery)
+harness-server        ← HTTP API entry point (com.harness.server.Main, Javalin) + Web UI (static resources)
 ```
 
 `harness-ai` depends on `harness-tool` (ReActEngine calls ToolExecutor).
@@ -70,7 +71,7 @@ harness-server        ← HTTP API entry point (com.harness.server.Main, Javalin
   | 6 | Realtime | `RealtimeModelProvider` | (reserved) |
 
 - **Tools implement `com.harness.tool.Tool` interface** — `spec()` returns ToolSpec, `execute(JsonNode)` returns String. Register in ToolRegistry. MCP tools adapted via McpToolAdapter.
-- **ReActEngine** uses LangChain4j 1.15.0 `ChatModel.chat(ChatRequest)` with `ToolSpecification` (JsonObjectSchema). Wraps ChatModel in `FallbackChatModel` when vision/voice providers are available. Wraps in `SemaphoreChatModel` for API concurrency limiting (`HARNESS_MODEL_API_MAX_CONCURRENT`, default 10). Supports streaming via `StreamingChatModel` (`streamExecute()` method). Tool calls retry up to 3 times on error; success with empty data passes to LLM without retry.
+- **ReActEngine** uses LangChain4j 1.15.0 `ChatModel.chat(ChatRequest)` with `ToolSpecification` (JsonObjectSchema). Wraps ChatModel in `FallbackChatModel` when vision/voice providers are available. Wraps in `SemaphoreChatModel` for API concurrency limiting (`HARNESS_MODEL_API_MAX_CONCURRENT`, default 10). Supports streaming via `StreamingChatModel` (`streamExecute()` method). Tool calls retry up to 3 times on error; success with empty data passes to LLM without retry. LLM API timeout configurable via `HARNESS_MODEL_CHAT_TIMEOUT_MS` (default 300s).
 - **Thinking Mode Control** — `HARNESS_MODEL_CHAT_THINKING` env var (default `true`) controls whether to enable thinking/reasoning mode for the chat model. `ChatModelProvider.chatModelNoThinking()` returns a model with thinking disabled (used by `LargeFileParser` for cost savings). Per-request override via `AgentContext.enableThinking()` (set in `context.enableThinking` JSON field). Providers pass `enable_thinking` via `customParameters(Map)` to OpenAI-compatible APIs (DashScope etc.). `ReActEngine.selectModel(Boolean)` picks thinking/non-thinking model; streaming mode falls back to blocking when thinking is disabled.
 - **File Content Injection** — File attachments are extracted and injected into the LLM context via `enhancedText` in `AgentOrchestrator`. Small files (< `HARNESS_INPUT_FILE_SIZE_THRESHOLD_KB`, default 100KB) use `TextExtractorRegistry.extract()` directly; large files use `LargeFileParser` merge-then-summarize approach: semantic splitting → greedy merge to `MODEL_CHAT_CONTEXT_WINDOW × LARGE_FILE_CONTEXT_RATIO` (default 40%) → parallel summarization → final merge. Works independently of RAG knowledge base configuration.
 - **ReAct Inspection** — 每轮工具调用后由 `Inspector` 启发式检查结果状态，记录在 `ReActStep.InspectionResult` 中：
@@ -348,6 +349,26 @@ parameters:
 
 **Models (com.harness.core.model):** `Skill`, `SkillIndex`
 
+### Project API Discovery (harness-agent + harness-tool)
+自动扫描现有项目，识别 REST API 接口并生成结构化配置。通过 `HARNESS_PROJECT_DISCOVERY_ENABLED=true`（默认 `true`）开启。
+
+**发现工具（注册到主 ToolRegistry，普通对话中也可使用）：**
+- `code_glob` — 按 glob 模式查找文件，返回最多 50 个匹配路径
+- `code_grep` — 按正则搜索文件内容，返回所有匹配（无数量限制），每个匹配 ±7 行上下文
+- `read_class_hierarchy` — 读取类及其父类（最多 2 层），返回合并字段列表 + 紧凑 JSON Schema。支持 Java/C#/C++/Python/JS/TS/PHP/Rust/Go
+
+**ClassHierarchyReader 跨模块查找：** 自动向上查找 `.git` 目录定位仓库根目录，支持跨模块父类查找（如 `ruoyi-modules/zhiduyuan` 中的类继承自 `ruoyi-common` 中的 `BaseEntity`）。
+
+**发现流程（LLM 引导式）：** `ProjectDiscoveryService` 构建独立的临时 `ToolRegistry`（仅包含发现三工具），配独立 `ReActEngine` 实例。LLM 按 4 步工作流执行：glob 定位 Controller → grep 搜索路由注解 → read_class_hierarchy 读取 DTO/VO 结构 → 输出结构化接口定义。
+
+**配置文件：** 产出 `project-apis.json`（声明式接口配置），通过 `HARNESS_PROJECT_APIS_CONFIG_FILE` 指定路径（默认 `./project-apis.json`）。
+
+**Key classes:**
+- `ProjectDiscoveryService` (harness-agent) — 发现任务编排
+- `CodeGlobTool` / `CodeGrepTool` / `ReadClassHierarchyTool` (harness-tool/discovery) — 发现工具
+- `ClassHierarchyReader` (harness-tool/discovery) — 多语言类结构解析器
+- `OpenApiSpecParser` (harness-tool/discovery) — OpenAPI spec 确定性解析
+
 ## Adding a New LLM Provider
 
 1. Create `YourProviderChatModelProvider implements ChatModelProvider` in `com.harness.ai.model.impl`
@@ -391,6 +412,10 @@ Same pattern for Vision/Voice/Embedding/Rerank providers.
 | GET | `/api/traces/stats` | Trace count and retention config |
 | DELETE | `/api/traces/cleanup` | Manual cleanup of expired traces |
 | DELETE | `/api/traces/{traceId}` | Delete a specific trace by ID |
+| POST | `/api/project-discovery/scan` | Trigger project API discovery scan |
+| GET | `/api/project-discovery/config` | Get current project-apis.json content |
+| PUT | `/api/project-discovery/config` | Update project-apis.json content |
+| POST | `/api/project-discovery/reload` | Hot-reload project APIs into ToolRegistry |
 | GET | `/api/health` | Health check |
 
 **Chat SSE events:** Blocking mode: `event: done` (full result JSON), `event: error` (error JSON). Streaming mode (`context.outputMode=streaming`): `event: start` (sessionId), `event: token` (partial text), `event: step` (ReAct step info), `event: done` (final result), `event: error`. JWT mode returns refreshed token in `X-New-Token` header when remaining lifetime < threshold.

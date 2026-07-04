@@ -10,6 +10,7 @@ import dev.langchain4j.model.openai.OpenAiStreamingChatModel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.time.Duration;
 import java.util.Map;
 
 public class OpenAiChatModelProvider implements ChatModelProvider {
@@ -21,17 +22,19 @@ public class OpenAiChatModelProvider implements ChatModelProvider {
     private final int maxTokens;
     private final double temperature;
     private final boolean thinking;
+    private final int timeoutSeconds;
 
     public OpenAiChatModelProvider() {
         EnvConfig cfg = EnvConfig.get();
         this.apiKey = cfg.requireString(EnvKey.MODEL_CHAT_API_KEY);
         this.baseUrl = cfg.getString(EnvKey.MODEL_CHAT_BASE_URL, "https://api.openai.com/v1");
         this.model = cfg.getString(EnvKey.MODEL_CHAT_MODEL, "gpt-4o");
-        this.maxTokens = cfg.getInt(EnvKey.MODEL_CHAT_MAX_TOKENS, 4096);
+        this.maxTokens = cfg.getInt(EnvKey.MODEL_CHAT_MAX_TOKENS, 12288);
         this.temperature = cfg.getDouble(EnvKey.MODEL_CHAT_TEMPERATURE, 0.7);
         this.thinking = cfg.getBool(EnvKey.MODEL_CHAT_THINKING, true);
-        log.info("[Model] OpenAI Chat initialized: model={}, baseUrl={}, maxTokens={}, temp={}, thinking={}",
-                model, baseUrl, maxTokens, temperature, thinking);
+        this.timeoutSeconds = cfg.getInt(EnvKey.MODEL_CHAT_TIMEOUT_MS, 300);
+        log.info("[Model] OpenAI Chat initialized: model={}, baseUrl={}, maxTokens={}, temp={}, thinking={}, timeout={}s",
+                model, baseUrl, maxTokens, temperature, thinking, timeoutSeconds);
     }
 
     @Override
@@ -42,6 +45,7 @@ public class OpenAiChatModelProvider implements ChatModelProvider {
                 .modelName(model)
                 .maxTokens(maxTokens)
                 .temperature(temperature)
+                .timeout(Duration.ofSeconds(timeoutSeconds))
                 .logRequests(true)
                 .logResponses(true)
                 .customParameters(Map.of("enable_thinking", thinking))
@@ -56,6 +60,7 @@ public class OpenAiChatModelProvider implements ChatModelProvider {
                 .modelName(model)
                 .maxTokens(maxTokens)
                 .temperature(temperature)
+                .timeout(Duration.ofSeconds(timeoutSeconds))
                 .customParameters(Map.of("enable_thinking", thinking))
                 .build();
     }

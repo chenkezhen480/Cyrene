@@ -40,7 +40,7 @@ public interface ChatModelProvider {
         if (m.contains("claude")) return 200000;
         if (m.contains("gemini")) return 1000000;
         if (m.contains("deepseek")) return 65536;
-        if (m.contains("qwen")) return 131072;
+        if (m.contains("qwen")) return 1048576;
         if (m.startsWith("o3") || m.startsWith("o4")) return 200000;
         if (m.startsWith("o1")) return 128000;
         if (m.contains("gpt-4")) return 128000;

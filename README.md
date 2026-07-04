@@ -2,9 +2,22 @@
 
 基于 **Harness 编排架构** 的 Java AI Agent 应用开发框架。提供可插拔的模型 Provider、内置 RAG 知识库、会话记忆与 5 层流水线编排，可作为脚手架快速搭建并定制面向业务的 Agent 应用。
 
+## 首次启动
+
+为了对接AI应用，那么我们必然需要针对已有系统进行对接——这正是初始化工作的意义所在。Cyrene Agent 内置了项目接口发现能力，能够自动扫描你的现有项目，在基础的Glob与Grep基础上，我还添加了ClassHierarchy对获取的类进行递归检索父类结构，以获取完整的参数结构。识别 REST API 接口并生成结构化的参数 Schema，让 Agent 具备与宿主系统交互的能力。
+
+**一键发现项目接口：**
+
+> Web UI首次启动时，指定项目目录即可自动扫描所有 Controller 接口，生成 `project-apis.json` 配置文件。支持 Spring Boot、Express、Flask 等主流框架，自动解析 DTO/VO 类继承结构。
+![初始界面](docs/assets/屏幕截图 2026-07-04 131522.png)
+
+![扫描结果展示](docs/assets/屏幕截图 2026-07-04 133335.png)
+
+![接口详情](docs/assets/屏幕截图 2026-07-04 130939.png)
+
 ## 为什么选择 Cyrene Agent？
 
-为你的产品构建 AI Agent 不必从零开始。Cyrene Agent 提供生产可用的基础能力——模型抽象、RAG、记忆、工具、审计——让你专注于业务逻辑而非底层 plumbing。配置模型、注册工具、即可上线。
+为你的产品构建 AI Agent 不必从零开始。Cyrene Agent 提供生产可用的基础能力——初始化工具配置，模型抽象、RAG、记忆、工具、审计——让你专注于业务逻辑而非底层 plumbing。配置模型、注册工具、即可上线。
 
 ### 编排架构
 
@@ -109,6 +122,10 @@ LLM 通过 `spawn_subagent` 工具派生子任务，支持依赖解析与并行�
 ### 联网搜索
 
 `WebSearchTool` 支持多引擎回退链：Tavily → SerpAPI → DuckDuckGo，无 API Key 的引擎自动跳过，DuckDuckGo 始终可用。
+
+### 项目接口发现
+
+自动扫描现有项目，识别 REST API 接口并生成结构化配置。发现工具（`code_glob`、`code_grep`、`read_class_hierarchy`）在 `HARNESS_PROJECT_DISCOVERY_ENABLED=true` 时注册到主工具集，普通对话中也可使用。`read_class_hierarchy` 支持 Java/C#/C++/Python/JS/TS 等多语言类结构解析，自动检测 `.git` 实现跨模块父类查找。
 
 ### 流式输出与取消
 
@@ -216,6 +233,10 @@ curl -X POST http://localhost:8080/api/chat \
 | `GET` | `/api/traces/stats` | Trace 统计与保留配置 |
 | `DELETE` | `/api/traces/cleanup` | 手动清理过期 Trace |
 | `DELETE` | `/api/traces/{traceId}` | 删除指定 Trace |
+| `POST` | `/api/project-discovery/scan` | 触发项目接口扫描 |
+| `GET` | `/api/project-discovery/config` | 获取接口配置 |
+| `PUT` | `/api/project-discovery/config` | 更新接口配置 |
+| `POST` | `/api/project-discovery/reload` | 热加载接口配置 |
 | `GET` | `/api/health` | 健康检查 |
 
 ### 对话请求示例
@@ -266,12 +287,11 @@ harness-env           ← 基础层：所有 HARNESS_* 环境变量 + HikariCP �
 harness-core          ← 核心模型：AgentMessage、AgentTrace、ReActStep、ToolSpec 等
     ├── harness-input        ← 认证(JWT) + 多模态解析 + 大文件合并摘要 + 文本提取 + 分块
     ├── harness-preprocess   ← RAG 查询改写 + 多路召回 + 语义上下文 + Rerank + 记忆管理
-    ├── harness-tool         ← 工具接口、注册表、执行器、MCP 适配、Skill 加载
+    ├── harness-tool         ← 工具接口、注册表、执行器、MCP 适配、Skill 加载、代码发现工具
     ├── harness-audit        ← TraceCollector + TraceStore
     └── harness-ai           ← LangChain4j 集成、6 种模型、ReActEngine、重试容错
-harness-agent         ← AgentOrchestrator（串联所有层）+ 子代理编排
-harness-server        ← HTTP API 入口（Javalin, SSE 流式）
-harness-cli           ← CLI 交互式入口
+harness-agent         ← AgentOrchestrator（串联所有层）+ 子代理编排 + 项目接口发现
+harness-server        ← HTTP API 入口（Javalin, SSE 流式, Web UI）
 ```
 
 ## 配置说明
@@ -280,17 +300,17 @@ harness-cli           ← CLI 交互式入口
 
 | 配置组 | 变量 | 说明 |
 |--------|------|------|
-| 模型 | `HARNESS_MODEL_CHAT_*` 等 | 6 种模型各自的 Provider、Key、端点，上下文窗口自动检测 |
+| 模型 | `HARNESS_MODEL_CHAT_*` 等 | 6 种模型各自的 Provider、Key、端点、超时（默认 300s），上下文窗口自动检测 |
 | 服务 | `HARNESS_SERVER_*` | 主机、端口、工作线程 |
 | 认证 | `HARNESS_AUTH_MODE` | `none` 或 `jwt` |
-| RAG 基础 | `HARNESS_RAG_PG_*` | PostgreSQL pgvector 连接、集合、TopK、相似度阈值 |
+| RAG 基础 | `HARNESS_RAG_*` | 向量存储后端（pgvector/milvus）、连接、集合、TopK、相似度阈值 |
 | RAG 查询改写 | `HARNESS_RAG_QUERY_REWRITE` | `none` / `hyde` / `multi-query` / `step-back` |
-| RAG 多路召回 | `HARNESS_RAG_MULTI_ROUTE` | `true` 开启多路并行，`HARNESS_RAG_FULLTEXT_ENABLED` 开启全文检索 |
 | 存储（记忆+Trace） | `HARNESS_AUDIT_STORE` | `mysql` / `sqlite` / `none`（默认） |
 | 缓存 | `HARNESS_MEMORY_REDIS_URL` | 设置后启用 Redis 分布式缓存（多实例部署） |
 | 压缩 | `HARNESS_CTX_COMPRESS_*` | 小压缩（ReAct 层）+ 大压缩（AI 层）阈值 |
 | 工具 | `HARNESS_TOOL_*` | 内置工具开关与 Web 搜索引擎优先级 |
 | MCP | `HARNESS_MCP_CONFIG_FILE` | MCP 服务器 JSON 配置文件 |
+| 接口发现 | `HARNESS_PROJECT_DISCOVERY_ENABLED` | 开启后自动扫描项目 REST API，发现工具可在普通对话中使用 |
 
 ## 数据库 Schema
 
@@ -343,6 +363,7 @@ mvn jacoco:report
 
 - **Realtime 模型**：接口已预留，暂无 Provider 实现
 - **知识图谱召回**：`RetrievalRoute` 接口已预留，暂无后端实现
+- **接口发现**：支持无 OpenAPI spec 的项目通过 LLM 扫描，但复杂嵌套类型解析仍有改进空间
 
 ## 技术栈
 

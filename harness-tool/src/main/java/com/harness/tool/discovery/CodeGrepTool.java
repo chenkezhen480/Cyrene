@@ -27,8 +27,7 @@ public class CodeGrepTool implements Tool {
 
     private static final Logger log = LoggerFactory.getLogger(CodeGrepTool.class);
     private static final ObjectMapper mapper = new ObjectMapper();
-    private static final int MAX_MATCHES = 30;
-    private static final int CONTEXT_LINES = 3;
+    private static final int CONTEXT_LINES = 7;
 
     private static final Set<String> DEFAULT_EXCLUDES = Set.of(
             ".env*", "*.pem", "*.key", "*credentials*", "*secret*",
@@ -50,7 +49,7 @@ public class CodeGrepTool implements Tool {
         return new ToolSpec(
                 "code_grep",
                 "Search file contents by regex pattern within the project root. " +
-                "Returns up to 5 matches with ±3 lines of context. " +
+                "Returns all matches with ±7 lines of context. " +
                 "Use to find route registrations, API annotations, controller methods, etc.",
                 mapper.createObjectNode()
                         .put("type", "object")
@@ -109,8 +108,6 @@ public class CodeGrepTool implements Tool {
 
                 @Override
                 public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
-                    if (results.size() >= MAX_MATCHES) return FileVisitResult.TERMINATE;
-
                     Path relative = rootDir.relativize(file);
                     String relativeStr = relative.toString().replace('\\', '/');
 
@@ -129,7 +126,6 @@ public class CodeGrepTool implements Tool {
                     try {
                         List<String> lines = Files.readAllLines(file);
                         for (int i = 0; i < lines.size(); i++) {
-                            if (results.size() >= MAX_MATCHES) return FileVisitResult.TERMINATE;
                             Matcher m = pattern.matcher(lines.get(i));
                             if (m.find()) {
                                 int start = Math.max(0, i - CONTEXT_LINES);

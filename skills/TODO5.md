@@ -37,10 +37,14 @@ Harness 定位是面向 AI 应用开发的通用框架。一款有特色的 AI �
 ### 2.1 环境变量
 
 ```bash
-HARNESS_PROJECT_DISCOVERY_ENABLED=true     # 功能总开关，默认 true（页面/接口常驻可访问）
+HARNESS_PROJECT_DISCOVERY_ENABLED=true     # 功能总开关，默认 true
 ```
 
-功能开关决定接口发现功能是否可用。Web UI 的自动打开逻辑见 §2.2。
+功能开关决定：
+1. 接口发现功能是否可用（Web UI + 扫描端点）
+2. 发现工具（`code_glob`、`code_grep`、`read_class_hierarchy`）是否注册到主 `ToolRegistry`，可在普通对话中使用
+
+Web UI 的自动打开逻辑见 §2.2。
 
 ### 2.2 启动流程（首次启动引导）
 
@@ -212,35 +216,36 @@ private static void tryOpenBrowser(String url) {
 
 无 spec 时，启动一个**专属、任务级**的发现流程，产出草稿标记为 `source: "code_scan"`。
 
-**实现要点：** 这个任务不应直接复用现有 `SubAgentOrchestrator` 的默认共享 `ToolRegistry` 机制（当前子代理共享主 `ToolRegistry`）——因为发现工具（见 §3.3）必须**只在发现任务里存在**，不能因为走了 sub-agent 通道就间接混进主 Agent 平时能调用的工具集。因此 `ProjectDiscoveryService` 需要构建一个**独立的、仅包含发现三原语的临时 `ToolRegistry`**，配一个独立的 `ReActEngine` 实例来跑这次任务，任务结束后整个丢弃，不注册进主注册表。
+**实现要点：** `ProjectDiscoveryService` 构建一个**独立的、仅包含发现三工具的临时 `ToolRegistry`**（`code_glob` + `code_grep` + `read_class_hierarchy`），配一个独立的 `ReActEngine` 实例来跑这次任务，任务结束后整个丢弃，不注册进主注册表。发现流程使用全局 `maxIterations` 设置，不单独限制。
 
-### 3.3 检索工具（glob / grep / read）
+**LLM 引导式工作流（4 步）：**
+1. `code_glob("**/*Controller.java")` — 定位所有控制器文件
+2. `code_grep(regex="@GetMapping|@PostMapping|...", glob="**/*Controller.java")` — 搜索所有路由注解（返回 ±7 行上下文，无匹配数限制）
+3. 从 grep 结果中提取 DTO/VO 类名，对每个类调用 `read_class_hierarchy` 获取完整字段结构（含继承父类字段 + JSON Schema）
+4. 整合输出结构化接口定义
+
+### 3.3 检索工具（glob / grep / read_class_hierarchy）
 
 不为每种框架（Spring/Express/Flask...）单独写解析器，而是给 LLM 一套通用原语，由 LLM 自己判断"这是不是一个路由注册"：
 
 | 工具 | 作用 |
 |---|---|
-| `CodeGlobTool` | 按文件名/扩展名模式定位候选文件 |
-| `CodeGrepTool` | 按正则搜索路由注册模式，最多返回 5 个匹配，每个匹配 ±3 行上下文（沿用 `LoadSkillTool` 已验证的收敛惯例） |
-| `CodeReadTool` | 读取候选位置的完整方法签名 + 相关 DTO/参数类定义 |
+| `CodeGlobTool` | 按文件名/扩展名模式定位候选文件，返回最多 50 个匹配路径 |
+| `CodeGrepTool` | 按正则搜索文件内容，返回**所有匹配**（无数量限制），每个匹配 ±7 行上下文 |
+| `ReadClassHierarchyTool` | 读取类及其父类（最多 2 层），返回合并字段列表 + 紧凑 JSON Schema。支持 Java/C#/C++/Python/JS/TS/PHP/Rust/Go。自动检测 `.git` 定位仓库根目录，支持跨模块父类查找 |
+
+~~`CodeReadTool`~~ — 已移除，功能被 `code_grep`（±7 行上下文）和 `read_class_hierarchy`（完整类结构）替代。
 
 具体框架识别逻辑（认出这是 Spring 还是 Express）留给 LLM 的推理能力，不写死在工具代码里。
 
-### 3.4 路径边界与敏感文件排除
+### 3.4 路径边界
 
 - 根目录即用户显式提供的路径；工具内部做路径规范化 + 边界检查，拒绝任何 `..` 或符号链接逃逸到根目录之外。
-- 跳过敏感文件，不读入、不出现在 LLM 上下文或 trace 中：`.env*`、`*.pem`、`*.key`、`*credentials*`、`*secret*`、`application*.yml`（如需要可通过 `HARNESS_PROJECT_DISCOVERY_EXCLUDE_PATTERNS` 追加，逗号分隔 glob）。
+- `ClassHierarchyReader` 自动向上查找 `.git` 目录定位仓库根目录，支持跨模块父类查找（如 `ruoyi-modules/zhiduyuan` 中的类继承自 `ruoyi-common` 中的 `BaseEntity`）。
 
-### 3.5 任务预算与生命周期
+### 3.5 生命周期
 
-发现任务有独立生命周期，不跟随触发它的那次 `/api/chat` 请求的 `CancellationToken`——用户关闭那次对话，发现任务不应被莫名打断或残留成孤儿任务。
-
-```bash
-HARNESS_PROJECT_DISCOVERY_MAX_TOOL_CALLS=60      # 单次发现任务最大工具调用次数
-HARNESS_PROJECT_DISCOVERY_TIMEOUT_MINUTES=10     # 单次发现任务超时
-```
-
-命中预算/超时时任务停止，返回**部分结果**作为草稿，并标注「扫描未完成，已达调用上限」，不得静默失败或返回空结果。
+发现任务使用全局 `maxIterations` 设置，不单独限制工具调用次数或超时。任务完成后结果直接返回，不保留中间状态。
 
 ---
 
@@ -284,6 +289,8 @@ HARNESS_PROJECT_DISCOVERY_TIMEOUT_MINUTES=10     # 单次发现任务超时
 | `tokenInjection` | 描述 token 注入位置（header/query/cookie），执行器据此拼装请求，纯确定性逻辑 |
 | `confirmed` | 唯一决定该条目是否真正生效的开关（见 §6.3） |
 | `riskAcknowledged` | 高风险组合（非 GET + bot 模式）的强制二次确认标记（见 §6.2） |
+
+**JSON Schema 输出优化：** `ReadClassHierarchyTool` 生成的 JSON Schema 采用紧凑格式（无 `x-sourceType` 注解、无 pretty-print 缩进），减少 token 消耗。类型映射信息已在字段列表中展示，不在 Schema 中重复。
 
 ---
 
@@ -427,9 +434,10 @@ public class HttpApiTool implements Tool {
 
 **新增文件（harness-tool）**
 - `HttpApiTool.java` — 通用执行器（§7）
-- `discovery/CodeGlobTool.java`
-- `discovery/CodeGrepTool.java`
-- `discovery/CodeReadTool.java`
+- `discovery/CodeGlobTool.java` — glob 模式文件搜索
+- `discovery/CodeGrepTool.java` — 正则内容搜索（±7 行上下文，无匹配限制）
+- `discovery/ReadClassHierarchyTool.java` — 读取类继承链 + 合并字段 + 生成紧凑 JSON Schema
+- `discovery/ClassHierarchyReader.java` — 多语言类结构解析器（Java/C#/C++/Python/JS/TS/PHP/Rust/Go），支持跨模块父类查找（基于 `.git` 检测仓库根目录）
 - `discovery/OpenApiSpecParser.java` — 确定性解析 openapi/swagger
 
 **新增文件（harness-agent）**
@@ -460,11 +468,10 @@ public class HttpApiTool implements Tool {
 
 | 变量 | 默认值 | 说明 |
 |---|---|---|
-| `HARNESS_PROJECT_DISCOVERY_ENABLED` | `true` | 功能总开关 |
+| `HARNESS_PROJECT_DISCOVERY_ENABLED` | `true` | 功能总开关（同时控制主工具注册表中的发现工具是否可用） |
 | `HARNESS_PROJECT_APIS_CONFIG_FILE` | `./project-apis.json` | 声明式配置文件路径 |
-| `HARNESS_PROJECT_DISCOVERY_MAX_TOOL_CALLS` | `60` | 单次发现任务最大工具调用次数 |
-| `HARNESS_PROJECT_DISCOVERY_TIMEOUT_MINUTES` | `10` | 单次发现任务超时 |
-| `HARNESS_PROJECT_DISCOVERY_EXCLUDE_PATTERNS` | 内置默认列表 | 追加的敏感文件排除 glob，逗号分隔 |
+
+已移除的变量：`HARNESS_PROJECT_DISCOVERY_MAX_TOOL_CALLS`、`HARNESS_PROJECT_DISCOVERY_TIMEOUT_MINUTES`、`HARNESS_PROJECT_DISCOVERY_EXCLUDE_PATTERNS`、`HARNESS_PROJECT_DISCOVERY_MAX_ITERATIONS`、`HARNESS_PROJECT_DISCOVERY_MAX_CONTEXT_CHARS`。发现任务使用全局设置，不单独限制。
 
 ---
 
@@ -505,8 +512,9 @@ public class HttpApiTool implements Tool {
 
 **Phase 2 — 发现流程**
 - `OpenApiSpecParser`（确定性解析）
-- 发现三原语 `CodeGlobTool`/`CodeGrepTool`/`CodeReadTool`（含路径边界 + 敏感文件排除）
-- `ProjectDiscoveryService`（独立 ToolRegistry + ReActEngine，同步执行）
+- 发现三工具 `CodeGlobTool`/`CodeGrepTool`/`ReadClassHierarchyTool`（含路径边界检查）
+- `ClassHierarchyReader`（多语言类结构解析，基于 `.git` 的跨模块父类查找）
+- `ProjectDiscoveryService`（独立 ToolRegistry + ReActEngine，LLM 引导式 4 步工作流）
 
 **Phase 3 — Server 端点 + Web UI**
 - `ProjectDiscoveryHandler` 全部端点（扫描、生成、配置读写、热加载）
@@ -529,7 +537,7 @@ Phase 1 与 Phase 2 可并行（互不依赖）；Phase 3 依赖 Phase 1+2 的�
 ## 13. 验证步骤
 
 1. 无 spec 的示例项目跑一次发现，确认扫描结果正确标注 `source: code_scan`，且未越界读取根目录之外的文件。
-2. 确认 `.env`/`*.pem` 等敏感文件未出现在发现任务的 LLM 上下文或 trace 中。
+2. 确认 `read_class_hierarchy` 能跨模块查找父类（如从 `ruoyi-modules/zhiduyuan` 找到 `ruoyi-common` 中的 `BaseEntity`）。
 3. 首次启动时，确认本地环境下自动弹出前置配置界面；容器环境下不弹出。
 4. 前置配置界面输入项目目录 → 同步扫描 → 展示结果 → 确认生成 → 确认 `project-apis.json` 文件正确生成。
 5. 取消前置配置后进入对话界面，再次进入时确认前置配置界面仍然弹出（因为配置文件不存在）。

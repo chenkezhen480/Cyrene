@@ -144,10 +144,11 @@ const PreConfigModal = {
 
     async function confirmGenerate() {
       try {
-        // Pass full config (discoveredAt, sourceRoot, endpoints)
+        // Pass full config (discoveredAt, sourceRoot, baseUrl, endpoints)
         const config = {
           discoveredAt: scanResult.value.discoveredAt || new Date().toISOString(),
           sourceRoot: scanResult.value.sourceRoot || sourceRoot.value.trim(),
+          baseUrl: scanResult.value.baseUrl || baseUrl.value.trim() || '',
           endpoints: (scanResult.value.endpoints || []).map(ep => ({ ...ep, confirmed: true })),
         };
         await CyreneAPI.generateConfig(config);
@@ -779,7 +780,7 @@ const ConfigPage = {
         configText.value = JSON.stringify(config, null, 2);
       } catch (e) {
         if (e.message.includes('not found') || e.message.includes('404')) {
-          configText.value = '{\n  "discoveredAt": "",\n  "sourceRoot": "",\n  "endpoints": []\n}';
+          configText.value = '{\n  "discoveredAt": "",\n  "sourceRoot": "",\n  "baseUrl": "",\n  "endpoints": []\n}';
         } else {
           error.value = e.message;
         }

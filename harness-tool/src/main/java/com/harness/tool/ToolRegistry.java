@@ -9,7 +9,7 @@ import org.slf4j.LoggerFactory;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Central registry for all available tools.
@@ -21,8 +21,8 @@ public class ToolRegistry {
 
     private final Map<String, Tool> tools = new ConcurrentHashMap<>();
 
-    /** Track names of dynamically loaded HttpApiTool instances for clean reload. */
-    private final CopyOnWriteArrayList<String> httpApiToolNames = new CopyOnWriteArrayList<>();
+    /** In-memory project API config, shared by the three discovery meta-tools. */
+    private final AtomicReference<ProjectApiConfig> configRef = new AtomicReference<>();
 
     /**
      * Register a tool. Overwrites if name already exists.
@@ -59,50 +59,39 @@ public class ToolRegistry {
     // ==================== Project API Discovery support ====================
 
     /**
-     * Load confirmed endpoints from a {@link ProjectApiConfig} into the registry.
-     * Only endpoints with {@code confirmed == true} are registered.
+     * Load project API config and register the three discovery meta-tools.
+     * Stores config in memory for the tools to query.
      * Thread-safe: can be called while ReAct loops are running.
      */
     public synchronized void loadFromConfig(ProjectApiConfig config) {
-        if (config == null || config.endpoints() == null) return;
-        int loaded = 0;
-        for (ApiEndpoint ep : config.endpoints()) {
-            if (!ep.confirmed()) continue;
-            if (ep.isHighRisk() && !ep.riskAcknowledged()) {
-                log.warn("[ToolRegistry] Skipping high-risk endpoint {} (riskAcknowledged=false)", ep.name());
-                continue;
-            }
-            String toolName = "http_" + ep.name();
-            if (!tools.containsKey(toolName)) {
-                tools.put(toolName, new HttpApiTool(ep));
-                httpApiToolNames.add(toolName);
-                loaded++;
-            }
-        }
-        if (loaded > 0) {
-            log.info("[ToolRegistry] Loaded {} project API endpoints from config", loaded);
-        }
+        if (config == null) return;
+
+        // Store config in memory (tools query via configRef)
+        configRef.set(config);
+
+        // Register the three meta-tools (idempotent — overwrite if exists)
+        tools.put("list_api_endpoints", new ListApiEndpointsTool(configRef::get));
+        tools.put("get_api_endpoint_detail", new GetApiEndpointDetailTool(configRef::get));
+        tools.put("call_discovered_api", new CallDiscoveredApiTool(configRef::get));
+
+        log.info("[ToolRegistry] Loaded project API config: {} endpoints, 3 meta-tools registered",
+                config.endpoints() != null ? config.endpoints().size() : 0);
     }
 
     /**
-     * Remove all dynamically loaded HttpApiTool instances.
-     * Used before reload to clear stale entries.
+     * Get the current project API config (for external queries).
      */
-    public synchronized void unregisterHttpApi() {
-        for (String name : httpApiToolNames) {
-            tools.remove(name);
-        }
-        httpApiToolNames.clear();
-        log.debug("[ToolRegistry] Unregistered all HttpApiTool instances");
+    public ProjectApiConfig getProjectApiConfig() {
+        return configRef.get();
     }
 
     /**
-     * Hot-reload: unregister existing HttpApiTools and re-register from new config.
+     * Hot-reload: update config in memory. Meta-tools automatically see new data via AtomicReference.
      * Thread-safe with respect to concurrent ReAct loop tool lookups.
      */
     public synchronized void hotReload(ProjectApiConfig config) {
-        unregisterHttpApi();
-        loadFromConfig(config);
-        log.info("[ToolRegistry] Hot-reload complete: total tools={}", tools.size());
+        configRef.set(config);
+        log.info("[ToolRegistry] Hot-reload complete: {} endpoints, total tools={}",
+                config.endpoints() != null ? config.endpoints().size() : 0, tools.size());
     }
 }

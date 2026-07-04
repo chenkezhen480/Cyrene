@@ -20,6 +20,7 @@ uploads/
 # Env
 .env
 *.log
+project-apis.json
 
 # OS
 .DS_Store

@@ -9,27 +9,27 @@
     </appender>
 
     <!-- ==================== Root ==================== -->
-    <root level="DEBUG">
+    <root level="INFO">
         <appender-ref ref="CONSOLE"/>
     </root>
 
     <!-- ==================== Cyrene Agent ==================== -->
     <logger name="com.harness.agent" level="DEBUG"/>
-    <logger name="com.harness.server" level="DEBUG"/>
+    <logger name="com.harness.server" level="INFO"/>
     <logger name="com.harness.ai" level="DEBUG"/>
     <logger name="com.harness.preprocess" level="DEBUG"/>
     <logger name="com.harness.input" level="DEBUG"/>
     <logger name="com.harness.tool" level="DEBUG"/>
-    <logger name="com.harness.audit" level="DEBUG"/>
-    <logger name="com.harness.env" level="DEBUG"/>
+    <logger name="com.harness.audit" level="INFO"/>
+    <logger name="com.harness.env" level="INFO"/>
 
     <!-- ==================== Third-party ==================== -->
-    <logger name="com.zaxxer.hikari" level="DEBUG"/>
-    <logger name="io.javalin" level="DEBUG"/>
-    <logger name="org.eclipse.jetty" level="DEBUG"/>
-    <logger name="okhttp3" level="DEBUG"/>
-    <logger name="dev.langchain4j" level="DEBUG"/>
-    <logger name="io.milvus" level="DEBUG"/>
-    <logger name="com.fasterxml.jackson" level="DEBUG"/>
+    <logger name="com.zaxxer.hikari" level="WARN"/>
+    <logger name="io.javalin" level="INFO"/>
+    <logger name="org.eclipse.jetty" level="WARN"/>
+    <logger name="okhttp3" level="WARN"/>
+    <logger name="dev.langchain4j" level="INFO"/>
+    <logger name="io.milvus" level="WARN"/>
+    <logger name="com.fasterxml.jackson" level="WARN"/>
 
 </configuration>

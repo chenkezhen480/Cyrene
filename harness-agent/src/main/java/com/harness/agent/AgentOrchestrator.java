@@ -16,12 +16,14 @@ import com.harness.input.multimodal.MultimodalParser;
 import com.harness.input.multimodal.TextChunker;
 import com.harness.preprocess.ContextBuilder;
 import com.harness.preprocess.memory.*;
-import com.harness.tool.HttpApiTool;
 import com.harness.tool.ToolExecutor;
 import com.harness.tool.ToolRegistry;
 import com.harness.tool.builtin.FfmpegTool;
 import com.harness.tool.builtin.SavePreferenceTool;
 import com.harness.tool.builtin.WebSearchTool;
+import com.harness.tool.discovery.CodeGlobTool;
+import com.harness.tool.discovery.CodeGrepTool;
+import com.harness.tool.discovery.ReadClassHierarchyTool;
 import com.harness.tool.mcp.McpServerConfig;
 import com.harness.tool.mcp.McpToolDiscovery;
 import com.harness.tool.skill.LoadSkillTool;
@@ -43,6 +45,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 
 import com.harness.core.model.StreamCallback;
@@ -824,6 +827,14 @@ public class AgentOrchestrator {
         if (cfg.getBool(EnvKey.TOOL_FFMPEG_ENABLED, false)) {
             toolRegistry.register(new FfmpegTool());
         }
+        // Discovery tools — available in chat when project discovery is enabled
+        if (cfg.getBool(EnvKey.PROJECT_DISCOVERY_ENABLED, true)) {
+            Path rootPath = Path.of(".").toAbsolutePath().normalize();
+            Set<String> excludes = Set.of();
+            toolRegistry.register(new CodeGlobTool(rootPath, excludes));
+            toolRegistry.register(new CodeGrepTool(rootPath, excludes));
+            toolRegistry.register(new ReadClassHierarchyTool(rootPath));
+        }
     }
 
     private void registerMcpTools() {
@@ -883,8 +894,8 @@ public class AgentOrchestrator {
         String configPath = cfg.getString(EnvKey.PROJECT_APIS_CONFIG_FILE, "./project-apis.json");
         java.nio.file.Path path = Path.of(configPath);
         if (!java.nio.file.Files.exists(path)) {
-            toolRegistry.unregisterHttpApi();
-            log.info("[Discovery] project-apis.json not found, unregistered all HttpApiTools");
+            toolRegistry.hotReload(new ProjectApiConfig(null, null, null, List.of()));
+            log.info("[Discovery] project-apis.json not found, cleared config");
             return;
         }
         try {

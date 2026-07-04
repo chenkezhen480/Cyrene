@@ -24,6 +24,8 @@ public final class EnvKey {
     public static final String MODEL_CHAT_TEMPERATURE = "HARNESS_MODEL_CHAT_TEMPERATURE";
     /** 是否开启思考/推理模式（影响 DashScope 等支持思考模式的 API），默认 true */
     public static final String MODEL_CHAT_THINKING   = "HARNESS_MODEL_CHAT_THINKING";
+    /** LLM API 超时时间（秒），默认 300（5分钟） */
+    public static final String MODEL_CHAT_TIMEOUT_MS = "HARNESS_MODEL_CHAT_TIMEOUT_MS";
 
     // ==================== 2. Vision Model (图片识别/视频分析) ====================
     public static final String MODEL_VISION_PROVIDER  = "HARNESS_MODEL_VISION_PROVIDER";
@@ -290,14 +292,8 @@ public final class EnvKey {
     public static final String SKILL_DIR = "HARNESS_SKILL_DIR";
 
     // ==================== Project Discovery ====================
-    /** 功能总开关，默认 true */
+    /** 功能总开关（true 时 code_glob/code_grep/read_class_hierarchy 工具对正常会话可用），默认 true */
     public static final String PROJECT_DISCOVERY_ENABLED        = "HARNESS_PROJECT_DISCOVERY_ENABLED";
     /** 声明式配置文件路径，默认 ./project-apis.json */
     public static final String PROJECT_APIS_CONFIG_FILE         = "HARNESS_PROJECT_APIS_CONFIG_FILE";
-    /** 单次发现任务最大工具调用次数，默认 60 */
-    public static final String PROJECT_DISCOVERY_MAX_TOOL_CALLS = "HARNESS_PROJECT_DISCOVERY_MAX_TOOL_CALLS";
-    /** 单次发现任务超时（分钟），默认 10 */
-    public static final String PROJECT_DISCOVERY_TIMEOUT_MINUTES = "HARNESS_PROJECT_DISCOVERY_TIMEOUT_MINUTES";
-    /** 追加的敏感文件排除 glob，逗号分隔 */
-    public static final String PROJECT_DISCOVERY_EXCLUDE_PATTERNS = "HARNESS_PROJECT_DISCOVERY_EXCLUDE_PATTERNS";
 }
