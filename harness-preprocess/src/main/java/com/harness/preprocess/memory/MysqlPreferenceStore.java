@@ -23,7 +23,7 @@ public class MysqlPreferenceStore implements PreferenceStore {
 
     @Override
     public List<Preference> loadByUser(String userId) {
-        String sql = "SELECT id, user_id, category, content, source_session_id, created_at, updated_at FROM user_preferences WHERE user_id = ? ORDER BY category";
+        String sql = "SELECT id, user_id, category, content, source_session_id, created_at, updated_at FROM user_preferences WHERE user_id = ? ORDER BY updated_at DESC";
         List<Preference> prefs = new ArrayList<>();
         try (Connection conn = MysqlConnectionPool.getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, userId);

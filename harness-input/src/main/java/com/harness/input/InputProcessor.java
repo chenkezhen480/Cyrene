@@ -42,11 +42,29 @@ public class InputProcessor {
      * @return parsed message + userId
      */
     public InputResult process(String token, String text, List<MultimodalParser.RawAttachment> attachments) {
+        return process(token, text, attachments, null);
+    }
+
+    /**
+     * Process raw input with optional context userId override.
+     *
+     * @param token         auth token (nullable if auth mode is none)
+     * @param text          input text (required)
+     * @param attachments   raw attachments (optional)
+     * @param contextUserId userId from request context (used when auth mode is none)
+     */
+    public InputResult process(String token, String text, List<MultimodalParser.RawAttachment> attachments,
+                               String contextUserId) {
         int attachCount = attachments != null ? attachments.size() : 0;
         log.debug("[L1-Input] Processing: textLen={}, attachments={}", text != null ? text.length() : 0, attachCount);
 
         // Step 1: Authenticate
         String userId = authenticator.authenticate(token);
+        // When auth is disabled, prefer the userId from request context
+        if ("anonymous".equals(userId) && contextUserId != null && !contextUserId.isBlank()) {
+            userId = contextUserId;
+            log.debug("[L1-Input] Auth=none, using context userId: {}", userId);
+        }
         log.debug("[L1-Input] Authenticated: userId={}", userId);
 
         // Step 2: Validate text

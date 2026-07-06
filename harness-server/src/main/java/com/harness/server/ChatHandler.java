@@ -101,6 +101,7 @@ public class ChatHandler {
 
             AgentContext agentContext = AgentContext.of(req.context());
             Boolean enableThinking = agentContext.enableThinking();
+            String contextUserId = agentContext.userId();
 
             // Set credentials for HttpApiTool (user_passthrough auth)
             HttpApiTool.setCurrentCredentials(agentContext.credentials());
@@ -134,6 +135,10 @@ public class ChatHandler {
                                                     "toolCalls", step.toolCalls().stream().map(ToolCall::toolName).toList()
                                             )));
                                         }
+                                        case COMPRESS -> writeSseEvent(out, "compress",
+                                                mapper.writeValueAsString(Map.of(
+                                                        "mode", event.metadata().get("mode"),
+                                                        "detail", event.data())));
                                         case DONE -> writeSseEvent(out, "done",
                                                 mapper.writeValueAsString(event.metadata()));
                                         case ERROR -> writeSseEvent(out, "error",
@@ -142,12 +147,12 @@ public class ChatHandler {
                                 } catch (IOException e) {
                                     log.debug("[Server] Failed to write SSE event: {}", e.getMessage());
                                 }
-                            }, enableThinking);
+                            }, enableThinking, contextUserId);
                 } else {
                     // Blocking mode: run agent
                     AgentResult result = agent.run(finalRawToken, req.text(),
                             req.attachments() != null ? req.attachments() : Collections.emptyList(),
-                            finalSessionId, req.systemPrompt(), cancellationToken, enableThinking);
+                            finalSessionId, req.systemPrompt(), cancellationToken, enableThinking, contextUserId);
 
                     long duration = System.currentTimeMillis() - start;
                     log.info("[Server] Chat completed: traceId={}, steps={}, risk={}, duration={}ms",

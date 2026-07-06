@@ -42,8 +42,8 @@ public class MilvusVectorStore implements VectorStore {
 
     public MilvusVectorStore(EmbeddingModelProvider embeddingProvider) {
         EnvConfig cfg = EnvConfig.get();
-        this.collectionName = "knowledge_documents"; // Milvus 物理集合名，不可配置
-        this.logicalCollection = cfg.getString(EnvKey.RAG_COLLECTION, "default");
+        this.collectionName = cfg.getString(EnvKey.RAG_COLLECTION, "knowledge_documents"); // 物理集合名 = env 变量
+        this.logicalCollection = "default"; // collection 字段固定值，物理集合已隔离
         this.topK = cfg.getInt(EnvKey.RAG_TOP_K, 5);
         this.scoreThreshold = cfg.getDouble(EnvKey.RAG_SCORE_THRESHOLD, 0.7);
         this.bm25Weight = cfg.getDouble(EnvKey.RAG_BM25_WEIGHT, 0.3);
@@ -77,7 +77,7 @@ public class MilvusVectorStore implements VectorStore {
             row.addProperty("id", ids.get(i));
             row.addProperty("content", doc.content());
             row.addProperty("source", doc.source());
-            row.addProperty("collection", coll);
+            row.addProperty("collection", logicalCollection);
             row.add("embedding", floatArrayToJsonArray(doc.embedding()));
             row.addProperty("chunk_index", doc.chunkIndex() >= 0 ? doc.chunkIndex() : i);
             row.addProperty("metadata", doc.metadata() != null ? mapToJson(doc.metadata()) : "{}");
@@ -102,9 +102,9 @@ public class MilvusVectorStore implements VectorStore {
     public void delete(String collection) {
         client.delete(DeleteReq.builder()
                 .collectionName(collectionName)
-                .filter("collection == \"" + escapeExpr(collection) + "\"")
+                .filter("id != \"\"")
                 .build());
-        log.info("[Milvus] Deleted documents from collection '{}'", collection);
+        log.info("[Milvus] Deleted all documents from '{}'", collectionName);
     }
 
     @Override
@@ -151,7 +151,7 @@ public class MilvusVectorStore implements VectorStore {
         try {
             QueryResp resp = client.query(QueryReq.builder()
                     .collectionName(collectionName)
-                    .filter("collection == \"" + escapeExpr(collection) + "\"")
+                    .filter("id != \"\"")
                     .outputFields(List.of("id", "content", "source", "chunk_index"))
                     .limit(1000L)
                     .build());
@@ -166,12 +166,17 @@ public class MilvusVectorStore implements VectorStore {
                         Map.of("chunk_index", entity.get("chunk_index") != null
                                 ? entity.get("chunk_index").toString() : "")));
             }
-            log.debug("[Milvus] Listed {} documents in collection '{}'", docs.size(), collection);
+            log.debug("[Milvus] Listed {} documents from '{}'", docs.size(), collectionName);
             return docs;
         } catch (Exception e) {
-            log.error("[Milvus] Failed to list collection '{}': {}", collection, e.getMessage(), e);
+            log.error("[Milvus] Failed to list collection '{}': {}", collectionName, e.getMessage(), e);
             return List.of();
         }
+    }
+
+    @Override
+    public List<String> listCollections() {
+        return List.of(collectionName);
     }
 
     // ==================== 3. 检索能力 ====================
@@ -189,7 +194,6 @@ public class MilvusVectorStore implements VectorStore {
                     .data(List.of(new FloatVec(toFloatList(embedding))))
                     .topK(topK)
                     .metricType(IndexParam.MetricType.COSINE)
-                    .filter("collection == \"" + escapeExpr(collection) + "\"")
                     .outputFields(List.of("content", "source"))
                     .build());
             return extractResults(resp);
@@ -209,7 +213,6 @@ public class MilvusVectorStore implements VectorStore {
                     .data(List.of(new EmbeddedText(query)))
                     .topK(topK)
                     .metricType(IndexParam.MetricType.BM25)
-                    .filter("collection == \"" + escapeExpr(collection) + "\"")
                     .outputFields(List.of("content", "source"))
                     .build());
             return extractResults(resp);
@@ -230,7 +233,6 @@ public class MilvusVectorStore implements VectorStore {
                     .vectors(List.of(new FloatVec(toFloatList(embedding))))
                     .topK(topK * 2)
                     .metricType(IndexParam.MetricType.COSINE)
-                    .expr("collection == \"" + escapeExpr(collection) + "\"")
                     .build();
 
             AnnSearchReq sparseReq = AnnSearchReq.builder()
@@ -238,7 +240,6 @@ public class MilvusVectorStore implements VectorStore {
                     .vectors(List.of(new EmbeddedText(query)))
                     .topK(topK * 2)
                     .metricType(IndexParam.MetricType.BM25)
-                    .expr("collection == \"" + escapeExpr(collection) + "\"")
                     .build();
 
             SearchResp resp = client.hybridSearch(HybridSearchReq.builder()

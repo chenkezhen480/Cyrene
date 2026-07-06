@@ -59,13 +59,20 @@ public class SessionLifecycleManager {
         boolean isNew = false;
 
         if (requestedSessionId != null && !requestedSessionId.isBlank()) {
-            // Try to find the requested session
+            // Try to find the requested session (active first)
             session = sessionStore.findActive(requestedSessionId).orElse(null);
             if (session == null) {
-                // Session not found or already closed, create new
-                session = sessionStore.create(userId);
-                isNew = true;
-                log.debug("Requested session {} not found, created new {}", requestedSessionId, session.id());
+                // Not active — check if it exists (closed/timed-out) and reopen
+                session = sessionStore.findById(requestedSessionId).orElse(null);
+                if (session != null) {
+                    sessionStore.updateLastActive(requestedSessionId);
+                    log.debug("Reopened closed session {} for user {}", requestedSessionId, userId);
+                } else {
+                    // Truly doesn't exist, create new
+                    session = sessionStore.create(userId);
+                    isNew = true;
+                    log.debug("Requested session {} not found, created new {}", requestedSessionId, session.id());
+                }
             }
         } else {
             // No session requested, create new

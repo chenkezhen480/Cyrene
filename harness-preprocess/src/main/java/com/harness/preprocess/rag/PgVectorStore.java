@@ -147,6 +147,22 @@ public class PgVectorStore implements VectorStore {
     }
 
     @Override
+    public List<String> listCollections() {
+        String sql = String.format("SELECT DISTINCT collection FROM %s ORDER BY collection", table);
+        List<String> collections = new ArrayList<>();
+        try (Connection conn = PgConnectionPool.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql);
+             ResultSet rs = ps.executeQuery()) {
+            while (rs.next()) {
+                collections.add(rs.getString("collection"));
+            }
+        } catch (SQLException e) {
+            log.error("Failed to list collections: {}", e.getMessage(), e);
+        }
+        return collections;
+    }
+
+    @Override
     public List<Document> searchVector(String collection, float[] embedding, int topK) {
         if (embedding == null || embedding.length == 0) {
             log.warn("Empty embedding, skipping pgvector search");

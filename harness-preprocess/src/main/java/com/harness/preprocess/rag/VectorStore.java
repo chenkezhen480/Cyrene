@@ -42,6 +42,11 @@ public interface VectorStore {
      */
     List<Document> listByCollection(String collection);
 
+    /**
+     * 列出所有集合名称。
+     */
+    List<String> listCollections();
+
     // ==================== 3. 检索能力 ====================
 
     /**

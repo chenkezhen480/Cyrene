@@ -130,6 +130,13 @@ public class Main {
         // Knowledge base management endpoints
         KnowledgeManagementHandler knowledgeMgmtHandler = new KnowledgeManagementHandler(agent.vectorStore());
         app.get("/api/knowledge/{collection}", knowledgeMgmtHandler::listDocuments);
+        // List all knowledge collections
+        app.get("/api/knowledge", ctx -> {
+            List<String> collections = agent.vectorStore().listCollections();
+            ctx.json(Map.of("collections", collections));
+        });
+        app.get("/api/knowledge/{collection}/{documentId}", knowledgeMgmtHandler::getDocument);
+        app.put("/api/knowledge/{collection}/{documentId}", knowledgeMgmtHandler::updateDocument);
         app.delete("/api/knowledge/{collection}", knowledgeMgmtHandler::deleteCollection);
         app.delete("/api/knowledge/{collection}/{documentId}", knowledgeMgmtHandler::deleteDocument);
 

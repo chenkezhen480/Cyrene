@@ -19,7 +19,7 @@ import com.harness.preprocess.memory.*;
 import com.harness.tool.ToolExecutor;
 import com.harness.tool.ToolRegistry;
 import com.harness.tool.builtin.FfmpegTool;
-import com.harness.tool.builtin.SavePreferenceTool;
+import com.harness.tool.builtin.UpdateMemoryTool;
 import com.harness.tool.builtin.WebSearchTool;
 import com.harness.tool.discovery.CodeGlobTool;
 import com.harness.tool.discovery.CodeGrepTool;
@@ -166,9 +166,17 @@ public class AgentOrchestrator {
             messageWriteWorker.start();
             cleanupScheduler = new SessionCleanupScheduler(sessionStore, sessionLifecycle, refinementWorker, messageCache, skillRegistry);
             cleanupScheduler.start();
-            // Register preference save tool when memory is enabled
-            toolRegistry.register(new SavePreferenceTool(
-                    (userId, category, content, sessionId) -> preferenceStore.upsert(userId, category, content, sessionId)));
+            // Register update_memory tool — LLM主动追加长期记忆
+            toolRegistry.register(new UpdateMemoryTool((userId, content, sessionId) -> {
+                // 追加模式：加载已有记忆，用 # 拼接新内容
+                String existing = preferenceStore.loadByUser(userId).stream()
+                        .filter(p -> "memory".equals(p.category()))
+                        .findFirst()
+                        .map(Preference::content)
+                        .orElse("");
+                String merged = existing.isEmpty() ? content : existing + " # " + content;
+                preferenceStore.upsert(userId, "memory", merged, sessionId);
+            }));
         } else {
             this.sessionStore = null;
             this.messageStore = null;
@@ -221,6 +229,13 @@ public class AgentOrchestrator {
                            String requestedSessionId, String systemPromptOverride,
                            com.harness.core.model.CancellationToken cancellationToken,
                            Boolean enableThinking) {
+        return run(token, text, attachments, requestedSessionId, systemPromptOverride, cancellationToken, enableThinking, null);
+    }
+
+    public AgentResult run(String token, String text, List<MultimodalParser.RawAttachment> attachments,
+                           String requestedSessionId, String systemPromptOverride,
+                           com.harness.core.model.CancellationToken cancellationToken,
+                           Boolean enableThinking, String contextUserId) {
         long runStart = System.currentTimeMillis();
         int attachCount = attachments != null ? attachments.size() : 0;
         log.debug("[Orchestrator] Run start: textLen={}, sessionId={}, attachments={}",
@@ -231,7 +246,7 @@ public class AgentOrchestrator {
 
         try {
             // Layer 1: Input
-            InputProcessor.InputResult input = inputProcessor.process(token, text, attachments);
+            InputProcessor.InputResult input = inputProcessor.process(token, text, attachments, contextUserId);
             trace.recordInput(input.userId(), text,
                     input.message().attachments().stream().map(AgentMessage.Attachment::name).toList());
 
@@ -274,8 +289,7 @@ public class AgentOrchestrator {
 
             final String userId = input.userId();
             if (MemoryStoreFactory.isEnabled() && userId != null) {
-                String effectiveSessionId = requestedSessionId != null ? requestedSessionId : activeSessionId;
-                SessionLifecycleManager.LifecycleResult lifecycle = sessionLifecycle.process(input.userId(), effectiveSessionId);
+                SessionLifecycleManager.LifecycleResult lifecycle = sessionLifecycle.process(input.userId(), requestedSessionId);
                 sessionId = lifecycle.session().id();
                 activeSessionId = sessionId;
                 final String sid = sessionId;
@@ -329,7 +343,7 @@ public class AgentOrchestrator {
             } else {
                 ragFuture.join();
                 // Memory disabled — use requested/active sessionId for skill isolation
-                sessionId = requestedSessionId != null ? requestedSessionId : activeSessionId;
+                sessionId = requestedSessionId != null ? requestedSessionId : java.util.UUID.randomUUID().toString();
             }
 
             // Register pending skill files with resolved sessionId
@@ -340,8 +354,8 @@ public class AgentOrchestrator {
             // Set ThreadLocal for skill tools session-scoped lookup
             final String finalSessionId = sessionId;
             LoadSkillTool.setCurrentSession(finalSessionId);
-            SavePreferenceTool.setCurrentUserId(userId);
-            SavePreferenceTool.setCurrentSessionId(finalSessionId);
+            UpdateMemoryTool.setCurrentUserId(userId);
+            UpdateMemoryTool.setCurrentSessionId(finalSessionId);
 
             // ===== Layer 2: Preprocess =====
             ContextBuilder.ContextResult ctx = ragFuture.join();
@@ -490,6 +504,13 @@ public class AgentOrchestrator {
                           String requestedSessionId, String systemPromptOverride,
                           com.harness.core.model.CancellationToken cancellationToken,
                           StreamCallback callback, Boolean enableThinking) {
+        streamRun(token, text, attachments, requestedSessionId, systemPromptOverride, cancellationToken, callback, enableThinking, null);
+    }
+
+    public void streamRun(String token, String text, List<MultimodalParser.RawAttachment> attachments,
+                          String requestedSessionId, String systemPromptOverride,
+                          com.harness.core.model.CancellationToken cancellationToken,
+                          StreamCallback callback, Boolean enableThinking, String contextUserId) {
         long runStart = System.currentTimeMillis();
         int attachCount = attachments != null ? attachments.size() : 0;
         log.debug("[Orchestrator] Stream run start: textLen={}, sessionId={}, attachments={}",
@@ -500,7 +521,7 @@ public class AgentOrchestrator {
 
         try {
             // Layer 1: Input
-            InputProcessor.InputResult input = inputProcessor.process(token, text, attachments);
+            InputProcessor.InputResult input = inputProcessor.process(token, text, attachments, contextUserId);
             trace.recordInput(input.userId(), text,
                     input.message().attachments().stream().map(AgentMessage.Attachment::name).toList());
 
@@ -543,8 +564,7 @@ public class AgentOrchestrator {
 
             final String userId = input.userId();
             if (MemoryStoreFactory.isEnabled() && userId != null) {
-                String effectiveSessionId = requestedSessionId != null ? requestedSessionId : activeSessionId;
-                SessionLifecycleManager.LifecycleResult lifecycle = sessionLifecycle.process(input.userId(), effectiveSessionId);
+                SessionLifecycleManager.LifecycleResult lifecycle = sessionLifecycle.process(input.userId(), requestedSessionId);
                 sessionId = lifecycle.session().id();
                 activeSessionId = sessionId;
                 final String sid = sessionId;
@@ -591,7 +611,7 @@ public class AgentOrchestrator {
                 longtermPrefs = longtermFuture.join();
             } else {
                 ragFuture.join();
-                sessionId = requestedSessionId != null ? requestedSessionId : activeSessionId;
+                sessionId = requestedSessionId != null ? requestedSessionId : java.util.UUID.randomUUID().toString();
             }
 
             // Register pending skill files with resolved sessionId
@@ -600,8 +620,8 @@ public class AgentOrchestrator {
             }
             final String finalSessionId = sessionId;
             LoadSkillTool.setCurrentSession(finalSessionId);
-            SavePreferenceTool.setCurrentUserId(userId);
-            SavePreferenceTool.setCurrentSessionId(finalSessionId);
+            UpdateMemoryTool.setCurrentUserId(userId);
+            UpdateMemoryTool.setCurrentSessionId(finalSessionId);
 
             // Layer 2: Preprocess
             ContextBuilder.ContextResult ctx = ragFuture.join();
@@ -621,6 +641,7 @@ public class AgentOrchestrator {
                 // 小压缩：从缓存中删除 tool 消息
                 int stripped = stripToolMessagesFromCache(sessionId, userId);
                 if (stripped > 0) {
+                    callback.onEvent(StreamEvent.compress("minor", stripped + " 条工具消息已清理"));
                     shorttermMessages = messageCache.getIfPresent(sessionId);
                     if (shorttermMessages == null) {
                         shorttermMessages = messageStore.loadForContext(sessionId);
@@ -643,6 +664,8 @@ public class AgentOrchestrator {
                 if (compressResult.type() != MemoryCompressor.CompressionResult.CompressionType.NONE) {
                     log.info("[Memory] Compression triggered: type={}, before={}, after={}",
                             compressResult.type(), compressResult.messagesBefore(), compressResult.messagesAfter());
+                    callback.onEvent(StreamEvent.compress("major",
+                            compressResult.messagesBefore() + " → " + compressResult.messagesAfter() + " 条消息已压缩"));
                     shorttermMessages = messageStore.loadForContext(sessionId);
                     messageCache.put(sessionId, userId, shorttermMessages);
 
@@ -772,19 +795,19 @@ public class AgentOrchestrator {
             sb.append("  - load_skill(name, query): 搜索并返回匹配片段（推荐，更高效）\n\n");
         }
 
-        // Inject long-term memory (user preferences), capped at MEMORY_LONGTERM_MAX_TOKENS
+        // Inject long-term memory (all records merged)
         if (!longtermPrefs.isEmpty()) {
             int maxChars = EnvConfig.get().getInt(EnvKey.MEMORY_LONGTERM_MAX_TOKENS, 800) * 3;
-            StringBuilder prefBlock = new StringBuilder("[User Preferences]\n");
+            StringBuilder memBlock = new StringBuilder("[User Memory]\n");
             for (Preference pref : longtermPrefs) {
-                prefBlock.append("- ").append(pref.category()).append(": ").append(pref.content()).append("\n");
+                memBlock.append(pref.content()).append("\n");
             }
-            if (prefBlock.length() > maxChars) {
-                prefBlock.setLength(maxChars);
-                prefBlock.append("...\n");
-                log.debug("[Memory] Long-term preferences truncated to {} chars ({} tokens max)", maxChars, maxChars / 3);
+            if (memBlock.length() > maxChars) {
+                memBlock.setLength(maxChars);
+                memBlock.append("...\n");
+                log.debug("[Memory] Long-term memory truncated to {} chars", maxChars);
             }
-            sb.append(prefBlock).append("\n");
+            sb.append(memBlock).append("\n");
         }
 
         return sb.toString();

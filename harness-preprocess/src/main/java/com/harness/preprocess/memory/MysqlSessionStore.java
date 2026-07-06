@@ -104,7 +104,7 @@ public class MysqlSessionStore implements SessionStore {
 
     @Override
     public void updateLastActive(String sessionId) {
-        String sql = "UPDATE sessions SET last_active = ? WHERE id = ?";
+        String sql = "UPDATE sessions SET last_active = ?, status = 'active' WHERE id = ?";
         try (Connection conn = MysqlConnectionPool.getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setTimestamp(1, Timestamp.from(Instant.now()));
             ps.setString(2, sessionId);

@@ -105,21 +105,24 @@ public class PreferenceRefinementWorker {
             return;
         }
 
-        // Load existing preferences
+        // Load existing memory (single record)
         List<Preference> existingPrefs = preferenceStore.loadByUser(task.userId());
+        String existingMemory = existingPrefs.isEmpty() ? "" : existingPrefs.get(0).content();
 
-        // Generate refinement
-        String refined = generateRefinement(messages, existingPrefs);
-        if (refined == null || refined.isBlank()) {
+        // Generate updated memory
+        String updatedMemory = generateRefinement(messages, existingMemory);
+        if (updatedMemory == null || updatedMemory.isBlank()) {
             log.debug("No refinement generated for session {}", task.sessionId());
             return;
         }
 
-        // Parse and upsert preferences
-        parseAndUpsertPrefs(task.userId(), task.sessionId(), refined);
+        // Upsert as single "memory" record
+        preferenceStore.upsert(task.userId(), "memory", updatedMemory.trim(), task.sessionId());
+        log.info("Updated long-term memory for user {} from session {} ({} chars)",
+                task.userId(), task.sessionId(), updatedMemory.trim().length());
     }
 
-    private String generateRefinement(List<MemoryMessage> messages, List<Preference> existingPrefs) {
+    private String generateRefinement(List<MemoryMessage> messages, String existingMemory) {
         ChatModel model = chatModel.chatModel();
         if (model == null) {
             log.warn("Chat model not available for preference refinement");
@@ -133,31 +136,26 @@ public class PreferenceRefinementWorker {
             }
         }
 
-        StringBuilder existing = new StringBuilder();
-        for (Preference pref : existingPrefs) {
-            existing.append("- ").append(pref.category()).append(": ").append(pref.content()).append("\n");
-        }
-
         int maxChars = longtermMaxTokens * 3;
         String prompt = """
-                You are a user preference extraction system. Analyze the conversation and extract user preferences.
+                You are a user memory extraction system. Analyze the conversation and update the user's memory profile.
 
-                Existing preferences:
+                Existing memory:
                 %s
 
                 Conversation:
                 %s
 
                 Instructions:
-                1. Merge new observations with existing preferences
+                1. Merge new observations with the existing memory
                 2. Resolve contradictions (newer information takes priority)
-                3. Deduplicate similar preferences
-                4. Categorize each preference (language, tone, domain, workflow, other)
-                5. Output format: one preference per line as "category: description"
-                6. If no meaningful preferences found, output "NONE"
-                7. CRITICAL: Total output must be under %d characters (~%d tokens). Be concise — every word must carry information. Omit low-value preferences if needed.
+                3. Include: identity, preferences, habits, communication style, expertise, ongoing projects, relationships, goals
+                4. Remove outdated or contradicted information
+                5. Output a SINGLE consolidated memory text (not multiple lines/categories)
+                6. If no meaningful information found, output "NONE"
+                7. CRITICAL: Total output must be under %d characters (~%d tokens). Be concise — every word must carry information.
                 """.formatted(
-                existing.isEmpty() ? "(none)" : existing.toString(),
+                existingMemory.isEmpty() ? "(none)" : existingMemory,
                 conversation.toString(),
                 maxChars, longtermMaxTokens
         );
@@ -171,26 +169,4 @@ public class PreferenceRefinementWorker {
         }
     }
 
-    private void parseAndUpsertPrefs(String userId, String sessionId, String refined) {
-        if (refined.strip().equalsIgnoreCase("NONE")) {
-            return;
-        }
-
-        String[] lines = refined.split("\n");
-        for (String line : lines) {
-            line = line.strip();
-            if (line.isEmpty() || line.startsWith("#") || line.equalsIgnoreCase("NONE")) continue;
-
-            int colonIdx = line.indexOf(':');
-            if (colonIdx <= 0) continue;
-
-            String category = line.substring(0, colonIdx).strip().toLowerCase();
-            String content = line.substring(colonIdx + 1).strip();
-
-            if (!content.isEmpty()) {
-                preferenceStore.upsert(userId, category, content, sessionId);
-                log.debug("Upserted preference: {} = {}", category, content);
-            }
-        }
-    }
 }

@@ -46,7 +46,7 @@ public class MilvusCollectionInitializer {
     public static void ensureCollection() {
         MilvusClientV2 client = MilvusConnectionPool.getClient();
         EnvConfig cfg = EnvConfig.get();
-        String collectionName = "knowledge_documents"; // Milvus 物理集合名，与 MilvusVectorStore 保持一致
+        String collectionName = cfg.getString(EnvKey.RAG_COLLECTION, "knowledge_documents"); // 与 MilvusVectorStore 保持一致
         int embedDim = cfg.getInt(EnvKey.RAG_EMBED_DIM, EnvKey.RAG_EMBED_DIM_DEFAULT);
 
         try {

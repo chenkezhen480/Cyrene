@@ -14,6 +14,7 @@ public record StreamEvent(
         START,
         TOKEN,
         STEP,
+        COMPRESS,
         DONE,
         ERROR
     }
@@ -42,5 +43,9 @@ public record StreamEvent(
 
     public static StreamEvent error(String message) {
         return new StreamEvent(Type.ERROR, message, Map.of());
+    }
+
+    public static StreamEvent compress(String mode, String detail) {
+        return new StreamEvent(Type.COMPRESS, detail, Map.of("mode", mode));
     }
 }

@@ -4,6 +4,23 @@
  */
 const { createApp, ref, reactive, computed, watch, onMounted, onUnmounted, nextTick, provide, inject } = Vue;
 
+// ── Markdown Renderer ──
+marked.setOptions({
+  breaks: true,
+  gfm: true,
+});
+
+function renderMarkdown(text) {
+  if (!text) return '';
+  try {
+    // Sanitize: escape raw HTML tags that aren't markdown
+    const html = marked.parse(text);
+    return html;
+  } catch (e) {
+    return text;
+  }
+}
+
 // ── SVG Icons ──
 const Icons = {
   chat: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>`,
@@ -15,6 +32,7 @@ const Icons = {
   mic: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>`,
   plus: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>`,
   trash: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>`,
+  edit: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>`,
   refresh: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>`,
   menu: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="21" y2="18"/></svg>`,
   close: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`,
@@ -66,14 +84,15 @@ const ToastContainer = {
   `
 };
 
-// Stars Background
+// Stars + Memory Fragments Background
 const StarsBackground = {
   setup() {
     const stars = ref([]);
+    const fragments = ref([]);
     onMounted(() => {
-      const arr = [];
+      const starArr = [];
       for (let i = 0; i < 20; i++) {
-        arr.push({
+        starArr.push({
           id: i,
           left: Math.random() * 100 + '%',
           top: Math.random() * 100 + '%',
@@ -82,15 +101,41 @@ const StarsBackground = {
           dim: Math.random() > 0.6,
         });
       }
-      stars.value = arr;
+      stars.value = starArr;
+
+      const fragArr = [];
+      for (let i = 0; i < 12; i++) {
+        const size = 4 + Math.random() * 10;
+        fragArr.push({
+          id: i,
+          left: Math.random() * 100 + '%',
+          top: Math.random() * 100 + '%',
+          size: size + 'px',
+          delay: Math.random() * 8 + 's',
+          duration: (8 + Math.random() * 12) + 's',
+          rotate: Math.random() * 360 + 'deg',
+          variant: Math.floor(Math.random() * 3), // 0=rose, 1=iris, 2=gold
+          drift: (Math.random() - 0.5) * 60 + 'px',
+        });
+      }
+      fragments.value = fragArr;
     });
-    return { stars };
+    return { stars, fragments };
   },
   template: `
     <div>
-      <div v-for="s in stars" :key="s.id"
+      <div v-for="s in stars" :key="'s'+s.id"
            :class="['star', s.dim ? 'star-dim' : '']"
            :style="{ left: s.left, top: s.top, animationDelay: s.delay, animationDuration: s.duration }">
+      </div>
+      <div v-for="f in fragments" :key="'f'+f.id"
+           :class="['fragment', 'fragment-' + f.variant]"
+           :style="{
+             left: f.left, top: f.top,
+             width: f.size, height: f.size,
+             animationDelay: f.delay, animationDuration: f.duration,
+             '--rotate': f.rotate, '--drift': f.drift
+           }">
       </div>
     </div>
   `
@@ -314,8 +359,8 @@ const ChatPage = {
       scrollToBottom();
 
       isStreaming.value = true;
-      const assistantMsg = { role: 'assistant', content: '' };
-      messages.value.push(assistantMsg);
+      messages.value.push({ role: 'assistant', content: '' });
+      const msgIdx = messages.value.length - 1;
 
       try {
         const resp = await CyreneAPI.chat(currentSessionId.value, text, {
@@ -325,49 +370,77 @@ const ChatPage = {
 
         const reader = resp.body.getReader();
         const decoder = new TextDecoder();
-        let buffer = '';
+        let sseBuffer = '';
+        let currentEventType = '';
 
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
 
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split('\n');
-          buffer = lines.pop() || '';
+          sseBuffer += decoder.decode(value, { stream: true });
+          const lines = sseBuffer.split('\n');
+          sseBuffer = lines.pop() || '';
 
           for (const line of lines) {
             if (line.startsWith('event: ')) {
-              const eventType = line.slice(7).trim();
+              currentEventType = line.slice(7).trim();
               continue;
             }
             if (line.startsWith('data: ')) {
               const data = line.slice(6);
               try {
                 const parsed = JSON.parse(data);
-                if (parsed.sessionId && !currentSessionId.value) {
-                  currentSessionId.value = parsed.sessionId;
-                }
-                if (parsed.text) {
-                  assistantMsg.content += parsed.text;
-                  scrollToBottom();
-                }
-                if (parsed.output) {
-                  assistantMsg.content = parsed.output;
-                  scrollToBottom();
+                switch (currentEventType) {
+                  case 'start':
+                    if (parsed.sessionId) {
+                      currentSessionId.value = parsed.sessionId;
+                    }
+                    break;
+                  case 'token':
+                    if (parsed.text) messages.value[msgIdx].content += parsed.text;
+                    break;
+                  case 'step':
+                    if (parsed.toolCalls && parsed.toolCalls.length) {
+                      const tools = parsed.toolCalls.join(', ');
+                      const stepHtml = `\n\n<div class="tool-call-block"><div class="tool-call-header">⚡ Step ${parsed.stepNumber || ''}: ${tools}</div>${parsed.action ? '<div class="tool-call-action">' + parsed.action + '</div>' : ''}</div>\n\n`;
+                      messages.value[msgIdx].content += stepHtml;
+                    }
+                    break;
+                  case 'compress':
+                    const modeLabel = parsed.mode === 'major' ? '大压缩' : '小压缩';
+                    const compressHtml = `\n\n<div class="compress-block"><span class="compress-icon">🗜️</span> <span class="compress-label">${modeLabel}</span> <span class="compress-detail">${parsed.detail || ''}</span></div>\n\n`;
+                    messages.value[msgIdx].content += compressHtml;
+                    break;
+                  case 'done':
+                    if (parsed.output != null) messages.value[msgIdx].content = parsed.output;
+                    if (parsed.sessionId) {
+                      currentSessionId.value = parsed.sessionId;
+                    }
+                    break;
+                  case 'error':
+                    messages.value[msgIdx].content = `Error: ${parsed.error || '未知错误'}`;
+                    showToast(parsed.error || '请求失败', 'error');
+                    break;
+                  default:
+                    if (parsed.text) messages.value[msgIdx].content += parsed.text;
+                    else if (parsed.output != null) messages.value[msgIdx].content = parsed.output;
                 }
               } catch (e) {
-                // not JSON, treat as token
-                assistantMsg.content += data;
-                scrollToBottom();
+                messages.value[msgIdx].content += data;
               }
+              currentEventType = '';
             }
           }
+
+          // Force yield to macrotask queue so browser can repaint
+          scrollToBottom();
+          await new Promise(r => setTimeout(r, 0));
         }
 
         // Reload sessions list
         loadSessions();
       } catch (e) {
-        assistantMsg.content = `Error: ${e.message}`;
+        messages.value[msgIdx].content = `Error: ${e.message}`;
       } finally {
         isStreaming.value = false;
         scrollToBottom();
@@ -398,7 +471,7 @@ const ChatPage = {
 
     return {
       Icons, sessions, currentSessionId, messages, inputText, isStreaming,
-      messagesEl, userId,
+      messagesEl, userId, renderMarkdown,
       loadSessions, selectSession, newSession, sendMessage,
       handleKeydown,
     };
@@ -437,13 +510,9 @@ const ChatPage = {
                 <div class="message-avatar">
                   {{ msg.role === 'user' ? 'U' : 'C' }}
                 </div>
-                <div class="message-content">{{ msg.content }}</div>
-              </div>
-              <div v-if="isStreaming && !messages[messages.length-1]?.content" class="message message-assistant">
-                <div class="message-avatar">C</div>
-                <div class="message-content">
-                  <div class="loading-dots"><span></span><span></span><span></span></div>
-                </div>
+                <div v-if="msg.role === 'user'" class="message-content">{{ msg.content }}</div>
+                <div v-else-if="msg.content" class="message-content md-body" v-html="renderMarkdown(msg.content)"></div>
+                <div v-else class="message-content"><div class="loading-dots" v-meteor><span></span><span></span><span></span></div></div>
               </div>
             </template>
             <empty-state v-else
@@ -490,10 +559,17 @@ const KnowledgePage = {
     const uploading = ref(false);
     const uploadCollection = ref('');
     const fileInput = ref(null);
+    const editingDoc = ref(null);
+    const editingContent = ref('');
+    const saving = ref(false);
 
     async function loadCollections() {
-      // No direct list-collections API, we'll use a workaround
-      // For now, show empty state and let user upload
+      try {
+        const data = await CyreneAPI.listCollections();
+        collections.value = data.collections || [];
+      } catch (e) {
+        collections.value = [];
+      }
     }
 
     async function loadDocuments() {
@@ -518,6 +594,7 @@ const KnowledgePage = {
         await CyreneAPI.uploadKnowledge(file, uploadCollection.value.trim());
         showToast('上传成功', 'success');
         selectedCollection.value = uploadCollection.value.trim();
+        loadCollections();
         loadDocuments();
       } catch (e) {
         showToast('上传失败: ' + e.message, 'error');
@@ -548,9 +625,41 @@ const KnowledgePage = {
       }
     }
 
-    watch(selectedCollection, loadDocuments);
+    async function openEdit(docId) {
+      try {
+        const doc = await CyreneAPI.getDocument(selectedCollection.value, docId);
+        editingDoc.value = doc;
+        editingContent.value = doc.content || '';
+      } catch (e) {
+        showToast('加载失败: ' + e.message, 'error');
+      }
+    }
 
-    return { Icons, collections, selectedCollection, documents, uploading, uploadCollection, fileInput, loadCollections, loadDocuments, uploadFile, deleteDoc, deleteCol };
+    async function saveEdit() {
+      if (!editingDoc.value) return;
+      saving.value = true;
+      try {
+        await CyreneAPI.updateDocument(selectedCollection.value, editingDoc.value.id, editingContent.value);
+        showToast('已保存', 'success');
+        editingDoc.value = null;
+        editingContent.value = '';
+        loadDocuments();
+      } catch (e) {
+        showToast('保存失败: ' + e.message, 'error');
+      } finally {
+        saving.value = false;
+      }
+    }
+
+    function closeEdit() {
+      editingDoc.value = null;
+      editingContent.value = '';
+    }
+
+    watch(selectedCollection, loadDocuments);
+    onMounted(loadCollections);
+
+    return { Icons, collections, selectedCollection, documents, uploading, uploadCollection, fileInput, editingDoc, editingContent, saving, loadCollections, loadDocuments, uploadFile, deleteDoc, deleteCol, openEdit, saveEdit, closeEdit };
   },
   template: `
     <div>
@@ -581,10 +690,8 @@ const KnowledgePage = {
         <div class="card-header">
           <div class="card-title">知识库浏览</div>
           <div style="display: flex; gap: var(--space-2); align-items: center;">
-            <input class="input" v-model="selectedCollection" placeholder="输入知识库名称"
-                   style="width: 200px;" @keydown.enter="loadDocuments" />
-            <button class="btn btn-ghost" @click="loadDocuments">
-              <span v-html="Icons.search" style="width:16px;height:16px;"></span>
+            <button class="btn btn-ghost btn-sm" @click="loadCollections">
+              <span v-html="Icons.refresh" style="width:14px;height:14px;"></span>
             </button>
             <button class="btn btn-danger btn-sm" v-if="selectedCollection" @click="deleteCol">
               <span v-html="Icons.trash" style="width:14px;height:14px;"></span>
@@ -592,21 +699,41 @@ const KnowledgePage = {
           </div>
         </div>
         <div class="card-body">
+          <!-- Collection list -->
+          <div v-if="collections.length && !selectedCollection" style="display: flex; flex-wrap: wrap; gap: var(--space-2); margin-bottom: var(--space-4);">
+            <div v-for="col in collections" :key="col"
+                 class="nav-item" style="cursor: pointer; padding: var(--space-2) var(--space-3);"
+                 @click="selectedCollection = col">
+              <span class="text-sm">📁 {{ col }}</span>
+            </div>
+          </div>
+
+          <!-- Selected collection -->
+          <div v-if="selectedCollection" style="margin-bottom: var(--space-3);">
+            <button class="btn btn-ghost btn-sm" @click="selectedCollection = ''; documents = []">
+              ← 返回列表
+            </button>
+            <span class="text-sm text-ash" style="margin-left: var(--space-2);">当前：{{ selectedCollection }}</span>
+          </div>
+
           <template v-if="documents.length">
             <table>
               <thead>
                 <tr>
-                  <th>文件名</th>
-                  <th>大小</th>
+                  <th>来源</th>
+                  <th>分块</th>
                   <th>操作</th>
                 </tr>
               </thead>
               <tbody>
                 <tr v-for="doc in documents" :key="doc.id">
-                  <td>{{ doc.fileName || doc.file_name || doc.id }}</td>
-                  <td class="text-ash">{{ doc.chunkCount || '?' }} chunks</td>
+                  <td class="text-sm">{{ doc.source || doc.id }}</td>
+                  <td class="text-ash text-xs">#{{ doc.metadata?.chunk_index ?? '-' }}</td>
                   <td>
-                    <button class="btn btn-ghost btn-sm" @click="deleteDoc(doc.id)">
+                    <button class="btn btn-ghost btn-sm" @click="openEdit(doc.id)" title="编辑">
+                      <span v-html="Icons.edit" style="width:14px;height:14px;"></span>
+                    </button>
+                    <button class="btn btn-ghost btn-sm" @click="deleteDoc(doc.id)" title="删除">
                       <span v-html="Icons.trash" style="width:14px;height:14px;"></span>
                     </button>
                   </td>
@@ -614,10 +741,36 @@ const KnowledgePage = {
               </tbody>
             </table>
           </template>
-          <empty-state v-else
+          <empty-state v-else-if="!selectedCollection && !collections.length"
             :icon="Icons.knowledge"
             title="记忆的种子尚未播下"
             hint="上传文件以构建知识库" />
+          <div v-else-if="selectedCollection && !documents.length" class="text-sm text-ash" style="padding: var(--space-4); text-align: center;">
+            该知识库暂无文档
+          </div>
+        </div>
+      </div>
+
+      <!-- Edit modal -->
+      <div v-if="editingDoc" class="modal-overlay" @click.self="closeEdit">
+        <div class="modal" style="max-width: 700px;">
+          <div class="modal-header">
+            <div class="modal-title">编辑文档分块</div>
+            <button class="btn btn-ghost btn-sm" @click="closeEdit">✕</button>
+          </div>
+          <div class="modal-body">
+            <div class="text-xs text-ash" style="margin-bottom: var(--space-2);">
+              来源：{{ editingDoc.source }} | ID：{{ editingDoc.id }}
+            </div>
+            <textarea class="input" v-model="editingContent" rows="15"
+                      style="width: 100%; font-family: var(--font-mono); font-size: var(--text-sm); resize: vertical;"></textarea>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-ghost" @click="closeEdit">取消</button>
+            <button class="btn btn-primary" @click="saveEdit" :disabled="saving">
+              {{ saving ? '保存中...' : '保存' }}
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -728,18 +881,18 @@ const AuditPage = {
                   </tr>
                 </thead>
                 <tbody>
-                  <tr v-for="t in traces" :key="t.id">
-                    <td class="text-xs" style="font-family: monospace; color: var(--iris);">{{ (t.id || '').slice(0, 8) }}...</td>
+                  <tr v-for="t in traces" :key="t.traceId">
+                    <td class="text-xs" style="font-family: monospace; color: var(--iris);">{{ (t.traceId || '').slice(0, 8) }}...</td>
                     <td>{{ t.userId || '-' }}</td>
                     <td>
-                      <span :class="['tag', t.risk === 'HIGH' ? 'tag-rose' : t.risk === 'MEDIUM' ? 'tag-gold' : 'tag-iris']">
-                        {{ t.risk || '-' }}
+                      <span :class="['tag', t.riskLevel === 'HIGH' ? 'tag-rose' : t.riskLevel === 'MEDIUM' ? 'tag-gold' : 'tag-iris']">
+                        {{ t.riskLevel || '-' }}
                       </span>
                     </td>
-                    <td class="text-ash">{{ formatDuration(t.durationMs) }}</td>
-                    <td class="text-xs text-dusk">{{ formatTime(t.createdAt) }}</td>
+                    <td class="text-ash">{{ formatDuration(t.totalDurationMs) }}</td>
+                    <td class="text-xs text-dusk">{{ formatTime(t.timestamp) }}</td>
                     <td>
-                      <button class="btn btn-ghost btn-sm" @click="deleteTrace(t.id)">
+                      <button class="btn btn-ghost btn-sm" @click="deleteTrace(t.traceId)">
                         <span v-html="Icons.trash" style="width:14px;height:14px;"></span>
                       </button>
                     </td>
@@ -1123,6 +1276,16 @@ const app = createApp({
       </div>
     </div>
   `
+});
+
+// Randomize meteor start position for each loading-dots element
+app.directive('meteor', {
+  mounted(el) {
+    const sy = Math.floor(Math.random() * 16) + 2;   // 2–17px
+    const ey = Math.floor(Math.random() * 4);          // 0–3px
+    el.style.setProperty('--meteor-sy', sy);
+    el.style.setProperty('--meteor-ey', ey);
+  }
 });
 
 // Register Icons as global property so all components can access it

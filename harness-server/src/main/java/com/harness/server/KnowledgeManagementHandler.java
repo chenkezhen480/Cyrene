@@ -82,6 +82,70 @@ public class KnowledgeManagementHandler {
     }
 
     /**
+     * GET /api/knowledge/{collection}/{documentId} — get a single document with content.
+     */
+    public void getDocument(Context ctx) {
+        String documentId = ctx.pathParam("documentId");
+        if (documentId == null || documentId.isBlank()) {
+            ctx.status(400).json(Map.of("error", "Document ID is required"));
+            return;
+        }
+
+        try {
+            VectorStore.Document doc = vectorStore.fetchById(documentId);
+            if (doc != null) {
+                ctx.json(doc);
+            } else {
+                ctx.status(404).json(Map.of("error", "Document not found: " + documentId));
+            }
+        } catch (Exception e) {
+            log.error("[Server] Failed to get document '{}': {}", documentId, e.getMessage(), e);
+            ctx.status(500).json(Map.of("error", e.getMessage()));
+        }
+    }
+
+    /**
+     * PUT /api/knowledge/{collection}/{documentId} — update a document's content.
+     */
+    public void updateDocument(Context ctx) {
+        String documentId = ctx.pathParam("documentId");
+        String collection = ctx.pathParam("collection");
+        if (documentId == null || documentId.isBlank()) {
+            ctx.status(400).json(Map.of("error", "Document ID is required"));
+            return;
+        }
+
+        try {
+            var body = ctx.bodyAsClass(java.util.Map.class);
+            String content = (String) body.get("content");
+            if (content == null || content.isBlank()) {
+                ctx.status(400).json(Map.of("error", "Content is required"));
+                return;
+            }
+
+            // Get existing doc to preserve metadata
+            VectorStore.Document existing = vectorStore.fetchById(documentId);
+            if (existing == null) {
+                ctx.status(404).json(Map.of("error", "Document not found: " + documentId));
+                return;
+            }
+
+            // Re-embed and update
+            // Note: requires embedding provider — for now update content only
+            VectorStore.Document updated = new VectorStore.Document(
+                    documentId, content, existing.source(), 0,
+                    existing.metadata(), existing.embedding(), existing.chunkIndex());
+            vectorStore.upsert(collection, List.of(updated));
+
+            log.info("[Server] Updated document {} in collection '{}'", documentId, collection);
+            ctx.json(Map.of("documentId", documentId, "updated", true));
+        } catch (Exception e) {
+            log.error("[Server] Failed to update document '{}': {}", documentId, e.getMessage(), e);
+            ctx.status(500).json(Map.of("error", e.getMessage()));
+        }
+    }
+
+    /**
      * DELETE /api/knowledge/{collection}/{documentId} — delete a specific document.
      */
     public void deleteDocument(Context ctx) {

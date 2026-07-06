@@ -128,9 +128,6 @@ public class SessionCleanupScheduler {
 
     /**
      * Detect sessions stuck in 'in_progress' refinement status and reset them to 'pending'.
-     * A session is considered stuck if refinement_status = 'in_progress' and last_active
-     * is older than the configured threshold (default 10 minutes). This handles crash
-     * recovery scenarios where refinement was interrupted mid-process.
      */
     void resetStuckRefinements() {
         try {

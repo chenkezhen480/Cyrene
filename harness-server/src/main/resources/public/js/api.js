@@ -109,6 +109,10 @@ const CyreneAPI = (() => {
   }
 
   // ── Knowledge ──
+  function listCollections() {
+    return request('GET', '/api/knowledge');
+  }
+
   function uploadKnowledge(file, collection) {
     const formData = new FormData();
     formData.append('file', file);
@@ -125,6 +129,14 @@ const CyreneAPI = (() => {
 
   function deleteCollection(collection) {
     return request('DELETE', `/api/knowledge/${collection}`);
+  }
+
+  function getDocument(collection, documentId) {
+    return request('GET', `/api/knowledge/${collection}/${documentId}`);
+  }
+
+  function updateDocument(collection, documentId, content) {
+    return request('PUT', `/api/knowledge/${collection}/${documentId}`, { content });
   }
 
   function deleteDocument(collection, documentId) {
@@ -183,7 +195,7 @@ const CyreneAPI = (() => {
     login,
     chat, cancelChat,
     createSession, listSessions, getSession, getMessages, getSessionStats, closeSession,
-    uploadKnowledge, listKnowledge, deleteCollection, deleteDocument,
+    listCollections, uploadKnowledge, listKnowledge, getDocument, updateDocument, deleteCollection, deleteDocument,
     getTrace, listTraces, getTraceStats, cleanupTraces, deleteTrace,
     scanProject, generateConfig, getConfig, updateConfig, reloadConfig,
     health,
