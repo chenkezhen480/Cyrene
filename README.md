@@ -1,3 +1,5 @@
+<p align="right"><a href="./README_EN.md">English</a></p>
+
 # Cyrene Agent
 
 基于 **Harness 编排架构** 的 Java AI Agent 应用开发框架。提供可插拔的模型 Provider、内置 RAG 知识库、会话记忆与 5 层流水线编排，可作为脚手架快速搭建并定制面向业务的 Agent 应用。
@@ -9,13 +11,16 @@
 **一键发现项目接口：**
 
 > Web UI首次启动时，指定项目目录即可自动扫描所有 Controller 接口，生成 `project-apis.json` 配置文件。支持 Spring Boot、Express、Flask 等主流框架，自动解析 DTO/VO 类继承结构。
+
 ![初始界面](docs/assets/init-scan.png)
 
 ![扫描结果展示](docs/assets/scan-result.png)
 
 ![接口详情](docs/assets/api-detail.png)
 
-## 为什么选择 Cyrene Agent？
+![效果展示](docs/assets/call-back.png)
+
+## 快速构建对接系统项目的AI应用Agent
 
 为你的产品构建 AI Agent 不必从零开始。Cyrene Agent 提供生产可用的基础能力——初始化工具配置，模型抽象、RAG、记忆、工具、审计——让你专注于业务逻辑而非底层 plumbing。配置模型、注册工具、即可上线。
 

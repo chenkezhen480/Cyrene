@@ -40,19 +40,23 @@ const Icons = {
   search: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>`,
 };
 
-// ── Ripple Effect Helper ──
-function createRipple(event, element) {
-  const rect = element.getBoundingClientRect();
-  const size = Math.max(rect.width, rect.height) * 2;
-  const x = event.clientX - rect.left - size / 2;
-  const y = event.clientY - rect.top - size / 2;
-  const ripple = document.createElement('span');
-  ripple.className = 'ripple';
-  ripple.style.width = ripple.style.height = `${size}px`;
-  ripple.style.left = `${x}px`;
-  ripple.style.top = `${y}px`;
-  element.appendChild(ripple);
-  ripple.addEventListener('animationend', () => ripple.remove());
+// ── i18n (data in i18n.js) ──
+
+// ── Ripple Effect Helper — Crystal Drop (Global) ──
+function createRipple(event) {
+  const size = 36;
+  const x = event.clientX - size / 2;
+  const y = event.clientY - size / 2;
+  for (let i = 0; i < 2; i++) {
+    const ring = document.createElement('span');
+    ring.className = 'global-ripple';
+    ring.style.width = ring.style.height = `${size}px`;
+    ring.style.left = `${x}px`;
+    ring.style.top = `${y}px`;
+    if (i === 1) ring.classList.add('global-ripple-delayed');
+    document.body.appendChild(ring);
+    ring.addEventListener('animationend', () => ring.remove());
+  }
 }
 
 // ── Toast System ──
@@ -160,6 +164,7 @@ const PreConfigModal = {
   emits: ['close', 'complete'],
   setup(props, { emit }) {
     const Icons = inject('Icons');
+    const t = inject('t');
     const step = ref('input'); // input | scanning | result | done
     const sourceRoot = ref('');
     const baseUrl = ref('');
@@ -169,7 +174,7 @@ const PreConfigModal = {
 
     async function startScan() {
       if (!sourceRoot.value.trim()) {
-        error.value = '请输入项目目录路径';
+        error.value = t('enterProjectPath');
         return;
       }
       error.value = '';
@@ -198,7 +203,7 @@ const PreConfigModal = {
         };
         await CyreneAPI.generateConfig(config);
         step.value = 'done';
-        showToast('配置文件已生成', 'success');
+        showToast(t('configGenerated'), 'success');
         setTimeout(() => emit('complete'), 1500);
       } catch (e) {
         error.value = e.message;
@@ -209,7 +214,7 @@ const PreConfigModal = {
       emit('close');
     }
 
-    return { Icons, step, sourceRoot, baseUrl, scanResult, error, scanning, startScan, confirmGenerate, skip };
+    return { Icons, t, step, sourceRoot, baseUrl, scanResult, error, scanning, startScan, confirmGenerate, skip };
   },
   template: `
     <div class="modal-overlay" v-if="visible" @click.self="skip">
@@ -217,55 +222,55 @@ const PreConfigModal = {
         <!-- Step: Input -->
         <template v-if="step === 'input'">
           <div class="modal-header">
-            <div class="modal-title">项目接口对接</div>
-            <div class="modal-subtitle">她还在等待——在世界的背面，等你迈出第一步</div>
+            <div class="modal-title">{{ t('projectApiSetup') }}</div>
+            <div class="modal-subtitle">{{ t('projectSubtitle') }}</div>
           </div>
           <div class="modal-body">
             <div class="input-group">
-              <label class="input-label">项目目录路径</label>
+              <label class="input-label">{{ t('projectPath') }}</label>
               <input class="input" v-model="sourceRoot"
                      placeholder="/path/to/your/project"
                      @keydown.enter="startScan" />
             </div>
             <div class="input-group mt-4">
-              <label class="input-label">服务 Base URL <span class="text-xs text-ash">（可选）</span></label>
+              <label class="input-label">{{ t('serviceBaseUrl') }} <span class="text-xs text-ash">{{ t('optional') }}</span></label>
               <input class="input" v-model="baseUrl"
                      placeholder="http://localhost:8081"
                      @keydown.enter="startScan" />
             </div>
             <div v-if="error" class="text-sm" style="color: var(--error);">{{ error }}</div>
             <p class="text-sm text-ash mt-4">
-              输入本地项目的根目录，系统将自动扫描接口定义。
-              首次扫描需要时间，请耐心等待。
+              {{ t('scanInstructions1') }}
+              {{ t('scanInstructions2') }}
             </p>
           </div>
           <div class="modal-footer">
-            <button class="btn btn-ghost" @click="skip">稍后再说</button>
-            <button class="btn btn-primary" @click="startScan">开始扫描</button>
+            <button class="btn btn-ghost" @click="skip">{{ t('later') }}</button>
+            <button class="btn btn-primary" @click="startScan">{{ t('startScan') }}</button>
           </div>
         </template>
 
         <!-- Step: Scanning -->
         <template v-if="step === 'scanning'">
           <div class="modal-header">
-            <div class="modal-title">正在扫描</div>
-            <div class="modal-subtitle">涟漪正在扩散，请耐心等待♪</div>
+            <div class="modal-title">{{ t('scanning') }}</div>
+            <div class="modal-subtitle">{{ t('scanningSubtitle') }}</div>
           </div>
           <div class="modal-body" style="text-align: center; padding: 3rem;">
             <div class="loading-dots" style="justify-content: center;">
               <span></span><span></span><span></span>
             </div>
-            <p class="text-sm text-ash mt-4">首次扫描需要时间，请耐心等待</p>
+            <p class="text-sm text-ash mt-4">{{ t('scanningHint') }}</p>
           </div>
         </template>
 
         <!-- Step: Result -->
         <template v-if="step === 'result'">
           <div class="modal-header">
-            <div class="modal-title">扫描完成</div>
+            <div class="modal-title">{{ t('scanComplete') }}</div>
             <div class="modal-subtitle">
-              发现 {{ scanResult?.endpoints?.length || 0 }} 个接口
-              <span v-if="scanResult?.source === 'code_scan'" class="tag tag-dusk" style="margin-left: 8px;">AI 生成，请核对</span>
+              {{ scanResult?.endpoints?.length || 0 }} {{ t('foundNEndpoints') }}
+              <span v-if="scanResult?.source === 'code_scan'" class="tag tag-dusk" style="margin-left: 8px;">{{ t('aiGenerated') }}</span>
               <span v-else class="tag tag-gold" style="margin-left: 8px;">OpenAPI</span>
             </div>
           </div>
@@ -278,26 +283,26 @@ const PreConfigModal = {
                 <span class="text-xs text-dusk truncate">{{ ep.description }}</span>
               </div>
               <div v-if="!scanResult?.endpoints?.length" class="p-6 text-center text-ash text-sm">
-                未发现接口
+                {{ t('noEndpoints') }}
               </div>
             </div>
             <div v-if="error" class="text-sm mt-4" style="color: var(--error);">{{ error }}</div>
           </div>
           <div class="modal-footer">
-            <button class="btn btn-ghost" @click="step = 'input'">重新扫描</button>
-            <button class="btn btn-ghost" @click="skip">取消</button>
-            <button class="btn btn-primary" @click="confirmGenerate">确认生成</button>
+            <button class="btn btn-ghost" @click="step = 'input'">{{ t('rescan') }}</button>
+            <button class="btn btn-ghost" @click="skip">{{ t('cancel') }}</button>
+            <button class="btn btn-primary" @click="confirmGenerate">{{ t('confirmGenerate') }}</button>
           </div>
         </template>
 
         <!-- Step: Done -->
         <template v-if="step === 'done'">
           <div class="modal-header">
-            <div class="modal-title">配置已生成</div>
-            <div class="modal-subtitle">涟漪已记录，记忆的种子已播下♪</div>
+            <div class="modal-title">{{ t('configDone') }}</div>
+            <div class="modal-subtitle">{{ t('configDoneSubtitle') }}</div>
           </div>
           <div class="modal-body" style="text-align: center; padding: 2rem;">
-            <p class="text-sm text-ash">project-apis.json 已生成，可在「配置」页面查看和修改</p>
+            <p class="text-sm text-ash">{{ t('configDoneHint') }}</p>
           </div>
         </template>
       </div>
@@ -311,6 +316,7 @@ const ChatPage = {
   setup() {
     const Icons = inject('Icons');
     const userId = inject('userId');
+    const t = inject('t');
     const sessions = ref([]);
     const currentSessionId = ref(null);
     const messages = ref([]);
@@ -349,7 +355,7 @@ const ChatPage = {
       if (!text || isStreaming.value) return;
 
       if (!userId.value) {
-        showToast('请先设置用户 ID', 'error');
+        showToast(t('setUserIdFirst'), 'error');
         return;
       }
 
@@ -402,12 +408,13 @@ const ChatPage = {
                   case 'step':
                     if (parsed.toolCalls && parsed.toolCalls.length) {
                       const tools = parsed.toolCalls.join(', ');
-                      const stepHtml = `\n\n<div class="tool-call-block"><div class="tool-call-header">⚡ Step ${parsed.stepNumber || ''}: ${tools}</div>${parsed.action ? '<div class="tool-call-action">' + parsed.action + '</div>' : ''}</div>\n\n`;
+                      const crystal = '<svg width="15" height="15" viewBox="0 0 16 16" fill="none" style="vertical-align:-2px;margin-right:3px"><defs><radialGradient id="cg"><stop offset="0%" stop-color="rgba(232,160,191,0.6)"/><stop offset="100%" stop-color="rgba(139,126,200,0.15)"/></radialGradient></defs><path d="M8 0.5L9.5 5 14 3.5 11 7.5 15.5 8 11 8.5 14 12.5 9.5 11 8 15.5 6.5 11 2 12.5 5 8.5 0.5 8 5 7.5 2 3.5 6.5 5z" fill="url(#cg)" stroke="var(--iris)" stroke-width="0.5" stroke-linejoin="round"/><circle cx="8" cy="8" r="1.8" fill="rgba(232,160,191,0.7)"/><circle cx="8" cy="8" r="0.8" fill="white" opacity="0.6"/></svg>';
+                      const stepHtml = `\n\n<div class="tool-call-block"><div class="tool-call-header">${crystal} Step ${parsed.stepNumber || ''}: ${tools}</div>${parsed.action ? '<div class="tool-call-action">' + parsed.action + '</div>' : ''}</div>\n\n`;
                       messages.value[msgIdx].content += stepHtml;
                     }
                     break;
                   case 'compress':
-                    const modeLabel = parsed.mode === 'major' ? '大压缩' : '小压缩';
+                    const modeLabel = parsed.mode === 'major' ? t('majorCompress') : t('minorCompress');
                     const compressHtml = `\n\n<div class="compress-block"><span class="compress-icon">🗜️</span> <span class="compress-label">${modeLabel}</span> <span class="compress-detail">${parsed.detail || ''}</span></div>\n\n`;
                     messages.value[msgIdx].content += compressHtml;
                     break;
@@ -418,8 +425,8 @@ const ChatPage = {
                     }
                     break;
                   case 'error':
-                    messages.value[msgIdx].content = `Error: ${parsed.error || '未知错误'}`;
-                    showToast(parsed.error || '请求失败', 'error');
+                    messages.value[msgIdx].content = `Error: ${parsed.error || t('unknownError')}`;
+                    showToast(parsed.error || t('requestFailed'), 'error');
                     break;
                   default:
                     if (parsed.text) messages.value[msgIdx].content += parsed.text;
@@ -470,7 +477,7 @@ const ChatPage = {
     });
 
     return {
-      Icons, sessions, currentSessionId, messages, inputText, isStreaming,
+      Icons, t, sessions, currentSessionId, messages, inputText, isStreaming,
       messagesEl, userId, renderMarkdown,
       loadSessions, selectSession, newSession, sendMessage,
       handleKeydown,
@@ -485,7 +492,7 @@ const ChatPage = {
           <div style="padding: var(--space-3); border-bottom: 1px solid var(--gold-line);">
             <button class="btn btn-secondary w-full" @click="newSession">
               <span v-html="Icons.plus" style="width:14px;height:14px;"></span>
-              新对话
+              {{ t('newChat') }}
             </button>
           </div>
           <div style="flex: 1; overflow-y: auto; padding: var(--space-2);">
@@ -493,10 +500,10 @@ const ChatPage = {
                  :class="['nav-item', currentSessionId === s.id ? 'active' : '']"
                  @click="selectSession(s.id)"
                  style="padding: var(--space-2) var(--space-3); font-size: var(--text-sm);">
-              <span class="truncate">{{ s.title || s.id || '未命名对话' }}</span>
+              <span class="truncate">{{ s.title || s.id || t('unnamedChat') }}</span>
             </div>
             <div v-if="!sessions.length" class="p-4 text-center text-xs text-ash">
-              暂无对话
+              {{ t('noChats') }}
             </div>
           </div>
         </div>
@@ -517,26 +524,26 @@ const ChatPage = {
             </template>
             <empty-state v-else
               :icon="Icons.chat"
-              title="涟漪尚未荡起，等待第一个音符♪"
-              hint="输入消息开始对话" />
+              :title="t('chatEmptyTitle')"
+              :hint="t('chatEmptyHint')" />
           </div>
 
           <!-- Input area -->
           <div class="chat-input-area">
             <div class="chat-input-wrapper">
               <textarea class="chat-input" v-model="inputText"
-                        placeholder="输入消息... (Enter 发送, Shift+Enter 换行)"
+                        :placeholder="t('chatPlaceholder')"
                         @keydown="handleKeydown"
                         rows="1"></textarea>
               <div class="chat-actions">
-                <button class="chat-action-btn" title="上传文件">
+                <button class="chat-action-btn" :title="t('uploadFile')">
                   <span v-html="Icons.upload" style="width:18px;height:18px;"></span>
                 </button>
-                <button class="chat-action-btn" title="语音输入">
+                <button class="chat-action-btn" :title="t('voiceInput')">
                   <span v-html="Icons.mic" style="width:18px;height:18px;"></span>
                 </button>
                 <button class="chat-send-btn" @click="sendMessage"
-                        :disabled="!inputText.trim() || isStreaming" title="发送">
+                        :disabled="!inputText.trim() || isStreaming" :title="t('send')">
                   <span v-html="Icons.send" style="width:16px;height:16px;"></span>
                 </button>
               </div>
@@ -553,6 +560,7 @@ const KnowledgePage = {
   components: { EmptyState },
   setup() {
     const Icons = inject('Icons');
+    const t = inject('t');
     const collections = ref([]);
     const selectedCollection = ref('');
     const documents = ref([]);
@@ -586,18 +594,18 @@ const KnowledgePage = {
       const file = fileInput.value?.files?.[0];
       if (!file) return;
       if (!uploadCollection.value.trim()) {
-        showToast('请输入知识库名称', 'error');
+        showToast(t('enterCollectionName'), 'error');
         return;
       }
       uploading.value = true;
       try {
         await CyreneAPI.uploadKnowledge(file, uploadCollection.value.trim());
-        showToast('上传成功', 'success');
+        showToast(t('uploadSuccess'), 'success');
         selectedCollection.value = uploadCollection.value.trim();
         loadCollections();
         loadDocuments();
       } catch (e) {
-        showToast('上传失败: ' + e.message, 'error');
+        showToast(t('uploadFailed') + e.message, 'error');
       } finally {
         uploading.value = false;
       }
@@ -606,10 +614,10 @@ const KnowledgePage = {
     async function deleteDoc(docId) {
       try {
         await CyreneAPI.deleteDocument(selectedCollection.value, docId);
-        showToast('已删除', 'success');
+        showToast(t('deleted'), 'success');
         loadDocuments();
       } catch (e) {
-        showToast('删除失败: ' + e.message, 'error');
+        showToast(t('deleteFailed') + e.message, 'error');
       }
     }
 
@@ -617,11 +625,11 @@ const KnowledgePage = {
       if (!selectedCollection.value) return;
       try {
         await CyreneAPI.deleteCollection(selectedCollection.value);
-        showToast('知识库已删除', 'success');
+        showToast(t('collectionDeleted'), 'success');
         selectedCollection.value = '';
         documents.value = [];
       } catch (e) {
-        showToast('删除失败: ' + e.message, 'error');
+        showToast(t('deleteFailed') + e.message, 'error');
       }
     }
 
@@ -631,7 +639,7 @@ const KnowledgePage = {
         editingDoc.value = doc;
         editingContent.value = doc.content || '';
       } catch (e) {
-        showToast('加载失败: ' + e.message, 'error');
+        showToast(t('loadFailed') + e.message, 'error');
       }
     }
 
@@ -640,12 +648,12 @@ const KnowledgePage = {
       saving.value = true;
       try {
         await CyreneAPI.updateDocument(selectedCollection.value, editingDoc.value.id, editingContent.value);
-        showToast('已保存', 'success');
+        showToast(t('saved'), 'success');
         editingDoc.value = null;
         editingContent.value = '';
         loadDocuments();
       } catch (e) {
-        showToast('保存失败: ' + e.message, 'error');
+        showToast(t('saveFailed') + e.message, 'error');
       } finally {
         saving.value = false;
       }
@@ -659,27 +667,27 @@ const KnowledgePage = {
     watch(selectedCollection, loadDocuments);
     onMounted(loadCollections);
 
-    return { Icons, collections, selectedCollection, documents, uploading, uploadCollection, fileInput, editingDoc, editingContent, saving, loadCollections, loadDocuments, uploadFile, deleteDoc, deleteCol, openEdit, saveEdit, closeEdit };
+    return { Icons, t, collections, selectedCollection, documents, uploading, uploadCollection, fileInput, editingDoc, editingContent, saving, loadCollections, loadDocuments, uploadFile, deleteDoc, deleteCol, openEdit, saveEdit, closeEdit };
   },
   template: `
     <div>
       <!-- Upload section -->
       <div class="card card-gold mb-4">
         <div class="card-header">
-          <div class="card-title">上传知识库</div>
+          <div class="card-title">{{ t('uploadKnowledge') }}</div>
         </div>
         <div class="card-body">
           <div style="display: flex; gap: var(--space-3); align-items: flex-end;">
             <div class="input-group" style="flex: 1;">
-              <label class="input-label">知识库名称</label>
+              <label class="input-label">{{ t('collectionName') }}</label>
               <input class="input" v-model="uploadCollection" placeholder="my-knowledge" />
             </div>
             <div class="input-group" style="flex: 1;">
-              <label class="input-label">选择文件</label>
+              <label class="input-label">{{ t('chooseFile') }}</label>
               <input type="file" ref="fileInput" class="input" style="padding: 8px;" />
             </div>
             <button class="btn btn-primary" @click="uploadFile" :disabled="uploading" style="white-space: nowrap;">
-              {{ uploading ? '上传中...' : '上传' }}
+              {{ uploading ? t('uploading') : t('upload') }}
             </button>
           </div>
         </div>
@@ -688,7 +696,7 @@ const KnowledgePage = {
       <!-- Browse section -->
       <div class="card">
         <div class="card-header">
-          <div class="card-title">知识库浏览</div>
+          <div class="card-title">{{ t('browseKnowledge') }}</div>
           <div style="display: flex; gap: var(--space-2); align-items: center;">
             <button class="btn btn-ghost btn-sm" @click="loadCollections">
               <span v-html="Icons.refresh" style="width:14px;height:14px;"></span>
@@ -711,18 +719,18 @@ const KnowledgePage = {
           <!-- Selected collection -->
           <div v-if="selectedCollection" style="margin-bottom: var(--space-3);">
             <button class="btn btn-ghost btn-sm" @click="selectedCollection = ''; documents = []">
-              ← 返回列表
+              {{ t('back') }}
             </button>
-            <span class="text-sm text-ash" style="margin-left: var(--space-2);">当前：{{ selectedCollection }}</span>
+            <span class="text-sm text-ash" style="margin-left: var(--space-2);">{{ t('current') }}{{ selectedCollection }}</span>
           </div>
 
           <template v-if="documents.length">
             <table>
               <thead>
                 <tr>
-                  <th>来源</th>
-                  <th>分块</th>
-                  <th>操作</th>
+                  <th>{{ t('chunksSource') }}</th>
+                  <th>{{ t('chunksCount') }}</th>
+                  <th>{{ t('operation') }}</th>
                 </tr>
               </thead>
               <tbody>
@@ -730,10 +738,10 @@ const KnowledgePage = {
                   <td class="text-sm">{{ doc.source || doc.id }}</td>
                   <td class="text-ash text-xs">#{{ doc.metadata?.chunk_index ?? '-' }}</td>
                   <td>
-                    <button class="btn btn-ghost btn-sm" @click="openEdit(doc.id)" title="编辑">
+                    <button class="btn btn-ghost btn-sm" @click="openEdit(doc.id)" :title="t('edit')">
                       <span v-html="Icons.edit" style="width:14px;height:14px;"></span>
                     </button>
-                    <button class="btn btn-ghost btn-sm" @click="deleteDoc(doc.id)" title="删除">
+                    <button class="btn btn-ghost btn-sm" @click="deleteDoc(doc.id)" :title="t('deleteDoc')">
                       <span v-html="Icons.trash" style="width:14px;height:14px;"></span>
                     </button>
                   </td>
@@ -743,10 +751,10 @@ const KnowledgePage = {
           </template>
           <empty-state v-else-if="!selectedCollection && !collections.length"
             :icon="Icons.knowledge"
-            title="记忆的种子尚未播下"
-            hint="上传文件以构建知识库" />
+            :title="t('seedsNotSown')"
+            :hint="t('uploadToBuild')" />
           <div v-else-if="selectedCollection && !documents.length" class="text-sm text-ash" style="padding: var(--space-4); text-align: center;">
-            该知识库暂无文档
+            {{ t('noDocsInCollection') }}
           </div>
         </div>
       </div>
@@ -755,20 +763,20 @@ const KnowledgePage = {
       <div v-if="editingDoc" class="modal-overlay" @click.self="closeEdit">
         <div class="modal" style="max-width: 700px;">
           <div class="modal-header">
-            <div class="modal-title">编辑文档分块</div>
+            <div class="modal-title">{{ t('editChunk') }}</div>
             <button class="btn btn-ghost btn-sm" @click="closeEdit">✕</button>
           </div>
           <div class="modal-body">
             <div class="text-xs text-ash" style="margin-bottom: var(--space-2);">
-              来源：{{ editingDoc.source }} | ID：{{ editingDoc.id }}
+              {{ t('source') }}：{{ editingDoc.source }} | {{ t('id') }}{{ editingDoc.id }}
             </div>
             <textarea class="input" v-model="editingContent" rows="15"
                       style="width: 100%; font-family: var(--font-mono); font-size: var(--text-sm); resize: vertical;"></textarea>
           </div>
           <div class="modal-footer">
-            <button class="btn btn-ghost" @click="closeEdit">取消</button>
+            <button class="btn btn-ghost" @click="closeEdit">{{ t('cancel') }}</button>
             <button class="btn btn-primary" @click="saveEdit" :disabled="saving">
-              {{ saving ? '保存中...' : '保存' }}
+              {{ saving ? t('saving') : t('save') }}
             </button>
           </div>
         </div>
@@ -782,6 +790,7 @@ const AuditPage = {
   components: { EmptyState },
   setup() {
     const Icons = inject('Icons');
+    const t = inject('t');
     const traces = ref([]);
     const stats = ref(null);
     const loading = ref(false);
@@ -805,20 +814,20 @@ const AuditPage = {
     async function deleteTrace(traceId) {
       try {
         await CyreneAPI.deleteTrace(traceId);
-        showToast('已删除', 'success');
+        showToast(t('deleted'), 'success');
         loadTraces();
       } catch (e) {
-        showToast('删除失败: ' + e.message, 'error');
+        showToast(t('deleteFailed') + e.message, 'error');
       }
     }
 
     async function cleanupTraces() {
       try {
         const result = await CyreneAPI.cleanupTraces();
-        showToast(`已清理 ${result.deleted || 0} 条记录`, 'success');
+        showToast(`${result.deleted || 0} ${t('cleanedNRecords')}`, 'success');
         loadTraces();
       } catch (e) {
-        showToast('清理失败: ' + e.message, 'error');
+        showToast(t('deleteFailed') + e.message, 'error');
       }
     }
 
@@ -830,12 +839,12 @@ const AuditPage = {
 
     function formatTime(ts) {
       if (!ts) return '-';
-      return new Date(ts).toLocaleString('zh-CN');
+      return new Date(ts).toLocaleString(CyreneI18n.localeString());
     }
 
     onMounted(loadTraces);
 
-    return { Icons, traces, stats, loading, loadTraces, deleteTrace, cleanupTraces, formatDuration, formatTime };
+    return { Icons, t, traces, stats, loading, loadTraces, deleteTrace, cleanupTraces, formatDuration, formatTime };
   },
   template: `
     <div>
@@ -844,13 +853,13 @@ const AuditPage = {
         <div class="card" style="flex: 1;">
           <div class="card-body" style="text-align: center;">
             <div style="font-family: var(--font-display); font-size: var(--text-2xl); color: var(--rose);">{{ stats.count || 0 }}</div>
-            <div class="text-sm text-ash">总记录数</div>
+            <div class="text-sm text-ash">{{ t('totalRecords') }}</div>
           </div>
         </div>
         <div class="card" style="flex: 1;">
           <div class="card-body" style="text-align: center;">
             <div style="font-family: var(--font-display); font-size: var(--text-2xl); color: var(--gold);">{{ stats.retentionDays || 30 }}</div>
-            <div class="text-sm text-ash">保留天数</div>
+            <div class="text-sm text-ash">{{ t('retentionDays') }}</div>
           </div>
         </div>
       </div>
@@ -858,12 +867,12 @@ const AuditPage = {
       <!-- Traces table -->
       <div class="card">
         <div class="card-header">
-          <div class="card-title">审计记录</div>
+          <div class="card-title">{{ t('auditRecords') }}</div>
           <div style="display: flex; gap: var(--space-2);">
             <button class="btn btn-ghost btn-sm" @click="loadTraces">
               <span v-html="Icons.refresh" style="width:14px;height:14px;"></span>
             </button>
-            <button class="btn btn-danger btn-sm" @click="cleanupTraces">清理过期</button>
+            <button class="btn btn-danger btn-sm" @click="cleanupTraces">{{ t('cleanupExpired') }}</button>
           </div>
         </div>
         <div class="card-body">
@@ -872,27 +881,27 @@ const AuditPage = {
               <table>
                 <thead>
                   <tr>
-                    <th>Trace ID</th>
-                    <th>用户</th>
-                    <th>风险</th>
-                    <th>耗时</th>
-                    <th>时间</th>
-                    <th>操作</th>
+                    <th>{{ t('traceId') }}</th>
+                    <th>{{ t('user') }}</th>
+                    <th>{{ t('risk') }}</th>
+                    <th>{{ t('duration') }}</th>
+                    <th>{{ t('time') }}</th>
+                    <th>{{ t('operation') }}</th>
                   </tr>
                 </thead>
                 <tbody>
-                  <tr v-for="t in traces" :key="t.traceId">
-                    <td class="text-xs" style="font-family: monospace; color: var(--iris);">{{ (t.traceId || '').slice(0, 8) }}...</td>
-                    <td>{{ t.userId || '-' }}</td>
+                  <tr v-for="tr in traces" :key="tr.traceId">
+                    <td class="text-xs" style="font-family: monospace; color: var(--iris);">{{ (tr.traceId || '').slice(0, 8) }}...</td>
+                    <td>{{ tr.userId || '-' }}</td>
                     <td>
-                      <span :class="['tag', t.riskLevel === 'HIGH' ? 'tag-rose' : t.riskLevel === 'MEDIUM' ? 'tag-gold' : 'tag-iris']">
-                        {{ t.riskLevel || '-' }}
+                      <span :class="['tag', tr.riskLevel === 'HIGH' ? 'tag-rose' : tr.riskLevel === 'MEDIUM' ? 'tag-gold' : 'tag-iris']">
+                        {{ tr.riskLevel || '-' }}
                       </span>
                     </td>
-                    <td class="text-ash">{{ formatDuration(t.totalDurationMs) }}</td>
-                    <td class="text-xs text-dusk">{{ formatTime(t.timestamp) }}</td>
+                    <td class="text-ash">{{ formatDuration(tr.totalDurationMs) }}</td>
+                    <td class="text-xs text-dusk">{{ formatTime(tr.timestamp) }}</td>
                     <td>
-                      <button class="btn btn-ghost btn-sm" @click="deleteTrace(t.traceId)">
+                      <button class="btn btn-ghost btn-sm" @click="deleteTrace(tr.traceId)">
                         <span v-html="Icons.trash" style="width:14px;height:14px;"></span>
                       </button>
                     </td>
@@ -903,8 +912,8 @@ const AuditPage = {
           </template>
           <empty-state v-else
             :icon="Icons.audit"
-            title="旅途尚未开始，无痕可寻"
-            hint="对话和工具调用的审计记录将显示在这里" />
+            :title="t('journeyNotStarted')"
+            :hint="t('auditHint')" />
         </div>
       </div>
     </div>
@@ -916,6 +925,7 @@ const ConfigPage = {
   components: { EmptyState },
   setup() {
     const Icons = inject('Icons');
+    const t = inject('t');
     const configText = ref('');
     const configObj = ref(null);
     const loading = ref(false);
@@ -948,11 +958,11 @@ const ConfigPage = {
       try {
         const parsed = JSON.parse(configText.value);
         await CyreneAPI.updateConfig(parsed);
-        showToast('配置已保存', 'success');
+        showToast(t('configSaved'), 'success');
         configObj.value = parsed;
       } catch (e) {
         if (e instanceof SyntaxError) {
-          error.value = 'JSON 格式错误: ' + e.message;
+          error.value = t('jsonError') + e.message;
         } else {
           error.value = e.message;
         }
@@ -964,9 +974,9 @@ const ConfigPage = {
     async function reloadConfig() {
       try {
         await CyreneAPI.reloadConfig();
-        showToast('配置已重新加载', 'success');
+        showToast(t('configReloaded'), 'success');
       } catch (e) {
-        showToast('重载失败: ' + e.message, 'error');
+        showToast(t('reloadFailed') + e.message, 'error');
       }
     }
 
@@ -985,7 +995,7 @@ const ConfigPage = {
 
     onMounted(loadConfig);
 
-    return { Icons, configText, configObj, loading, saving, error, loadConfig, saveConfig, reloadConfig, handleKeydown };
+    return { Icons, t, configText, configObj, loading, saving, error, loadConfig, saveConfig, reloadConfig, handleKeydown };
   },
   template: `
     <div>
@@ -996,14 +1006,14 @@ const ConfigPage = {
           <div style="display: flex; gap: var(--space-2);">
             <button class="btn btn-ghost btn-sm" @click="loadConfig">
               <span v-html="Icons.refresh" style="width:14px;height:14px;"></span>
-              重新加载
+              {{ t('reload') }}
             </button>
             <button class="btn btn-ghost btn-sm" @click="reloadConfig">
-              热加载到工具
+              {{ t('hotReload') }}
             </button>
             <button class="btn btn-primary btn-sm" @click="saveConfig" :disabled="saving">
               <span v-html="Icons.save" style="width:14px;height:14px;"></span>
-              {{ saving ? '保存中...' : '保存' }}
+              {{ saving ? t('saving') : t('save') }}
             </button>
           </div>
         </div>
@@ -1017,7 +1027,7 @@ const ConfigPage = {
                       spellcheck="false"></textarea>
             <div v-if="error" class="text-sm mt-2" style="color: var(--error);">{{ error }}</div>
             <div class="text-xs text-ash mt-2">
-              修改后点击「保存」写入文件，再点击「热加载到工具」使配置生效（无需重启服务）
+              {{ t('configHint') }}
             </div>
           </template>
         </div>
@@ -1026,17 +1036,17 @@ const ConfigPage = {
       <!-- Endpoint summary -->
       <div class="card mt-4" v-if="configObj?.endpoints?.length">
         <div class="card-header">
-          <div class="card-title">已配置接口 ({{ configObj.endpoints.length }})</div>
+          <div class="card-title">{{ t('configuredEndpoints') }} ({{ configObj.endpoints.length }})</div>
         </div>
         <div class="card-body">
           <table>
             <thead>
               <tr>
-                <th>方法</th>
-                <th>路径</th>
-                <th>名称</th>
-                <th>鉴权</th>
-                <th>状态</th>
+                <th>{{ t('method') }}</th>
+                <th>{{ t('path') }}</th>
+                <th>{{ t('name') }}</th>
+                <th>{{ t('auth') }}</th>
+                <th>{{ t('status') }}</th>
               </tr>
             </thead>
             <tbody>
@@ -1047,7 +1057,7 @@ const ConfigPage = {
                 <td class="text-xs text-ash">{{ ep.authMode || '-' }}</td>
                 <td>
                   <span :class="['tag', ep.confirmed ? 'tag-gold' : 'tag-dusk']">
-                    {{ ep.confirmed ? '已启用' : '未启用' }}
+                    {{ ep.confirmed ? t('enabled') : t('disabled') }}
                   </span>
                 </td>
               </tr>
@@ -1058,8 +1068,8 @@ const ConfigPage = {
 
       <empty-state v-if="!loading && !configObj?.endpoints?.length"
         :icon="Icons.config"
-        title="她还在等待——在世界的背面，等你迈出第一步"
-        hint="运行首次扫描或手动创建配置文件" />
+        :title="t('waitingForYou')"
+        :hint="t('scanOrCreateHint')" />
     </div>
   `
 };
@@ -1071,9 +1081,9 @@ const app = createApp({
     const Icons = inject('Icons');
     const currentPage = ref('chat');
     const sidebarOpen = ref(false);
+    const sidebarCollapsed = ref(false);
     const showPreConfig = ref(false);
     const configExists = ref(true);
-    const pageTransitioning = ref(false);
 
     // ── Global userId (persisted in localStorage) ──
     const userId = ref(localStorage.getItem('cyrene_user') || '');
@@ -1082,6 +1092,10 @@ const app = createApp({
     const editUserId = ref('');
 
     provide('userId', userId);
+    const locale = CyreneI18n.init(ref, watch);
+    const t = CyreneI18n.t.bind(CyreneI18n);
+    provide('t', t);
+    provide('locale', locale);
 
     function confirmUserId() {
       const val = editUserId.value.trim();
@@ -1090,7 +1104,7 @@ const app = createApp({
       localStorage.setItem('cyrene_user', val);
       showWelcome.value = false;
       editingUser.value = false;
-      showToast('用户 ID 已设置: ' + val, 'success');
+      showToast(t('userIdSet') + val, 'success');
     }
 
     function startEditUser() {
@@ -1102,26 +1116,22 @@ const app = createApp({
       editingUser.value = false;
     }
 
-    const navItems = [
-      { id: 'chat', label: '对话', icon: Icons.chat },
-      { id: 'knowledge', label: '知识库', icon: Icons.knowledge },
-      { id: 'audit', label: '审计', icon: Icons.audit },
-      { id: 'config', label: '配置', icon: Icons.config },
-    ];
+    const navItems = computed(() => [
+      { id: 'chat', label: t('chat'), icon: Icons.chat },
+      { id: 'knowledge', label: t('knowledge'), icon: Icons.knowledge },
+      { id: 'audit', label: t('audit'), icon: Icons.audit },
+      { id: 'config', label: t('config'), icon: Icons.config },
+    ]);
 
     const pageTitle = computed(() => {
-      const item = navItems.find(n => n.id === currentPage.value);
+      const item = navItems.value.find(n => n.id === currentPage.value);
       return item ? item.label : 'Cyrene';
     });
 
     function navigate(page) {
       if (page === currentPage.value) return;
-      pageTransitioning.value = true;
-      setTimeout(() => {
-        currentPage.value = page;
-        pageTransitioning.value = false;
-        window.location.hash = page;
-      }, 200);
+      currentPage.value = page;
+      window.location.hash = page;
     }
 
     function toggleSidebar() {
@@ -1150,7 +1160,7 @@ const app = createApp({
     // Handle hash routing
     function handleHash() {
       const hash = window.location.hash.slice(1) || 'chat';
-      if (navItems.find(n => n.id === hash)) {
+      if (navItems.value.find(n => n.id === hash)) {
         currentPage.value = hash;
       }
     }
@@ -1166,8 +1176,8 @@ const app = createApp({
     });
 
     return {
-      Icons, currentPage, sidebarOpen, showPreConfig, configExists, pageTransitioning,
-      navItems, pageTitle,
+      Icons, currentPage, sidebarOpen, sidebarCollapsed, showPreConfig, configExists,
+      navItems, pageTitle, t, locale,
       userId, showWelcome, editingUser, editUserId,
       confirmUserId, startEditUser, cancelEditUser,
       navigate, toggleSidebar, onPreConfigComplete, onPreConfigClose,
@@ -1178,30 +1188,27 @@ const app = createApp({
       <stars-background />
       <toast-container />
 
-      <!-- Page transition ripple -->
-      <div v-if="pageTransitioning" class="page-ripple"></div>
-
       <!-- Welcome modal (first visit only) -->
       <div v-if="showWelcome" class="modal-overlay">
         <div class="modal" style="max-width: 420px;">
           <div class="modal-header">
-            <div class="modal-title">欢迎来到 Cyrene</div>
-            <div class="modal-subtitle">涟漪尚未荡起，等待第一个音符♪</div>
+            <div class="modal-title">{{ t('welcomeTitle') }}</div>
+            <div class="modal-subtitle">{{ t('welcomeSubtitle') }}</div>
           </div>
           <div class="modal-body">
             <div class="input-group">
-              <label class="input-label">用户 ID</label>
+              <label class="input-label">{{ t('userId') }}</label>
               <input class="input" v-model="editUserId"
-                     placeholder="输入你的用户 ID"
+                     :placeholder="t('enterUserId')"
                      @keydown.enter="confirmUserId" autofocus />
               <div class="text-xs text-ash mt-2">
-                用于标识你的会话和记忆，只需设置一次，后续自动使用
+                {{ t('userIdHint') }}
               </div>
             </div>
           </div>
           <div class="modal-footer">
             <button class="btn btn-primary" @click="confirmUserId" :disabled="!editUserId.trim()">
-              进入 Cyrene
+              {{ t('enterCyrene') }}
             </button>
           </div>
         </div>
@@ -1223,23 +1230,29 @@ const app = createApp({
         <div :class="['sidebar-backdrop', sidebarOpen ? '' : 'hidden']" @click="sidebarOpen = false"></div>
 
         <!-- Sidebar -->
-        <aside :class="['sidebar', sidebarOpen ? 'open' : '']">
+        <aside :class="['sidebar', sidebarOpen ? 'open' : '', sidebarCollapsed ? 'collapsed' : '']">
           <div class="sidebar-header">
             <div class="sidebar-logo">
-              <span>Cyrene</span>
-              <span class="logo-accent">♪</span>
+              <span v-show="!sidebarCollapsed">Cyrene</span>
+              <span v-show="!sidebarCollapsed" class="logo-accent">♪</span>
+              <button class="sidebar-toggle" @click="sidebarCollapsed = !sidebarCollapsed" :title="sidebarCollapsed ? t('expandSidebar') : t('collapseSidebar')">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                  <path :d="sidebarCollapsed ? 'M6 3l5 5-5 5' : 'M10 3l-5 5 5 5'" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+              </button>
             </div>
           </div>
           <nav class="sidebar-nav">
             <button v-for="item in navItems" :key="item.id"
                     :class="['nav-item', currentPage === item.id ? 'active' : '']"
+                    :title="sidebarCollapsed ? item.label : ''"
                     @click="navigate(item.id); sidebarOpen = false">
               <span class="nav-icon" v-html="item.icon"></span>
-              <span class="nav-label">{{ item.label }}</span>
+              <span class="nav-label" v-show="!sidebarCollapsed">{{ item.label }}</span>
             </button>
           </nav>
-          <div class="sidebar-footer">
-            在时间的涟漪中
+          <div class="sidebar-footer" v-show="!sidebarCollapsed">
+            {{ t('inTimeRipples') }}
           </div>
         </aside>
 
@@ -1248,10 +1261,14 @@ const app = createApp({
           <header class="header">
             <h2 class="header-title">{{ pageTitle }}</h2>
             <div class="header-actions">
+              <!-- Language toggle -->
+              <button class="lang-toggle" @click="locale = locale === 'zh' ? 'en' : 'zh'" :title="locale === 'zh' ? 'Switch to English' : '切换到中文'">
+                {{ locale === 'zh' ? 'EN' : '中' }}
+              </button>
               <!-- User ID badge (click to edit) -->
-              <div class="user-badge" @click="startEditUser" style="cursor: pointer;" title="点击修改用户 ID">
+              <div class="user-badge" @click="startEditUser" style="cursor: pointer;" :title="t('clickToEditUserId')">
                 <span class="user-dot"></span>
-                <span>{{ userId || '未设置' }}</span>
+                <span>{{ userId || t('unset') }}</span>
               </div>
             </div>
           </header>
@@ -1259,11 +1276,11 @@ const app = createApp({
           <!-- Inline user ID editor -->
           <div v-if="editingUser" style="padding: 0 var(--space-6); background: var(--surface); border-bottom: 1px solid var(--gold-line);">
             <div style="display: flex; gap: var(--space-3); align-items: center; padding: var(--space-3) 0;">
-              <input class="input" v-model="editUserId" placeholder="用户 ID"
+              <input class="input" v-model="editUserId" :placeholder="t('userId')"
                      style="flex: 1; max-width: 300px;"
                      @keydown.enter="confirmUserId" @keydown.escape="cancelEditUser" />
-              <button class="btn btn-primary btn-sm" @click="confirmUserId" :disabled="!editUserId.trim()">确认</button>
-              <button class="btn btn-ghost btn-sm" @click="cancelEditUser">取消</button>
+              <button class="btn btn-primary btn-sm" @click="confirmUserId" :disabled="!editUserId.trim()">{{ t('confirm') }}</button>
+              <button class="btn btn-ghost btn-sm" @click="cancelEditUser">{{ t('cancel') }}</button>
             </div>
           </div>
 
@@ -1276,6 +1293,11 @@ const app = createApp({
       </div>
     </div>
   `
+});
+
+// 全局涟漪 — 界面任意位置点击都有
+document.addEventListener('click', (e) => {
+  createRipple(e);
 });
 
 // Randomize meteor start position for each loading-dots element

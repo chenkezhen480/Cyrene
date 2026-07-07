@@ -371,60 +371,18 @@ public class AgentOrchestrator {
             }
             trace.recordLlmMeta(chatModelProvider.modelName(), "v1");
 
-            // 压缩检查：先小压缩（删缓存中的 tool 消息），再大压缩（AI 摘要）
-            int totalBudget = chatModelProvider.chatModel() != null ? chatModelProvider.contextWindow() : 8000;
+            // 压缩检查
             if (sessionId != null && userId != null) {
-                // 小压缩：从缓存中删除 tool 消息
-                int stripped = stripToolMessagesFromCache(sessionId, userId);
-                if (stripped > 0) {
-                    // 缓存已更新，重新加载 shorttermMessages
-                    shorttermMessages = messageCache.getIfPresent(sessionId);
-                    if (shorttermMessages == null) {
-                        shorttermMessages = messageStore.loadForContext(sessionId);
-                    }
-                }
+                var outcome = applyCompression(sessionId, userId, shorttermMessages, finalUserMessage, systemPrompt);
+                shorttermMessages = outcome.finalMessages();
 
-                int shorttermTokens = estimateTokens(shorttermMessages);
-                int inputTokens = estimateTokens(finalUserMessage);  // includes RAG context
-                int systemTokens = estimateTokens(systemPrompt);
-                int totalUsed = shorttermTokens + inputTokens + systemTokens;
-                log.debug("[Orchestrator] Token estimate: shortterm={}, input={}, system={}, total={}/{}",
-                        shorttermTokens, inputTokens, systemTokens, totalUsed, totalBudget);
-
-                // 大压缩：小压缩后仍超过（大压缩阈值-10）% 时触发
-                int majorThreshold = EnvConfig.get().getInt(EnvKey.CTX_COMPRESS_MAJOR, 85);
-                var compressResult = new MemoryCompressor.CompressionResult(
-                        MemoryCompressor.CompressionResult.CompressionType.NONE, 0, 0);
-                if ((int) (totalUsed * 100.0 / totalBudget) >= majorThreshold - 10) {
-                    compressResult = memoryCompressor.compressIfNeeded(
-                            sessionId, shorttermMessages, shorttermTokens, totalUsed, totalBudget);
-                }
-                if (compressResult.type() != MemoryCompressor.CompressionResult.CompressionType.NONE) {
-                    log.info("[Memory] Compression triggered: type={}, before={}, after={}",
-                            compressResult.type(), compressResult.messagesBefore(), compressResult.messagesAfter());
+                if (outcome.hasMajor()) {
                     Map<String, String> meta = new HashMap<>(trace.builder().build().metadata());
-                    meta.put("compression_type", compressResult.type().name());
-                    meta.put("messages_before", String.valueOf(compressResult.messagesBefore()));
-                    meta.put("messages_after", String.valueOf(compressResult.messagesAfter()));
+                    meta.put("compression_type", outcome.majorResult().type().name());
+                    meta.put("messages_before", String.valueOf(outcome.majorResult().messagesBefore()));
+                    meta.put("messages_after", String.valueOf(outcome.majorResult().messagesAfter()));
                     trace.builder().metadata(meta);
-                    // 压缩后重建缓存（从DB加载含摘要的状态）
-                    shorttermMessages = messageStore.loadForContext(sessionId);
-                    messageCache.put(sessionId, userId, shorttermMessages);
-
-                    // 大压缩后重新注入已加载的skill内容（skill内容不在DB中，需要重新加载）
-                    List<com.harness.core.model.Skill> loadedSkills = skillRegistry.getLoadedSkills(sessionId);
-                    if (!loadedSkills.isEmpty()) {
-                        log.debug("[Memory] Re-injecting {} loaded skills after major compression", loadedSkills.size());
-                        List<MemoryMessage> skillMessages = new ArrayList<>(shorttermMessages);
-                        for (com.harness.core.model.Skill skill : loadedSkills) {
-                            String skillContent = buildSkillContentForReinjection(skill);
-                            skillMessages.add(new MemoryMessage(0, sessionId, "system", skillContent, false, null));
-                        }
-                        shorttermMessages = skillMessages;
-                        messageCache.put(sessionId, userId, shorttermMessages);
-                    }
                 }
-
                 // 用户消息：异步写DB + 同步更新缓存
                 messageWriteWorker.submit(sessionId, "user", enhancedText, false);
                 messageCache.append(sessionId, userId, new MemoryMessage(0, sessionId, "user", enhancedText, false, null));
@@ -635,52 +593,17 @@ public class AgentOrchestrator {
                 finalUserMessage = enhancedText + "\n\n" + ctx.contextBlock();
             }
 
-            // 压缩检查：先小压缩（删缓存中的 tool 消息），再大压缩（AI 摘要）
-            int totalBudget = chatModelProvider.chatModel() != null ? chatModelProvider.contextWindow() : 8000;
+            // 压缩检查
             if (sessionId != null && userId != null) {
-                // 小压缩：从缓存中删除 tool 消息
-                int stripped = stripToolMessagesFromCache(sessionId, userId);
-                if (stripped > 0) {
-                    callback.onEvent(StreamEvent.compress("minor", stripped + " 条工具消息已清理"));
-                    shorttermMessages = messageCache.getIfPresent(sessionId);
-                    if (shorttermMessages == null) {
-                        shorttermMessages = messageStore.loadForContext(sessionId);
-                    }
-                }
+                var outcome = applyCompression(sessionId, userId, shorttermMessages, finalUserMessage, systemPrompt);
+                shorttermMessages = outcome.finalMessages();
 
-                int shorttermTokens = estimateTokens(shorttermMessages);
-                int inputTokens = estimateTokens(finalUserMessage);  // includes RAG context
-                int systemTokens = estimateTokens(systemPrompt);
-                int totalUsed = shorttermTokens + inputTokens + systemTokens;
-
-                // 大压缩：小压缩后仍超过（大压缩阈值-10）% 时触发
-                int majorThreshold = EnvConfig.get().getInt(EnvKey.CTX_COMPRESS_MAJOR, 85);
-                var compressResult = new MemoryCompressor.CompressionResult(
-                        MemoryCompressor.CompressionResult.CompressionType.NONE, 0, 0);
-                if ((int) (totalUsed * 100.0 / totalBudget) >= majorThreshold - 10) {
-                    compressResult = memoryCompressor.compressIfNeeded(
-                            sessionId, shorttermMessages, shorttermTokens, totalUsed, totalBudget);
+                if (outcome.hasMinor()) {
+                    callback.onEvent(StreamEvent.compress("minor", outcome.minorStripped() + " 条工具消息已清理"));
                 }
-                if (compressResult.type() != MemoryCompressor.CompressionResult.CompressionType.NONE) {
-                    log.info("[Memory] Compression triggered: type={}, before={}, after={}",
-                            compressResult.type(), compressResult.messagesBefore(), compressResult.messagesAfter());
+                if (outcome.hasMajor()) {
                     callback.onEvent(StreamEvent.compress("major",
-                            compressResult.messagesBefore() + " → " + compressResult.messagesAfter() + " 条消息已压缩"));
-                    shorttermMessages = messageStore.loadForContext(sessionId);
-                    messageCache.put(sessionId, userId, shorttermMessages);
-
-                    // 大压缩后重新注入已加载的skill内容（skill内容不在DB中，需要重新加载）
-                    List<com.harness.core.model.Skill> loadedSkills = skillRegistry.getLoadedSkills(sessionId);
-                    if (!loadedSkills.isEmpty()) {
-                        log.debug("[Memory] Re-injecting {} loaded skills after major compression", loadedSkills.size());
-                        List<MemoryMessage> skillMessages = new ArrayList<>(shorttermMessages);
-                        for (com.harness.core.model.Skill skill : loadedSkills) {
-                            String skillContent = buildSkillContentForReinjection(skill);
-                            skillMessages.add(new MemoryMessage(0, sessionId, "system", skillContent, false, null));
-                        }
-                        shorttermMessages = skillMessages;
-                        messageCache.put(sessionId, userId, shorttermMessages);
-                    }
+                            outcome.majorResult().messagesBefore() + " → " + outcome.majorResult().messagesAfter() + " 条消息已压缩"));
                 }
 
                 messageWriteWorker.submit(sessionId, "user", enhancedText, false);
@@ -1029,6 +952,82 @@ public class AgentOrchestrator {
                 }
             }
         }
+    }
+
+    /**
+     * 压缩结果：供调用方决定如何上报。
+     */
+    record CompressionOutcome(
+            int minorStripped,
+            MemoryCompressor.CompressionResult majorResult,
+            List<MemoryMessage> finalMessages
+    ) {
+        boolean hasMinor() { return minorStripped > 0; }
+        boolean hasMajor() { return majorResult.type() != MemoryCompressor.CompressionResult.CompressionType.NONE; }
+    }
+
+    /**
+     * 统一压缩流程：总上下文达到阈值时先小压缩，仍超则大压缩。
+     * 返回 CompressionOutcome 供调用方上报 SSE 或写 trace metadata。
+     */
+    private CompressionOutcome applyCompression(
+            String sessionId, String userId,
+            List<MemoryMessage> shorttermMessages,
+            String finalUserMessage, String systemPrompt) {
+
+        int totalBudget = chatModelProvider.chatModel() != null ? chatModelProvider.contextWindow() : 8000;
+        int shorttermTokens = estimateTokens(shorttermMessages);
+        int inputTokens = estimateTokens(finalUserMessage);
+        int systemTokens = estimateTokens(systemPrompt);
+        int totalUsed = shorttermTokens + inputTokens + systemTokens;
+
+        int majorThreshold = EnvConfig.get().getInt(EnvKey.CTX_COMPRESS_MAJOR, 85);
+        int usagePercent = (int) (totalUsed * 100.0 / totalBudget);
+        int minorStripped = 0;
+
+        // 小压缩：达到阈值时清理 tool 消息
+        if (usagePercent >= majorThreshold) {
+            minorStripped = stripToolMessagesFromCache(sessionId, userId);
+            if (minorStripped > 0) {
+                shorttermMessages = messageCache.getIfPresent(sessionId);
+                if (shorttermMessages == null) {
+                    shorttermMessages = messageStore.loadForContext(sessionId);
+                }
+                shorttermTokens = estimateTokens(shorttermMessages);
+                totalUsed = shorttermTokens + inputTokens + systemTokens;
+                usagePercent = (int) (totalUsed * 100.0 / totalBudget);
+            }
+        }
+
+        // 大压缩：小压缩后仍超过（阈值-10）% 时触发
+        var majorResult = new MemoryCompressor.CompressionResult(
+                MemoryCompressor.CompressionResult.CompressionType.NONE, 0, 0);
+        if (usagePercent >= majorThreshold - 10) {
+            majorResult = memoryCompressor.compressIfNeeded(
+                    sessionId, shorttermMessages, shorttermTokens, totalUsed, totalBudget);
+        }
+
+        // 大压缩后重建缓存 + 重新注入 skill
+        if (majorResult.type() != MemoryCompressor.CompressionResult.CompressionType.NONE) {
+            log.info("[Memory] Compression triggered: type={}, before={}, after={}",
+                    majorResult.type(), majorResult.messagesBefore(), majorResult.messagesAfter());
+            shorttermMessages = messageStore.loadForContext(sessionId);
+            messageCache.put(sessionId, userId, shorttermMessages);
+
+            List<com.harness.core.model.Skill> loadedSkills = skillRegistry.getLoadedSkills(sessionId);
+            if (!loadedSkills.isEmpty()) {
+                log.debug("[Memory] Re-injecting {} loaded skills after major compression", loadedSkills.size());
+                List<MemoryMessage> skillMessages = new ArrayList<>(shorttermMessages);
+                for (com.harness.core.model.Skill skill : loadedSkills) {
+                    String skillContent = buildSkillContentForReinjection(skill);
+                    skillMessages.add(new MemoryMessage(0, sessionId, "system", skillContent, false, null));
+                }
+                shorttermMessages = skillMessages;
+                messageCache.put(sessionId, userId, shorttermMessages);
+            }
+        }
+
+        return new CompressionOutcome(minorStripped, majorResult, shorttermMessages);
     }
 
     /**
