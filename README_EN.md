@@ -2,7 +2,7 @@
 
 # Cyrene Agent
 
-A Java AI Agent application development framework built on the **Harness orchestration architecture**. Provides pluggable model providers, built-in RAG knowledge base, session memory, and a 5-layer pipeline orchestration — use it as a scaffold to rapidly build and customize business-oriented Agent applications.    ---------1768576157@qq.com
+A Java AI Agent application development framework built on the **Harness orchestration architecture**. Provides pluggable model providers, built-in RAG knowledge base, session memory, and a 5-layer pipeline orchestration — use it as a scaffold to rapidly build and customize business-oriented Agent applications.    1768576157@qq.com
 
 ## First Launch
 
