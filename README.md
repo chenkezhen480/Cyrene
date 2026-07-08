@@ -2,7 +2,7 @@
 
 # Cyrene Agent
 
-基于 **Harness 编排架构** 的 Java AI Agent 应用开发框架。提供可插拔的模型 Provider、内置 RAG 知识库、会话记忆与 5 层流水线编排，可作为脚手架快速搭建并定制面向业务的 Agent 应用。   ---------1768576157@qq.com
+基于 **Harness 编排架构** 的 Java AI Agent 应用开发框架。提供可插拔的模型 Provider、内置 RAG 知识库、会话记忆与 5 层流水线编排，可作为脚手架快速搭建并定制面向业务的 Agent 应用。   1768576157@qq.com
 
 ## 首次启动
 
