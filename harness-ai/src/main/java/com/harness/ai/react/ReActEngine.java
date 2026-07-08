@@ -237,14 +237,14 @@ public class ReActEngine {
                 listener.onStep(step);
             }
 
-            // 循环检测：连续 N 次相同工具调用
-            if (loopDetectionThreshold > 0) {
-                ReActStep.InspectionResult loopResult = Inspector.detectLoop(allSteps, loopDetectionThreshold);
-                if (loopResult != null) {
-                    inspection = loopResult;
-                    // 覆盖 step 中的 inspection 结果
+            // 同工具同参数循环检测：连续 N 次调用同一工具且参数完全相同
+            if (inspection.status() == ReActStep.InspectionResult.InspectionStatus.PASS) {
+                ReActStep.InspectionResult sameToolResult = Inspector.detectSameToolConsecutive(
+                        allSteps, loopDetectionThreshold);
+                if (sameToolResult != null) {
+                    inspection = sameToolResult;
                     allSteps.set(allSteps.size() - 1, new ReActStep(i, aiMessage.text(),
-                            step.action(), toolCalls, toolResults, step.observation(), loopResult));
+                            step.action(), toolCalls, toolResults, step.observation(), sameToolResult));
                 }
             }
 
@@ -454,13 +454,14 @@ public class ReActEngine {
                 listener.onStep(step);
             }
 
-            // 循环检测：连续 N 次相同工具调用
-            if (loopDetectionThreshold > 0) {
-                ReActStep.InspectionResult loopResult = Inspector.detectLoop(allSteps, loopDetectionThreshold);
-                if (loopResult != null) {
-                    inspection = loopResult;
+            // 同工具同参数循环检测：连续 N 次调用同一工具且参数完全相同
+            if (inspection.status() == ReActStep.InspectionResult.InspectionStatus.PASS) {
+                ReActStep.InspectionResult sameToolResult = Inspector.detectSameToolConsecutive(
+                        allSteps, loopDetectionThreshold);
+                if (sameToolResult != null) {
+                    inspection = sameToolResult;
                     allSteps.set(allSteps.size() - 1, new ReActStep(i, aiMessage.text(),
-                            step.action(), toolCalls, toolResults, step.observation(), loopResult));
+                            step.action(), toolCalls, toolResults, step.observation(), sameToolResult));
                 }
             }
 

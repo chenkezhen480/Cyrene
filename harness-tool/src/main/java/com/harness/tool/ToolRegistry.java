@@ -1,11 +1,16 @@
 package com.harness.tool;
 
-import com.harness.core.model.ApiEndpoint;
 import com.harness.core.model.ProjectApiConfig;
 import com.harness.core.model.ToolSpec;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.harness.env.EnvConfig;
+import com.harness.env.EnvKey;
+import com.harness.tool.discovery.UpdateProjectApiTool;
+
+import java.io.File;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -59,7 +64,7 @@ public class ToolRegistry {
     // ==================== Project API Discovery support ====================
 
     /**
-     * Load project API config and register the three discovery meta-tools.
+     * Load project API config and register the four discovery meta-tools.
      * Stores config in memory for the tools to query.
      * Thread-safe: can be called while ReAct loops are running.
      */
@@ -69,13 +74,37 @@ public class ToolRegistry {
         // Store config in memory (tools query via configRef)
         configRef.set(config);
 
-        // Register the three meta-tools (idempotent — overwrite if exists)
+        // Register meta-tools (idempotent — overwrite if exists)
         tools.put("list_api_endpoints", new ListApiEndpointsTool(configRef::get));
         tools.put("get_api_endpoint_detail", new GetApiEndpointDetailTool(configRef::get));
         tools.put("call_discovered_api", new CallDiscoveredApiTool(configRef::get));
+        tools.put("update_project_api", new UpdateProjectApiTool(this));
 
-        log.info("[ToolRegistry] Loaded project API config: {} endpoints, 3 meta-tools registered",
+        log.info("[ToolRegistry] Loaded project API config: {} endpoints, 4 meta-tools registered",
                 config.endpoints() != null ? config.endpoints().size() : 0);
+    }
+
+    /**
+     * Update the in-memory project API config and persist to disk.
+     *
+     * @param newConfig the updated config
+     * @return true if both memory update and disk write succeeded
+     */
+    public synchronized boolean updateProjectApiConfig(ProjectApiConfig newConfig) {
+        if (newConfig == null) return false;
+        configRef.set(newConfig);
+
+        // Persist to disk
+        try {
+            String configPath = EnvConfig.get().getString(EnvKey.PROJECT_APIS_CONFIG_FILE, "./project-apis.json");
+            ObjectMapper mapper = new ObjectMapper();
+            mapper.writerWithDefaultPrettyPrinter().writeValue(new File(configPath), newConfig);
+            log.info("[ToolRegistry] Config synced to disk: {} endpoints", newConfig.endpoints().size());
+            return true;
+        } catch (Exception e) {
+            log.error("[ToolRegistry] Failed to write config to disk: {}", e.getMessage());
+            return false;
+        }
     }
 
     /**
@@ -83,15 +112,5 @@ public class ToolRegistry {
      */
     public ProjectApiConfig getProjectApiConfig() {
         return configRef.get();
-    }
-
-    /**
-     * Hot-reload: update config in memory. Meta-tools automatically see new data via AtomicReference.
-     * Thread-safe with respect to concurrent ReAct loop tool lookups.
-     */
-    public synchronized void hotReload(ProjectApiConfig config) {
-        configRef.set(config);
-        log.info("[ToolRegistry] Hot-reload complete: {} endpoints, total tools={}",
-                config.endpoints() != null ? config.endpoints().size() : 0, tools.size());
     }
 }

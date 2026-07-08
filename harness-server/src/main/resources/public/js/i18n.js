@@ -26,6 +26,8 @@ const messages = {
     chatEmptyTitle: '涟漪尚未荡起，等待第一个音符♪', chatEmptyHint: '输入消息开始对话',
     chatPlaceholder: '输入消息... (Enter 发送, Shift+Enter 换行)',
     uploadFile: '上传文件', voiceInput: '语音输入', send: '发送',
+    deleteSession: '删除会话', deleteSessionConfirm: '确认删除该会话？所有消息将被永久删除。',
+    sessionDeleted: '会话已删除', cancelOutput: '停止输出',
     // KnowledgePage
     enterCollectionName: '请输入知识库名称', uploadSuccess: '上传成功',
     collectionDeleted: '知识库已删除', uploadKnowledge: '上传知识库',
@@ -84,6 +86,8 @@ const messages = {
     chatEmptyTitle: 'The ripples have yet to rise, awaiting the first note ♪', chatEmptyHint: 'Type a message to start chatting',
     chatPlaceholder: 'Type a message... (Enter to send, Shift+Enter for new line)',
     uploadFile: 'Upload file', voiceInput: 'Voice input', send: 'Send',
+    deleteSession: 'Delete', deleteSessionConfirm: 'Delete this session? All messages will be permanently removed.',
+    sessionDeleted: 'Session deleted', cancelOutput: 'Stop',
     // KnowledgePage
     enterCollectionName: 'Please enter a collection name', uploadSuccess: 'Upload successful',
     collectionDeleted: 'Collection deleted', uploadKnowledge: 'Upload Knowledge',

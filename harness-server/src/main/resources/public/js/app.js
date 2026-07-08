@@ -194,10 +194,11 @@ const PreConfigModal = {
 
     async function confirmGenerate() {
       try {
-        // Pass full config (discoveredAt, sourceRoot, baseUrl, endpoints)
+        // Pass full config (discoveredAt, projectDescription, baseUrl, projectRoot, endpoints)
         const config = {
           discoveredAt: scanResult.value.discoveredAt || new Date().toISOString(),
-          sourceRoot: scanResult.value.sourceRoot || sourceRoot.value.trim(),
+          projectDescription: scanResult.value.projectDescription || '',
+          projectRoot: scanResult.value.projectRoot || sourceRoot.value.trim(),
           baseUrl: scanResult.value.baseUrl || baseUrl.value.trim() || '',
           endpoints: (scanResult.value.endpoints || []).map(ep => ({ ...ep, confirmed: true })),
         };
@@ -350,6 +351,30 @@ const ChatPage = {
       messages.value = [];
     }
 
+    async function deleteSession(sid) {
+      if (!confirm(t('deleteSessionConfirm'))) return;
+      try {
+        await CyreneAPI.closeSession(sid);
+        showToast(t('sessionDeleted'), 'success');
+        if (currentSessionId.value === sid) {
+          currentSessionId.value = null;
+          messages.value = [];
+        }
+        loadSessions();
+      } catch (e) {
+        showToast(t('deleteFailed') + e.message, 'error');
+      }
+    }
+
+    async function cancelOutput() {
+      if (!currentSessionId.value) return;
+      try {
+        await CyreneAPI.cancelChat(currentSessionId.value);
+      } catch (e) {
+        // Ignore — stream may have already ended
+      }
+    }
+
     async function sendMessage() {
       const text = inputText.value.trim();
       if (!text || isStreaming.value) return;
@@ -424,6 +449,9 @@ const ChatPage = {
                       currentSessionId.value = parsed.sessionId;
                     }
                     break;
+                  case 'cancelled':
+                    // Keep whatever content was streamed so far
+                    break;
                   case 'error':
                     messages.value[msgIdx].content = `Error: ${parsed.error || t('unknownError')}`;
                     showToast(parsed.error || t('requestFailed'), 'error');
@@ -480,7 +508,7 @@ const ChatPage = {
       Icons, t, sessions, currentSessionId, messages, inputText, isStreaming,
       messagesEl, userId, renderMarkdown,
       loadSessions, selectSession, newSession, sendMessage,
-      handleKeydown,
+      deleteSession, cancelOutput, handleKeydown,
     };
   },
   template: `
@@ -497,10 +525,12 @@ const ChatPage = {
           </div>
           <div style="flex: 1; overflow-y: auto; padding: var(--space-2);">
             <div v-for="s in sessions" :key="s.id"
-                 :class="['nav-item', currentSessionId === s.id ? 'active' : '']"
-                 @click="selectSession(s.id)"
-                 style="padding: var(--space-2) var(--space-3); font-size: var(--text-sm);">
-              <span class="truncate">{{ s.title || s.id || t('unnamedChat') }}</span>
+                 :class="['session-item', currentSessionId === s.id ? 'active' : '']"
+                 @click="selectSession(s.id)">
+              <span class="session-title truncate">{{ s.title || s.id || t('unnamedChat') }}</span>
+              <button class="session-delete-btn" @click.stop="deleteSession(s.id)" :title="t('deleteSession')">
+                <span v-html="Icons.trash" style="width:12px;height:12px;"></span>
+              </button>
             </div>
             <div v-if="!sessions.length" class="p-4 text-center text-xs text-ash">
               {{ t('noChats') }}
@@ -542,8 +572,13 @@ const ChatPage = {
                 <button class="chat-action-btn" :title="t('voiceInput')">
                   <span v-html="Icons.mic" style="width:18px;height:18px;"></span>
                 </button>
-                <button class="chat-send-btn" @click="sendMessage"
-                        :disabled="!inputText.trim() || isStreaming" :title="t('send')">
+                <button v-if="isStreaming" class="chat-cancel-btn" @click="cancelOutput" :title="t('cancelOutput')">
+                  <svg viewBox="0 0 24 24" fill="currentColor" style="width:16px;height:16px;">
+                    <rect x="6" y="6" width="12" height="12" rx="2"/>
+                  </svg>
+                </button>
+                <button v-else class="chat-send-btn" @click="sendMessage"
+                        :disabled="!inputText.trim()" :title="t('send')">
                   <span v-html="Icons.send" style="width:16px;height:16px;"></span>
                 </button>
               </div>
@@ -943,7 +978,7 @@ const ConfigPage = {
         configText.value = JSON.stringify(config, null, 2);
       } catch (e) {
         if (e.message.includes('not found') || e.message.includes('404')) {
-          configText.value = '{\n  "discoveredAt": "",\n  "sourceRoot": "",\n  "baseUrl": "",\n  "endpoints": []\n}';
+          configText.value = '{\n  "discoveredAt": "",\n  "projectDescription": "",\n  "baseUrl": "",\n  "projectRoot": "",\n  "endpoints": []\n}';
         } else {
           error.value = e.message;
         }

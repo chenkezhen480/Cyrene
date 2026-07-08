@@ -2,6 +2,7 @@ package com.harness.server;
 
 import com.harness.core.model.MemoryMessage;
 import com.harness.core.model.Session;
+import com.harness.env.MysqlConnectionPool;
 import com.harness.preprocess.memory.MessageStore;
 import com.harness.preprocess.memory.SessionMessageCache;
 import com.harness.preprocess.memory.SessionStore;
@@ -9,6 +10,10 @@ import io.javalin.http.Context;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.SQLException;
+import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.format.DateTimeParseException;
@@ -223,22 +228,48 @@ public class SessionHandler {
     }
 
     /**
-     * DELETE /api/sessions/{sessionId} — Close/delete a session.
+     * DELETE /api/sessions/{sessionId} — Close session and delete all messages in a transaction.
      */
     public void delete(Context ctx) {
         String sessionId = ctx.pathParam("sessionId");
-        Optional<Session> session = sessionStore.findById(sessionId);
-        if (session.isEmpty()) {
+        if (sessionStore.findById(sessionId).isEmpty()) {
             ctx.status(404).json(Map.of("error", "Session not found: " + sessionId));
             return;
         }
-        if (session.get().status() != Session.SessionStatus.active) {
-            ctx.status(400).json(Map.of("error", "Session is already closed with status: " + session.get().status()));
-            return;
+
+        // Transaction: delete session + messages atomically
+        Connection conn = null;
+        try {
+            conn = MysqlConnectionPool.getConnection();
+            conn.setAutoCommit(false);
+
+            int deleted;
+            try (PreparedStatement ps = conn.prepareStatement(
+                    "DELETE FROM messages WHERE session_id = ?")) {
+                ps.setString(1, sessionId);
+                deleted = ps.executeUpdate();
+            }
+            try (PreparedStatement ps = conn.prepareStatement(
+                    "DELETE FROM sessions WHERE id = ?")) {
+                ps.setString(1, sessionId);
+                ps.executeUpdate();
+            }
+
+            conn.commit();
+            cache.remove(sessionId); // triggers onEvict → skillRegistry.clearSession()
+            log.info("[Server] Deleted session {} with {} messages", sessionId, deleted);
+            ctx.json(Map.of("message", "Session deleted", "sessionId", sessionId, "messagesDeleted", deleted));
+
+        } catch (SQLException e) {
+            log.error("[Server] Failed to delete session {}, rolling back: {}", sessionId, e.getMessage(), e);
+            if (conn != null) {
+                try { conn.rollback(); } catch (SQLException ex) { log.error("Rollback failed: {}", ex.getMessage()); }
+            }
+            ctx.status(500).json(Map.of("error", "Failed to delete session: " + e.getMessage()));
+        } finally {
+            if (conn != null) {
+                try { conn.setAutoCommit(true); conn.close(); } catch (SQLException ignored) {}
+            }
         }
-        sessionStore.close(sessionId, Session.SessionStatus.ended);
-        cache.remove(sessionId); // triggers onEvict → skillRegistry.clearSession()
-        log.info("[Server] Closed session {}", sessionId);
-        ctx.json(Map.of("message", "Session closed", "sessionId", sessionId));
     }
 }

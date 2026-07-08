@@ -12,6 +12,7 @@ public class CancellationToken {
 
     private volatile boolean cancelled = false;
     private final Set<Thread> trackedThreads = ConcurrentHashMap.newKeySet();
+    private volatile Runnable onCancel;
 
     /**
      * Register the current thread for interruption on cancel.
@@ -44,11 +45,25 @@ public class CancellationToken {
     }
 
     /**
-     * Signal cancellation and interrupt all tracked threads.
+     * Register a callback to invoke on cancel (e.g., to cancel OkHttp calls).
+     * Only one callback is supported; subsequent calls overwrite.
+     */
+    public void onCancel(Runnable callback) {
+        this.onCancel = callback;
+    }
+
+    /**
+     * Signal cancellation, interrupt all tracked threads, and invoke the cancel callback.
      * Safe to call from any thread.
      */
     public void cancel() {
         this.cancelled = true;
+        // Cancel HTTP calls first (closes sockets immediately)
+        Runnable cb = this.onCancel;
+        if (cb != null) {
+            try { cb.run(); } catch (Exception ignored) {}
+        }
+        // Then interrupt threads (for blocking non-HTTP operations)
         for (Thread t : trackedThreads) {
             t.interrupt();
         }

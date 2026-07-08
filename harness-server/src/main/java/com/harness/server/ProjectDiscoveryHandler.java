@@ -66,7 +66,8 @@ public class ProjectDiscoveryHandler {
 
             ctx.json(Map.of(
                     "status", "ok",
-                    "sourceRoot", config.sourceRoot(),
+                    "projectDescription", config.projectDescription(),
+                    "projectRoot", config.projectRoot() != null ? config.projectRoot() : "",
                     "baseUrl", config.baseUrl() != null ? config.baseUrl() : "",
                     "endpoints", config.endpoints(),
                     "discoveredAt", config.discoveredAt()
@@ -94,7 +95,7 @@ public class ProjectDiscoveryHandler {
             mapper.writerWithDefaultPrettyPrinter().writeValue(configPath.toFile(), config);
 
             // Auto-reload into ToolRegistry
-            agent.reloadProjectApiConfig();
+            agent.loadProjectApiConfig();
 
             log.info("[Discovery] Generated project-apis.json with {} endpoints at {}",
                     config.endpoints().size(), configPath);
@@ -165,7 +166,7 @@ public class ProjectDiscoveryHandler {
      */
     public void reload(Context ctx) {
         try {
-            agent.reloadProjectApiConfig();
+            agent.loadProjectApiConfig();
             log.info("[Discovery] Hot-reload triggered via API");
             ctx.json(Map.of("status", "ok"));
         } catch (Exception e) {

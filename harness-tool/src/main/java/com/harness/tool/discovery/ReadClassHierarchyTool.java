@@ -59,6 +59,12 @@ public class ReadClassHierarchyTool implements Tool {
             return "ERROR: 'className' is required";
         }
 
+        // Project not initialized — sourceRoot is still the default "."
+        Path cwd = Path.of(".").toAbsolutePath().normalize();
+        if (sourceRoot.equals(cwd)) {
+            return "This tool is unavailable: project path not configured yet. You MUST explain to the user that the project needs to be initialized first via the project discovery scan in the UI before code search tools can work. Do NOT retry this tool.";
+        }
+
         log.debug("[ReadClassHierarchy] Reading hierarchy for: {} in {}", className, sourceRoot);
 
         try {

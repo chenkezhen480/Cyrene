@@ -53,6 +53,10 @@ public class Main {
     }
 
     public static void main(String[] args) {
+        // Use our cancellable HTTP client (supports request cancellation for token savings)
+        System.setProperty("langchain4j.http.clientBuilderFactory",
+                "com.harness.ai.model.impl.CancellableHttpClient$Factory");
+
         EnvConfig.init(Collections.emptyMap());
 
         String authMode = EnvConfig.get().getString(EnvKey.AUTH_MODE, "none");

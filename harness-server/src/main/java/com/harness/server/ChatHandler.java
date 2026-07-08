@@ -2,6 +2,7 @@ package com.harness.server;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.harness.agent.AgentOrchestrator;
+import com.harness.ai.model.impl.CancellableHttpClient;
 import com.harness.core.model.*;
 import com.harness.env.EnvConfig;
 import com.harness.env.EnvKey;
@@ -82,6 +83,7 @@ public class ChatHandler {
             // Register cancellation token
             String requestId = sessionId != null ? sessionId : java.util.UUID.randomUUID().toString();
             CancellationToken cancellationToken = new CancellationToken();
+            cancellationToken.onCancel(CancellableHttpClient::cancelAll);
             activeRequests.put(requestId, cancellationToken);
 
             // Set up SSE streaming response via raw servlet response
@@ -141,6 +143,8 @@ public class ChatHandler {
                                                         "detail", event.data())));
                                         case DONE -> writeSseEvent(out, "done",
                                                 mapper.writeValueAsString(event.metadata()));
+                                        case CANCELLED -> writeSseEvent(out, "cancelled",
+                                                mapper.writeValueAsString(Map.of("message", event.data())));
                                         case ERROR -> writeSseEvent(out, "error",
                                                 mapper.writeValueAsString(Map.of("error", event.data())));
                                     }

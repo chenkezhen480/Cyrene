@@ -3,6 +3,8 @@ package com.harness.tool.discovery;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.harness.core.model.ToolSpec;
+import com.harness.env.EnvConfig;
+import com.harness.env.EnvKey;
 import com.harness.tool.Tool;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -36,21 +38,23 @@ public class CodeGrepTool implements Tool {
 
     private final Path rootDir;
     private final Set<String> excludePatterns;
+    private final int maxResults;
 
     public CodeGrepTool(Path rootDir, Set<String> additionalExcludes) {
         this.rootDir = rootDir.toAbsolutePath().normalize();
         Set<String> allExcludes = new java.util.HashSet<>(DEFAULT_EXCLUDES);
         if (additionalExcludes != null) allExcludes.addAll(additionalExcludes);
         this.excludePatterns = allExcludes;
+        this.maxResults = EnvConfig.get().getInt(EnvKey.TOOL_MAX_RESULTS, 100);
     }
 
     @Override
     public ToolSpec spec() {
         return new ToolSpec(
                 "code_grep",
-                "Search file contents by regex pattern within the project root. " +
-                "Returns all matches with ±7 lines of context. " +
-                "Use to find route registrations, API annotations, controller methods, etc.",
+                "Search file contents by regex pattern within the project directory. " +
+                "Returns up to " + maxResults + " matches with ±7 lines of context. " +
+                "Use to find API route annotations, controller methods, request/response mappings, etc.",
                 mapper.createObjectNode()
                         .put("type", "object")
                         .<com.fasterxml.jackson.databind.node.ObjectNode>set("properties",
@@ -73,6 +77,12 @@ public class CodeGrepTool implements Tool {
         String regex = arguments.has("regex") ? arguments.get("regex").asText().trim() : null;
         if (regex == null || regex.isEmpty()) {
             return "ERROR: 'regex' is required";
+        }
+
+        // Project not initialized — rootDir is still the default "."
+        Path cwd = Path.of(".").toAbsolutePath().normalize();
+        if (rootDir.equals(cwd)) {
+            return "This tool is unavailable: project path not configured yet. You MUST explain to the user that the project needs to be initialized first via the project discovery scan in the UI before code search tools can work. Do NOT retry this tool.";
         }
 
         String fileGlob = arguments.has("glob") ? arguments.get("glob").asText().trim() : null;
@@ -108,6 +118,8 @@ public class CodeGrepTool implements Tool {
 
                 @Override
                 public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
+                    if (results.size() >= maxResults) return FileVisitResult.TERMINATE;
+
                     Path relative = rootDir.relativize(file);
                     String relativeStr = relative.toString().replace('\\', '/');
 
@@ -155,7 +167,11 @@ public class CodeGrepTool implements Tool {
         }
 
         StringBuilder sb = new StringBuilder();
-        sb.append("Found ").append(results.size()).append(" match(es):\n\n");
+        sb.append("Found ").append(results.size()).append(" match(es)");
+        if (results.size() >= maxResults) {
+            sb.append(" (limited to ").append(maxResults).append(")");
+        }
+        sb.append(":\n\n");
         for (String r : results) {
             sb.append(r).append("\n");
         }

@@ -62,4 +62,12 @@ public interface MessageStore {
     ) {}
 
     SessionStats loadSessionStats(String sessionId);
+
+    /**
+     * Delete all messages belonging to a session.
+     *
+     * @param sessionId session ID
+     * @return number of deleted messages
+     */
+    int deleteBySession(String sessionId);
 }

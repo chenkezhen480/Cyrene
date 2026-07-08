@@ -16,6 +16,7 @@ public record StreamEvent(
         STEP,
         COMPRESS,
         DONE,
+        CANCELLED,
         ERROR
     }
 
@@ -43,6 +44,10 @@ public record StreamEvent(
 
     public static StreamEvent error(String message) {
         return new StreamEvent(Type.ERROR, message, Map.of());
+    }
+
+    public static StreamEvent cancelled() {
+        return new StreamEvent(Type.CANCELLED, "Output cancelled by user", Map.of());
     }
 
     public static StreamEvent compress(String mode, String detail) {

@@ -46,6 +46,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 
 import com.harness.core.model.StreamCallback;
@@ -686,6 +687,13 @@ public class AgentOrchestrator {
                     finalSessionId,
                     result.steps().size()));
 
+        } catch (CancellationException e) {
+            long duration = System.currentTimeMillis() - runStart;
+            log.info("[Orchestrator] Stream run cancelled after {}ms", duration);
+            CompletableFuture.runAsync(() -> {
+                try { trace.finish(); } catch (Exception ignored) {}
+            });
+            callback.onEvent(StreamEvent.cancelled());
         } catch (Exception e) {
             long duration = System.currentTimeMillis() - runStart;
             log.error("[Orchestrator] Stream run failed after {}ms: {}", duration, e.getMessage(), e);
@@ -775,7 +783,22 @@ public class AgentOrchestrator {
         }
         // Discovery tools — available in chat when project discovery is enabled
         if (cfg.getBool(EnvKey.PROJECT_DISCOVERY_ENABLED, true)) {
+            // Use projectRoot from project-apis.json if available, otherwise "."
             Path rootPath = Path.of(".").toAbsolutePath().normalize();
+            String configPath = cfg.getString(EnvKey.PROJECT_APIS_CONFIG_FILE, "./project-apis.json");
+            try {
+                java.nio.file.Path cfgPath = Path.of(configPath);
+                if (java.nio.file.Files.exists(cfgPath)) {
+                    ProjectApiConfig cfg_ = new com.fasterxml.jackson.databind.ObjectMapper()
+                            .readValue(cfgPath.toFile(), ProjectApiConfig.class);
+                    if (cfg_.projectRoot() != null && !cfg_.projectRoot().isBlank()) {
+                        rootPath = Path.of(cfg_.projectRoot()).toAbsolutePath().normalize();
+                        log.info("[Discovery] Using projectRoot from config: {}", rootPath);
+                    }
+                }
+            } catch (Exception e) {
+                log.warn("[Discovery] Failed to read projectRoot from config, using '.' : {}", e.getMessage());
+            }
             Set<String> excludes = Set.of();
             toolRegistry.register(new CodeGlobTool(rootPath, excludes));
             toolRegistry.register(new CodeGrepTool(rootPath, excludes));
@@ -807,9 +830,10 @@ public class AgentOrchestrator {
     }
 
     /**
-     * Load project-apis.json and register confirmed endpoints as HttpApiTools.
+     * Load project-apis.json: register endpoint tools + re-register discovery tools with projectRoot.
+     * Called at startup and by generate/reload endpoints.
      */
-    private void loadProjectApiConfig() {
+    public void loadProjectApiConfig() {
         EnvConfig cfg = EnvConfig.get();
         if (!cfg.getBool(EnvKey.PROJECT_DISCOVERY_ENABLED, true)) {
             log.info("[Discovery] Project API discovery disabled");
@@ -825,32 +849,21 @@ public class AgentOrchestrator {
             ObjectMapper mapper = new ObjectMapper();
             ProjectApiConfig config = mapper.readValue(path.toFile(), ProjectApiConfig.class);
             toolRegistry.loadFromConfig(config);
+
+            // Re-register discovery tools with the projectRoot from config
+            if (config.projectRoot() != null && !config.projectRoot().isBlank()) {
+                Path projectRoot = Path.of(config.projectRoot()).toAbsolutePath().normalize();
+                Set<String> excludes = Set.of();
+                toolRegistry.register(new CodeGlobTool(projectRoot, excludes));
+                toolRegistry.register(new CodeGrepTool(projectRoot, excludes));
+                toolRegistry.register(new ReadClassHierarchyTool(projectRoot));
+                log.info("[Discovery] Re-registered discovery tools with projectRoot={}", projectRoot);
+            }
+
             log.info("[Discovery] Loaded project APIs from {}: {} endpoints",
                     configPath, config.endpoints().size());
         } catch (Exception e) {
             log.error("[Discovery] Failed to load project-apis.json: {}", e.getMessage());
-        }
-    }
-
-    /**
-     * Hot-reload project API config (called by server endpoint).
-     */
-    public void reloadProjectApiConfig() {
-        EnvConfig cfg = EnvConfig.get();
-        String configPath = cfg.getString(EnvKey.PROJECT_APIS_CONFIG_FILE, "./project-apis.json");
-        java.nio.file.Path path = Path.of(configPath);
-        if (!java.nio.file.Files.exists(path)) {
-            toolRegistry.hotReload(new ProjectApiConfig(null, null, null, List.of()));
-            log.info("[Discovery] project-apis.json not found, cleared config");
-            return;
-        }
-        try {
-            ObjectMapper mapper = new ObjectMapper();
-            ProjectApiConfig config = mapper.readValue(path.toFile(), ProjectApiConfig.class);
-            toolRegistry.hotReload(config);
-            log.info("[Discovery] Hot-reloaded project APIs: {} endpoints", config.endpoints().size());
-        } catch (Exception e) {
-            log.error("[Discovery] Failed to hot-reload project-apis.json: {}", e.getMessage());
         }
     }
 

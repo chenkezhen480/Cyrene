@@ -3,6 +3,8 @@ package com.harness.tool.discovery;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.harness.core.model.ToolSpec;
+import com.harness.env.EnvConfig;
+import com.harness.env.EnvKey;
 import com.harness.tool.Tool;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -15,7 +17,7 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * Discovery tool: locate candidate files by glob pattern within a project root.
+ * Discovery tool: locate candidate files by glob pattern within the project root.
  * Path boundary enforced — cannot escape root directory.
  * Sensitive files (.env*, *.pem, *.key, etc.) are excluded.
  */
@@ -23,7 +25,6 @@ public class CodeGlobTool implements Tool {
 
     private static final Logger log = LoggerFactory.getLogger(CodeGlobTool.class);
     private static final ObjectMapper mapper = new ObjectMapper();
-    private static final int MAX_RESULTS = 50;
 
     /** Default sensitive file patterns to exclude. */
     private static final Set<String> DEFAULT_EXCLUDES = Set.of(
@@ -33,6 +34,7 @@ public class CodeGlobTool implements Tool {
 
     private final Path rootDir;
     private final Set<String> excludePatterns;
+    private final int maxResults;
 
     public CodeGlobTool(Path rootDir, Set<String> additionalExcludes) {
         this.rootDir = rootDir.toAbsolutePath().normalize();
@@ -41,15 +43,16 @@ public class CodeGlobTool implements Tool {
             allExcludes.addAll(additionalExcludes);
         }
         this.excludePatterns = allExcludes;
+        this.maxResults = EnvConfig.get().getInt(EnvKey.TOOL_MAX_RESULTS, 100);
     }
 
     @Override
     public ToolSpec spec() {
         return new ToolSpec(
                 "code_glob",
-                "Find files matching a glob pattern within the project root. " +
-                "Use to locate candidate source files (e.g. '**/*.java', '**/controller*'). " +
-                "Returns up to 50 file paths.",
+                "Find files matching a glob pattern within the project directory. " +
+                "Use to locate project source files for API route discovery (e.g. '**/*Controller.java', '**/routes*'). " +
+                "Returns up to " + maxResults + " file paths.",
                 mapper.createObjectNode()
                         .put("type", "object")
                         .<com.fasterxml.jackson.databind.node.ObjectNode>set("properties",
@@ -70,16 +73,30 @@ public class CodeGlobTool implements Tool {
             return "ERROR: 'pattern' is required";
         }
 
+        // Project not initialized — rootDir is still the default "."
+        Path cwd = Path.of(".").toAbsolutePath().normalize();
+        if (rootDir.equals(cwd)) {
+            return "This tool is unavailable: project path not configured yet. You MUST explain to the user that the project needs to be initialized first via the project discovery scan in the UI before code search tools can work. Do NOT retry this tool.";
+        }
+
         log.debug("[CodeGlob] Searching: {} in {}", pattern, rootDir);
 
         try {
             PathMatcher matcher = FileSystems.getDefault().getPathMatcher("glob:" + pattern);
+
+            // Fallback matcher for root-level files: strip leading **/ prefix.
+            PathMatcher filenameFallback = null;
+            if (pattern.startsWith("**/")) {
+                String stripped = pattern.substring(3);
+                filenameFallback = FileSystems.getDefault().getPathMatcher("glob:" + stripped);
+            }
+
+            final PathMatcher fallback = filenameFallback;
             List<String> matches = new ArrayList<>();
 
             Files.walkFileTree(rootDir, new SimpleFileVisitor<>() {
                 @Override
                 public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) {
-                    // Skip hidden directories and target/build directories
                     String dirName = dir.getFileName() != null ? dir.getFileName().toString() : "";
                     if (dirName.startsWith(".") || dirName.equals("target") || dirName.equals("build")
                             || dirName.equals("node_modules") || dirName.equals(".git")) {
@@ -90,16 +107,15 @@ public class CodeGlobTool implements Tool {
 
                 @Override
                 public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
-                    if (matches.size() >= MAX_RESULTS) return FileVisitResult.TERMINATE;
+                    if (matches.size() >= maxResults) return FileVisitResult.TERMINATE;
 
                     Path relative = rootDir.relativize(file);
                     String relativeStr = relative.toString().replace('\\', '/');
 
-                    // Check sensitive file exclusion
                     if (isSensitiveFile(relativeStr)) return FileVisitResult.CONTINUE;
 
-                    // Check glob match (match against relative path)
-                    if (matcher.matches(relative) || matcher.matches(file.getFileName())) {
+                    if (matcher.matches(relative) || matcher.matches(file.getFileName())
+                            || (fallback != null && fallback.matches(file.getFileName()))) {
                         matches.add(relativeStr);
                     }
                     return FileVisitResult.CONTINUE;
@@ -111,7 +127,11 @@ public class CodeGlobTool implements Tool {
             }
 
             StringBuilder sb = new StringBuilder();
-            sb.append("Found ").append(matches.size()).append(" files:\n");
+            sb.append("Found ").append(matches.size()).append(" files");
+            if (matches.size() >= maxResults) {
+                sb.append(" (limited to ").append(maxResults).append(")");
+            }
+            sb.append(":\n");
             for (String m : matches) {
                 sb.append(m).append("\n");
             }
@@ -127,7 +147,6 @@ public class CodeGlobTool implements Tool {
         String lower = relativePath.toLowerCase();
         String fileName = Path.of(relativePath).getFileName().toString().toLowerCase();
         for (String exclude : excludePatterns) {
-            // Simple glob-like matching
             String regex = exclude.replace(".", "\\.").replace("*", ".*");
             if (fileName.matches(regex) || lower.matches(".*" + regex + ".*")) {
                 return true;

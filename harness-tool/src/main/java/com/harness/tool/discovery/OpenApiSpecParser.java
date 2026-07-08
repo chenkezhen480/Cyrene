@@ -146,7 +146,7 @@ public class OpenApiSpecParser {
         }
 
         log.info("[OpenAPI] Parsed {} endpoints from OpenAPI 3.x spec", endpoints.size());
-        return new ProjectApiConfig(Instant.now().toString(), projectRoot.toAbsolutePath().toString(), null, endpoints);
+        return new ProjectApiConfig(Instant.now().toString(), projectRoot.toAbsolutePath().toString(), null, projectRoot.toAbsolutePath().toString(), endpoints);
     }
 
     /**
@@ -207,7 +207,7 @@ public class OpenApiSpecParser {
         }
 
         log.info("[OpenAPI] Parsed {} endpoints from Swagger 2.x spec", endpoints.size());
-        return new ProjectApiConfig(Instant.now().toString(), projectRoot.toAbsolutePath().toString(), null, endpoints);
+        return new ProjectApiConfig(Instant.now().toString(), projectRoot.toAbsolutePath().toString(), null, projectRoot.toAbsolutePath().toString(), endpoints);
     }
 
     /**

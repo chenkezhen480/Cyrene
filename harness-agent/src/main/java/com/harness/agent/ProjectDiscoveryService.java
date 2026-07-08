@@ -118,6 +118,7 @@ public class ProjectDiscoveryService {
                     Instant.now().toString(),
                     projectDescription,
                     baseUrl,
+                    sourceRoot.toAbsolutePath().toString(),
                     endpoints
             );
 
@@ -127,6 +128,7 @@ public class ProjectDiscoveryService {
                     Instant.now().toString(),
                     sourceRoot.getFileName().toString(),
                     baseUrl,
+                    sourceRoot.toAbsolutePath().toString(),
                     List.of()
             );
         }
@@ -164,28 +166,54 @@ public class ProjectDiscoveryService {
             第四步：输出结果
               整合所有信息，输出结构化的接口定义。
 
-            ═══ 输出格式 ═══
+            ═══ 输出格式（严格遵守，否则解析失败）═══
 
-            先输出项目描述：
-            PROJECT: <一行项目描述，如 "若依管理系统-用户权限模块">
+            第一行输出项目描述：
+            PROJECT: <一行项目描述>
 
-            然后每个接口重复以下格式：
+            然后每个接口严格按以下格式输出，不要加 markdown 标题、编号、粗体等任何修饰：
+
             ENDPOINT:
-            - name: <接口名称>
-            - description: <接口描述>
-            - method: <GET|POST|PUT|DELETE>
-            - path: <URL路径>
-            - parameters: <有效的 JSON Schema 对象>
-            - returnType: <返回类型，如 AjaxResult<List<UserVO>>>
+            - name: 接口名称
+            - description: 接口描述
+            - method: GET
+            - path: /api/xxx
+            - parameters: {"type":"object","properties":{}}
+            - returnType: R<Void>
 
-            parameters 字段必须使用 read_class_hierarchy 返回的 JSON Schema，不要自己猜测字段。
-            无参数时：{"type":"object","properties":{}}
+            ⚠️ 绝对禁止：
+            - 不要用 "### ENDPOINT:" 或 "### 1." 等 markdown 标题
+            - 不要用 "- **name**: xxx" 等粗体格式
+            - 不要用 ```json``` 代码块包裹 parameters
+            - 不要加 "---" 分隔线
+            - 不要输出项目概述、模块说明等额外内容
+            - parameters 必须是行内 JSON，直接跟在 "- parameters: " 后面
 
-            ⚠️ 重要规则：
-            - 必须为每个引用的 DTO/VO 类调用 read_class_hierarchy，确保参数结构完整
+            ✅ 正确示例：
+            PROJECT: 若依管理系统-用户权限模块
+
+            ENDPOINT:
+            - name: 查询用户列表
+            - description: 分页查询用户列表
+            - method: GET
+            - path: /system/user/list
+            - parameters: {"type":"object","properties":{"userName":{"type":"string"},"status":{"type":"string"}}}
+            - returnType: TableDataInfo<UserVO>
+
+            ENDPOINT:
+            - name: 新增用户
+            - description: 新增用户信息
+            - method: POST
+            - path: /system/user
+            - parameters: {"type":"object","properties":{"userName":{"type":"string"},"nickName":{"type":"string"}}}
+            - returnType: R<Void>
+
+            ⚠️ 工具使用规则：
+            - 必须为每个 DTO/VO 类调用 read_class_hierarchy，确保参数结构完整
             - 必须提取所有接口，不要遗漏
-            - parameters 必须是有效的 JSON 格式
-            - read_class_hierarchy 能正常返回结果时，继续用它读取下一个类，不要回退到 glob 或 grep
+            - read_class_hierarchy 返回的 JSON Schema 直接用作 parameters 值
+            - 无参数时用：{"type":"object","properties":{}}
+            - read_class_hierarchy 能正常返回结果时，继续用它读取下一个类
             - 如果 read_class_hierarchy 返回 "Class not found"，先用 code_glob 查找文件路径，再重试
             - 尽量在一次响应中调用多个工具（如同时读取多个 DTO 类），减少轮次
             """.formatted(sourceRoot);
@@ -205,7 +233,7 @@ public class ProjectDiscoveryService {
                         ep.path(), null, ep.source(), ep.authMode(), ep.credentialKey(),
                         ep.tokenInjection(), ep.parameters(), ep.confirmed(), ep.riskAcknowledged()))
                 .toList();
-        return new ProjectApiConfig(config.discoveredAt(), config.sourceRoot(), baseUrl, updated);
+        return new ProjectApiConfig(config.discoveredAt(), config.projectDescription(), baseUrl, config.projectRoot(), updated);
     }
 
     /**
@@ -230,13 +258,25 @@ public class ProjectDiscoveryService {
 
         List<ApiEndpoint> endpoints = new ArrayList<>();
         var mapper = new ObjectMapper();
-        String[] blocks = output.split("(?m)^ENDPOINT:");
+        // Split by ENDPOINT: — supports "ENDPOINT:", "### ENDPOINT:", "### ENDPOINT: name"
+        String[] blocks = output.split("(?m)^#{0,3}\\s*ENDPOINT[:\\s]");
+        // Fallback: if no ENDPOINT markers found, split by markdown H3 headings (### N. or ### Title)
+        if (blocks.length < 2) {
+            blocks = output.split("(?m)^#{1,3}\\s+(?!.*PROJECT)(?!.*项目描述)");
+        }
         int id = 1;
 
         for (String block : blocks) {
             if (block.isBlank()) continue;
             try {
+                // If name is on the same line as ENDPOINT (e.g. "### ENDPOINT: 查询列表\n...")
+                String firstLine = block.lines().findFirst().orElse("").trim();
+                String inlineName = firstLine.replaceAll("^[-\\s]+", "").trim();
+
                 String name = extractField(block, "name");
+                if (name.isEmpty() && !inlineName.isEmpty()) {
+                    name = inlineName.split("\n")[0].trim(); // take only the first line
+                }
                 String desc = extractField(block, "description");
                 String method = extractField(block, "method");
                 String path = extractField(block, "path");
@@ -328,12 +368,19 @@ public class ProjectDiscoveryService {
         for (int i = 0; i < lines.length; i++) {
             String trimmed = lines[i].trim();
             String value = null;
-            if (trimmed.startsWith("- " + fieldName + ":")) {
+            // Support: "- name:", "- **name**:", "name:", "**name**:"
+            String boldField = "**" + fieldName + "**";
+            if (trimmed.startsWith("- " + boldField + ":")) {
+                value = trimmed.substring(boldField.length() + 3).trim();
+            } else if (trimmed.startsWith("- " + fieldName + ":")) {
                 value = trimmed.substring(fieldName.length() + 3).trim();
+            } else if (trimmed.startsWith(boldField + ":")) {
+                value = trimmed.substring(boldField.length() + 1).trim();
             } else if (trimmed.startsWith(fieldName + ":")) {
                 value = trimmed.substring(fieldName.length() + 1).trim();
             }
             if (value != null) {
+                // Handle inline JSON
                 if (value.startsWith("{") && !value.endsWith("}")) {
                     StringBuilder sb = new StringBuilder(value);
                     for (int j = i + 1; j < lines.length; j++) {
@@ -341,6 +388,28 @@ public class ProjectDiscoveryService {
                         if (lines[j].trim().endsWith("}")) break;
                     }
                     return sb.toString().trim();
+                }
+                // Handle ```json code block — extract JSON from the block
+                if (value.startsWith("```") || value.isEmpty()) {
+                    StringBuilder sb = new StringBuilder();
+                    boolean inBlock = false;
+                    for (int j = i + 1; j < lines.length; j++) {
+                        String l = lines[j].trim();
+                        if (l.startsWith("```") && inBlock) break;
+                        if (l.startsWith("```")) { inBlock = true; continue; }
+                        if (inBlock) sb.append(l).append("\n");
+                        // Also catch bare JSON after the field line
+                        if (!inBlock && l.startsWith("{")) {
+                            sb.append(l).append("\n");
+                            for (int k = j + 1; k < lines.length; k++) {
+                                sb.append(lines[k].trim()).append("\n");
+                                if (lines[k].trim().endsWith("}")) break;
+                            }
+                            break;
+                        }
+                    }
+                    String extracted = sb.toString().trim();
+                    if (!extracted.isEmpty()) return extracted;
                 }
                 return value;
             }

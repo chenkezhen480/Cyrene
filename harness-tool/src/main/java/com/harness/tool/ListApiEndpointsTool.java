@@ -56,7 +56,7 @@ public class ListApiEndpointsTool implements Tool {
 
         ObjectNode result = mapper.createObjectNode();
         result.put("total", arr.size());
-        result.put("sourceRoot", config.sourceRoot());
+        result.put("projectDescription", config.projectDescription());
         result.set("endpoints", arr);
         return result.toString();
     }

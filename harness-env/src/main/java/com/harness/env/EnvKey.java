@@ -165,6 +165,8 @@ public final class EnvKey {
     public static final String TOOL_WEB_SEARCH_SERPAPI_API_KEY = "HARNESS_TOOL_WEB_SEARCH_SERPAPI_API_KEY";
     public static final String TOOL_FFMPEG_ENABLED       = "HARNESS_TOOL_FFMPEG_ENABLED";
     public static final String TOOL_FFMPEG_PATH          = "HARNESS_TOOL_FFMPEG_PATH";
+    /** 工具返回结果数量上限（code_glob/code_grep 等），默认 100 */
+    public static final String TOOL_MAX_RESULTS         = "HARNESS_TOOL_MAX_RESULTS";
 
     // ==================== ReAct ====================
     /** ReAct 循环最大迭代次数，默认 10 */

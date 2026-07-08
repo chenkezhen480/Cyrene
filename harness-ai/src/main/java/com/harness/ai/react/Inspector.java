@@ -8,6 +8,8 @@ import com.harness.core.model.ToolResult;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.fasterxml.jackson.databind.JsonNode;
+
 import java.util.List;
 import java.util.Set;
 
@@ -36,7 +38,15 @@ public class Inspector {
             "nothing found",
             "0 results",
             "no entries",
-            "no records"
+            "no records",
+            "no files found",
+            "no files match",
+            "no matching files",
+            "no files matched",
+            "0 files",
+            "found 0 files",
+            "0 match",
+            "found 0 match"
     );
 
     /** Minimum output length to not be considered insufficient. */
@@ -46,7 +56,7 @@ public class Inspector {
      * Inspect a set of tool calls and their results.
      *
      * @param toolCalls  the tool calls requested by the LLM
-     * @param toolResults the results from executing those tools
+     * @param toolResults the results from executing those tool calls
      * @return an InspectionResult with status and reason
      */
     public InspectionResult inspect(List<ToolCall> toolCalls, List<ToolResult> toolResults) {
@@ -96,7 +106,9 @@ public class Inspector {
                     if (lower.contains(phrase)) {
                         return new InspectionResult(
                                 InspectionStatus.INSUFFICIENT,
-                                "Tool '" + result.toolName() + "' output indicates no useful results: '" + phrase + "'");
+                                "Tool '" + result.toolName() + "' found no results. "
+                                        + "Do NOT retry the same tool with different parameters. "
+                                        + "Either try a different tool, or output the final answer with available information.");
                     }
                 }
             }
@@ -118,8 +130,7 @@ public class Inspector {
                     + ". Consider using a different tool or adjusting your approach.";
             case WRONG_TOOL -> "[Inspection] Wrong tool selected: " + result.reason()
                     + ". Consider using a different tool that is better suited for this task.";
-            case INSUFFICIENT -> "[Inspection] Insufficient result: " + result.reason()
-                    + ". Try a different query, different parameters, or an alternative tool.";
+            case INSUFFICIENT -> "[Inspection] Insufficient result: " + result.reason();
             case LOOP_DETECTED -> "[Inspection] Loop detected: " + result.reason()
                     + ". You MUST output the final answer now based on available information.";
             case PASS -> null;
@@ -127,46 +138,55 @@ public class Inspector {
     }
 
     /**
-     * 检测连续重复的工具调用（相同工具名+相同参数）。
+     * Detect consecutive calls to the same tool with the same arguments.
+     * This catches cases where the LLM retries the exact same call that already
+     * produced no useful results.
      *
-     * @param recentSteps 最近的 ReAct 步骤列表
-     * @param threshold 连续重复次数阈值
-     * @return 如果检测到循环返回 InspectionResult，否则返回 null
+     * @param recentSteps recent ReAct steps
+     * @param threshold   consecutive same-call count to trigger
+     * @return InspectionResult if detected, null otherwise
      */
-    public static InspectionResult detectLoop(List<ReActStep> recentSteps, int threshold) {
-        if (recentSteps == null || recentSteps.size() < threshold) {
+    public static InspectionResult detectSameToolConsecutive(List<ReActStep> recentSteps, int threshold) {
+        if (recentSteps == null || threshold <= 0 || recentSteps.size() < threshold) {
             return null;
         }
 
-        // 取最近 N 步
         List<ReActStep> tail = recentSteps.subList(recentSteps.size() - threshold, recentSteps.size());
 
-        // 检查是否所有步骤都调用了相同的工具且参数一致
-        String firstAction = tail.get(0).action();
-        String firstArgs = extractArgsSignature(tail.get(0).toolCalls());
-
-        if (firstAction == null || firstAction.isBlank()) return null;
+        // Extract first step's tool calls signature (sorted by tool name for consistency)
+        String firstSig = buildToolCallsSignature(tail.get(0).toolCalls());
+        if (firstSig == null) return null;
 
         for (int i = 1; i < tail.size(); i++) {
-            String action = tail.get(i).action();
-            String args = extractArgsSignature(tail.get(i).toolCalls());
-            if (!firstAction.equals(action) || !firstArgs.equals(args)) {
-                return null;  // 不是循环
+            String sig = buildToolCallsSignature(tail.get(i).toolCalls());
+            if (!firstSig.equals(sig)) {
+                return null;  // Different tool or arguments, not a loop
             }
         }
 
-        log.warn("[Inspector] Loop detected: {} consecutive calls to '{}' with same args", threshold, firstAction);
+        String toolName = tail.get(0).toolCalls().isEmpty() ? "unknown"
+                : tail.get(0).toolCalls().get(0).toolName();
+        log.warn("[Inspector] Same tool+args loop: '{}' called {} times with identical arguments", toolName, threshold);
         return new InspectionResult(
                 InspectionStatus.LOOP_DETECTED,
-                String.format("Tool '%s' called %d times consecutively with identical parameters", firstAction, threshold));
+                String.format("Tool '%s' called %d times with identical arguments. "
+                        + "It is clearly not producing useful results. "
+                        + "Stop retrying and output the final answer.", toolName, threshold));
     }
 
-    private static String extractArgsSignature(List<ToolCall> toolCalls) {
-        if (toolCalls == null || toolCalls.isEmpty()) return "";
+    /**
+     * Build a deterministic signature string from a list of tool calls
+     * (tool name + sorted arguments JSON).
+     */
+    private static String buildToolCallsSignature(List<ToolCall> toolCalls) {
+        if (toolCalls == null || toolCalls.isEmpty()) return null;
         StringBuilder sb = new StringBuilder();
         for (ToolCall tc : toolCalls) {
-            sb.append(tc.toolName()).append(":").append(tc.arguments()).append(";");
+            sb.append(tc.toolName()).append(':');
+            JsonNode args = tc.arguments();
+            sb.append(args != null ? args.toString() : "null").append('|');
         }
         return sb.toString();
     }
+
 }

@@ -264,6 +264,20 @@ public class MysqlMessageStore implements MessageStore {
         return new SessionStats(0, 0, 0, 0, 0, false);
     }
 
+    @Override
+    public int deleteBySession(String sessionId) {
+        String sql = "DELETE FROM messages WHERE session_id = ?";
+        try (Connection conn = MysqlConnectionPool.getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, sessionId);
+            int deleted = ps.executeUpdate();
+            log.debug("Deleted {} messages for session {}", deleted, sessionId);
+            return deleted;
+        } catch (SQLException e) {
+            log.error("Failed to delete messages for session {}: {}", sessionId, e.getMessage(), e);
+            return 0;
+        }
+    }
+
     private MemoryMessage mapMessage(ResultSet rs) throws SQLException {
         return new MemoryMessage(
                 rs.getLong("id"),
