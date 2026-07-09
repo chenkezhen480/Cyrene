@@ -15,6 +15,15 @@ public final class EnvKey {
 
     private EnvKey() {}
 
+    // ==================== Gap Analysis / 动态路由 ====================
+    /**
+     * 功能总开关，默认 true。关闭后所有字段回退全局静态配置。
+     * <p>三级判定漏斗：Tier 0 显式覆盖 → Tier 1 规则引擎（&lt;1ms）→ Tier 2 LLM 分类。
+     * 四个独立字段：needsThinking / needsKnowledgeBase / rewriteStrategy / needsWebSearch。
+     * 判定结果写入 trace metadata（gap_source = explicit/rule/llm/default）。
+     */
+    public static final String GAP_ANALYSIS_ENABLED = "HARNESS_GAP_ANALYSIS_ENABLED";
+
     // ==================== 1. Chat Model (通用对话+工具调用) ====================
     public static final String MODEL_CHAT_PROVIDER    = "HARNESS_MODEL_CHAT_PROVIDER";
     public static final String MODEL_CHAT_API_KEY     = "HARNESS_MODEL_CHAT_API_KEY";
@@ -25,7 +34,7 @@ public final class EnvKey {
     /** 是否开启思考/推理模式（影响 DashScope 等支持思考模式的 API），默认 true */
     public static final String MODEL_CHAT_THINKING   = "HARNESS_MODEL_CHAT_THINKING";
     /** LLM API 超时时间（秒），默认 300（5分钟） */
-    public static final String MODEL_CHAT_TIMEOUT_MS = "HARNESS_MODEL_CHAT_TIMEOUT_MS";
+    public static final String MODEL_CHAT_TIMEOUT_SECONDS = "HARNESS_MODEL_CHAT_TIMEOUT_SECONDS";
 
     // ==================== 2. Vision Model (图片识别/视频分析) ====================
     public static final String MODEL_VISION_PROVIDER  = "HARNESS_MODEL_VISION_PROVIDER";
@@ -61,6 +70,15 @@ public final class EnvKey {
     public static final String MODEL_REALTIME_PROVIDER = "HARNESS_MODEL_REALTIME_PROVIDER";
     public static final String MODEL_REALTIME_API_KEY  = "HARNESS_MODEL_REALTIME_API_KEY";
     public static final String MODEL_REALTIME_BASE_URL = "HARNESS_MODEL_REALTIME_BASE_URL";
+
+    // ==================== 7. Classifier Model (意图分类/路由 / GapAnalyzer Tier 2) ====================
+    /** 分类器 Provider，留空则禁用 Tier 2（仅 Tier 0+1 生效）。支持 openai 兼容 API */
+    public static final String MODEL_CLASSIFIER_PROVIDER   = "HARNESS_MODEL_CLASSIFIER_PROVIDER";
+    public static final String MODEL_CLASSIFIER_API_KEY    = "HARNESS_MODEL_CLASSIFIER_API_KEY";
+    public static final String MODEL_CLASSIFIER_BASE_URL   = "HARNESS_MODEL_CLASSIFIER_BASE_URL";
+    public static final String MODEL_CLASSIFIER_MODEL      = "HARNESS_MODEL_CLASSIFIER_MODEL";
+    /** 分类器最大输出 token，默认 50（只够输出压缩 JSON） */
+    public static final String MODEL_CLASSIFIER_MAX_TOKENS = "HARNESS_MODEL_CLASSIFIER_MAX_TOKENS";
 
     // ==================== Auth ====================
     public static final String AUTH_MODE             = "HARNESS_AUTH_MODE";

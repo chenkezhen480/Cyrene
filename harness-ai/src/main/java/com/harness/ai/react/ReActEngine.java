@@ -131,10 +131,13 @@ public class ReActEngine {
                 return new ReActResult(cancelledOutput, allSteps);
             }
 
+            // Merge thinking params + tool specs into a single ChatRequestParameters
+            // LangChain4j: cannot set both builder.parameters() and builder.toolSpecifications()
+            // Solution: put tools inside the parameters object
+            ChatRequestParameters mergedParams = buildMergedParams(thinkingParams, toolSpecs);
             ChatRequest.Builder reqBuilder = ChatRequest.builder().messages(messages);
-            if (thinkingParams != null) reqBuilder.parameters(thinkingParams);
-            if (!toolSpecs.isEmpty()) {
-                reqBuilder.toolSpecifications(toolSpecs);
+            if (mergedParams != null) {
+                reqBuilder.parameters(mergedParams);
             }
 
             long llmStart = System.currentTimeMillis();
@@ -327,10 +330,10 @@ public class ReActEngine {
                 return new ReActResult(cancelledOutput, allSteps);
             }
 
+            ChatRequestParameters mergedParams = buildMergedParams(thinkingParams, toolSpecs);
             ChatRequest.Builder reqBuilder = ChatRequest.builder().messages(messages);
-            if (thinkingParams != null) reqBuilder.parameters(thinkingParams);
-            if (!toolSpecs.isEmpty()) {
-                reqBuilder.toolSpecifications(toolSpecs);
+            if (mergedParams != null) {
+                reqBuilder.parameters(mergedParams);
             }
 
             // Streaming LLM call
@@ -681,6 +684,36 @@ public class ReActEngine {
         if (enableThinking == null) return null; // use model default
         return OpenAiChatRequestParameters.builder()
                 .customParameters(Map.of("enable_thinking", enableThinking))
+                .build();
+    }
+
+    /**
+     * Merge thinking params and tool specs into a single ChatRequestParameters.
+     * <p>
+     * LangChain4j ChatRequest 不允许同时调用 builder.parameters() 和 builder.toolSpecifications()。
+     * 解决方案：把 toolSpecifications 放进 OpenAiChatRequestParameters 内部，只用 parameters() 一个入口。
+     */
+    private ChatRequestParameters buildMergedParams(ChatRequestParameters thinkingParams, List<ToolSpecification> toolSpecs) {
+        boolean hasThinking = thinkingParams != null;
+        boolean hasTools = !toolSpecs.isEmpty();
+
+        if (!hasThinking && !hasTools) return null;
+
+        if (hasThinking && hasTools) {
+            // Merge: thinking customParameters + tools into one parameters object
+            return OpenAiChatRequestParameters.builder()
+                    .customParameters(((OpenAiChatRequestParameters) thinkingParams).customParameters())
+                    .toolSpecifications(toolSpecs)
+                    .build();
+        }
+
+        if (hasThinking) {
+            return thinkingParams; // thinking only, no tools
+        }
+
+        // tools only, no thinking override
+        return OpenAiChatRequestParameters.builder()
+                .toolSpecifications(toolSpecs)
                 .build();
     }
 

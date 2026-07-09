@@ -25,7 +25,7 @@ public class AnthropicChatModelProvider implements ChatModelProvider {
         this.model = cfg.getString(EnvKey.MODEL_CHAT_MODEL, "claude-sonnet-4-6");
         this.maxTokens = cfg.getInt(EnvKey.MODEL_CHAT_MAX_TOKENS, 12288);
         this.temperature = cfg.getDouble(EnvKey.MODEL_CHAT_TEMPERATURE, 0.7);
-        this.timeoutSeconds = cfg.getInt(EnvKey.MODEL_CHAT_TIMEOUT_MS, 300);
+        this.timeoutSeconds = cfg.getInt(EnvKey.MODEL_CHAT_TIMEOUT_SECONDS, 300);
     }
 
     @Override

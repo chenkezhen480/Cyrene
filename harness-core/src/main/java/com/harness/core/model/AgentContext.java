@@ -14,6 +14,14 @@ public record AgentContext(
     public static final String KEY_OUTPUT_MODE = "outputMode";
     public static final String KEY_ENABLE_THINKING = "enableThinking";
     public static final String KEY_CREDENTIALS = "credentials";
+
+    // ==================== GapAnalysis 显式覆盖字段 ====================
+    /** 是否检索知识库，null 时回退全局配置 */
+    public static final String KEY_NEEDS_KNOWLEDGE_BASE = "needsKnowledgeBase";
+    /** 查询改写策略：NONE | HYDE | MULTI_QUERY | STEP_BACK，null 时回退全局配置 */
+    public static final String KEY_REWRITE_STRATEGY = "rewriteStrategy";
+    /** 是否联网搜索，null 时回退全局配置 */
+    public static final String KEY_NEEDS_WEB_SEARCH = "needsWebSearch";
     public static final String VALUE_MODE_BLOCKING = "blocking";
     public static final String VALUE_MODE_STREAMING = "streaming";
 
@@ -44,6 +52,62 @@ public record AgentContext(
         if (val instanceof Boolean b) return b;
         if (val instanceof String s) return Boolean.parseBoolean(s);
         return null;  // not specified, use env default
+    }
+
+    // ==================== GapAnalysis 显式覆盖 ====================
+    // 约定：null = 未显式指定，回退到环境变量默认值；显式值（false/true/NONE 等）优先于环境变量
+
+    /**
+     * 是否检索知识库。
+     * <ul>
+     *   <li>{@code null} — 未指定，回退到环境变量（HARNESS_RAG_PROVIDER 等）</li>
+     *   <li>{@code true} — 显式启用检索</li>
+     *   <li>{@code false} — 显式禁用检索</li>
+     * </ul>
+     * context JSON: {"needsKnowledgeBase": true}
+     */
+    public Boolean needsKnowledgeBase() {
+        Object val = data.get(KEY_NEEDS_KNOWLEDGE_BASE);
+        if (val instanceof Boolean b) return b;
+        if (val instanceof String s) return Boolean.parseBoolean(s);
+        return null;
+    }
+
+    /**
+     * 查询改写策略。
+     * <ul>
+     *   <li>{@code null} — 未指定，回退到环境变量 HARNESS_RAG_QUERY_REWRITE</li>
+     *   <li>{@code "NONE"} — 显式不改写（但仍可检索）</li>
+     *   <li>{@code "HYDE" / "MULTI_QUERY" / "STEP_BACK"} — 显式指定改写策略</li>
+     * </ul>
+     * context JSON: {"rewriteStrategy": "HYDE"}
+     */
+    public String rewriteStrategy() {
+        Object val = data.get(KEY_REWRITE_STRATEGY);
+        if (val != null) {
+            String s = val.toString().toUpperCase();
+            return switch (s) {
+                case "NONE", "HYDE", "MULTI_QUERY", "STEP_BACK" -> s;
+                default -> null;
+            };
+        }
+        return null;
+    }
+
+    /**
+     * 是否联网搜索。
+     * <ul>
+     *   <li>{@code null} — 未指定，回退到环境变量或 GapAnalyzer 判定</li>
+     *   <li>{@code true} — 显式启用联网搜索</li>
+     *   <li>{@code false} — 显式禁用联网搜索</li>
+     * </ul>
+     * context JSON: {"needsWebSearch": true}
+     */
+    public Boolean needsWebSearch() {
+        Object val = data.get(KEY_NEEDS_WEB_SEARCH);
+        if (val instanceof Boolean b) return b;
+        if (val instanceof String s) return Boolean.parseBoolean(s);
+        return null;
     }
 
     /**

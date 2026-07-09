@@ -151,12 +151,12 @@ public class ChatHandler {
                                 } catch (IOException e) {
                                     log.debug("[Server] Failed to write SSE event: {}", e.getMessage());
                                 }
-                            }, enableThinking, contextUserId);
+                            }, enableThinking, contextUserId, agentContext);
                 } else {
                     // Blocking mode: run agent
                     AgentResult result = agent.run(finalRawToken, req.text(),
                             req.attachments() != null ? req.attachments() : Collections.emptyList(),
-                            finalSessionId, req.systemPrompt(), cancellationToken, enableThinking, contextUserId);
+                            finalSessionId, req.systemPrompt(), cancellationToken, enableThinking, contextUserId, agentContext);
 
                     long duration = System.currentTimeMillis() - start;
                     log.info("[Server] Chat completed: traceId={}, steps={}, risk={}, duration={}ms",

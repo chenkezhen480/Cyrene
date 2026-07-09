@@ -118,4 +118,23 @@ public final class ModelProviderFactory {
         log.info("Realtime model provider not yet implemented: {}", provider);
         return new NoOpRealtimeModelProvider();
     }
+
+    /**
+     * 7. Classifier Model (optional, for GapAnalyzer Tier 2 LLM classification)
+     */
+    public static ClassifierModelProvider createClassifier() {
+        String provider = EnvConfig.get().getString(EnvKey.MODEL_CLASSIFIER_PROVIDER, "");
+        if (provider.isBlank()) {
+            log.info("[Model] Classifier model not configured, Tier 2 disabled");
+            return new NoOpClassifierModelProvider();
+        }
+        log.info("Creating classifier model provider: {}", provider);
+        return switch (provider.toLowerCase()) {
+            case "openai", "dashscope" -> new OpenAiClassifierModelProvider();
+            default -> {
+                log.warn("Unknown classifier provider '{}', falling back to NoOp", provider);
+                yield new NoOpClassifierModelProvider();
+            }
+        };
+    }
 }

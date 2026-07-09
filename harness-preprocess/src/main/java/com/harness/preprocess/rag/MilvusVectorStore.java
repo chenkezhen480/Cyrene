@@ -48,6 +48,7 @@ public class MilvusVectorStore implements VectorStore {
         this.scoreThreshold = cfg.getDouble(EnvKey.RAG_SCORE_THRESHOLD, 0.7);
         this.bm25Weight = cfg.getDouble(EnvKey.RAG_BM25_WEIGHT, 0.3);
         this.embeddingProvider = embeddingProvider;
+        log.info("[Milvus] collection='{}', topK={}, scoreThreshold={}, bm25Weight={}", collectionName, topK, scoreThreshold, bm25Weight);
         this.client = MilvusConnectionPool.getClient();
     }
 
@@ -341,7 +342,7 @@ public class MilvusVectorStore implements VectorStore {
                     score != null ? score : 0.0,
                     null));
         }
-        log.debug("[Milvus] Search returned {} documents", docs.size());
+        log.debug("[Milvus] Search on '{}' returned {} documents", collectionName, docs.size());
         return docs;
     }
 

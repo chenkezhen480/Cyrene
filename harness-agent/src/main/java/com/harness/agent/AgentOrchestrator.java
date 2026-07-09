@@ -15,6 +15,10 @@ import com.harness.input.InputProcessor;
 import com.harness.input.multimodal.MultimodalParser;
 import com.harness.input.multimodal.TextChunker;
 import com.harness.preprocess.ContextBuilder;
+import com.harness.preprocess.gap.GapAnalysis;
+import com.harness.preprocess.gap.GapAnalyzer;
+import com.harness.preprocess.gap.GapClassifier;
+import com.harness.preprocess.gap.GapRuleEngine;
 import com.harness.preprocess.memory.*;
 import com.harness.tool.ToolExecutor;
 import com.harness.tool.ToolRegistry;
@@ -67,13 +71,14 @@ public class AgentOrchestrator {
         try { Class.forName("org.sqlite.JDBC"); } catch (ClassNotFoundException ignored) {}
     }
 
-    // 6 model providers
+    // 7 model providers
     private final ChatModelProvider chatModelProvider;
     private final VisionModelProvider visionModelProvider;
     private final VoiceModelProvider voiceModelProvider;
     private final EmbeddingModelProvider embeddingModelProvider;
     private final RerankModelProvider rerankModelProvider;
     private final RealtimeModelProvider realtimeModelProvider;
+    private final ClassifierModelProvider classifierModelProvider;
 
     private final InputProcessor inputProcessor;
     private final ContextBuilder contextBuilder;
@@ -82,6 +87,7 @@ public class AgentOrchestrator {
     private final ReActEngine reactEngine;
     private final TraceStore traceStore;
     private final ReplyAuditor replyAuditor;
+    private final GapAnalyzer gapAnalyzer;
 
     // Sub-agent subsystem
     private final SubAgentOrchestrator subAgentOrchestrator;
@@ -118,6 +124,7 @@ public class AgentOrchestrator {
         this.embeddingModelProvider = ModelProviderFactory.createEmbedding();
         this.rerankModelProvider = ModelProviderFactory.createRerank();
         this.realtimeModelProvider = ModelProviderFactory.createRealtime();
+        this.classifierModelProvider = ModelProviderFactory.createClassifier();
 
         // Layer 1: Input
         this.inputProcessor = new InputProcessor(chatModelProvider, visionModelProvider, voiceModelProvider);
@@ -151,6 +158,9 @@ public class AgentOrchestrator {
         // Layer 5: Audit
         this.traceStore = TraceStoreFactory.create();
         this.replyAuditor = new ReplyAuditor();
+
+        // GapAnalyzer (动态路由)
+        this.gapAnalyzer = new GapAnalyzer(new GapRuleEngine(), new GapClassifier(classifierModelProvider));
 
         // Memory subsystem — skip entirely when disabled
         if (MemoryStoreFactory.isEnabled()) {
@@ -191,12 +201,13 @@ public class AgentOrchestrator {
             this.cleanupScheduler = null;
         }
 
-        log.info("Agent initialized: chat={}, vision={}, voice={}, embedding={}, rerank={}, tools={}, memory={}",
+        log.info("Agent initialized: chat={}, vision={}, voice={}, embedding={}, rerank={}, classifier={}, tools={}, memory={}",
                 chatModelProvider.providerName(),
                 visionModelProvider.providerName(),
                 voiceModelProvider.providerName(),
                 embeddingModelProvider.providerName(),
                 rerankModelProvider.providerName(),
+                classifierModelProvider.providerName(),
                 toolRegistry.size(),
                 MemoryStoreFactory.isEnabled() ? "enabled" : "none");
     }
@@ -237,6 +248,13 @@ public class AgentOrchestrator {
                            String requestedSessionId, String systemPromptOverride,
                            com.harness.core.model.CancellationToken cancellationToken,
                            Boolean enableThinking, String contextUserId) {
+        return run(token, text, attachments, requestedSessionId, systemPromptOverride, cancellationToken, enableThinking, contextUserId, null);
+    }
+
+    public AgentResult run(String token, String text, List<MultimodalParser.RawAttachment> attachments,
+                           String requestedSessionId, String systemPromptOverride,
+                           com.harness.core.model.CancellationToken cancellationToken,
+                           Boolean enableThinking, String contextUserId, AgentContext agentContext) {
         long runStart = System.currentTimeMillis();
         int attachCount = attachments != null ? attachments.size() : 0;
         log.debug("[Orchestrator] Run start: textLen={}, sessionId={}, attachments={}",
@@ -280,13 +298,19 @@ public class AgentOrchestrator {
 
             final String ragInput = enhancedText;
 
+            // GapAnalyzer: 动态路由判定
+            AgentContext actx = agentContext != null ? agentContext : AgentContext.empty();
+            GapAnalysis gapAnalysis = gapAnalyzer.analyze(ragInput, actx);
+            trace.builder().metadata(gapMetadata(gapAnalysis, trace.builder().build().metadata()));
+
             // ===== Layer 1.5: Session lifecycle =====
             List<MemoryMessage> shorttermMessages = List.of();
             List<Preference> longtermPrefs = List.of();
 
-            // RAG retrieval always runs; memory loading is conditional
+            // RAG retrieval; GapAnalysis controls whether retrieval happens
+            final GapAnalysis finalGap = gapAnalysis;
             CompletableFuture<ContextBuilder.ContextResult> ragFuture = CompletableFuture.supplyAsync(() ->
-                    contextBuilder.build(ragInput));
+                    contextBuilder.build(ragInput, finalGap));
 
             final String userId = input.userId();
             if (MemoryStoreFactory.isEnabled() && userId != null) {
@@ -394,7 +418,9 @@ public class AgentOrchestrator {
             // Set parent cancellation token for sub-agents
             subAgentOrchestrator.setParentToken(cancellationToken);
             List<ChatMessage> historyChatMessages = convertToChatMessages(shorttermMessages);
-            ReActEngine.ReActResult result = reactEngine.execute(systemPrompt, finalUserMessage, historyChatMessages, trace.builder(), null, cancellationToken, enableThinking);
+            // thinking 优先级：显式 enableThinking > GapAnalysis.needsThinking > 环境变量
+            Boolean effectiveThinking = enableThinking != null ? enableThinking : gapAnalysis.needsThinking();
+            ReActEngine.ReActResult result = reactEngine.execute(systemPrompt, finalUserMessage, historyChatMessages, trace.builder(), null, cancellationToken, effectiveThinking);
             result.steps().forEach(trace::addStep);
 
             // Tool 消息进缓存（不落 DB），供下一轮 preprocess 小压缩
@@ -470,6 +496,14 @@ public class AgentOrchestrator {
                           String requestedSessionId, String systemPromptOverride,
                           com.harness.core.model.CancellationToken cancellationToken,
                           StreamCallback callback, Boolean enableThinking, String contextUserId) {
+        streamRun(token, text, attachments, requestedSessionId, systemPromptOverride, cancellationToken, callback, enableThinking, contextUserId, null);
+    }
+
+    public void streamRun(String token, String text, List<MultimodalParser.RawAttachment> attachments,
+                          String requestedSessionId, String systemPromptOverride,
+                          com.harness.core.model.CancellationToken cancellationToken,
+                          StreamCallback callback, Boolean enableThinking, String contextUserId,
+                          AgentContext agentContext) {
         long runStart = System.currentTimeMillis();
         int attachCount = attachments != null ? attachments.size() : 0;
         log.debug("[Orchestrator] Stream run start: textLen={}, sessionId={}, attachments={}",
@@ -513,13 +547,19 @@ public class AgentOrchestrator {
 
             final String ragInput = enhancedText;
 
+            // GapAnalyzer: 动态路由判定
+            AgentContext actx = agentContext != null ? agentContext : AgentContext.empty();
+            GapAnalysis gapAnalysis = gapAnalyzer.analyze(ragInput, actx);
+            trace.builder().metadata(gapMetadata(gapAnalysis, trace.builder().build().metadata()));
+
             // Layer 1.5: Session lifecycle
             List<MemoryMessage> shorttermMessages = List.of();
             List<Preference> longtermPrefs = List.of();
 
-            // RAG retrieval always runs; memory loading is conditional
+            // RAG retrieval; GapAnalysis controls whether retrieval happens
+            final GapAnalysis finalGap = gapAnalysis;
             CompletableFuture<ContextBuilder.ContextResult> ragFuture = CompletableFuture.supplyAsync(() ->
-                    contextBuilder.build(ragInput));
+                    contextBuilder.build(ragInput, finalGap));
 
             final String userId = input.userId();
             if (MemoryStoreFactory.isEnabled() && userId != null) {
@@ -630,8 +670,10 @@ public class AgentOrchestrator {
                 }
             };
 
+            // thinking 优先级：显式 enableThinking > GapAnalysis.needsThinking > 环境变量
+            Boolean effectiveThinking = enableThinking != null ? enableThinking : gapAnalysis.needsThinking();
             ReActEngine.ReActResult result = reactEngine.streamExecute(
-                    systemPrompt, finalUserMessage, historyChatMessages, trace.builder(), listener, cancellationToken, enableThinking);
+                    systemPrompt, finalUserMessage, historyChatMessages, trace.builder(), listener, cancellationToken, effectiveThinking);
             result.steps().forEach(trace::addStep);
 
             // Tool 消息进缓存（不落 DB），供下一轮 preprocess 小压缩
@@ -764,6 +806,17 @@ public class AgentOrchestrator {
             log.debug("Failed to extract attachment content: {}", e.getMessage());
             return null;
         }
+    }
+
+    /** 将 GapAnalysis 结果写入 trace metadata，用于事后追溯 */
+    private Map<String, String> gapMetadata(GapAnalysis gap, Map<String, String> existing) {
+        Map<String, String> meta = new HashMap<>(existing);
+        meta.put("gap_needsKnowledgeBase", String.valueOf(gap.needsKnowledgeBase()));
+        meta.put("gap_rewriteStrategy", String.valueOf(gap.rewriteStrategy()));
+        meta.put("gap_needsThinking", String.valueOf(gap.needsThinking()));
+        meta.put("gap_needsWebSearch", String.valueOf(gap.needsWebSearch()));
+        meta.put("gap_source", String.valueOf(gap.source()));
+        return meta;
     }
 
     private RiskLevel determineRisk(ReActEngine.ReActResult result) {

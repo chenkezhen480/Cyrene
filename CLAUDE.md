@@ -59,7 +59,7 @@ harness-server        ← HTTP API entry point (com.harness.server.Main, Javalin
 ## Key Conventions
 
 - **All configuration via environment variables.** Every `HARNESS_*` key is defined in `EnvKey.java` (harness-env). Never hardcode config values — read from `EnvConfig.get()`.
-- **6 model types, independently configurable.** Each has a provider interface in `com.harness.ai.model` and implementations in `com.harness.ai.model.impl`. NoOp implementations used when unconfigured.
+- **7 model types, independently configurable.** Each has a provider interface in `com.harness.ai.model` and implementations in `com.harness.ai.model.impl`. NoOp implementations used when unconfigured.
 
   | # | Type | Interface | Providers |
   |---|------|-----------|-----------|
@@ -69,9 +69,10 @@ harness-server        ← HTTP API entry point (com.harness.server.Main, Javalin
   | 4 | Embedding | `EmbeddingModelProvider` | openai, ollama |
   | 5 | Rerank | `RerankModelProvider` | openai |
   | 6 | Realtime | `RealtimeModelProvider` | (reserved) |
+  | 7 | Classifier | `ClassifierModelProvider` | openai (用于 GapAnalyzer Tier 2 LLM 分类) |
 
 - **Tools implement `com.harness.tool.Tool` interface** — `spec()` returns ToolSpec, `execute(JsonNode)` returns String. Register in ToolRegistry. MCP tools adapted via McpToolAdapter.
-- **ReActEngine** uses LangChain4j 1.15.0 `ChatModel.chat(ChatRequest)` with `ToolSpecification` (JsonObjectSchema). Wraps ChatModel in `FallbackChatModel` when vision/voice providers are available. Wraps in `SemaphoreChatModel` for API concurrency limiting (`HARNESS_MODEL_API_MAX_CONCURRENT`, default 10). Supports streaming via `StreamingChatModel` (`streamExecute()` method). Tool calls retry up to 3 times on error; success with empty data passes to LLM without retry. LLM API timeout configurable via `HARNESS_MODEL_CHAT_TIMEOUT_MS` (default 300s).
+- **ReActEngine** uses LangChain4j 1.15.0 `ChatModel.chat(ChatRequest)` with `ToolSpecification` (JsonObjectSchema). Wraps ChatModel in `FallbackChatModel` when vision/voice providers are available. Wraps in `SemaphoreChatModel` for API concurrency limiting (`HARNESS_MODEL_API_MAX_CONCURRENT`, default 10). Supports streaming via `StreamingChatModel` (`streamExecute()` method). Tool calls retry up to 3 times on error; success with empty data passes to LLM without retry. LLM API timeout configurable via `HARNESS_MODEL_CHAT_TIMEOUT_SECONDS` (default 300s).
 - **Thinking Mode Control** — `HARNESS_MODEL_CHAT_THINKING` env var (default `true`) controls whether to enable thinking/reasoning mode for the chat model. `ChatModelProvider.chatModelNoThinking()` returns a model with thinking disabled (used by `LargeFileParser` for cost savings). Per-request override via `AgentContext.enableThinking()` (set in `context.enableThinking` JSON field). Providers pass `enable_thinking` via `customParameters(Map)` to OpenAI-compatible APIs (DashScope etc.). `ReActEngine.selectModel(Boolean)` picks thinking/non-thinking model; streaming mode falls back to blocking when thinking is disabled.
 - **File Content Injection** — File attachments are extracted and injected into the LLM context via `enhancedText` in `AgentOrchestrator`. Small files (< `HARNESS_INPUT_FILE_SIZE_THRESHOLD_KB`, default 100KB) use `TextExtractorRegistry.extract()` directly; large files use `LargeFileParser` merge-then-summarize approach: semantic splitting → greedy merge to `MODEL_CHAT_CONTEXT_WINDOW × LARGE_FILE_CONTEXT_RATIO` (default 40%) → parallel summarization → final merge. Works independently of RAG knowledge base configuration.
 - **ReAct Inspection** — 每轮工具调用后由 `Inspector` 启发式检查结果状态，记录在 `ReActStep.InspectionResult` 中：
@@ -82,12 +83,13 @@ harness-server        ← HTTP API entry point (com.harness.server.Main, Javalin
   | `TOOL_ERROR` | 工具执行失败 | `!result.success()` |
   | `WRONG_TOOL` | 选错了工具 | 输出为 null/空白 |
   | `INSUFFICIENT` | 结果不够完整 | 输出过短 (<50字符) 或含 "no results" 等短语 |
-  | `LOOP_DETECTED` | 循环调用同一工具 | 连续相同工具+参数 |
+  | `LOOP_DETECTED` | 循环调用同一工具 | 连续相同工具+相同参数（工具名+参数JSON完全一致） |
 
   非 PASS 状态会注入 `Inspector.buildInspectionHint()` 作为下一轮的提示。`HARNESS_REACT_STOP_ON_TOOL_ERROR=true` 时遇到 `TOOL_ERROR` 立即停止循环；默认 `false` 继续下一轮让 LLM 自行决策。
 - **ReAct Reflection** — 定期注入反思提示，让 LLM 检查当前进展并调整策略。`HARNESS_REACT_REFLECTION_INTERVAL`（默认 3）控制每隔几轮注入一次反思。`HARNESS_REACT_LOOP_DETECTION_THRESHOLD`（默认 3）控制连续相同工具+参数调用的循环检测阈值。
+- **GapAnalyzer (动态路由)** — 三级判定漏斗，根据查询特征动态决定 `needsThinking`/`needsKnowledgeBase`/`rewriteStrategy`/`needsWebSearch` 四个独立参数。`HARNESS_GAP_ANALYSIS_ENABLED`（默认 `true`）控制功能开关。三级漏斗：Tier 0 显式覆盖（AgentContext）→ Tier 1 规则引擎（硬编码正则/关键词，<1ms）→ Tier 2 LLM 分类（ClassifierModelProvider，GLM-4.7-flash，thinking 关闭，max_tokens=50）。每级只填充上一级为 null 的字段，全部确定后短路返回。判定结果写入 trace metadata（`gap_source` = explicit/rule/llm/default）。Tier 2 失败时降级到环境变量默认值，不阻塞主流程。
 - **ReActListener** — SSE 流式回调接口，`onStep(ReActStep)` 在每轮迭代完成后调用。扩展方法：`onToken(String)` 每个 token 块回调，`onToolCallStart(String toolName, String arguments)` 工具调用开始回调。
-- **Streaming Output** — `AgentOrchestrator.streamRun()` 提供流式输出模式，通过 `StreamCallback` 实时推送 `StreamEvent`（START/TOKEN/STEP/DONE/ERROR）。`AgentContext` record 包装 `Map<String, Object>` context 参数，`isStreaming()` 判断输出模式。流式模式下后处理（trace.finish、sessionStore.updateLastActive）异步化。
+- **Streaming Output** — `AgentOrchestrator.streamRun()` 提供流式输出模式，通过 `StreamCallback` 实时推送 `StreamEvent`（START/TOKEN/STEP/DONE/CANCELLED/ERROR）。`AgentContext` record 包装 `Map<String, Object>` context 参数，`isStreaming()` 判断输出模式。流式模式下后处理（trace.finish、sessionStore.updateLastActive）异步化。`CancellationException` 捕获后发送 `CANCELLED` 事件（保留已输出内容），区别于 `ERROR`。
 - **CancellationToken** — 线程安全的取消令牌，支持轮询（`isCancelled()`）和线程中断（`Thread.interrupt()`）双重取消机制。`cancel()` 会中断所有已注册的工作线程（包括子代理线程）。ReAct 循环在每轮迭代间、LLM 调用后、工具执行前均检查取消状态；`DELETE /api/chat/{sessionId}` 触发取消。
 - **ReplyAuditor** — 异步启发式回复质量审计（无模型调用），检查回复长度、错误指标、工具残留。结果写入 trace metadata。
 - **Sub-Agent** — `SubAgentOrchestrator` 管理子代理生命周期，支持依赖解析和并行执行。LLM 通过 `spawn_subagent` 工具派生子任务，每个子代理拥有独立的 ReActEngine 实例但共享工具注册表。`MultiAgentOrchestrator` 提供编程式子代理访问。`HARNESS_AGENT_MAX_SUBAGENTS`（默认 3）控制并发数。
@@ -356,6 +358,7 @@ parameters:
 - `code_glob` — 按 glob 模式查找文件，返回最多 50 个匹配路径
 - `code_grep` — 按正则搜索文件内容，返回所有匹配（无数量限制），每个匹配 ±7 行上下文
 - `read_class_hierarchy` — 读取类及其父类（最多 2 层），返回合并字段列表 + 紧凑 JSON Schema。支持 Java/C#/C++/Python/JS/TS/PHP/Rust/Go
+- `update_project_api` — 操作内存中的 project-apis.json 配置（add/remove/update 端点），自动同步到磁盘。通过 `ToolRegistry.updateProjectApiConfig()` 实现
 
 **ClassHierarchyReader 跨模块查找：** 自动向上查找 `.git` 目录定位仓库根目录，支持跨模块父类查找（如 `ruoyi-modules/zhiduyuan` 中的类继承自 `ruoyi-common` 中的 `BaseEntity`）。
 
@@ -402,7 +405,7 @@ Same pattern for Vision/Voice/Embedding/Rerank providers.
 | GET | `/api/sessions/{sessionId}` | Get session detail |
 | GET | `/api/sessions/{sessionId}/messages` | Message history with cursor pagination. Query: `limit`, `cursor` (message ID), `direction` (asc/desc) |
 | GET | `/api/sessions/{sessionId}/stats` | Session statistics (message counts, turns, avg reply length, duration, etc.) |
-| DELETE | `/api/sessions/{sessionId}` | Close a session (messages preserved in DB) |
+| DELETE | `/api/sessions/{sessionId}` | Delete session and all messages (transactional) |
 | POST | `/api/knowledge/upload` | Upload file for knowledge base ingestion (multipart: `file`, `collection`) |
 | GET | `/api/knowledge/{collection}` | List documents in a collection |
 | DELETE | `/api/knowledge/{collection}` | Delete all documents in a collection |
@@ -418,7 +421,20 @@ Same pattern for Vision/Voice/Embedding/Rerank providers.
 | POST | `/api/project-discovery/reload` | Hot-reload project APIs into ToolRegistry |
 | GET | `/api/health` | Health check |
 
-**Chat SSE events:** Blocking mode: `event: done` (full result JSON), `event: error` (error JSON). Streaming mode (`context.outputMode=streaming`): `event: start` (sessionId), `event: token` (partial text), `event: step` (ReAct step info), `event: done` (final result), `event: error`. JWT mode returns refreshed token in `X-New-Token` header when remaining lifetime < threshold.
+**Chat SSE events:** Blocking mode: `event: done` (full result JSON), `event: error` (error JSON). Streaming mode (`context.outputMode=streaming`): `event: start` (sessionId), `event: token` (partial text), `event: step` (ReAct step info), `event: done` (final result), `event: cancelled` (user cancelled, keeps partial output), `event: error`. JWT mode returns refreshed token in `X-New-Token` header when remaining lifetime < threshold.
+
+**LLM HTTP Cancellation** — `CancellableHttpClient` (ServiceLoader-based `HttpClientBuilderFactory`) wraps JDK HttpClient to support SSE stream cancellation. `CompletableFuture.cancel(true)` immediately closes the socket. `CancellationToken.onCancel(CancellableHttpClient::cancelAll)` registered in `ChatHandler`. System property `langchain4j.http.clientBuilderFactory` set in `Main.main()` to override default.
+
+## Web UI (harness-server/src/main/resources/public)
+
+Vue 3 SPA with i18n support (zh/en). Key features:
+- **Session sidebar** — list, create, delete sessions (trash icon on hover). Delete removes session + messages atomically.
+- **Streaming output** — real-time token display via SSE. Cancel button (red square) appears during streaming, calls `DELETE /api/chat/{sessionId}` to stop LLM and keep partial output.
+- **Markdown rendering** — `marked` + DOMPurify for safe HTML.
+- **Knowledge management** — upload files, browse collections, delete documents.
+- **Project API discovery** — trigger scan, view/edit config, hot-reload.
+
+Key files: `js/app.js` (Vue components), `js/api.js` (API client), `js/i18n.js` (translations), `css/style.css` (styles).
 
 ## Dependencies
 

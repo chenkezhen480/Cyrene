@@ -6,8 +6,9 @@ import com.harness.ai.model.RerankModelProvider;
 import com.harness.env.EnvConfig;
 import com.harness.env.EnvKey;
 import com.harness.preprocess.rag.*;
-import com.harness.preprocess.rag.rewrite.QueryRewriter;
-import com.harness.preprocess.rag.rewrite.QueryRewriterFactory;
+import com.harness.preprocess.gap.GapAnalysis;
+import com.harness.preprocess.gap.RewriteStrategy;
+import com.harness.preprocess.rag.rewrite.*;
 import com.harness.preprocess.rerank.Reranker;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -29,6 +30,7 @@ public class ContextBuilder {
     private final Reranker reranker;
     private final SemanticContextRetriever semanticRetriever;
     private final QueryRewriter queryRewriter;
+    private final ChatModelProvider chatModelProvider;
 
     public ContextBuilder(RerankModelProvider rerankModelProvider,
                           EmbeddingModelProvider embeddingModelProvider,
@@ -37,6 +39,7 @@ public class ContextBuilder {
         this.semanticRetriever = vectorStore != null ? new SemanticContextRetriever(vectorStore) : null;
         this.reranker = new Reranker(rerankModelProvider);
         this.queryRewriter = QueryRewriterFactory.create(chatModelProvider);
+        this.chatModelProvider = chatModelProvider;
     }
 
     /**
@@ -46,12 +49,30 @@ public class ContextBuilder {
      * @return context result with RAG hits and formatted context string
      */
     public ContextResult build(String userText) {
+        return build(userText, GapAnalysis.defaults());
+    }
+
+    /**
+     * Build enriched context from user input, with GapAnalysis controlling behavior.
+     *
+     * @param userText    the raw user input text
+     * @param gapAnalysis 动态路由分析结果，控制是否检索、用哪种改写策略
+     * @return context result with RAG hits and formatted context string
+     */
+    public ContextResult build(String userText, GapAnalysis gapAnalysis) {
         log.debug("[L2-RAG] Building context for text ({} chars)", userText != null ? userText.length() : 0);
 
-        // Step 0: Query rewriting
-        List<String> queries = queryRewriter.rewrite(userText);
+        // GapAnalysis: 显式禁用检索时直接返回空结果
+        if (Boolean.FALSE.equals(gapAnalysis.needsKnowledgeBase())) {
+            log.debug("[L2-RAG] Skipped: needsKnowledgeBase=false (explicit)");
+            return ContextResult.empty();
+        }
+
+        // Step 0: Query rewriting（按 GapAnalysis 动态选择策略，null 时用默认）
+        QueryRewriter activeRewriter = resolveRewriter(gapAnalysis.rewriteStrategy());
+        List<String> queries = activeRewriter.rewrite(userText);
         if (queries.size() > 1) {
-            log.debug("[L2-RAG] Query rewrite [{}]: {} queries", queryRewriter.strategyName(), queries.size());
+            log.debug("[L2-RAG] Query rewrite [{}]: {} queries", activeRewriter.strategyName(), queries.size());
         }
 
         // Step 1: RAG retrieval (support multi-query)
@@ -106,7 +127,7 @@ public class ContextBuilder {
         metadata.put("rag_doc_count", String.valueOf(ragDocs.size()));
         metadata.put("reranked_doc_count", String.valueOf(reranked.size()));
         metadata.put("lookback_count", String.valueOf(totalLookback));
-        metadata.put("query_rewrite", queryRewriter.strategyName());
+        metadata.put("query_rewrite", activeRewriter.strategyName());
         metadata.put("query_count", String.valueOf(queries.size()));
         metadata.put("provider", vectorStore != null ? vectorStore.providerName() : "none");
         if (!lookbackChunkIds.isEmpty()) {
@@ -118,6 +139,24 @@ public class ContextBuilder {
                 contextBlock,
                 metadata
         );
+    }
+
+    /**
+     * 根据 GapAnalysis 的 rewriteStrategy 动态选择 QueryRewriter。
+     * null 时返回构造时的默认 rewriter。
+     */
+    private QueryRewriter resolveRewriter(RewriteStrategy strategy) {
+        if (strategy == null) return this.queryRewriter;
+        if (chatModelProvider == null) {
+            log.warn("[L2-RAG] Strategy '{}' requires ChatModelProvider, falling back to default", strategy);
+            return this.queryRewriter;
+        }
+        return switch (strategy) {
+            case NONE -> new NoOpQueryRewriter();
+            case HYDE -> new HydeQueryRewriter(chatModelProvider);
+            case MULTI_QUERY -> new MultiQueryRewriter(chatModelProvider);
+            case STEP_BACK -> new StepBackQueryRewriter(chatModelProvider);
+        };
     }
 
     private List<RagRetriever.RagDocument> doRetrieve(String query) {
@@ -156,6 +195,10 @@ public class ContextBuilder {
     ) {
         public boolean hasContext() {
             return contextBlock != null && !contextBlock.isBlank();
+        }
+
+        public static ContextResult empty() {
+            return new ContextResult(List.of(), "", Map.of());
         }
     }
 }

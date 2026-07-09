@@ -1,8 +1,8 @@
 <p align="right"><a href="./README_EN.md">English</a></p>
 
-# Cyrene Agent
+# Cyrene Agent -自主决策的AI应用框架
 
-基于 **Harness 编排架构** 的 Java AI Agent 应用开发框架。提供可插拔的模型 Provider、内置 RAG 知识库、会话记忆与 5 层流水线编排，可作为脚手架快速搭建并定制面向业务的 Agent 应用。   1768576157@qq.com
+基于 **Harness 编排架构** 的 Java AI Agent 应用开发框架，可自主决策，针对每个请求，自主决定是否思考，是否使用知识库检索，查询策略与联网开启，来避免不必要的知识库开支与思考开支(例如：你好，谢谢等等)。提供可插拔的模型 Provider、内置 RAG 知识库、会话记忆与 5 层流水线编排，可作为脚手架快速搭建并定制面向业务的 Agent 应用。  1768576157@qq.com
 
 ## 首次启动
 
@@ -20,7 +20,7 @@
 
 ![效果展示](docs/assets/call-back.png)
 
-## 快速构建对接系统项目的AI应用Agent
+## 基础配置
 
 为你的产品构建 AI Agent 不必从零开始。Cyrene Agent 提供生产可用的基础能力——初始化工具配置，模型抽象、RAG、记忆、工具、审计——让你专注于业务逻辑而非底层 plumbing。配置模型、注册工具、即可上线。
 
@@ -30,6 +30,31 @@ Cyrene Agent 采用 **Harness 编排模式**：通用编排框架包裹领域组
 
 ## 核心特性
 
+### 针对项目一键生成接口工具
+首次启动时，会根据 HARNESS_PROJECT_DISCOVERY_ENABLED=true 变量自动启动控制台的web UI，并加载glob与grep还有read_class_hierarchy工具三件套，其中glob负责检索文件，grep负责检索关键上下文（默认为7行），通过获取输入参数类与输出参数类，调用read_class_hierarchy获取父类以获取完整参数结构，递归的最大深度为2，随后给出一份关于对接项目的工具json文件。文件会在后续项目启动时解析加载进内存，通过一套编辑json和list，get，read工具进行管理。
+
+### 全自主决策
+在输入层与预处理层添加了一层启发式路由，由 `HARNESS_GAP_ANALYSIS_ENABLED=true` 控制。针对每个请求，自主决定是否思考、是否使用知识库检索、查询策略与联网开启，来避免不必要的知识库开支与思考开支（例如：你好，谢谢等）。
+
+**三层判定漏斗（优先级递减）：**
+
+| 层级 | 机制 | 延迟 | 说明 |
+|------|------|------|------|
+| Tier 0 | 显式覆盖 | 0ms | 请求上下文直接指定参数，最高优先级 |
+| Tier 1 | 规则引擎 | <1ms | 硬编码正则/关键词匹配，覆盖常见场景（问候语拦截、时效性问题联网、深度分析启用思考） |
+| Tier 2 | LLM 分类 | ~200ms | 轻量级 Classifier 模型（默认 GLM-4.7-flash），分析剩余未确定字段 |
+
+**四个独立决策字段：**
+
+| 字段 | 说明 |
+|------|------|
+| `needsThinking` | 是否启用深度思考（extended thinking） |
+| `needsKnowledgeBase` | 是否启用 RAG 知识库检索 |
+| `rewriteStrategy` | 查询改写策略（NONE / HYDE / MULTI_QUERY / STEP_BACK） |
+| `needsWebSearch` | 是否启用联网搜索 |
+
+每个字段独立决策，未命中的字段由环境变量兜底。判定结果写入 Trace metadata（`gap_source` = explicit / rule / llm / default）。后续也可更换为针对语义经过训练的轻量级本地 ONNX 模型。
+
 ### 5 层流水线架构
 
 ```
@@ -38,7 +63,7 @@ Input → Session Lifecycle → Preprocess → ReAct Loop (AI ↔ Tool ↔ Inspe
 
 每个请求经过结构化流水线，各层独立可观测、可配置、可追踪。
 
-### 6 种独立模型类型
+### 7 种独立模型类型
 
 每种模型类型可独立配置 Provider、API Key 和端点：
 
@@ -50,12 +75,13 @@ Input → Session Lifecycle → Preprocess → ReAct Loop (AI ↔ Tool ↔ Inspe
 | Embedding | 多模态向量化 | OpenAI、Ollama |
 | Rerank | 检索结果重排序 | OpenAI 兼容接口 |
 | Realtime | 实时多模态（预留） | — |
+| Classifier | Gap Analyzer Tier 2 意图分类 | OpenAI 兼容接口 |
 
 可自由混搭——例如 Chat 用 DashScope、Embedding 用 OpenAI、Rerank 用本地 Ollama。
 
 ### 内置 RAG 知识库
 
-通过 API 上传文档（PDF、DOCX、XLSX、TXT、Markdown 等），自动完成文本提取、语义分块、Embedding 并存储到 PostgreSQL pgvector。
+通过 API 上传文档（PDF、DOCX、XLSX、TXT、Markdown 等），自动完成文本提取、语义分块、Embedding 并存储到向量数据库（PostgreSQL pgvector 或 Milvus，通过 `HARNESS_RAG_PROVIDER` 切换）。
 
 **完整 RAG 流水线：**
 
@@ -70,11 +96,10 @@ Input → Session Lifecycle → Preprocess → ReAct Loop (AI ↔ Tool ↔ Inspe
   │  step-back → LLM 生成更通用的抽象查询（适合过于具体的问题）
   │
   ▼
-多路召回（可选，环境变量插拔）
-  │  语义向量召回  → pgvector cosine similarity（默认）
-  │  关键词全文召回 → PostgreSQL tsvector/tsquery（与语义互补）
-  │  知识图谱召回  → 预留扩展
-  │  多路结果按文档 ID 去重合并（CompletableFuture 并行）
+向量检索（统一接口，环境变量切换后端）
+  │  pgvector   → cosine similarity + 可选全文检索（tsvector/tsquery）
+  │  Milvus     → BM25 稠密 + 语义向量混合检索（HARNESS_RAG_BM25_WEIGHT 控制权重）
+  │  结果按相似度分数排序，支持 HARNESS_RAG_SCORE_THRESHOLD 阈值过滤
   │
   ▼
 语义上下文增强
@@ -294,7 +319,7 @@ harness-core          ← 核心模型：AgentMessage、AgentTrace、ReActStep�
     ├── harness-preprocess   ← RAG 查询改写 + 多路召回 + 语义上下文 + Rerank + 记忆管理
     ├── harness-tool         ← 工具接口、注册表、执行器、MCP 适配、Skill 加载、代码发现工具
     ├── harness-audit        ← TraceCollector + TraceStore
-    └── harness-ai           ← LangChain4j 集成、6 种模型、ReActEngine、重试容错
+    └── harness-ai           ← LangChain4j 集成、7 种模型、ReActEngine、重试容错
 harness-agent         ← AgentOrchestrator（串联所有层）+ 子代理编排 + 项目接口发现
 harness-server        ← HTTP API 入口（Javalin, SSE 流式, Web UI）
 ```
@@ -305,10 +330,10 @@ harness-server        ← HTTP API 入口（Javalin, SSE 流式, Web UI）
 
 | 配置组 | 变量 | 说明 |
 |--------|------|------|
-| 模型 | `HARNESS_MODEL_CHAT_*` 等 | 6 种模型各自的 Provider、Key、端点、超时（默认 300s），上下文窗口自动检测 |
+| 模型 | `HARNESS_MODEL_CHAT_*` 等 | 7 种模型各自的 Provider、Key、端点、超时（默认 300s），上下文窗口自动检测 |
 | 服务 | `HARNESS_SERVER_*` | 主机、端口、工作线程 |
 | 认证 | `HARNESS_AUTH_MODE` | `none` 或 `jwt` |
-| RAG 基础 | `HARNESS_RAG_*` | 向量存储后端（pgvector/milvus）、连接、集合、TopK、相似度阈值 |
+| RAG 基础 | `HARNESS_RAG_*` | 向量存储后端（`HARNESS_RAG_PROVIDER`：pgvector/milvus）、连接、集合、TopK、相似度阈值、BM25 权重 |
 | RAG 查询改写 | `HARNESS_RAG_QUERY_REWRITE` | `none` / `hyde` / `multi-query` / `step-back` |
 | 存储（记忆+Trace） | `HARNESS_AUDIT_STORE` | `mysql` / `sqlite` / `none`（默认） |
 | 缓存 | `HARNESS_MEMORY_REDIS_URL` | 设置后启用 Redis 分布式缓存（多实例部署） |
@@ -343,9 +368,15 @@ mvn jacoco:report
 
 ### 添加新的 LLM Provider
 
-1. 在 `com.harness.ai.model.impl` 实现对应 Provider 接口
+1. 在 `com.harness.ai.model.impl` 实现对应 Provider 接口（Chat/Vision/Voice/Embedding/Rerank/Classifier）
 2. 在 `ModelProviderFactory` 中注册
 3. 在 `EnvKey.java` 中添加环境变量键（遵循 `HARNESS_MODEL_*` 命名规范）
+
+### 添加新的向量存储后端
+
+1. 实现 `com.harness.preprocess.rag.VectorStore`（`retrieve()` + `insertBatch()` + `deleteByFile()`）
+2. 在 `VectorStoreFactory` 中注册新后端名
+3. 设置 `HARNESS_RAG_PROVIDER=your-backend`
 
 ### 添加新工具
 
@@ -358,16 +389,9 @@ mvn jacoco:report
 2. 在 `QueryRewriterFactory.create()` 中注册新策略名
 3. 设置 `HARNESS_RAG_QUERY_REWRITE=your-strategy`
 
-### 添加新的召回路由
-
-1. 实现 `com.harness.preprocess.rag.route.RetrievalRoute`（`retrieve()` + `routeName()` + `isAvailable()`）
-2. 在 `RetrievalRouteFactory.createEnabledRoutes()` 中添加路由创建逻辑
-3. 设置 `HARNESS_RAG_MULTI_ROUTE=true` 开启多路并行
-
 ## 已知限制
 
 - **Realtime 模型**：接口已预留，暂无 Provider 实现
-- **知识图谱召回**：`RetrievalRoute` 接口已预留，暂无后端实现
 - **接口发现**：支持无 OpenAPI spec 的项目通过 LLM 扫描，但复杂嵌套类型解析仍有改进空间
 
 ## 技术栈

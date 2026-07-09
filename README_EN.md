@@ -1,8 +1,8 @@
 <p align="right"><a href="./README.md">中文</a></p>
 
-# Cyrene Agent
+# Cyrene Agent - Autonomous AI Application Framework
 
-A Java AI Agent application development framework built on the **Harness orchestration architecture**. Provides pluggable model providers, built-in RAG knowledge base, session memory, and a 5-layer pipeline orchestration — use it as a scaffold to rapidly build and customize business-oriented Agent applications.    1768576157@qq.com
+A Java AI Agent application development framework built on the **Harness orchestration architecture** with autonomous decision-making. For each request, it independently decides whether to enable thinking, use knowledge base retrieval, apply query rewriting, and enable web search — avoiding unnecessary RAG and thinking costs for simple queries (e.g., greetings, thanks). Provides pluggable model providers, built-in RAG knowledge base, session memory, and a 5-layer pipeline orchestration — use it as a scaffold to rapidly build and customize business-oriented Agent applications.  1768576157@qq.com
 
 ## First Launch
 
@@ -30,6 +30,31 @@ Cyrene Agent uses the **Harness orchestration pattern**: a generic orchestration
 
 ## Core Features
 
+### One-Click Project API Discovery
+On first launch, the system automatically starts the Web UI console based on `HARNESS_PROJECT_DISCOVERY_ENABLED=true`, loading the glob, grep, and `read_class_hierarchy` tool trio. Glob handles file discovery, grep searches for key context (default 7 lines). By obtaining input/output parameter classes and calling `read_class_hierarchy` to retrieve parent class structures for complete parameter definitions (max recursion depth of 2), it generates a tool JSON file for the target project. This file is parsed and loaded into memory on subsequent project starts, managed through a set of JSON editing and list/get/read tools.
+
+### Autonomous Decision-Making
+A heuristic routing layer is added between the input and preprocessing layers, controlled by `HARNESS_GAP_ANALYSIS_ENABLED=true`. For each request, the system autonomously decides whether to enable thinking, use knowledge base retrieval, apply query rewriting, and enable web search — avoiding unnecessary RAG and thinking costs for simple queries (e.g., greetings, thanks).
+
+**Three-tier decision funnel (priority descending):**
+
+| Tier | Mechanism | Latency | Description |
+|------|-----------|---------|-------------|
+| Tier 0 | Explicit override | 0ms | Parameters specified directly in request context, highest priority |
+| Tier 1 | Rule engine | <1ms | Hardcoded regex/keyword matching for common scenarios (greeting intercept, time-sensitive web search, deep analysis thinking) |
+| Tier 2 | LLM classification | ~200ms | Lightweight Classifier model (default GLM-4.7-flash), analyzes remaining undetermined fields |
+
+**Four independent decision fields:**
+
+| Field | Description |
+|-------|-------------|
+| `needsThinking` | Whether to enable extended thinking |
+| `needsKnowledgeBase` | Whether to enable RAG knowledge base retrieval |
+| `rewriteStrategy` | Query rewriting strategy (NONE / HYDE / MULTI_QUERY / STEP_BACK) |
+| `needsWebSearch` | Whether to enable web search |
+
+Each field is decided independently; unmatched fields fall back to environment variables. Decision results are written to Trace metadata (`gap_source` = explicit / rule / llm / default). The system can later be swapped for a lightweight local ONNX model trained on semantic classification.
+
 ### 5-Layer Pipeline Architecture
 
 ```
@@ -38,7 +63,7 @@ Input → Session Lifecycle → Preprocess → ReAct Loop (AI ↔ Tool ↔ Inspe
 
 Each request flows through a structured pipeline where each layer is independently observable, configurable, and traceable.
 
-### 6 Independent Model Types
+### 7 Independent Model Types
 
 Each model type can be independently configured with its own provider, API key, and endpoint:
 
@@ -50,12 +75,13 @@ Each model type can be independently configured with its own provider, API key, 
 | Embedding | Multimodal vectorization | OpenAI, Ollama |
 | Rerank | Search result reranking | OpenAI-compatible APIs |
 | Realtime | Real-time multimodal (reserved) | — |
+| Classifier | Gap Analyzer Tier 2 LLM classification | OpenAI |
 
 Mix and match freely — e.g., Chat with DashScope, Embedding with OpenAI, Rerank with local Ollama.
 
 ### Built-in RAG Knowledge Base
 
-Upload documents via API (PDF, DOCX, XLSX, TXT, Markdown, etc.) — automatic text extraction, semantic chunking, embedding, and storage in PostgreSQL pgvector.
+Upload documents via API (PDF, DOCX, XLSX, TXT, Markdown, etc.) — automatic text extraction, semantic chunking, embedding, and storage in vector database (PostgreSQL pgvector or Milvus, switchable via `HARNESS_RAG_PROVIDER`).
 
 **Complete RAG Pipeline:**
 
@@ -70,11 +96,10 @@ Query Rewriting (optional, pluggable via env vars)
   │  step-back  → LLM generates a more general abstract query (for overly specific questions)
   │
   ▼
-Multi-Route Retrieval (optional, pluggable via env vars)
-  │  Semantic vector retrieval  → pgvector cosine similarity (default)
-  │  Keyword full-text retrieval → PostgreSQL tsvector/tsquery (complementary to semantic)
-  │  Knowledge graph retrieval  → Reserved for extension
-  │  Multi-route results deduplicated by document ID (CompletableFuture parallel)
+Vector Retrieval (unified interface, backend switchable via env vars)
+  │  pgvector   → cosine similarity + optional full-text search (tsvector/tsquery)
+  │  Milvus     → BM25 sparse + semantic vector hybrid search (HARNESS_RAG_BM25_WEIGHT controls weight)
+  │  Results ranked by similarity score, with HARNESS_RAG_SCORE_THRESHOLD filtering
   │
   ▼
 Semantic Context Enhancement
@@ -294,7 +319,7 @@ harness-core          ← Core models: AgentMessage, AgentTrace, ReActStep, Tool
     ├── harness-preprocess   ← RAG query rewriting + multi-route retrieval + semantic context + Rerank + memory management
     ├── harness-tool         ← Tool interface, registry, executor, MCP adapter, Skill loading, code discovery tools
     ├── harness-audit        ← TraceCollector + TraceStore
-    └── harness-ai           ← LangChain4j integration, 6 model types, ReActEngine, retry & fault tolerance
+    └── harness-ai           ← LangChain4j integration, 7 model types, ReActEngine, retry & fault tolerance
 harness-agent         ← AgentOrchestrator (wires all layers) + sub-agent orchestration + project API discovery
 harness-server        ← HTTP API entry point (Javalin, SSE streaming, Web UI)
 ```
@@ -305,10 +330,10 @@ All configuration is managed via `HARNESS_` prefixed environment variables. See 
 
 | Config Group | Variables | Description |
 |--------------|-----------|-------------|
-| Models | `HARNESS_MODEL_CHAT_*`, etc. | 6 model types: provider, key, endpoint, timeout (default 300s), context window auto-detected |
+| Models | `HARNESS_MODEL_CHAT_*`, etc. | 7 model types: provider, key, endpoint, timeout (default 300s), context window auto-detected |
 | Server | `HARNESS_SERVER_*` | Host, port, worker threads |
 | Auth | `HARNESS_AUTH_MODE` | `none` or `jwt` |
-| RAG Core | `HARNESS_RAG_*` | Vector store backend (pgvector/milvus), connection, collection, TopK, similarity threshold |
+| RAG Core | `HARNESS_RAG_*` | Vector store backend (`HARNESS_RAG_PROVIDER`: pgvector/milvus), connection, collection, TopK, similarity threshold, BM25 weight |
 | RAG Query Rewrite | `HARNESS_RAG_QUERY_REWRITE` | `none` / `hyde` / `multi-query` / `step-back` |
 | Storage (memory+trace) | `HARNESS_AUDIT_STORE` | `mysql` / `sqlite` / `none` (default) |
 | Cache | `HARNESS_MEMORY_REDIS_URL` | Set to enable Redis distributed cache (multi-instance deployment) |
@@ -343,9 +368,15 @@ Test framework: JUnit 5 + Mockito + AssertJ. Integration tests use the `@Tag("in
 
 ### Adding a New LLM Provider
 
-1. Implement the corresponding provider interface in `com.harness.ai.model.impl`
+1. Implement the corresponding provider interface in `com.harness.ai.model.impl` (Chat/Vision/Voice/Embedding/Rerank/Classifier)
 2. Register in `ModelProviderFactory`
 3. Add environment variable keys in `EnvKey.java` (follow `HARNESS_MODEL_*` naming convention)
+
+### Adding a New Vector Store Backend
+
+1. Implement `com.harness.preprocess.rag.VectorStore` (`retrieve()` + `insertBatch()` + `deleteByFile()`)
+2. Register the new backend name in `VectorStoreFactory`
+3. Set `HARNESS_RAG_PROVIDER=your-backend`
 
 ### Adding a New Tool
 
@@ -358,16 +389,9 @@ Test framework: JUnit 5 + Mockito + AssertJ. Integration tests use the `@Tag("in
 2. Register the new strategy name in `QueryRewriterFactory.create()`
 3. Set `HARNESS_RAG_QUERY_REWRITE=your-strategy`
 
-### Adding a New Retrieval Route
-
-1. Implement `com.harness.preprocess.rag.route.RetrievalRoute` (`retrieve()` + `routeName()` + `isAvailable()`)
-2. Add route creation logic in `RetrievalRouteFactory.createEnabledRoutes()`
-3. Set `HARNESS_RAG_MULTI_ROUTE=true` to enable multi-route parallel retrieval
-
 ## Known Limitations
 
 - **Realtime model**: Interface reserved, no provider implementation yet
-- **Knowledge graph retrieval**: `RetrievalRoute` interface reserved, no backend implementation yet
 - **API discovery**: Supports LLM-based scanning for projects without OpenAPI specs, but complex nested type resolution still has room for improvement
 
 ## Tech Stack

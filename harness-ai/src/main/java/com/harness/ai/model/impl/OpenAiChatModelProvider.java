@@ -32,7 +32,7 @@ public class OpenAiChatModelProvider implements ChatModelProvider {
         this.maxTokens = cfg.getInt(EnvKey.MODEL_CHAT_MAX_TOKENS, 12288);
         this.temperature = cfg.getDouble(EnvKey.MODEL_CHAT_TEMPERATURE, 0.7);
         this.thinking = cfg.getBool(EnvKey.MODEL_CHAT_THINKING, true);
-        this.timeoutSeconds = cfg.getInt(EnvKey.MODEL_CHAT_TIMEOUT_MS, 300);
+        this.timeoutSeconds = cfg.getInt(EnvKey.MODEL_CHAT_TIMEOUT_SECONDS, 300);
         log.info("[Model] OpenAI Chat initialized: model={}, baseUrl={}, maxTokens={}, temp={}, thinking={}, timeout={}s",
                 model, baseUrl, maxTokens, temperature, thinking, timeoutSeconds);
     }
