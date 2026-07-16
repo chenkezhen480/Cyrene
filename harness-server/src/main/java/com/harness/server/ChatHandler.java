@@ -51,6 +51,12 @@ public class ChatHandler {
             String sessionId = ctx.header("X-Session-Id");
             log.debug("[Server] POST /api/chat: textLen={}, sessionId={}, attachments={}",
                     req.text() != null ? req.text().length() : 0, sessionId, attachCount);
+            if (attachCount > 0) {
+                for (var a : req.attachments()) {
+                    log.debug("[Server] Attachment: name={}, mimeType={}, dataLen={}",
+                            a.name(), a.mimeType(), a.data() != null ? a.data().length : 0);
+                }
+            }
 
             // Auth gate: skip if mode=none, validate JWT if mode=jwt
             String rawToken = null;
@@ -137,12 +143,21 @@ public class ChatHandler {
                                                     "toolCalls", step.toolCalls().stream().map(ToolCall::toolName).toList()
                                             )));
                                         }
+                                        case TOOL_CALL_START -> writeSseEvent(out, "tool_call_start",
+                                                mapper.writeValueAsString(Map.of(
+                                                        "toolName", event.metadata().get("toolName"),
+                                                        "arguments", event.metadata().get("arguments"))));
                                         case COMPRESS -> writeSseEvent(out, "compress",
                                                 mapper.writeValueAsString(Map.of(
                                                         "mode", event.metadata().get("mode"),
                                                         "detail", event.data())));
-                                        case DONE -> writeSseEvent(out, "done",
+                                        case ARTIFACT -> writeSseEvent(out, "artifact",
                                                 mapper.writeValueAsString(event.metadata()));
+                                        case DONE -> {
+                                            Map<String, Object> donePayload = new java.util.HashMap<>(event.metadata());
+                                            donePayload.put("output", event.data() != null ? event.data() : "");
+                                            writeSseEvent(out, "done", mapper.writeValueAsString(donePayload));
+                                        }
                                         case CANCELLED -> writeSseEvent(out, "cancelled",
                                                 mapper.writeValueAsString(Map.of("message", event.data())));
                                         case ERROR -> writeSseEvent(out, "error",
@@ -177,13 +192,23 @@ public class ChatHandler {
                     writeSseEvent(out, "start", mapper.writeValueAsString(Map.of(
                             "sessionId", resolvedSessionId)));
 
-                    Map<String, Object> doneData = Map.of(
-                            "output", result.output() != null ? result.output() : "",
-                            "riskLevel", result.riskLevel().name(),
-                            "traceId", result.trace().traceId(),
-                            "steps", result.steps().size(),
-                            "sessionId", resolvedSessionId
-                    );
+                    Map<String, Object> doneData = new java.util.HashMap<>();
+                    doneData.put("output", result.output() != null ? result.output() : "");
+                    doneData.put("riskLevel", result.riskLevel().name());
+                    doneData.put("traceId", result.trace().traceId());
+                    doneData.put("steps", result.steps().size());
+                    doneData.put("sessionId", resolvedSessionId);
+                    if (!result.artifacts().isEmpty()) {
+                        doneData.put("artifacts", result.artifacts().stream().map(a -> Map.of(
+                                "id", a.id(),
+                                "name", a.name(),
+                                "type", a.type().name(),
+                                "mimeType", a.mimeType() != null ? a.mimeType() : "",
+                                "sizeBytes", a.sizeBytes(),
+                                "downloadUrl", a.downloadUrl(),
+                                "previewUrl", a.previewUrl()
+                        )).toList());
+                    }
                     writeSseEvent(out, "done", mapper.writeValueAsString(doneData));
                 }
 

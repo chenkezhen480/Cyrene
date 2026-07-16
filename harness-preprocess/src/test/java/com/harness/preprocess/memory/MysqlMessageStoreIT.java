@@ -1,6 +1,7 @@
 package com.harness.preprocess.memory;
 
 import com.harness.core.model.MemoryMessage;
+import com.harness.core.model.MessageBlock;
 import com.harness.core.model.Session;
 import com.harness.env.EnvConfig;
 import com.harness.env.MysqlConnectionPool;
@@ -44,7 +45,6 @@ class MysqlMessageStoreIT {
     @AfterAll
     static void cleanUp() {
         try (Connection conn = MysqlConnectionPool.getConnection()) {
-            // Delete all messages for this test user's sessions (including createTestSession() ones)
             try (PreparedStatement ps = conn.prepareStatement(
                     "DELETE FROM messages WHERE session_id IN (SELECT id FROM sessions WHERE user_id = ?)")) {
                 ps.setString(1, TEST_USER);
@@ -59,49 +59,53 @@ class MysqlMessageStoreIT {
         }
     }
 
+    private List<MessageBlock> blocks(String text) {
+        return List.of(new MessageBlock(MessageBlock.BlockType.TEXT, text, null));
+    }
+
     @Test
     void save_andLoadForContext() {
-        store.save(sessionId, "user", "Hello", false);
-        store.save(sessionId, "assistant", "Hi there", false);
+        store.save(sessionId, "user", blocks("Hello"), false);
+        store.save(sessionId, "assistant", blocks("Hi there"), false);
 
         List<MemoryMessage> messages = store.loadForContext(sessionId);
 
         assertThat(messages).hasSize(2);
         assertThat(messages.get(0).role()).isEqualTo("user");
-        assertThat(messages.get(0).content()).isEqualTo("Hello");
+        assertThat(messages.get(0).text()).isEqualTo("Hello");
         assertThat(messages.get(1).role()).isEqualTo("assistant");
-        assertThat(messages.get(1).content()).isEqualTo("Hi there");
+        assertThat(messages.get(1).text()).isEqualTo("Hi there");
     }
 
     @Test
     void save_summaryMessage_markedCorrectly() {
         String sid = createTestSession();
-        store.save(sid, "assistant", "Summary of old messages", true);
+        store.save(sid, "assistant", blocks("Summary of old messages"), true);
 
         List<MemoryMessage> messages = store.loadForContext(sid);
-        assertThat(messages).anyMatch(m -> m.isSummary() && m.content().contains("Summary"));
+        assertThat(messages).anyMatch(m -> m.isSummary() && m.text().contains("Summary"));
     }
 
     @Test
     void loadForContext_orderedByCreation() {
         String sid = createTestSession();
-        store.save(sid, "user", "First", false);
-        store.save(sid, "assistant", "Second", false);
-        store.save(sid, "user", "Third", false);
+        store.save(sid, "user", blocks("First"), false);
+        store.save(sid, "assistant", blocks("Second"), false);
+        store.save(sid, "user", blocks("Third"), false);
 
         List<MemoryMessage> messages = store.loadForContext(sid);
 
         assertThat(messages).hasSize(3);
-        assertThat(messages.get(0).content()).isEqualTo("First");
-        assertThat(messages.get(2).content()).isEqualTo("Third");
+        assertThat(messages.get(0).text()).isEqualTo("First");
+        assertThat(messages.get(2).text()).isEqualTo("Third");
     }
 
     @Test
     void countUserMessages_returnsCount() {
         String sid = createTestSession();
-        store.save(sid, "user", "msg1", false);
-        store.save(sid, "assistant", "reply1", false);
-        store.save(sid, "user", "msg2", false);
+        store.save(sid, "user", blocks("msg1"), false);
+        store.save(sid, "assistant", blocks("reply1"), false);
+        store.save(sid, "user", blocks("msg2"), false);
 
         int count = store.countUserMessages(sid);
 
@@ -111,8 +115,8 @@ class MysqlMessageStoreIT {
     @Test
     void sumUserContentLength_sumsChars() {
         String sid = createTestSession();
-        store.save(sid, "user", "Hello", false);      // 5 chars
-        store.save(sid, "user", "World!", false);     // 6 chars
+        store.save(sid, "user", blocks("Hello"), false);      // 5 chars
+        store.save(sid, "user", blocks("World!"), false);     // 6 chars
 
         int total = store.sumUserContentLength(sid);
 
@@ -122,10 +126,10 @@ class MysqlMessageStoreIT {
     @Test
     void countConversationTurns_returnsUserAssistantPairs() {
         String sid = createTestSession();
-        store.save(sid, "user", "Q1", false);
-        store.save(sid, "assistant", "A1", false);
-        store.save(sid, "user", "Q2", false);
-        store.save(sid, "assistant", "A2", false);
+        store.save(sid, "user", blocks("Q1"), false);
+        store.save(sid, "assistant", blocks("A1"), false);
+        store.save(sid, "user", blocks("Q2"), false);
+        store.save(sid, "assistant", blocks("A2"), false);
 
         int turns = store.countConversationTurns(sid);
 
@@ -135,9 +139,9 @@ class MysqlMessageStoreIT {
     @Test
     void countToolMessages_returnsCount() {
         String sid = createTestSession();
-        store.save(sid, "user", "query", false);
-        store.save(sid, "tool", "tool result 1", false);
-        store.save(sid, "tool", "tool result 2", false);
+        store.save(sid, "user", blocks("query"), false);
+        store.save(sid, "tool", blocks("tool result 1"), false);
+        store.save(sid, "tool", blocks("tool result 2"), false);
 
         int count = store.countToolMessages(sid);
 
@@ -147,8 +151,8 @@ class MysqlMessageStoreIT {
     @Test
     void avgAssistantReplyLength_computesAverage() {
         String sid = createTestSession();
-        store.save(sid, "assistant", "Hello", false);      // 5 chars
-        store.save(sid, "assistant", "Hello World!", false); // 12 chars
+        store.save(sid, "assistant", blocks("Hello"), false);      // 5 chars
+        store.save(sid, "assistant", blocks("Hello World!"), false); // 12 chars
 
         int avg = store.avgAssistantReplyLength(sid);
 
@@ -158,7 +162,7 @@ class MysqlMessageStoreIT {
     @Test
     void hasUserQuestions_trueWhenUserMessages() {
         String sid = createTestSession();
-        store.save(sid, "user", "What is this?", false);
+        store.save(sid, "user", blocks("What is this?"), false);
 
         assertThat(store.hasUserQuestions(sid)).isTrue();
     }
@@ -166,7 +170,7 @@ class MysqlMessageStoreIT {
     @Test
     void hasUserQuestions_falseWhenNoUserMessages() {
         String sid = createTestSession();
-        store.save(sid, "assistant", "Hello", false);
+        store.save(sid, "assistant", blocks("Hello"), false);
 
         assertThat(store.hasUserQuestions(sid)).isFalse();
     }
@@ -174,54 +178,52 @@ class MysqlMessageStoreIT {
     @Test
     void loadPage_ascendingOrder() {
         String sid = createTestSession();
-        store.save(sid, "user", "First", false);
-        store.save(sid, "assistant", "Second", false);
-        store.save(sid, "user", "Third", false);
+        store.save(sid, "user", blocks("First"), false);
+        store.save(sid, "assistant", blocks("Second"), false);
+        store.save(sid, "user", blocks("Third"), false);
 
         List<MemoryMessage> page = store.loadPage(sid, 0, 10, true);
 
         assertThat(page).hasSize(3);
-        assertThat(page.get(0).content()).isEqualTo("First");
-        assertThat(page.get(2).content()).isEqualTo("Third");
+        assertThat(page.get(0).text()).isEqualTo("First");
+        assertThat(page.get(2).text()).isEqualTo("Third");
     }
 
     @Test
     void loadPage_descendingOrder_returnsChronological() {
         String sid = createTestSession();
-        store.save(sid, "user", "First", false);
-        store.save(sid, "assistant", "Second", false);
-        store.save(sid, "user", "Third", false);
+        store.save(sid, "user", blocks("First"), false);
+        store.save(sid, "assistant", blocks("Second"), false);
+        store.save(sid, "user", blocks("Third"), false);
 
-        // descending=true paginates from newest, but output is always chronological
         List<MemoryMessage> page = store.loadPage(sid, Long.MAX_VALUE, 10, false);
 
         assertThat(page).hasSize(3);
-        assertThat(page.get(0).content()).isEqualTo("First");
-        assertThat(page.get(2).content()).isEqualTo("Third");
+        assertThat(page.get(0).text()).isEqualTo("First");
+        assertThat(page.get(2).text()).isEqualTo("Third");
     }
 
     @Test
     void loadPage_withCursorAndLimit() {
         String sid = createTestSession();
-        store.save(sid, "user", "First", false);
-        store.save(sid, "assistant", "Second", false);
-        store.save(sid, "user", "Third", false);
+        store.save(sid, "user", blocks("First"), false);
+        store.save(sid, "assistant", blocks("Second"), false);
+        store.save(sid, "user", blocks("Third"), false);
 
-        // Get all ascending, use first message's id as cursor for second page
         List<MemoryMessage> all = store.loadPage(sid, 0, 10, true);
         long cursor = all.get(0).id();
 
         List<MemoryMessage> page2 = store.loadPage(sid, cursor, 10, true);
         assertThat(page2).hasSize(2);
-        assertThat(page2.get(0).content()).isEqualTo("Second");
+        assertThat(page2.get(0).text()).isEqualTo("Second");
     }
 
     @Test
     void countByRole_returnsCount() {
         String sid = createTestSession();
-        store.save(sid, "user", "q1", false);
-        store.save(sid, "user", "q2", false);
-        store.save(sid, "assistant", "a1", false);
+        store.save(sid, "user", blocks("q1"), false);
+        store.save(sid, "user", blocks("q2"), false);
+        store.save(sid, "assistant", blocks("a1"), false);
 
         assertThat(store.countByRole(sid, "user")).isEqualTo(2);
         assertThat(store.countByRole(sid, "assistant")).isEqualTo(1);
@@ -231,11 +233,11 @@ class MysqlMessageStoreIT {
     @Test
     void loadSessionStats_returnsCompleteStats() {
         String sid = createTestSession();
-        store.save(sid, "user", "What is Java?", false);
-        store.save(sid, "assistant", "Java is a programming language.", false);
-        store.save(sid, "tool", "search results", false);
-        store.save(sid, "user", "Tell me more", false);
-        store.save(sid, "assistant", "Sure, here are details.", false);
+        store.save(sid, "user", blocks("What is Java?"), false);
+        store.save(sid, "assistant", blocks("Java is a programming language."), false);
+        store.save(sid, "tool", blocks("search results"), false);
+        store.save(sid, "user", blocks("Tell me more"), false);
+        store.save(sid, "assistant", blocks("Sure, here are details."), false);
 
         MessageStore.SessionStats stats = store.loadSessionStats(sid);
 

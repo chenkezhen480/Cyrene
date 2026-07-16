@@ -70,6 +70,21 @@ const CyreneAPI = (() => {
     return fetch('/api/chat', { method: 'POST', headers, body: JSON.stringify(body) });
   }
 
+  // ── File Upload (for image-to-image and other file references) ──
+  async function uploadFile(file) {
+    const formData = new FormData();
+    formData.append('file', file);
+    const headers = {};
+    if (_token) headers['Authorization'] = `Bearer ${_token}`;
+
+    const resp = await fetch('/api/files/upload', { method: 'POST', headers, body: formData });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({ error: resp.statusText }));
+      throw new Error(err.error || `HTTP ${resp.status}`);
+    }
+    return resp.json(); // { url, name, size }
+  }
+
   function cancelChat(sessionId) {
     return request('DELETE', `/api/chat/${sessionId}`);
   }
@@ -143,6 +158,19 @@ const CyreneAPI = (() => {
     return request('DELETE', `/api/knowledge/${collection}/${documentId}`);
   }
 
+  // ── Artifacts ──
+  function getArtifactUrl(id) {
+    return `/api/artifacts/${id}`;
+  }
+
+  function getArtifactPreviewUrl(id) {
+    return `/api/artifacts/${id}/preview`;
+  }
+
+  function listSessionArtifacts(sessionId) {
+    return request('GET', `/api/artifacts/session/${sessionId}`);
+  }
+
   // ── Traces ──
   function getTrace(traceId) {
     return request('GET', `/api/trace/${traceId}`);
@@ -193,9 +221,10 @@ const CyreneAPI = (() => {
   return {
     setToken, getToken, onTokenRefresh,
     login,
-    chat, cancelChat,
+    chat, cancelChat, uploadFile,
     createSession, listSessions, getSession, getMessages, getSessionStats, closeSession,
     listCollections, uploadKnowledge, listKnowledge, getDocument, updateDocument, deleteCollection, deleteDocument,
+    getArtifactUrl, getArtifactPreviewUrl, listSessionArtifacts,
     getTrace, listTraces, getTraceStats, cleanupTraces, deleteTrace,
     scanProject, generateConfig, getConfig, updateConfig, reloadConfig,
     health,

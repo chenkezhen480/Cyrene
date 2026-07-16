@@ -21,6 +21,14 @@ function renderMarkdown(text) {
   }
 }
 
+// Strip artifact markdown links from text to prevent double-rendering
+// when both TEXT and ARTIFACT blocks are present
+const ARTIFACT_LINK_RE = /!\[.*?\]\(\/api\/artifacts\/[^)]+\)/g;
+function stripArtifactLinks(text) {
+  if (!text) return '';
+  return text.replace(ARTIFACT_LINK_RE, '').trim();
+}
+
 // ── SVG Icons ──
 const Icons = {
   chat: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>`,
@@ -324,6 +332,71 @@ const ChatPage = {
     const inputText = ref('');
     const isStreaming = ref(false);
     const messagesEl = ref(null);
+    const attachedFiles = ref([]);
+    const chatFileInput = ref(null);
+
+    function triggerFileUpload() {
+      chatFileInput.value?.click();
+    }
+
+    async function handleFileSelect(e) {
+      const files = Array.from(e.target.files || []);
+      for (const file of files) {
+        if (attachedFiles.value.some(f => f.name === file.name && f.size === file.size)) continue;
+        // 添加到列表，状态为上传中
+        const item = reactive({ file, url: null, uploading: true, error: null });
+        attachedFiles.value.push(item);
+        // 立即上传
+        try {
+          const result = await CyreneAPI.uploadFile(file);
+          item.url = result.url;
+          item.uploading = false;
+          console.log('[Chat] File uploaded:', result.url);
+        } catch (err) {
+          item.uploading = false;
+          item.error = err.message;
+          console.error('[Chat] File upload failed:', err);
+          showToast(t('uploadFailed') + err.message, 'error');
+        }
+      }
+      e.target.value = '';
+    }
+
+    async function handlePaste(e) {
+      const items = Array.from(e.clipboardData?.items || []);
+      for (const item of items) {
+        if (item.type.startsWith('image/')) {
+          e.preventDefault(); // 阻止默认粘贴行为
+          const file = item.getAsFile();
+          if (!file) continue;
+
+          // 生成一个有意义的文件名
+          const ext = file.type.split('/')[1] || 'png';
+          const fileName = `pasted-${Date.now()}.${ext}`;
+          const renamedFile = new File([file], fileName, { type: file.type });
+
+          // 添加到列表并上传
+          const itemObj = reactive({ file: renamedFile, url: null, uploading: true, error: null });
+          attachedFiles.value.push(itemObj);
+          try {
+            const result = await CyreneAPI.uploadFile(renamedFile);
+            itemObj.url = result.url;
+            itemObj.uploading = false;
+            console.log('[Chat] Pasted image uploaded:', result.url);
+          } catch (err) {
+            itemObj.uploading = false;
+            itemObj.error = err.message;
+            console.error('[Chat] Pasted image upload failed:', err);
+            showToast(t('uploadFailed') + err.message, 'error');
+          }
+          break; // 只处理第一个图片
+        }
+      }
+    }
+
+    function removeFile(index) {
+      attachedFiles.value.splice(index, 1);
+    }
 
     async function loadSessions() {
       if (!userId.value) return;
@@ -377,15 +450,43 @@ const ChatPage = {
 
     async function sendMessage() {
       const text = inputText.value.trim();
-      if (!text || isStreaming.value) return;
+      if ((!text && attachedFiles.value.length === 0) || isStreaming.value) return;
 
       if (!userId.value) {
         showToast(t('setUserIdFirst'), 'error');
         return;
       }
 
-      // Add user message to UI
-      messages.value.push({ role: 'user', content: text });
+      // 获取已上传的文件 URL
+      const files = [...attachedFiles.value];
+      attachedFiles.value = [];
+
+      // 检查是否有上传失败的文件
+      const failedFiles = files.filter(f => f.error);
+      if (failedFiles.length > 0) {
+        showToast(t('uploadFailed') + failedFiles.map(f => f.name).join(', '), 'error');
+        return;
+      }
+
+      // 检查是否有还在上传中的文件
+      const uploadingFiles = files.filter(f => f.uploading);
+      if (uploadingFiles.length > 0) {
+        showToast('文件正在上传中，请稍候...', 'error');
+        // 把文件放回去
+        attachedFiles.value = files;
+        return;
+      }
+
+      // 获取已上传的 URL
+      const fileUrls = files.filter(f => f.url).map(f => ({ url: f.url, name: f.file.name }));
+
+      // Add user message to UI (with file indicator)
+      let displayContent = text;
+      if (files.length > 0) {
+        const fileList = files.map(f => `📎 ${f.file.name}`).join('\n');
+        displayContent = text ? `${fileList}\n\n${text}` : fileList;
+      }
+      messages.value.push({ role: 'user', content: displayContent });
       inputText.value = '';
       scrollToBottom();
 
@@ -394,10 +495,17 @@ const ChatPage = {
       const msgIdx = messages.value.length - 1;
 
       try {
-        const resp = await CyreneAPI.chat(currentSessionId.value, text, {
+        // Build context with file URLs
+        const context = {
           userId: userId.value,
           outputMode: 'streaming',
-        });
+        };
+        // If there are uploaded files, add them to context.File
+        if (fileUrls.length > 0) {
+          context.File = fileUrls.length === 1 ? fileUrls[0].url : fileUrls.map(f => f.url);
+        }
+
+        const resp = await CyreneAPI.chat(currentSessionId.value, text, context);
 
         const reader = resp.body.getReader();
         const decoder = new TextDecoder();
@@ -430,12 +538,37 @@ const ChatPage = {
                   case 'token':
                     if (parsed.text) messages.value[msgIdx].content += parsed.text;
                     break;
-                  case 'step':
-                    if (parsed.toolCalls && parsed.toolCalls.length) {
-                      const tools = parsed.toolCalls.join(', ');
+                  case 'tool_call_start':
+                    // Show tool call block + loading placeholder immediately when tool starts
+                    {
                       const crystal = '<svg width="15" height="15" viewBox="0 0 16 16" fill="none" style="vertical-align:-2px;margin-right:3px"><defs><radialGradient id="cg"><stop offset="0%" stop-color="rgba(232,160,191,0.6)"/><stop offset="100%" stop-color="rgba(139,126,200,0.15)"/></radialGradient></defs><path d="M8 0.5L9.5 5 14 3.5 11 7.5 15.5 8 11 8.5 14 12.5 9.5 11 8 15.5 6.5 11 2 12.5 5 8.5 0.5 8 5 7.5 2 3.5 6.5 5z" fill="url(#cg)" stroke="var(--iris)" stroke-width="0.5" stroke-linejoin="round"/><circle cx="8" cy="8" r="1.8" fill="rgba(232,160,191,0.7)"/><circle cx="8" cy="8" r="0.8" fill="white" opacity="0.6"/></svg>';
-                      const stepHtml = `\n\n<div class="tool-call-block"><div class="tool-call-header">${crystal} Step ${parsed.stepNumber || ''}: ${tools}</div>${parsed.action ? '<div class="tool-call-action">' + parsed.action + '</div>' : ''}</div>\n\n`;
-                      messages.value[msgIdx].content += stepHtml;
+                      // Deduplicate: remove previous loading canvas and running blocks for same tool (retry case)
+                      const ARTIFACT_TOOLS = ['image_generation', 'video_generation', 'python_sandbox'];
+                      if (ARTIFACT_TOOLS.includes(parsed.toolName)) {
+                        messages.value[msgIdx].content = messages.value[msgIdx].content
+                          .replace(/\n?<div class="artifact-loading-canvas"[\s\S]*?<\/div>\n?/g, '');
+                      }
+                      let toolHtml = `\n\n<div class="tool-call-block tool-call-running" data-tool="${parsed.toolName}"><div class="tool-call-header">${crystal} ${parsed.toolName}</div></div>\n\n`;
+                      // Embed LOADING placeholder inline for artifact-producing tools
+                      if (ARTIFACT_TOOLS.includes(parsed.toolName)) {
+                        const loadId = 'ld-' + Date.now();
+                        const stars = genStars(24);
+                        const starHtml = stars.map(s => `<span class="star" style="left:${s.x}%;top:${s.y}%;width:${s.r}px;height:${s.r}px;animation-delay:${s.d}s;animation-duration:${s.dur}s"></span>`).join('');
+                        const label = parsed.toolName === 'image_generation' ? '正在绘图中...' : parsed.toolName === 'video_generation' ? '正在生成视频...' : '正在执行代码...';
+                        toolHtml += `\n<div class="artifact-loading-canvas" data-load-id="${loadId}">${starHtml}<div class="artifact-loading-text">${label}</div></div>\n`;
+                      }
+                      messages.value[msgIdx].content += toolHtml;
+                    }
+                    break;
+                  case 'step':
+                    // Tool completed — remove running glow from tool call blocks
+                    {
+                      const container = document.querySelector(`[data-msg-idx="${msgIdx}"]`);
+                      if (container) {
+                        container.querySelectorAll('.tool-call-running').forEach(el => {
+                          el.classList.remove('tool-call-running');
+                        });
+                      }
                     }
                     break;
                   case 'compress':
@@ -443,25 +576,76 @@ const ChatPage = {
                     const compressHtml = `\n\n<div class="compress-block"><span class="compress-icon">🗜️</span> <span class="compress-label">${modeLabel}</span> <span class="compress-detail">${parsed.detail || ''}</span></div>\n\n`;
                     messages.value[msgIdx].content += compressHtml;
                     break;
+                  case 'artifact':
+                    {
+                      // Remove inline LOADING placeholder
+                      messages.value[msgIdx].content = messages.value[msgIdx].content.replace(
+                        /\n?<div class="artifact-loading-canvas"[\s\S]*?<\/div>\n?/, ''
+                      );
+                      // Embed artifact inline into message content
+                      if (parsed.type === 'IMAGE') {
+                        const url = getArtifactPreviewUrl(parsed.id || parsed.artifactId);
+                        messages.value[msgIdx].content += `\n\n![${parsed.name || 'image'}](${url})\n\n`;
+                      } else if (parsed.type === 'VIDEO') {
+                        const url = getArtifactPreviewUrl(parsed.id || parsed.artifactId);
+                        messages.value[msgIdx].content += `\n\n<video controls src="${url}" style="max-width:100%;border-radius:8px"></video>\n\n`;
+                      } else {
+                        const url = getArtifactUrl(parsed.id || parsed.artifactId);
+                        messages.value[msgIdx].content += `\n\n📎 [${parsed.name || 'file'}](${url})\n\n`;
+                      }
+                    }
+                    break;
                   case 'done':
-                    if (parsed.output != null) messages.value[msgIdx].content = parsed.output;
-                    if (parsed.sessionId) {
-                      currentSessionId.value = parsed.sessionId;
+                    {
+                      const doneOutput = parsed.output || '';
+                      const doneArtifacts = parsed.artifacts || [];
+                      if (doneArtifacts.length > 0) {
+                        // Build blocks from output + artifacts
+                        const blocks = [];
+                        let textBuf = doneOutput;
+                        for (const art of doneArtifacts) {
+                          blocks.push({ type: 'TEXT', text: textBuf });
+                          blocks.push({
+                            type: 'ARTIFACT',
+                            artifactId: art.id,
+                            metadata: {
+                              type: art.type,
+                              mimeType: art.mimeType,
+                              name: art.name,
+                              previewUrl: art.previewUrl,
+                              downloadUrl: art.downloadUrl
+                            }
+                          });
+                          textBuf = '';
+                        }
+                        if (textBuf) blocks.push({ type: 'TEXT', text: textBuf });
+                        messages.value[msgIdx].content = blocks;
+                      } else {
+                        if (doneOutput) messages.value[msgIdx].content = [{ type: 'TEXT', text: doneOutput }];
+                      }
+                      if (parsed.sessionId) {
+                        currentSessionId.value = parsed.sessionId;
+                      }
                     }
                     break;
                   case 'cancelled':
-                    // Keep whatever content was streamed so far
+                    // Convert streamed string to blocks format
+                    if (typeof messages.value[msgIdx].content === 'string' && messages.value[msgIdx].content) {
+                      messages.value[msgIdx].content = [{ type: 'TEXT', text: messages.value[msgIdx].content }];
+                    }
                     break;
                   case 'error':
-                    messages.value[msgIdx].content = `Error: ${parsed.error || t('unknownError')}`;
+                    messages.value[msgIdx].content = `⚠️ Error: ${parsed.error || t('unknownError')}`;
                     showToast(parsed.error || t('requestFailed'), 'error');
                     break;
                   default:
                     if (parsed.text) messages.value[msgIdx].content += parsed.text;
-                    else if (parsed.output != null) messages.value[msgIdx].content = parsed.output;
+                    else if (parsed.output != null) messages.value[msgIdx].content = [{ type: 'TEXT', text: parsed.output }];
                 }
               } catch (e) {
-                messages.value[msgIdx].content += data;
+                if (typeof messages.value[msgIdx].content === 'string') {
+                  messages.value[msgIdx].content += data;
+                }
               }
               currentEventType = '';
             }
@@ -475,7 +659,8 @@ const ChatPage = {
         // Reload sessions list
         loadSessions();
       } catch (e) {
-        messages.value[msgIdx].content = `Error: ${e.message}`;
+        messages.value[msgIdx].content = `⚠️ Error: ${e.message}`;
+        showToast(e.message, 'error');
       } finally {
         isStreaming.value = false;
         scrollToBottom();
@@ -504,11 +689,37 @@ const ChatPage = {
       if (userId.value) loadSessions();
     });
 
+    // Artifact helpers
+    function getArtifactUrl(id) { return CyreneAPI.getArtifactUrl(id); }
+    function getArtifactPreviewUrl(id) { return CyreneAPI.getArtifactPreviewUrl(id); }
+    function genStars(n) {
+      const stars = [];
+      for (let i = 0; i < n; i++) {
+        stars.push({
+          i,
+          x: Math.random() * 96 + 2,
+          y: Math.random() * 80 + 10,
+          r: Math.random() * 3 + 1.5,
+          d: Math.random() * 4,
+          dur: Math.random() * 2 + 1.5
+        });
+      }
+      return stars;
+    }
+    function formatSize(bytes) {
+      if (!bytes || bytes === 0) return '0 B';
+      const units = ['B', 'KB', 'MB', 'GB'];
+      const i = Math.floor(Math.log(bytes) / Math.log(1024));
+      return (bytes / Math.pow(1024, i)).toFixed(i > 0 ? 1 : 0) + ' ' + units[i];
+    }
+
     return {
       Icons, t, sessions, currentSessionId, messages, inputText, isStreaming,
-      messagesEl, userId, renderMarkdown,
+      messagesEl, userId, renderMarkdown, stripArtifactLinks,
+      attachedFiles, chatFileInput, triggerFileUpload, handleFileSelect, handlePaste, removeFile,
       loadSessions, selectSession, newSession, sendMessage,
       deleteSession, cancelOutput, handleKeydown,
+      getArtifactUrl, getArtifactPreviewUrl, formatSize,
     };
   },
   template: `
@@ -543,12 +754,28 @@ const ChatPage = {
           <div ref="messagesEl" class="chat-messages">
             <template v-if="messages.length">
               <div v-for="(msg, i) in messages" :key="i"
+                   :data-msg-idx="i"
                    :class="['message', msg.role === 'user' ? 'message-user' : 'message-assistant']">
                 <div class="message-avatar">
                   {{ msg.role === 'user' ? 'U' : 'C' }}
                 </div>
-                <div v-if="msg.role === 'user'" class="message-content">{{ msg.content }}</div>
-                <div v-else-if="msg.content" class="message-content md-body" v-html="renderMarkdown(msg.content)"></div>
+                <div v-if="msg.role === 'user'" class="message-content">{{ typeof msg.content === 'string' ? msg.content : (msg.content && msg.content[0] && msg.content[0].text || '') }}</div>
+                <div v-else-if="Array.isArray(msg.content) && msg.content.length" class="message-content md-body">
+                  <template v-for="(block, bi) in msg.content" :key="bi">
+                    <span v-if="block.type === 'TEXT'" v-html="renderMarkdown(stripArtifactLinks(block.text))"></span>
+                    <span v-else-if="block.type === 'ARTIFACT'">
+                      <img v-if="(block.metadata && block.metadata.type === 'IMAGE') || (!block.metadata?.type && block.metadata?.mimeType && block.metadata.mimeType.startsWith('image/'))"
+                           :src="getArtifactPreviewUrl(block.artifactId)"
+                           :alt="(block.metadata && block.metadata.name) || 'image'"
+                           style="max-width:100%;border-radius:8px;margin:8px 0;" />
+                      <video v-else-if="(block.metadata && block.metadata.type === 'VIDEO') || (!block.metadata?.type && block.metadata?.mimeType && block.metadata.mimeType.startsWith('video/'))"
+                             controls :src="getArtifactPreviewUrl(block.artifactId)"
+                             style="max-width:100%;border-radius:8px;margin:8px 0;"></video>
+                      <a v-else :href="getArtifactUrl(block.artifactId)">📎 {{ (block.metadata && block.metadata.name) || 'file' }}</a>
+                    </span>
+                  </template>
+                </div>
+                <div v-else-if="typeof msg.content === 'string' && msg.content" class="message-content md-body" v-html="renderMarkdown(msg.content)"></div>
                 <div v-else class="message-content"><div class="loading-dots" v-meteor><span></span><span></span><span></span></div></div>
               </div>
             </template>
@@ -560,13 +787,29 @@ const ChatPage = {
 
           <!-- Input area -->
           <div class="chat-input-area">
+            <!-- Attached files -->
+            <div v-if="attachedFiles.length > 0" class="attached-files">
+              <div v-for="(item, idx) in attachedFiles" :key="idx" class="attached-file-chip">
+                <span class="attached-file-icon">
+                  <span v-if="item.uploading" class="loading-dots" style="display:inline-flex;"><span></span><span></span><span></span></span>
+                  <span v-else-if="item.error" style="color: var(--error);">❌</span>
+                  <span v-else>✅</span>
+                </span>
+                <span class="attached-file-name">{{ item.file.name }}</span>
+                <span class="attached-file-size">{{ formatSize(item.file.size) }}</span>
+                <button class="attached-file-remove" @click="removeFile(idx)">×</button>
+              </div>
+            </div>
+            <input type="file" ref="chatFileInput" multiple style="display:none"
+                   @change="handleFileSelect" />
             <div class="chat-input-wrapper">
               <textarea class="chat-input" v-model="inputText"
                         :placeholder="t('chatPlaceholder')"
                         @keydown="handleKeydown"
+                        @paste="handlePaste"
                         rows="1"></textarea>
               <div class="chat-actions">
-                <button class="chat-action-btn" :title="t('uploadFile')">
+                <button class="chat-action-btn" :title="t('uploadFile')" @click="triggerFileUpload">
                   <span v-html="Icons.upload" style="width:18px;height:18px;"></span>
                 </button>
                 <button class="chat-action-btn" :title="t('voiceInput')">
@@ -578,7 +821,7 @@ const ChatPage = {
                   </svg>
                 </button>
                 <button v-else class="chat-send-btn" @click="sendMessage"
-                        :disabled="!inputText.trim()" :title="t('send')">
+                        :disabled="!inputText.trim() && attachedFiles.length === 0" :title="t('send')">
                   <span v-html="Icons.send" style="width:16px;height:16px;"></span>
                 </button>
               </div>

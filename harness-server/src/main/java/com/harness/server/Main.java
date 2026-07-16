@@ -1,5 +1,6 @@
 package com.harness.server;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.harness.agent.AgentOrchestrator;
 import com.harness.audit.store.AuditCleanupScheduler;
@@ -105,8 +106,10 @@ public class Main {
         pool.setName("harness-server");
 
         int idleTimeoutMs = EnvConfig.get().getInt(EnvKey.SERVER_IDLE_TIMEOUT, 300_000); // default 5 min
+        long maxRequestSize = EnvConfig.get().getLong(EnvKey.SERVER_MAX_REQUEST_SIZE_MB, 20) * 1024 * 1024;
         Javalin app = Javalin.create(config -> {
             config.jsonMapper(new io.javalin.json.JavalinJackson(mapper, false));
+            config.http.maxRequestSize = maxRequestSize;
             config.jetty.threadPool = pool;
             config.jetty.modifyServer(server -> {
                 for (org.eclipse.jetty.server.Connector c : server.getConnectors()) {
@@ -116,6 +119,12 @@ public class Main {
                 }
             });
             config.staticFiles.add("/public", io.javalin.http.staticfiles.Location.CLASSPATH);
+            // 提供 knowledge-uploads 目录下的文件访问（用于图生图等场景）
+            config.staticFiles.add(staticFiles -> {
+                staticFiles.hostedPath = "/files";
+                staticFiles.directory = EnvConfig.get().getString(EnvKey.KNOWLEDGE_UPLOAD_DIR, "./knowledge-uploads");
+                staticFiles.location = io.javalin.http.staticfiles.Location.EXTERNAL;
+            });
         }).start(host, port);
 
         // Health check
@@ -130,6 +139,11 @@ public class Main {
         // Knowledge base upload endpoint
         KnowledgeUploadHandler knowledgeHandler = new KnowledgeUploadHandler(ingestService, traceStore);
         app.post("/api/knowledge/upload", knowledgeHandler::handle);
+
+        // File upload endpoint (for image-to-image and other file references)
+        String knowledgeUploadDir = EnvConfig.get().getString(EnvKey.KNOWLEDGE_UPLOAD_DIR, "./knowledge-uploads");
+        FileUploadHandler fileUploadHandler = new FileUploadHandler(knowledgeUploadDir);
+        app.post("/api/files/upload", fileUploadHandler::handle);
 
         // Knowledge base management endpoints
         KnowledgeManagementHandler knowledgeMgmtHandler = new KnowledgeManagementHandler(agent.vectorStore());
@@ -148,8 +162,24 @@ public class Main {
         ChatHandler chatHandler = new ChatHandler(agent, activeRequests);
         app.post("/api/chat", chatHandler::handle);
 
+        // Global exception handler: format framework-level errors (e.g. body too large) as SSE for chat
+        app.exception(io.javalin.http.HttpResponseException.class, (e, ctx) -> {
+            String accept = ctx.header("Accept");
+            if (accept != null && accept.contains("text/event-stream")) {
+                ctx.contentType("text/event-stream");
+                try {
+                    ctx.result("event: error\ndata: " + new ObjectMapper()
+                            .writeValueAsString(Map.of("error", e.getMessage())) + "\n\n");
+                } catch (JsonProcessingException ex) {
+                    throw new RuntimeException(ex);
+                }
+            } else {
+                ctx.status(e.getStatus()).json(Map.of("error", e.getMessage()));
+            }
+        });
+
         // Session management endpoints
-        SessionHandler sessionHandler = new SessionHandler(agent.sessionStore(), agent.messageStore(), agent.messageCache());
+        SessionHandler sessionHandler = new SessionHandler(agent.sessionStore(), agent.messageStore(), agent.messageCache(), agent.messageWriteWorker());
         app.post("/api/sessions", sessionHandler::create);
         app.get("/api/sessions", sessionHandler::list);
         app.get("/api/sessions/{sessionId}", sessionHandler::detail);
@@ -219,6 +249,14 @@ public class Main {
                 ctx.status(404).json(Map.of("error", "Trace not found: " + traceId));
             }
         });
+
+        // Artifact download/preview endpoints
+        if (agent.artifactStore() != null) {
+            ArtifactHandler artifactHandler = new ArtifactHandler(agent.artifactStore());
+            app.get("/api/artifacts/{id}", artifactHandler::download);
+            app.get("/api/artifacts/{id}/preview", artifactHandler::preview);
+            app.get("/api/artifacts/session/{sessionId}", artifactHandler::listBySession);
+        }
 
         // Project API Discovery endpoints
         ProjectDiscoveryHandler discoveryHandler = new ProjectDiscoveryHandler(mapper, agent);

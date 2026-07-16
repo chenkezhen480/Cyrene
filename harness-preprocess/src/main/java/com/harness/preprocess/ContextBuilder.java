@@ -68,6 +68,12 @@ public class ContextBuilder {
             return ContextResult.empty();
         }
 
+        // RAG provider 未配置时提前返回，避免查询改写白跑 LLM 调用
+        if (vectorStore == null) {
+            log.warn("[L2-RAG] GapAnalyzer decided needsKnowledgeBase=true but RAG provider is none, skipping");
+            return ContextResult.empty();
+        }
+
         // Step 0: Query rewriting（按 GapAnalysis 动态选择策略，null 时用默认）
         QueryRewriter activeRewriter = resolveRewriter(gapAnalysis.rewriteStrategy());
         List<String> queries = activeRewriter.rewrite(userText);

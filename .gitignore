@@ -5,6 +5,7 @@ target/
 *.war
 dependency-reduced-pom.xml
 uploads/
+artifacts/
 
 # Claude Code
 .claude/

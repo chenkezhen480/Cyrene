@@ -1,6 +1,7 @@
 package com.harness.preprocess.memory;
 
 import com.harness.core.model.MemoryMessage;
+import com.harness.core.model.MessageBlock;
 import com.harness.env.EnvConfig;
 import com.harness.env.RedisConnectionPool;
 import org.junit.jupiter.api.*;
@@ -65,7 +66,7 @@ class RedisSessionMessageCacheIT {
     }
 
     private MemoryMessage msg(String role, String content) {
-        return new MemoryMessage(0, null, role, content, false, Instant.now());
+        return new MemoryMessage(0, null, role, List.of(new MessageBlock(MessageBlock.BlockType.TEXT, content, null)), false, Instant.now());
     }
 
     @Test
@@ -77,8 +78,8 @@ class RedisSessionMessageCacheIT {
 
         List<MemoryMessage> cached = cache.getIfPresent(sid);
         assertThat(cached).hasSize(2);
-        assertThat(cached.get(0).content()).isEqualTo("Hello");
-        assertThat(cached.get(1).content()).isEqualTo("Hi");
+        assertThat(cached.get(0).text()).isEqualTo("Hello");
+        assertThat(cached.get(1).text()).isEqualTo("Hi");
     }
 
     @Test
@@ -99,7 +100,7 @@ class RedisSessionMessageCacheIT {
 
         List<MemoryMessage> cached = cache.getIfPresent(sid);
         assertThat(cached).hasSize(2);
-        assertThat(cached.get(1).content()).isEqualTo("Second");
+        assertThat(cached.get(1).text()).isEqualTo("Second");
     }
 
     @Test
@@ -110,7 +111,7 @@ class RedisSessionMessageCacheIT {
 
         List<MemoryMessage> cached = cache.getIfPresent(sid);
         assertThat(cached).hasSize(1);
-        assertThat(cached.get(0).content()).isEqualTo("First message");
+        assertThat(cached.get(0).text()).isEqualTo("First message");
     }
 
     @Test
@@ -172,7 +173,7 @@ class RedisSessionMessageCacheIT {
 
         List<MemoryMessage> cached = cache.getIfPresent(sid);
         assertThat(cached).hasSize(2);
-        assertThat(cached.get(0).content()).isEqualTo("New1");
+        assertThat(cached.get(0).text()).isEqualTo("New1");
     }
 
     @Test

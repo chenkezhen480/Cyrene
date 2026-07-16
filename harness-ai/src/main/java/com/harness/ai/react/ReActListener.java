@@ -1,6 +1,9 @@
 package com.harness.ai.react;
 
+import com.harness.core.model.Artifact;
 import com.harness.core.model.ReActStep;
+
+import java.util.List;
 
 /**
  * Callback interface for receiving intermediate ReAct loop events.
@@ -26,4 +29,10 @@ public interface ReActListener {
      * Default is no-op for backward compatibility.
      */
     default void onToolCallStart(String toolName, String arguments) {}
+
+    /**
+     * Called when an artifact-producing tool generates downloadable files.
+     * Default is no-op for backward compatibility.
+     */
+    default void onArtifact(List<Artifact> artifacts) {}
 }

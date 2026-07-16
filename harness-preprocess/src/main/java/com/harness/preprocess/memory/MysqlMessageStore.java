@@ -1,6 +1,7 @@
 package com.harness.preprocess.memory;
 
 import com.harness.core.model.MemoryMessage;
+import com.harness.core.model.MessageBlock;
 import com.harness.env.MysqlConnectionPool;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -12,6 +13,7 @@ import java.util.List;
 /**
  * MySQL-backed message store.
  * Uses shared HikariCP connection pool.
+ * Content is stored as JSON (structured MessageBlock array).
  */
 public class MysqlMessageStore implements MessageStore {
 
@@ -22,12 +24,12 @@ public class MysqlMessageStore implements MessageStore {
     }
 
     @Override
-    public void save(String sessionId, String role, String content, boolean isSummary) {
-        String sql = "INSERT INTO messages (session_id, role, content, is_summary) VALUES (?, ?, ?, ?)";
+    public void save(String sessionId, String role, List<MessageBlock> content, boolean isSummary) {
+        String sql = "INSERT INTO messages (session_id, role, content, is_summary) VALUES (?, ?, CAST(? AS JSON), ?)";
         try (Connection conn = MysqlConnectionPool.getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, sessionId);
             ps.setString(2, role);
-            ps.setString(3, content);
+            ps.setString(3, MessageBlock.toJson(content));
             ps.setBoolean(4, isSummary);
             ps.executeUpdate();
         } catch (SQLException e) {
@@ -53,10 +55,8 @@ public class MysqlMessageStore implements MessageStore {
 
             String loadSql;
             if (latestSummaryId != null) {
-                // Load summary row + all messages after it
                 loadSql = "SELECT id, session_id, role, content, is_summary, created_at FROM messages WHERE session_id = ? AND id >= ? ORDER BY id ASC";
             } else {
-                // No summary, load all messages
                 loadSql = "SELECT id, session_id, role, content, is_summary, created_at FROM messages WHERE session_id = ? ORDER BY id ASC";
             }
 
@@ -91,7 +91,10 @@ public class MysqlMessageStore implements MessageStore {
 
     @Override
     public int sumUserContentLength(String sessionId) {
-        String sql = "SELECT COALESCE(SUM(CHAR_LENGTH(content)), 0) FROM messages WHERE session_id = ? AND role = 'user' AND is_summary = 0";
+        // Extract text from TEXT blocks using JSON functions
+        String sql = "SELECT COALESCE(SUM(CHAR_LENGTH(JSON_UNQUOTE(JSON_EXTRACT(c.val, '$.text')))), 0) " +
+                "FROM messages, JSON_TABLE(content, '$[*]' COLUMNS(val JSON PATH '$') ) c " +
+                "WHERE session_id = ? AND role = 'user' AND is_summary = 0 AND JSON_EXTRACT(c.val, '$.type') = 'TEXT'";
         try (Connection conn = MysqlConnectionPool.getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, sessionId);
             ResultSet rs = ps.executeQuery();
@@ -104,8 +107,6 @@ public class MysqlMessageStore implements MessageStore {
 
     @Override
     public int countConversationTurns(String sessionId) {
-        // A "turn" is a user message followed by an assistant message.
-        // Count the number of user messages that have a subsequent assistant message.
         String sql = "SELECT COUNT(*) FROM messages WHERE session_id = ? AND role = 'user' AND is_summary = 0";
         int userCount = 0;
         try (Connection conn = MysqlConnectionPool.getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
@@ -144,7 +145,10 @@ public class MysqlMessageStore implements MessageStore {
 
     @Override
     public int avgAssistantReplyLength(String sessionId) {
-        String sql = "SELECT COALESCE(AVG(CHAR_LENGTH(content)), 0) FROM messages WHERE session_id = ? AND role = 'assistant' AND is_summary = 0";
+        // Average length of text extracted from TEXT blocks
+        String sql = "SELECT COALESCE(AVG(CHAR_LENGTH(JSON_UNQUOTE(JSON_EXTRACT(c.val, '$.text')))), 0) " +
+                "FROM messages, JSON_TABLE(content, '$[*]' COLUMNS(val JSON PATH '$') ) c " +
+                "WHERE session_id = ? AND role = 'assistant' AND is_summary = 0 AND JSON_EXTRACT(c.val, '$.type') = 'TEXT'";
         try (Connection conn = MysqlConnectionPool.getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, sessionId);
             ResultSet rs = ps.executeQuery();
@@ -157,12 +161,11 @@ public class MysqlMessageStore implements MessageStore {
 
     @Override
     public boolean hasUserQuestions(String sessionId) {
-        String sql = "SELECT COUNT(*) FROM messages WHERE session_id = ? AND role = 'user' AND is_summary = 0 " +
-                "AND (content LIKE '%?%' OR content LIKE '%？%' OR content LIKE '%how %' OR content LIKE '%what %' " +
-                "OR content LIKE '%why %' OR content LIKE '%when %' OR content LIKE '%where %' OR content LIKE '%who %' " +
-                "OR content LIKE '%which %' OR content LIKE '%can you%' OR content LIKE '%could you%' " +
-                "OR content LIKE '%please %' OR content LIKE '%i want%' OR content LIKE '%i need%' " +
-                "OR content LIKE '%help me%' OR content LIKE '%tell me%')";
+        // Search within TEXT block text values
+        String sql = "SELECT COUNT(*) FROM messages m, JSON_TABLE(m.content, '$[*]' COLUMNS(val JSON PATH '$') ) c " +
+                "WHERE m.session_id = ? AND m.role = 'user' AND m.is_summary = 0 " +
+                "AND JSON_EXTRACT(c.val, '$.type') = 'TEXT' " +
+                "AND (JSON_UNQUOTE(JSON_EXTRACT(c.val, '$.text')) LIKE '%?%' OR JSON_UNQUOTE(JSON_EXTRACT(c.val, '$.text')) LIKE '%？%')";
         try (Connection conn = MysqlConnectionPool.getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, sessionId);
             ResultSet rs = ps.executeQuery();
@@ -229,20 +232,27 @@ public class MysqlMessageStore implements MessageStore {
         String sql = """
                 SELECT
                     SUM(CASE WHEN role = 'user' AND is_summary = 0 THEN 1 ELSE 0 END) AS user_msg_count,
-                    COALESCE(SUM(CASE WHEN role = 'user' AND is_summary = 0 THEN CHAR_LENGTH(content) ELSE 0 END), 0) AS user_char_count,
+                    COALESCE(SUM(CASE WHEN role = 'user' AND is_summary = 0 THEN user_chars ELSE 0 END), 0) AS user_char_count,
                     COALESCE(MIN(CASE WHEN role = 'user' AND is_summary = 0 THEN uc.cnt END), 0) AS conversation_turns,
                     SUM(CASE WHEN role LIKE '%tool%' AND is_summary = 0 THEN 1 ELSE 0 END) AS tool_msg_count,
-                    COALESCE(AVG(CASE WHEN role = 'assistant' AND is_summary = 0 THEN CHAR_LENGTH(content) END), 0) AS avg_reply_len,
-                    MAX(CASE WHEN role = 'user' AND is_summary = 0 AND (
-                        content LIKE '%?%' OR content LIKE '%？%' OR content LIKE '%how %' OR content LIKE '%what %' OR
-                        content LIKE '%why %' OR content LIKE '%when %' OR content LIKE '%where %' OR content LIKE '%who %' OR
-                        content LIKE '%which %' OR content LIKE '%can you%' OR content LIKE '%could you%' OR
-                        content LIKE '%please %' OR content LIKE '%i want%' OR content LIKE '%i need%' OR
-                        content LIKE '%help me%' OR content LIKE '%tell me%'
-                    ) THEN 1 ELSE 0 END) AS has_questions
-                FROM messages,
+                    COALESCE(AVG(CASE WHEN role = 'assistant' AND is_summary = 0 THEN asst_chars END), 0) AS avg_reply_len,
+                    MAX(CASE WHEN role = 'user' AND is_summary = 0 AND has_q THEN 1 ELSE 0 END) AS has_questions
+                FROM (
+                    SELECT m.role, m.is_summary,
+                        COALESCE((SELECT SUM(CHAR_LENGTH(JSON_UNQUOTE(JSON_EXTRACT(c.val, '$.text'))))
+                            FROM JSON_TABLE(m.content, '$[*]' COLUMNS(val JSON PATH '$') ) c
+                            WHERE JSON_EXTRACT(c.val, '$.type') = 'TEXT'), 0) AS user_chars,
+                        COALESCE((SELECT SUM(CHAR_LENGTH(JSON_UNQUOTE(JSON_EXTRACT(c.val, '$.text'))))
+                            FROM JSON_TABLE(m.content, '$[*]' COLUMNS(val JSON PATH '$') ) c
+                            WHERE JSON_EXTRACT(c.val, '$.type') = 'TEXT'), 0) AS asst_chars,
+                        EXISTS (SELECT 1 FROM JSON_TABLE(m.content, '$[*]' COLUMNS(val JSON PATH '$') ) c
+                            WHERE JSON_EXTRACT(c.val, '$.type') = 'TEXT'
+                            AND (JSON_UNQUOTE(JSON_EXTRACT(c.val, '$.text')) LIKE '%?%'
+                                OR JSON_UNQUOTE(JSON_EXTRACT(c.val, '$.text')) LIKE '%？%')) AS has_q
+                    FROM messages m
+                    WHERE m.session_id = ? AND m.is_summary = 0
+                ) sub,
                 LATERAL (SELECT COUNT(*) AS cnt FROM messages WHERE session_id = ? AND role = 'user' AND is_summary = 0) uc
-                WHERE session_id = ? AND is_summary = 0
                 """;
         try (Connection conn = getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, sessionId);
@@ -279,11 +289,14 @@ public class MysqlMessageStore implements MessageStore {
     }
 
     private MemoryMessage mapMessage(ResultSet rs) throws SQLException {
+        String contentJson = rs.getString("content");
+        List<MessageBlock> blocks = MessageBlock.fromJson(contentJson);
+        if (blocks == null) blocks = List.of(new MessageBlock(MessageBlock.BlockType.TEXT, contentJson, null));
         return new MemoryMessage(
                 rs.getLong("id"),
                 rs.getString("session_id"),
                 rs.getString("role"),
-                rs.getString("content"),
+                blocks,
                 rs.getBoolean("is_summary"),
                 rs.getTimestamp("created_at").toInstant()
         );

@@ -72,7 +72,7 @@ harness-server        ← HTTP API entry point (com.harness.server.Main, Javalin
   | 7 | Classifier | `ClassifierModelProvider` | openai (用于 GapAnalyzer Tier 2 LLM 分类) |
 
 - **Tools implement `com.harness.tool.Tool` interface** — `spec()` returns ToolSpec, `execute(JsonNode)` returns String. Register in ToolRegistry. MCP tools adapted via McpToolAdapter.
-- **ReActEngine** uses LangChain4j 1.15.0 `ChatModel.chat(ChatRequest)` with `ToolSpecification` (JsonObjectSchema). Wraps ChatModel in `FallbackChatModel` when vision/voice providers are available. Wraps in `SemaphoreChatModel` for API concurrency limiting (`HARNESS_MODEL_API_MAX_CONCURRENT`, default 10). Supports streaming via `StreamingChatModel` (`streamExecute()` method). Tool calls retry up to 3 times on error; success with empty data passes to LLM without retry. LLM API timeout configurable via `HARNESS_MODEL_CHAT_TIMEOUT_SECONDS` (default 300s).
+- **ReActEngine** uses LangChain4j 1.15.0 `ChatModel.chat(ChatRequest)` with `ToolSpecification` (JsonObjectSchema). Wraps ChatModel in `FallbackChatModel` when vision/voice providers are available. Wraps in `SemaphoreChatModel` for API concurrency limiting (`HARNESS_MODEL_API_MAX_CONCURRENT`, default 10). Supports streaming via `StreamingChatModel` (`streamExecute()` method). No intra-iteration retry — tool errors are returned to the LLM which adjusts strategy in the next iteration. `HARNESS_REACT_MAX_TOOL_RETRIES` (default 3) controls how many consecutive `TOOL_ERROR` iterations before stopping the loop. LLM API timeout configurable via `HARNESS_MODEL_CHAT_TIMEOUT_SECONDS` (default 300s).
 - **Thinking Mode Control** — `HARNESS_MODEL_CHAT_THINKING` env var (default `true`) controls whether to enable thinking/reasoning mode for the chat model. `ChatModelProvider.chatModelNoThinking()` returns a model with thinking disabled (used by `LargeFileParser` for cost savings). Per-request override via `AgentContext.enableThinking()` (set in `context.enableThinking` JSON field). Providers pass `enable_thinking` via `customParameters(Map)` to OpenAI-compatible APIs (DashScope etc.). `ReActEngine.selectModel(Boolean)` picks thinking/non-thinking model; streaming mode falls back to blocking when thinking is disabled.
 - **File Content Injection** — File attachments are extracted and injected into the LLM context via `enhancedText` in `AgentOrchestrator`. Small files (< `HARNESS_INPUT_FILE_SIZE_THRESHOLD_KB`, default 100KB) use `TextExtractorRegistry.extract()` directly; large files use `LargeFileParser` merge-then-summarize approach: semantic splitting → greedy merge to `MODEL_CHAT_CONTEXT_WINDOW × LARGE_FILE_CONTEXT_RATIO` (default 40%) → parallel summarization → final merge. Works independently of RAG knowledge base configuration.
 - **ReAct Inspection** — 每轮工具调用后由 `Inspector` 启发式检查结果状态，记录在 `ReActStep.InspectionResult` 中：
@@ -85,18 +85,18 @@ harness-server        ← HTTP API entry point (com.harness.server.Main, Javalin
   | `INSUFFICIENT` | 结果不够完整 | 输出过短 (<50字符) 或含 "no results" 等短语 |
   | `LOOP_DETECTED` | 循环调用同一工具 | 连续相同工具+相同参数（工具名+参数JSON完全一致） |
 
-  非 PASS 状态会注入 `Inspector.buildInspectionHint()` 作为下一轮的提示。`HARNESS_REACT_STOP_ON_TOOL_ERROR=true` 时遇到 `TOOL_ERROR` 立即停止循环；默认 `false` 继续下一轮让 LLM 自行决策。
+  非 PASS 状态会注入 `Inspector.buildInspectionHint()` 作为下一轮的提示。`HARNESS_REACT_MAX_TOOL_RETRIES`（默认 3）控制连续 `TOOL_ERROR` 达到几次后停止循环；设为 1 等价于遇错即停。
 - **ReAct Reflection** — 定期注入反思提示，让 LLM 检查当前进展并调整策略。`HARNESS_REACT_REFLECTION_INTERVAL`（默认 3）控制每隔几轮注入一次反思。`HARNESS_REACT_LOOP_DETECTION_THRESHOLD`（默认 3）控制连续相同工具+参数调用的循环检测阈值。
 - **GapAnalyzer (动态路由)** — 三级判定漏斗，根据查询特征动态决定 `needsThinking`/`needsKnowledgeBase`/`rewriteStrategy`/`needsWebSearch` 四个独立参数。`HARNESS_GAP_ANALYSIS_ENABLED`（默认 `true`）控制功能开关。三级漏斗：Tier 0 显式覆盖（AgentContext）→ Tier 1 规则引擎（硬编码正则/关键词，<1ms）→ Tier 2 LLM 分类（ClassifierModelProvider，GLM-4.7-flash，thinking 关闭，max_tokens=50）。每级只填充上一级为 null 的字段，全部确定后短路返回。判定结果写入 trace metadata（`gap_source` = explicit/rule/llm/default）。Tier 2 失败时降级到环境变量默认值，不阻塞主流程。
 - **ReActListener** — SSE 流式回调接口，`onStep(ReActStep)` 在每轮迭代完成后调用。扩展方法：`onToken(String)` 每个 token 块回调，`onToolCallStart(String toolName, String arguments)` 工具调用开始回调。
-- **Streaming Output** — `AgentOrchestrator.streamRun()` 提供流式输出模式，通过 `StreamCallback` 实时推送 `StreamEvent`（START/TOKEN/STEP/DONE/CANCELLED/ERROR）。`AgentContext` record 包装 `Map<String, Object>` context 参数，`isStreaming()` 判断输出模式。流式模式下后处理（trace.finish、sessionStore.updateLastActive）异步化。`CancellationException` 捕获后发送 `CANCELLED` 事件（保留已输出内容），区别于 `ERROR`。
+- **Streaming Output** — `AgentOrchestrator.streamRun()` 提供流式输出模式，通过 `StreamCallback` 实时推送 `StreamEvent`（START/TOKEN/STEP/TOOL_CALL_START/COMPRESS/ARTIFACT/DONE/CANCELLED/ERROR）。`TOOL_CALL_START` 在工具执行前立即触发（用于前端即时显示加载状态），`STEP` 在工具执行完成后触发。`AgentContext` record 包装 `Map<String, Object>` context 参数，`isStreaming()` 判断输出模式。流式模式下后处理（trace.finish、sessionStore.updateLastActive）异步化。`CancellationException` 捕获后发送 `CANCELLED` 事件（保留已输出内容），区别于 `ERROR`。
 - **CancellationToken** — 线程安全的取消令牌，支持轮询（`isCancelled()`）和线程中断（`Thread.interrupt()`）双重取消机制。`cancel()` 会中断所有已注册的工作线程（包括子代理线程）。ReAct 循环在每轮迭代间、LLM 调用后、工具执行前均检查取消状态；`DELETE /api/chat/{sessionId}` 触发取消。
 - **ReplyAuditor** — 异步启发式回复质量审计（无模型调用），检查回复长度、错误指标、工具残留。结果写入 trace metadata。
 - **Sub-Agent** — `SubAgentOrchestrator` 管理子代理生命周期，支持依赖解析和并行执行。LLM 通过 `spawn_subagent` 工具派生子任务，每个子代理拥有独立的 ReActEngine 实例但共享工具注册表。`MultiAgentOrchestrator` 提供编程式子代理访问。`HARNESS_AGENT_MAX_SUBAGENTS`（默认 3）控制并发数。
 - **Web Search fallback** — `WebSearchTool` 支持多引擎回退链：Tavily → SerpAPI → DuckDuckGo。优先级通过 `HARNESS_TOOL_WEB_SEARCH_PRIORITY` 配置，无 API key 的引擎自动跳过，DuckDuckGo 始终可用。
 - **MCP Tool Discovery** — `McpToolDiscovery` 通过 JSON-RPC `tools/list` 自动发现 MCP 服务器工具，结果缓存避免重复发现。MCP 服务器配置支持两种方式：`HARNESS_MCP_CONFIG_FILE`（JSON 文件，推荐）或 `HARNESS_MCP_SERVERS`（逗号分隔的 `name=url` 环境变量）。JSON 文件中每个服务器可独立设置 `connectTimeoutMs` / `callTimeoutMs`。
 - **Retry & Robustness** — 六层容错机制：
-  - **Tool 调用重试:** `ReActEngine.executeWithRetry()` — 工具调用失败时最多重试 3 次，成功（即使输出为空）不重试，错误结果传递给 LLM 由其决策
+  - **Tool 调用:** `ReActEngine.executeWithRetry()` — 单次执行，不重试；错误结果传递给 LLM 由其在下一迭代调整策略。`HARNESS_REACT_MAX_TOOL_RETRIES`（默认 3）控制连续 TOOL_ERROR 达到几次后停止循环
   - **LLM API 重试:** `RetryingChatModel` 装饰器包装所有 ChatModelProvider，指数退避（1s→2s→4s），最多 3 次，仅重试 429/503/timeout 等可恢复错误
   - **MCP 断线重连:** `McpToolAdapter` 捕获 IOException 后重建 OkHttpClient 并重试 1 次
   - **消息写入重试:** `MessageWriteWorker` 三层降级：重试 3 次 → 单条同步写 → 死信队列（`getDeadLetterQueue()` API）
@@ -351,6 +351,42 @@ parameters:
 
 **Models (com.harness.core.model):** `Skill`, `SkillIndex`
 
+### Artifact System (harness-core + harness-tool + harness-preprocess + harness-server)
+Tools can produce downloadable artifacts (images, videos, files) via the `ArtifactProducingTool` marker interface in `harness-tool`. The artifact lifecycle:
+
+1. Tool produces bytes → `ArtifactStorer.store()` saves to `FilesystemArtifactStore` (disk + JSON metadata)
+2. Tool output includes markdown link `![name](/api/artifacts/{id}/preview)` — LLM naturally includes it in its response
+3. `ReActEngine.parseArtifacts()` extracts artifact info from markdown links → fires `listener.onArtifact()` → SSE `artifact` event
+4. Frontend removes LOADING placeholder, displays real image inline in message content
+5. Backend saves LLM's response (containing image URL) to DB via `MessageWriteWorker`
+
+**Key classes:**
+- `Artifact` record (harness-core) — id, sessionId, name, type (IMAGE/VIDEO/DOCUMENT/CODE/AUDIO/OTHER), mimeType, sizeBytes, filePath, createdAt. Has `previewUrl()` and `downloadUrl()` helpers.
+- `ArtifactProducingTool` interface (harness-tool) — marker interface with `setStorer(ArtifactStorer)` callback
+- `CancellableTool` interface (harness-tool) — tools implementing this can cancel in-progress HTTP requests via `cancel()` method. Automatically registered/unregistered with `CancellationToken` during execution.
+- `ArtifactStorageService` (harness-preprocess) — orchestrates save/metadata/cleanup
+- `FilesystemArtifactStore` (harness-preprocess) — disk persistence under `{HARNESS_KNOWLEDGE_UPLOAD_DIR}/artifacts/`
+- `ArtifactHandler` (harness-server) — serves `GET /api/artifacts/{id}` (download) and `GET /api/artifacts/{id}/preview` (inline)
+- Built-in artifact tools: `ImageGenerationTool`, `VideoGenerationTool`, `PythonSandboxTool`
+
+**Frontend SSE flow:** `tool_call_start` → show tool call block + starfield LOADING animation inline in message content. `artifact` → remove LOADING, show real image. `done` → LLM's final text (already contains image URL from natural response). Images persist in DB as `![name](url)` markdown.
+
+### File Upload & Image-to-Image Flow
+Files can be uploaded via `POST /api/files/upload` (multipart form) and stored in `{HARNESS_KNOWLEDGE_UPLOAD_DIR}/input/`. Returns relative URL (e.g., `/files/input/xxx.jpg`).
+
+**Image-to-image flow:**
+1. Frontend uploads file → stores in `knowledge-uploads/input/` → returns URL
+2. Frontend sends URL in `context.File` field (single string or array)
+3. Backend injects file URLs into `enhancedText` with `[参考文件 / Reference Files]` section
+4. LLM sees reference files and uses `reference_image` parameter in `image_generation` tool
+5. `ImageGenerationTool` loads image from local file path or artifact URL
+
+**Key env vars:**
+- `HARNESS_TOOL_IMAGE_GEN_*` — image generation model config (provider, API key, base URL, model)
+- `HARNESS_TOOL_VIDEO_GEN_*` — video generation model config
+
+**ImageGenerationTool** uses `/images/generations` endpoint (OpenAI-compatible) with base64-encoded reference image for img2img. Supports DALL-E 3, DashScope, Volcengine, and other compatible providers.
+
 ### Project API Discovery (harness-agent + harness-tool)
 自动扫描现有项目，识别 REST API 接口并生成结构化配置。通过 `HARNESS_PROJECT_DISCOVERY_ENABLED=true`（默认 `true`）开启。
 
@@ -398,7 +434,7 @@ Same pattern for Vision/Voice/Embedding/Rerank providers.
 | Method | Path | Description |
 |--------|------|-------------|
 | POST | `/api/auth/token` | Get JWT token (userId/username + password, mode=jwt only) |
-| POST | `/api/chat` | Send message, get agent response (SSE stream). Supports `systemPrompt` and `context` (JSON: `outputMode`=blocking/streaming, `userId`, `enableThinking`) in body, `X-Session-Id` header |
+| POST | `/api/chat` | Send message, get agent response (SSE stream). Supports `systemPrompt` and `context` (JSON: `outputMode`=blocking/streaming, `userId`, `enableThinking`, `File`=url_or_array) in body, `X-Session-Id` header |
 | DELETE | `/api/chat/{sessionId}` | Cancel an in-progress chat request |
 | POST | `/api/sessions` | Create a new session (body: `userId`, optional `title`) |
 | GET | `/api/sessions` | List sessions with cursor pagination. Query: `userId`, `status` (active/ended/timeout), `limit`, `cursor` (ISO-8601) |
@@ -406,6 +442,7 @@ Same pattern for Vision/Voice/Embedding/Rerank providers.
 | GET | `/api/sessions/{sessionId}/messages` | Message history with cursor pagination. Query: `limit`, `cursor` (message ID), `direction` (asc/desc) |
 | GET | `/api/sessions/{sessionId}/stats` | Session statistics (message counts, turns, avg reply length, duration, etc.) |
 | DELETE | `/api/sessions/{sessionId}` | Delete session and all messages (transactional) |
+| POST | `/api/files/upload` | Upload file for image-to-image and other references (multipart: `file`). Returns `{url, name, size}` |
 | POST | `/api/knowledge/upload` | Upload file for knowledge base ingestion (multipart: `file`, `collection`) |
 | GET | `/api/knowledge/{collection}` | List documents in a collection |
 | DELETE | `/api/knowledge/{collection}` | Delete all documents in a collection |
@@ -420,17 +457,23 @@ Same pattern for Vision/Voice/Embedding/Rerank providers.
 | PUT | `/api/project-discovery/config` | Update project-apis.json content |
 | POST | `/api/project-discovery/reload` | Hot-reload project APIs into ToolRegistry |
 | GET | `/api/health` | Health check |
+| GET | `/api/artifacts/{id}` | Download artifact file |
+| GET | `/api/artifacts/{id}/preview` | Inline preview (Content-Disposition: inline) |
 
 **Chat SSE events:** Blocking mode: `event: done` (full result JSON), `event: error` (error JSON). Streaming mode (`context.outputMode=streaming`): `event: start` (sessionId), `event: token` (partial text), `event: step` (ReAct step info), `event: done` (final result), `event: cancelled` (user cancelled, keeps partial output), `event: error`. JWT mode returns refreshed token in `X-New-Token` header when remaining lifetime < threshold.
 
 **LLM HTTP Cancellation** — `CancellableHttpClient` (ServiceLoader-based `HttpClientBuilderFactory`) wraps JDK HttpClient to support SSE stream cancellation. `CompletableFuture.cancel(true)` immediately closes the socket. `CancellationToken.onCancel(CancellableHttpClient::cancelAll)` registered in `ChatHandler`. System property `langchain4j.http.clientBuilderFactory` set in `Main.main()` to override default.
+
+**Tool Cancellation** — Tools implementing `CancellableTool` interface can cancel their in-progress HTTP requests. `ReActEngine` automatically registers/unregisters tool's `cancel()` method with `CancellationToken` during execution. `ImageGenerationTool` uses OkHttp's `Call.cancel()` to abort remote API calls immediately.
 
 ## Web UI (harness-server/src/main/resources/public)
 
 Vue 3 SPA with i18n support (zh/en). Key features:
 - **Session sidebar** — list, create, delete sessions (trash icon on hover). Delete removes session + messages atomically.
 - **Streaming output** — real-time token display via SSE. Cancel button (red square) appears during streaming, calls `DELETE /api/chat/{sessionId}` to stop LLM and keep partial output.
-- **Markdown rendering** — `marked` + DOMPurify for safe HTML.
+- **Tool call blocks** — `tool_call_start` SSE event renders tool call block + starfield LOADING animation inline in message content. `step` event removes running glow. Deduplication on retry.
+- **Inline artifact rendering** — Images/videos rendered inline as markdown (`![name](url)`) within message content, not as separate cards. Persisted to DB with message text.
+- **Markdown rendering** — `marked` (no DOMPurify) for safe HTML. Images and videos in `.md-body` get responsive styles.
 - **Knowledge management** — upload files, browse collections, delete documents.
 - **Project API discovery** — trigger scan, view/edit config, hot-reload.
 

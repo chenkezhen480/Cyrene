@@ -15,6 +15,10 @@ import com.harness.input.InputProcessor;
 import com.harness.input.multimodal.MultimodalParser;
 import com.harness.input.multimodal.TextChunker;
 import com.harness.preprocess.ContextBuilder;
+import com.harness.core.model.Artifact;
+import com.harness.core.model.ArtifactStore;
+import com.harness.preprocess.artifact.ArtifactStorageService;
+import com.harness.preprocess.artifact.FilesystemArtifactStore;
 import com.harness.preprocess.gap.GapAnalysis;
 import com.harness.preprocess.gap.GapAnalyzer;
 import com.harness.preprocess.gap.GapClassifier;
@@ -23,7 +27,10 @@ import com.harness.preprocess.memory.*;
 import com.harness.tool.ToolExecutor;
 import com.harness.tool.ToolRegistry;
 import com.harness.tool.builtin.FfmpegTool;
+import com.harness.tool.builtin.ImageGenerationTool;
+import com.harness.tool.builtin.PythonSandboxTool;
 import com.harness.tool.builtin.UpdateMemoryTool;
+import com.harness.tool.builtin.VideoGenerationTool;
 import com.harness.tool.builtin.WebSearchTool;
 import com.harness.tool.discovery.CodeGlobTool;
 import com.harness.tool.discovery.CodeGrepTool;
@@ -106,6 +113,10 @@ public class AgentOrchestrator {
     // Skill subsystem
     private final SkillRegistry skillRegistry;
 
+    // Artifact subsystem
+    private final ArtifactStore artifactStore;
+    private final ArtifactStorageService artifactStorageService;
+
     private String activeSessionId;  // CLI mode: reuse across calls
 
     public AgentOrchestrator() {
@@ -161,6 +172,13 @@ public class AgentOrchestrator {
 
         // GapAnalyzer (动态路由)
         this.gapAnalyzer = new GapAnalyzer(new GapRuleEngine(), new GapClassifier(classifierModelProvider));
+
+        // Artifact subsystem
+        String artifactDirStr = EnvConfig.get().getString(EnvKey.ARTIFACT_DIR, "./artifacts");
+        Path artifactDirPath = Path.of(artifactDirStr).toAbsolutePath().normalize();
+        this.artifactStore = new FilesystemArtifactStore(artifactDirPath);
+        int artifactMaxSize = EnvConfig.get().getInt(EnvKey.ARTIFACT_MAX_SIZE_MB, 100);
+        this.artifactStorageService = new ArtifactStorageService(artifactStore, artifactDirPath, artifactMaxSize);
 
         // Memory subsystem — skip entirely when disabled
         if (MemoryStoreFactory.isEnabled()) {
@@ -278,6 +296,29 @@ public class AgentOrchestrator {
                     sb.append(pc.text());
                 }
                 enhancedText = sb.toString();
+            }
+
+            // Inject File URLs from context (for image-to-image and other file references)
+            if (agentContext != null && agentContext.data() != null) {
+                Object fileObj = agentContext.data().get("File");
+                if (fileObj != null) {
+                    StringBuilder sb = new StringBuilder(enhancedText);
+                    sb.append("\n\n[参考文件 / Reference Files]");
+                    if (fileObj instanceof String fileUrl) {
+                        // Single file URL
+                        sb.append("\n- ").append(fileUrl);
+                        log.debug("[Orchestrator] Injected File URL from context: {}", fileUrl);
+                    } else if (fileObj instanceof List<?> fileList) {
+                        // Multiple file URLs
+                        for (Object item : fileList) {
+                            if (item instanceof String url) {
+                                sb.append("\n- ").append(url);
+                            }
+                        }
+                        log.debug("[Orchestrator] Injected {} File URLs from context", fileList.size());
+                    }
+                    enhancedText = sb.toString();
+                }
             }
 
             // Pre-detect skill files from attachments (register after sessionId is resolved)
@@ -409,8 +450,9 @@ public class AgentOrchestrator {
                     trace.builder().metadata(meta);
                 }
                 // 用户消息：异步写DB + 同步更新缓存
-                messageWriteWorker.submit(sessionId, "user", enhancedText, false);
-                messageCache.append(sessionId, userId, new MemoryMessage(0, sessionId, "user", enhancedText, false, null));
+                List<MessageBlock> userBlocks = List.of(new MessageBlock(MessageBlock.BlockType.TEXT, enhancedText, null));
+                messageWriteWorker.submit(sessionId, "user", userBlocks, false);
+                messageCache.append(sessionId, userId, new MemoryMessage(0, sessionId, "user", userBlocks, false, null));
                 sessionStore.updateLastActive(sessionId);
             }
 
@@ -418,10 +460,63 @@ public class AgentOrchestrator {
             // Set parent cancellation token for sub-agents
             subAgentOrchestrator.setParentToken(cancellationToken);
             List<ChatMessage> historyChatMessages = convertToChatMessages(shorttermMessages);
+
+            // Unified block accumulation via listener (same pattern as streamRun)
+            List<MessageBlock> blockAccumulator = new ArrayList<>();
+            StringBuilder textAccumulator = new StringBuilder();
+
+            ReActListener blockListener = new ReActListener() {
+                @Override public void onToken(String token) {}
+                @Override public void onToolCallStart(String toolName, String arguments) {}
+                @Override
+                public void onStep(ReActStep step) {
+                    // Tool iteration: accumulate reasoning text (LLM's pre-tool-call thinking)
+                    // Final answer: accumulate answer text (post-tools response)
+                    if (step.toolCalls() != null && !step.toolCalls().isEmpty()) {
+                        // Tool iteration — reasoning text only, skip observation (tool output)
+                        if (step.thought() != null && !step.thought().isBlank()) {
+                            textAccumulator.append(step.thought());
+                        }
+                    } else {
+                        // Final answer — store raw text; system prompt prevents artifact links
+                        if (step.observation() != null && !step.observation().isBlank()) {
+                            textAccumulator.append(step.observation());
+                        }
+                    }
+                }
+                @Override
+                public void onArtifact(java.util.List<Artifact> artifacts) {
+                    // Flush accumulated text as TEXT block before inserting artifact
+                    if (textAccumulator.length() > 0) {
+                        blockAccumulator.add(new MessageBlock(MessageBlock.BlockType.TEXT, textAccumulator.toString(), null));
+                        textAccumulator.setLength(0);
+                    }
+                    for (Artifact a : artifacts) {
+                        Map<String, Object> meta = new HashMap<>();
+                        meta.put("type", a.type().name());
+                        if (a.mimeType() != null) meta.put("mimeType", a.mimeType());
+                        if (a.name() != null) meta.put("name", a.name());
+                        meta.put("previewUrl", a.previewUrl());
+                        meta.put("downloadUrl", a.downloadUrl());
+                        blockAccumulator.add(new MessageBlock(MessageBlock.BlockType.ARTIFACT, null, a.id(), meta));
+                    }
+                }
+            };
+
             // thinking 优先级：显式 enableThinking > GapAnalysis.needsThinking > 环境变量
             Boolean effectiveThinking = enableThinking != null ? enableThinking : gapAnalysis.needsThinking();
-            ReActEngine.ReActResult result = reactEngine.execute(systemPrompt, finalUserMessage, historyChatMessages, trace.builder(), null, cancellationToken, effectiveThinking);
+            ReActEngine.ReActResult result = reactEngine.execute(systemPrompt, finalUserMessage, historyChatMessages, trace.builder(), blockListener, cancellationToken, effectiveThinking);
             result.steps().forEach(trace::addStep);
+
+            // Flush remaining text after loop
+            if (textAccumulator.length() > 0) {
+                blockAccumulator.add(new MessageBlock(MessageBlock.BlockType.TEXT, textAccumulator.toString(), null));
+            }
+
+            // Accumulated blocks are authoritative — onStep/onArtifact always fire before execute() returns
+            List<MessageBlock> asstBlocks = blockAccumulator.isEmpty()
+                    ? List.of(new MessageBlock(MessageBlock.BlockType.TEXT, result.output() != null ? result.output() : "", null))
+                    : blockAccumulator;
 
             // Tool 消息进缓存（不落 DB），供下一轮 preprocess 小压缩
             cacheToolMessages(result, sessionId, userId);
@@ -450,18 +545,19 @@ public class AgentOrchestrator {
                 }
             });
 
-            // ===== 后处理：保存AI回复 =====
+            // Save AI message (async via worker)
             if (sessionId != null && userId != null) {
-                messageWriteWorker.submit(sessionId, "assistant", result.output(), false);
-                messageCache.append(sessionId, userId, new MemoryMessage(0, sessionId, "assistant", result.output(), false, null));
+                messageWriteWorker.submit(sessionId, "assistant", asstBlocks, false);
+                messageCache.append(sessionId, userId, new MemoryMessage(0, sessionId, "assistant", asstBlocks, false, null));
                 sessionStore.updateLastActive(sessionId);
             }
 
             AgentTrace agentTrace = trace.finish();
             long duration = System.currentTimeMillis() - runStart;
-            log.info("[Orchestrator] Run complete: outputLen={}, risk={}, steps={}, duration={}ms",
-                    result.output() != null ? result.output().length() : 0, risk, result.steps().size(), duration);
-            return AgentResult.success(result.output(), agentTrace, result.steps());
+            log.info("[Orchestrator] Run complete: outputLen={}, risk={}, steps={}, artifacts={}, duration={}ms",
+                    result.output() != null ? result.output().length() : 0, risk, result.steps().size(),
+                    result.artifacts().size(), duration);
+            return AgentResult.success(result.output(), agentTrace, result.steps(), result.artifacts());
 
         } catch (Exception e) {
             long duration = System.currentTimeMillis() - runStart;
@@ -527,6 +623,29 @@ public class AgentOrchestrator {
                     sb.append(pc.text());
                 }
                 enhancedText = sb.toString();
+            }
+
+            // Inject File URLs from context (for image-to-image and other file references)
+            if (agentContext != null && agentContext.data() != null) {
+                Object fileObj = agentContext.data().get("File");
+                if (fileObj != null) {
+                    StringBuilder sb = new StringBuilder(enhancedText);
+                    sb.append("\n\n[参考文件 / Reference Files]");
+                    if (fileObj instanceof String fileUrl) {
+                        // Single file URL
+                        sb.append("\n- ").append(fileUrl);
+                        log.debug("[Orchestrator] Injected File URL from context: {}", fileUrl);
+                    } else if (fileObj instanceof List<?> fileList) {
+                        // Multiple file URLs
+                        for (Object item : fileList) {
+                            if (item instanceof String url) {
+                                sb.append("\n- ").append(url);
+                            }
+                        }
+                        log.debug("[Orchestrator] Injected {} File URLs from context", fileList.size());
+                    }
+                    enhancedText = sb.toString();
+                }
             }
 
             // Pre-detect skill files from attachments (register after sessionId is resolved)
@@ -647,8 +766,9 @@ public class AgentOrchestrator {
                             outcome.majorResult().messagesBefore() + " → " + outcome.majorResult().messagesAfter() + " 条消息已压缩"));
                 }
 
-                messageWriteWorker.submit(sessionId, "user", enhancedText, false);
-                messageCache.append(sessionId, userId, new MemoryMessage(0, sessionId, "user", enhancedText, false, null));
+                List<MessageBlock> userBlocks = List.of(new MessageBlock(MessageBlock.BlockType.TEXT, enhancedText, null));
+                messageWriteWorker.submit(sessionId, "user", userBlocks, false);
+                messageCache.append(sessionId, userId, new MemoryMessage(0, sessionId, "user", userBlocks, false, null));
             }
 
             // Emit start event with sessionId (first event for client)
@@ -658,6 +778,10 @@ public class AgentOrchestrator {
             // Set parent cancellation token for sub-agents
             subAgentOrchestrator.setParentToken(cancellationToken);
             List<ChatMessage> historyChatMessages = convertToChatMessages(shorttermMessages);
+            // Accumulate message blocks during ReAct loop via listener
+            List<MessageBlock> blockAccumulator = new ArrayList<>();
+            StringBuilder textAccumulator = new StringBuilder();
+
             ReActListener listener = new ReActListener() {
                 @Override
                 public void onStep(ReActStep step) {
@@ -666,7 +790,32 @@ public class AgentOrchestrator {
 
                 @Override
                 public void onToken(String tokenText) {
+                    textAccumulator.append(tokenText);
                     callback.onEvent(StreamEvent.token(tokenText));
+                }
+
+                @Override
+                public void onToolCallStart(String toolName, String arguments) {
+                    callback.onEvent(StreamEvent.toolCallStart(toolName, arguments));
+                }
+
+                @Override
+                public void onArtifact(java.util.List<Artifact> artifacts) {
+                    // Flush accumulated text as a TEXT block before inserting artifact
+                    if (textAccumulator.length() > 0) {
+                        blockAccumulator.add(new MessageBlock(MessageBlock.BlockType.TEXT, textAccumulator.toString(), null));
+                        textAccumulator.setLength(0);
+                    }
+                    for (Artifact a : artifacts) {
+                        Map<String, Object> meta = new HashMap<>();
+                        meta.put("type", a.type().name());
+                        if (a.mimeType() != null) meta.put("mimeType", a.mimeType());
+                        if (a.name() != null) meta.put("name", a.name());
+                        meta.put("previewUrl", a.previewUrl());
+                        meta.put("downloadUrl", a.downloadUrl());
+                        blockAccumulator.add(new MessageBlock(MessageBlock.BlockType.ARTIFACT, null, a.id(), meta));
+                        callback.onEvent(StreamEvent.artifact(a));
+                    }
                 }
             };
 
@@ -675,6 +824,16 @@ public class AgentOrchestrator {
             ReActEngine.ReActResult result = reactEngine.streamExecute(
                     systemPrompt, finalUserMessage, historyChatMessages, trace.builder(), listener, cancellationToken, effectiveThinking);
             result.steps().forEach(trace::addStep);
+
+            // Flush remaining text after loop
+            if (textAccumulator.length() > 0) {
+                blockAccumulator.add(new MessageBlock(MessageBlock.BlockType.TEXT, textAccumulator.toString(), null));
+            }
+
+            // Accumulated blocks are authoritative — onToken/onArtifact always fire before streamExecute() returns
+            List<MessageBlock> asstBlocks = blockAccumulator.isEmpty()
+                    ? List.of(new MessageBlock(MessageBlock.BlockType.TEXT, result.output() != null ? result.output() : "", null))
+                    : blockAccumulator;
 
             // Tool 消息进缓存（不落 DB），供下一轮 preprocess 小压缩
             cacheToolMessages(result, finalSessionId, userId);
@@ -695,10 +854,10 @@ public class AgentOrchestrator {
                 }
             });
 
-            // Post-processing: save AI message (async via worker)
+            // Save AI message (async via worker)
             if (finalSessionId != null && userId != null) {
-                messageWriteWorker.submit(finalSessionId, "assistant", result.output(), false);
-                messageCache.append(finalSessionId, userId, new MemoryMessage(0, finalSessionId, "assistant", result.output(), false, null));
+                messageWriteWorker.submit(finalSessionId, "assistant", asstBlocks, false);
+                messageCache.append(finalSessionId, userId, new MemoryMessage(0, finalSessionId, "assistant", asstBlocks, false, null));
             }
 
             // Async: trace.finish() and sessionStore.updateLastActive()
@@ -727,7 +886,8 @@ public class AgentOrchestrator {
                     result.output(),
                     trace.builder().build().traceId(),
                     finalSessionId,
-                    result.steps().size()));
+                    result.steps().size(),
+                    result.artifacts()));
 
         } catch (CancellationException e) {
             long duration = System.currentTimeMillis() - runStart;
@@ -756,6 +916,7 @@ public class AgentOrchestrator {
                 : EnvConfig.get().getString(EnvKey.SYSTEM_PROMPT,
                         "You are a helpful AI assistant with access to tools. Use tools when needed to answer questions. Think step by step. If a tool fails, try an alternative approach.");
         sb.append(basePrompt).append("\n\n");
+        sb.append("IMPORTANT: After image/video generation tools succeed, do NOT include download links, file paths, image markdown syntax (![name](url)), or descriptive repetitions of the image in your text reply. The frontend automatically renders generated content as inline cards. Your text reply should only contain natural language commentary (e.g. style notes, asking if adjustments are needed).\n\n");
 
         // Inject skill index — name + when-to-use description
         if (skillRegistry.size(sessionId) > 0) {
@@ -793,7 +954,7 @@ public class AgentOrchestrator {
     private int estimateTokens(List<MemoryMessage> messages) {
         int total = 0;
         for (MemoryMessage msg : messages) {
-            total += estimateTokens(msg.content());
+            total += estimateTokens(msg.text());
         }
         return total;
     }
@@ -833,6 +994,49 @@ public class AgentOrchestrator {
         }
         if (cfg.getBool(EnvKey.TOOL_FFMPEG_ENABLED, false)) {
             toolRegistry.register(new FfmpegTool());
+        }
+        // Python sandbox tool — enabled when Docker image is configured
+        toolRegistry.register(new PythonSandboxTool(
+                (source, name, mimeType, sessionId) -> artifactStorageService.storeFromPath(source, name, mimeType, sessionId),
+                id -> artifactStore.get(id)
+        ));
+        // Image generation tool — only registered when API key is configured
+        String imgApiKey = cfg.getString(EnvKey.TOOL_IMAGE_GEN_API_KEY, "");
+        if (!imgApiKey.isBlank()) {
+            toolRegistry.register(new ImageGenerationTool(new ImageGenerationTool.ArtifactStorer() {
+                @Override
+                public Artifact store(byte[] data, String name, String mimeType, String sessionId) {
+                    return artifactStorageService.store(data, name, mimeType, sessionId);
+                }
+
+                @Override
+                public byte[] loadBytes(String artifactId) {
+                    return artifactStore.get(artifactId)
+                            .map(a -> {
+                                try {
+                                    return java.nio.file.Files.readAllBytes(java.nio.file.Path.of(a.filePath()));
+                                } catch (Exception e) {
+                                    throw new RuntimeException("Failed to read artifact file: " + artifactId, e);
+                                }
+                            })
+                            .orElseThrow(() -> new RuntimeException("Artifact not found: " + artifactId));
+                }
+            }));
+        } else {
+            log.info("[Orchestrator] Image generation tool disabled (no HARNESS_TOOL_IMAGE_GEN_API_KEY)");
+        }
+        // Video generation tool — only registered when API key + base URL are configured
+        String vidApiKey = cfg.getString(EnvKey.TOOL_VIDEO_GEN_API_KEY, "");
+        String vidBaseUrl = cfg.getString(EnvKey.TOOL_VIDEO_GEN_BASE_URL, "");
+        if (!vidApiKey.isBlank() && !vidBaseUrl.isBlank()) {
+            toolRegistry.register(new VideoGenerationTool(
+                    (data, name, mimeType, sessionId) -> artifactStorageService.store(data, name, mimeType, sessionId),
+                    (sessionId, artifact) -> {
+                        log.info("[ArtifactCallback] Video artifact ready: {} for session {}", artifact.name(), sessionId);
+                    }
+            ));
+        } else {
+            log.info("[Orchestrator] Video generation tool disabled (no HARNESS_TOOL_VIDEO_GEN_API_KEY/BASE_URL)");
         }
         // Discovery tools — available in chat when project discovery is enabled
         if (cfg.getBool(EnvKey.PROJECT_DISCOVERY_ENABLED, true)) {
@@ -964,9 +1168,15 @@ public class AgentOrchestrator {
     public PreferenceRefinementWorker refinementWorker() { return refinementWorker; }
     public SubAgentOrchestrator subAgentOrchestrator() { return subAgentOrchestrator; }
     public SessionMessageCache messageCache() { return messageCache; }
+    public MessageWriteWorker messageWriteWorker() { return messageWriteWorker; }
     public SkillRegistry skillRegistry() { return skillRegistry; }
     public TraceStore traceStore() { return traceStore; }
     public com.harness.preprocess.rag.VectorStore vectorStore() { return contextBuilder.vectorStore(); }
+
+    // Expose artifact subsystem
+    public ArtifactStore artifactStore() { return artifactStore; }
+    public ArtifactStorageService artifactStorageService() { return artifactStorageService; }
+
 
     /**
      * Convert MemoryMessage list to LangChain4j ChatMessage list for ReAct history injection.
@@ -976,18 +1186,17 @@ public class AgentOrchestrator {
     private List<ChatMessage> convertToChatMessages(List<MemoryMessage> memoryMessages) {
         List<ChatMessage> chatMessages = new ArrayList<>();
         for (MemoryMessage msg : memoryMessages) {
+            String text = msg.text();
             if (msg.isSummary()) {
-                // Compressed summary: inject as AiMessage so LLM sees prior context
-                chatMessages.add(AiMessage.from("[Previous conversation summary]\n" + msg.content()));
+                chatMessages.add(AiMessage.from("[Previous conversation summary]\n" + text));
                 continue;
             }
             switch (msg.role()) {
-                case "user" -> chatMessages.add(UserMessage.from(msg.content()));
-                case "assistant" -> chatMessages.add(AiMessage.from(msg.content()));
+                case "user" -> chatMessages.add(UserMessage.from(text));
+                case "assistant" -> chatMessages.add(AiMessage.from(text));
                 case "system" -> {
-                    // Skill content re-injected after major compression
-                    if (msg.content() != null && msg.content().startsWith("[Skill:")) {
-                        chatMessages.add(AiMessage.from(msg.content()));
+                    if (text != null && text.startsWith("[Skill:")) {
+                        chatMessages.add(AiMessage.from(text));
                     }
                 }
             }
@@ -1003,18 +1212,18 @@ public class AgentOrchestrator {
         if (sessionId == null || userId == null) return;
         for (ReActStep step : result.steps()) {
             if (step.toolCalls() == null || step.toolCalls().isEmpty()) continue;
-            // 保存 assistant 的工具调用请求
             String toolCallDesc = step.toolCalls().stream()
                     .map(tc -> tc.toolName() + "(" + tc.arguments() + ")")
                     .reduce((a, b) -> a + ", " + b).orElse("");
+            List<MessageBlock> toolCallBlocks = List.of(new MessageBlock(MessageBlock.BlockType.TEXT, "[Tool call] " + toolCallDesc, null));
             messageCache.append(sessionId, userId,
-                    new MemoryMessage(0, sessionId, "assistant", "[Tool call] " + toolCallDesc, false, null));
-            // 保存工具执行结果
+                    new MemoryMessage(0, sessionId, "assistant", toolCallBlocks, false, null));
             if (step.toolResults() != null) {
                 for (ToolResult tr : step.toolResults()) {
                     String content = tr.success() ? tr.output() : "ERROR: " + tr.error();
+                    List<MessageBlock> toolResultBlocks = List.of(new MessageBlock(MessageBlock.BlockType.TEXT, "[" + tr.toolName() + "] " + content, null));
                     messageCache.append(sessionId, userId,
-                            new MemoryMessage(0, sessionId, "tool", "[" + tr.toolName() + "] " + content, false, null));
+                            new MemoryMessage(0, sessionId, "tool", toolResultBlocks, false, null));
                 }
             }
         }
@@ -1086,7 +1295,7 @@ public class AgentOrchestrator {
                 List<MemoryMessage> skillMessages = new ArrayList<>(shorttermMessages);
                 for (com.harness.core.model.Skill skill : loadedSkills) {
                     String skillContent = buildSkillContentForReinjection(skill);
-                    skillMessages.add(new MemoryMessage(0, sessionId, "system", skillContent, false, null));
+                    skillMessages.add(new MemoryMessage(0, sessionId, "system", List.of(new MessageBlock(MessageBlock.BlockType.TEXT, skillContent, null)), false, null));
                 }
                 shorttermMessages = skillMessages;
                 messageCache.put(sessionId, userId, shorttermMessages);
@@ -1106,7 +1315,7 @@ public class AgentOrchestrator {
         int before = cached.size();
         List<MemoryMessage> stripped = cached.stream()
                 .filter(m -> !"tool".equals(m.role()))
-                .filter(m -> !(m.role().equals("assistant") && m.content() != null && m.content().startsWith("[Tool call]")))
+                .filter(m -> !(m.role().equals("assistant") && m.text().startsWith("[Tool call]")))
                 .toList();
         if (stripped.size() < before) {
             int removed = before - stripped.size();

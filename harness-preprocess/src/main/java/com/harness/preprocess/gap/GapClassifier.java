@@ -30,31 +30,10 @@ public class GapClassifier {
     private static final ObjectMapper mapper = new ObjectMapper();
 
     private static final String SYSTEM_PROMPT = """
-            You are a query router. Analyze the user query and output a JSON object with exactly 4 fields:
-            {"t":bool,"k":bool,"w":"NONE|HYDE|MULTI_QUERY|STEP_BACK","s":bool}
-
-            Field meanings:
-            - t = needsThinking (deep reasoning required)
-            - k = needsKnowledgeBase (internal knowledge retrieval required)
-            - w = rewriteStrategy (query rewrite strategy, meaningless when k=false, output "NONE")
-            - s = needsWebSearch (real-time web data required)
-
-            Think in 3 dimensions before deciding:
-            1. Expectation: what quality/depth does the user expect?
-            2. Current state: can the model alone satisfy this?
-            3. Gap: how big is the mismatch between expectation and state?
-
-            Rewrite strategy (w) selection criteria:
-            - NONE: short query, model knowledge sufficient, no rewrite needed, direct retrieval with original query
-            - HYDE: short but semantically ambiguous query, low vector recall rate, use hypothetical answer to improve semantic matching
-            - MULTI_QUERY: narrow query scope, need multi-angle recall to improve coverage
-            - STEP_BACK: overly specific query, need to retrieve background knowledge first before answering the concrete question
-
-            Rules:
-            - When k=false, w must be "NONE"
-            - These 4 fields are independent; multiple can be true simultaneously
-            - Output ONLY the compact JSON, no explanation, no markdown
-            """;
+            Output JSON: {"t":bool,"k":bool,"w":"NONE|HYDE|MULTI_QUERY|STEP_BACK","s":bool}
+            t=needsThinking k=needsKnowledgeBase w=rewriteStrategy(k=false→NONE) s=needsWebSearch
+            w: NONE=default, HYDE=ambiguous→hypothetical answer, MULTI_QUERY=broad coverage, STEP_BACK=specific→general
+            Output ONLY the JSON, no explanation.""";
 
     private final ChatModel model;
     private final boolean available;

@@ -1,6 +1,7 @@
 package com.harness.preprocess.memory;
 
 import com.harness.core.model.MemoryMessage;
+import com.harness.core.model.MessageBlock;
 import com.harness.env.EnvConfig;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -31,7 +32,7 @@ class InMemorySessionMessageCacheTest {
     }
 
     private MemoryMessage msg(String role, String content) {
-        return new MemoryMessage(0, null, role, content, false, Instant.now());
+        return new MemoryMessage(0, null, role, List.of(new MessageBlock(MessageBlock.BlockType.TEXT, content, null)), false, Instant.now());
     }
 
     private List<MemoryMessage> msgs(int count) {
@@ -51,7 +52,7 @@ class InMemorySessionMessageCacheTest {
         List<MemoryMessage> result = cache.getIfPresent("s1");
 
         assertThat(result).hasSize(1);
-        assertThat(result.get(0).content()).isEqualTo("Hello");
+        assertThat(result.get(0).text()).isEqualTo("Hello");
     }
 
     @Test
@@ -66,7 +67,7 @@ class InMemorySessionMessageCacheTest {
         cache.append("s1", "u1", msg("assistant", "Second"));
 
         assertThat(cache.getIfPresent("s1")).hasSize(2);
-        assertThat(cache.getIfPresent("s1").get(1).content()).isEqualTo("Second");
+        assertThat(cache.getIfPresent("s1").get(1).text()).isEqualTo("Second");
     }
 
     @Test

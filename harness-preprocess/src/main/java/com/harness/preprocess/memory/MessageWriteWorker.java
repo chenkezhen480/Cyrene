@@ -1,5 +1,6 @@
 package com.harness.preprocess.memory;
 
+import com.harness.core.model.MessageBlock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -32,7 +33,7 @@ public class MessageWriteWorker {
     private final AtomicBoolean running = new AtomicBoolean(false);
     private Thread workerThread;
 
-    public record WriteTask(String sessionId, String role, String content, boolean isSummary) {}
+    public record WriteTask(String sessionId, String role, List<MessageBlock> content, boolean isSummary) {}
 
     public MessageWriteWorker(MessageStore messageStore) {
         this.messageStore = messageStore;
@@ -66,12 +67,25 @@ public class MessageWriteWorker {
     /**
      * Enqueue a message for async DB write. Non-blocking.
      */
-    public void submit(String sessionId, String role, String content, boolean isSummary) {
+    public void submit(String sessionId, String role, List<MessageBlock> content, boolean isSummary) {
         queue.offer(new WriteTask(sessionId, role, content, isSummary));
     }
 
     public int pending() {
         return queue.size();
+    }
+
+    /**
+     * Synchronously flush all pending messages in the queue to DB.
+     * Used before session deletion to ensure no messages are lost.
+     * Returns the number of messages flushed.
+     */
+    public int flushPending() {
+        List<WriteTask> pending = new ArrayList<>();
+        queue.drainTo(pending);
+        if (pending.isEmpty()) return 0;
+        flush(pending);
+        return pending.size();
     }
 
     private void run() {
@@ -123,8 +137,8 @@ public class MessageWriteWorker {
                     messageStore.save(task.sessionId(), task.role(), task.content(), task.isSummary());
                     log.debug("Fallback write succeeded for message (session={}, role={})", task.sessionId(), task.role());
                 } catch (Exception e) {
-                    log.error("Fallback write also failed for message (session={}, role={}, content={}): {}",
-                            task.sessionId(), task.role(), truncate(task.content(), 100), e.getMessage(), e);
+                    log.error("Fallback write also failed for message (session={}, role={}): {}",
+                            task.sessionId(), task.role(), e.getMessage(), e);
                     stillFailed.add(task);
                 }
             }
@@ -186,10 +200,5 @@ public class MessageWriteWorker {
             deadLetterQueue.clear();
             return size;
         }
-    }
-
-    private static String truncate(String s, int maxLen) {
-        if (s == null) return "null";
-        return s.length() <= maxLen ? s : s.substring(0, maxLen) + "...";
     }
 }

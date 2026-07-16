@@ -2,6 +2,7 @@ package com.harness.preprocess.memory;
 
 import com.harness.ai.model.ChatModelProvider;
 import com.harness.core.model.MemoryMessage;
+import com.harness.core.model.MessageBlock;
 import com.harness.env.EnvConfig;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.UserMessage;
@@ -46,7 +47,7 @@ class MemoryCompressorTest {
         List<MemoryMessage> msgs = new ArrayList<>();
         for (int i = 0; i < count; i++) {
             String role = (i % 2 == 0) ? "user" : "assistant";
-            msgs.add(new MemoryMessage(i, "sess1", role, "Message content " + i, false, Instant.now()));
+            msgs.add(new MemoryMessage(i, "sess1", role, List.of(new MessageBlock(MessageBlock.BlockType.TEXT, "Message content " + i, null)), false, Instant.now()));
         }
         return msgs;
     }
@@ -85,9 +86,9 @@ class MemoryCompressorTest {
         assertThat(result.messagesBefore()).isEqualTo(10);
         assertThat(result.messagesAfter()).isEqualTo(2);
 
-        ArgumentCaptor<String> summaryCaptor = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<List> summaryCaptor = ArgumentCaptor.forClass(List.class);
         verify(messageStore).save(eq("sess1"), eq("system"), summaryCaptor.capture(), eq(true));
-        assertThat(summaryCaptor.getValue()).contains("compressed summary");
+        assertThat(MemoryMessage.text(summaryCaptor.getValue())).contains("compressed summary");
 
         verify(sessionStore).updateLastActive("sess1");
     }
@@ -104,9 +105,9 @@ class MemoryCompressorTest {
 
         assertThat(result.type()).isEqualTo(MemoryCompressor.CompressionResult.CompressionType.MAJOR);
 
-        ArgumentCaptor<String> summaryCaptor = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<List> summaryCaptor = ArgumentCaptor.forClass(List.class);
         verify(messageStore).save(eq("sess1"), eq("system"), summaryCaptor.capture(), eq(true));
-        assertThat(summaryCaptor.getValue()).contains("[Conversation summary]");
+        assertThat(MemoryMessage.text(summaryCaptor.getValue())).contains("[Conversation summary]");
 
         verify(sessionStore).updateLastActive("sess1");
     }
@@ -162,7 +163,7 @@ class MemoryCompressorTest {
         assertThat(result.type()).isEqualTo(MemoryCompressor.CompressionResult.CompressionType.MAJOR);
         assertThat(result.messagesBefore()).isEqualTo(10);
         assertThat(result.messagesAfter()).isEqualTo(2);
-        verify(messageStore).save(eq("sess1"), eq("system"), anyString(), eq(true));
+        verify(messageStore).save(eq("sess1"), eq("system"), anyList(), eq(true));
     }
 
     @Test
@@ -194,9 +195,9 @@ class MemoryCompressorTest {
 
         assertThat(result.type()).isEqualTo(MemoryCompressor.CompressionResult.CompressionType.MAJOR);
 
-        ArgumentCaptor<String> captor = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<List> captor = ArgumentCaptor.forClass(List.class);
         verify(messageStore).save(eq("sess1"), eq("system"), captor.capture(), eq(true));
-        String summary = captor.getValue();
+        String summary = MemoryMessage.text(captor.getValue());
         // Fallback should produce a summary within ~9000 chars
         assertThat(summary.length()).isLessThanOrEqualTo(9000 + 100); // small margin for header
         assertThat(summary).contains("[Conversation summary]");
@@ -235,10 +236,10 @@ class MemoryCompressorTest {
 
         assertThat(result.type()).isEqualTo(MemoryCompressor.CompressionResult.CompressionType.MAJOR);
 
-        ArgumentCaptor<String> captor = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<List> captor = ArgumentCaptor.forClass(List.class);
         verify(messageStore).save(eq("sess1"), eq("system"), captor.capture(), eq(true));
         // Should fall back to truncation
-        assertThat(captor.getValue()).contains("[Conversation summary]");
+        assertThat(MemoryMessage.text(captor.getValue())).contains("[Conversation summary]");
     }
 
     @Test

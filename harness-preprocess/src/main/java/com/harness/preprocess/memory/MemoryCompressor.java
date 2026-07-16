@@ -2,6 +2,7 @@ package com.harness.preprocess.memory;
 
 import com.harness.ai.model.ChatModelProvider;
 import com.harness.core.model.MemoryMessage;
+import com.harness.core.model.MessageBlock;
 import com.harness.env.EnvConfig;
 import com.harness.env.EnvKey;
 import dev.langchain4j.data.message.UserMessage;
@@ -82,7 +83,7 @@ public class MemoryCompressor {
      */
     private CompressionResult doMajorCompression(String sessionId, List<MemoryMessage> messages, int targetTokens, int totalBudget) {
         String summary = generateDecayedSummary(messages, targetTokens, totalBudget);
-        messageStore.save(sessionId, "system", summary, true);
+        messageStore.save(sessionId, "system", List.of(new MessageBlock(MessageBlock.BlockType.TEXT, summary, null)), true);
         sessionStore.updateLastActive(sessionId);
 
         List<MemoryMessage> freshMessages = messageStore.loadForContext(sessionId);
@@ -108,7 +109,7 @@ public class MemoryCompressor {
         for (int i = 0; i < total; i++) {
             MemoryMessage msg = messages.get(i);
             String recency = getTimeDecayLabel(i, total);
-            conversation.append(String.format("[%s] %s: %s\n", recency, msg.role(), msg.content()));
+            conversation.append(String.format("[%s] %s: %s\n", recency, msg.role(), msg.text()));
         }
 
         int targetChars = targetTokens * 3;
@@ -176,11 +177,11 @@ public class MemoryCompressor {
         StringBuilder sb = new StringBuilder("[Conversation summary]\n");
         for (int i = messages.size() - 1; i >= 0; i--) {
             MemoryMessage msg = messages.get(i);
-            String line = msg.role() + ": " + msg.content() + "\n";
+            String line = msg.role() + ": " + msg.text() + "\n";
             if (sb.length() + line.length() > targetChars) {
                 int remaining = targetChars - sb.length() - 3;
                 if (remaining > 0) {
-                    sb.insert(0, msg.role() + ": " + msg.content().substring(0, Math.min(remaining, msg.content().length())) + "...\n");
+                    sb.insert(0, msg.role() + ": " + msg.text().substring(0, Math.min(remaining, msg.text().length())) + "...\n");
                 }
                 break;
             }

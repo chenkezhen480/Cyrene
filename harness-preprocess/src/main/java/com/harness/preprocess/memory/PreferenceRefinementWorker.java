@@ -132,7 +132,7 @@ public class PreferenceRefinementWorker {
         StringBuilder conversation = new StringBuilder();
         for (MemoryMessage msg : messages) {
             if (!msg.isSummary()) {
-                conversation.append(msg.role()).append(": ").append(msg.content()).append("\n");
+                conversation.append(msg.role()).append(": ").append(msg.text()).append("\n");
             }
         }
 

@@ -68,11 +68,14 @@ CREATE TABLE IF NOT EXISTS `sessions` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='会话表 - 管理用户对话会话的生命周期';
 
 -- ========== 消息表 ==========
+-- content 为结构化 JSON 数组，统一格式：
+-- 纯文字消息: [{"type":"TEXT","text":"你好"}]
+-- 含产物消息: [{"type":"TEXT","text":"已生成"},{"type":"ARTIFACT","artifactId":"xxx","metadata":{"type":"IMAGE",...}}]
 CREATE TABLE IF NOT EXISTS `messages` (
     `id`            BIGINT          NOT NULL AUTO_INCREMENT                          COMMENT '自增主键',
     `session_id`    VARCHAR(64)     NOT NULL     DEFAULT ''                          COMMENT '所属会话ID',
     `role`          VARCHAR(16)     NOT NULL     DEFAULT ''                          COMMENT '角色（user/assistant/system）',
-    `content`       MEDIUMTEXT      NOT NULL                                         COMMENT '消息内容',
+    `content`       JSON            NOT NULL                                         COMMENT '结构化内容块数组（TEXT/ARTIFACT）',
     `is_summary`    TINYINT(1)      NOT NULL DEFAULT 0                               COMMENT '是否为压缩摘要（0=原始消息，1=摘要）',
     `created_at`    DATETIME(3)     NOT NULL DEFAULT CURRENT_TIMESTAMP(3)           COMMENT '创建时间',
     PRIMARY KEY (`id`),
@@ -93,3 +96,8 @@ CREATE TABLE IF NOT EXISTS `user_preferences` (
     UNIQUE INDEX `idx_pref_user_category` (`user_id`, `category`),
     INDEX `idx_pref_user_id` (`user_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='用户偏好表 - 存储从对话中提炼的用户长期偏好（长期记忆）';
+
+-- ========== 已有数据库迁移：将 content 从 MEDIUMTEXT 改为 JSON ==========
+-- 如果是已有库，执行以下语句迁移：
+-- ALTER TABLE messages MODIFY COLUMN content JSON NOT NULL COMMENT '结构化内容块数组（TEXT/ARTIFACT）';
+-- UPDATE messages SET content = JSON_ARRAY(JSON_OBJECT('type', 'TEXT', 'text', content)) WHERE JSON_VALID(content) = 0;

@@ -80,6 +80,30 @@ public final class EnvKey {
     /** 分类器最大输出 token，默认 50（只够输出压缩 JSON） */
     public static final String MODEL_CLASSIFIER_MAX_TOKENS = "HARNESS_MODEL_CLASSIFIER_MAX_TOKENS";
 
+    // ==================== 8. Image Generation Model (图片生成) ====================
+    /** 图片生成 provider（如 openai/azure），默认 openai */
+    public static final String TOOL_IMAGE_GEN_PROVIDER   = "HARNESS_TOOL_IMAGE_GEN_PROVIDER";
+    /** 图片生成 API key */
+    public static final String TOOL_IMAGE_GEN_API_KEY    = "HARNESS_TOOL_IMAGE_GEN_API_KEY";
+    /** 图片生成 API base URL，默认 https://api.openai.com/v1 */
+    public static final String TOOL_IMAGE_GEN_BASE_URL   = "HARNESS_TOOL_IMAGE_GEN_BASE_URL";
+    /** 图片生成模型名，默认 dall-e-3 */
+    public static final String TOOL_IMAGE_GEN_MODEL      = "HARNESS_TOOL_IMAGE_GEN_MODEL";
+
+    // ==================== 9. Video Generation Model (视频生成) ====================
+    /** 视频生成 provider（如 kling/runway/sora） */
+    public static final String TOOL_VIDEO_GEN_PROVIDER   = "HARNESS_TOOL_VIDEO_GEN_PROVIDER";
+    /** 视频生成 API key */
+    public static final String TOOL_VIDEO_GEN_API_KEY    = "HARNESS_TOOL_VIDEO_GEN_API_KEY";
+    /** 视频生成 API base URL（含版本路径，如 https://api.kling.ai/v1） */
+    public static final String TOOL_VIDEO_GEN_BASE_URL   = "HARNESS_TOOL_VIDEO_GEN_BASE_URL";
+    /** 视频生成模型名 */
+    public static final String TOOL_VIDEO_GEN_MODEL      = "HARNESS_TOOL_VIDEO_GEN_MODEL";
+    /** 视频提交 endpoint 路径（拼接在 BASE_URL 后），默认 /submit */
+    public static final String TOOL_VIDEO_GEN_SUBMIT_PATH = "HARNESS_TOOL_VIDEO_GEN_SUBMIT_PATH";
+    /** 视频状态查询 endpoint 路径（拼接在 BASE_URL 后 + /{taskId}），默认 /status */
+    public static final String TOOL_VIDEO_GEN_STATUS_PATH = "HARNESS_TOOL_VIDEO_GEN_STATUS_PATH";
+
     // ==================== Auth ====================
     public static final String AUTH_MODE             = "HARNESS_AUTH_MODE";
     public static final String AUTH_TOKEN            = "HARNESS_AUTH_TOKEN";
@@ -190,8 +214,8 @@ public final class EnvKey {
     /** ReAct 循环最大迭代次数，默认 10 */
     public static final String REACT_MAX_ITERATIONS      = "HARNESS_REACT_MAX_ITERATIONS";
     public static final String REACT_STRATEGY            = "HARNESS_REACT_STRATEGY";
-    /** 工具调用出错时是否立即停止循环，默认 false（让 LLM 自行决策） */
-    public static final String REACT_STOP_ON_TOOL_ERROR  = "HARNESS_REACT_STOP_ON_TOOL_ERROR";
+    /** 工具失败后最大重试轮数（LLM 每轮可调整策略），默认 3 */
+    public static final String REACT_MAX_TOOL_RETRIES    = "HARNESS_REACT_MAX_TOOL_RETRIES";
     /** 反思间隔轮数（每隔 N 步注入反思消息），默认 3（0=禁用） */
     public static final String REACT_REFLECTION_INTERVAL = "HARNESS_REACT_REFLECTION_INTERVAL";
     /** 循环检测阈值（连续 N 次相同工具调用判定为循环），默认 3（0=禁用） */
@@ -227,6 +251,8 @@ public final class EnvKey {
     public static final String SERVER_IDLE_TIMEOUT   = "HARNESS_SERVER_IDLE_TIMEOUT";
     /** Jetty 线程池大小，默认 availableProcessors * 2（最少 8） */
     public static final String SERVER_WORKERS        = "HARNESS_SERVER_WORKERS";
+    /** HTTP 请求体最大尺寸（MB），默认 20 */
+    public static final String SERVER_MAX_REQUEST_SIZE_MB = "HARNESS_SERVER_MAX_REQUEST_SIZE_MB";
 
     // ==================== Multimodal ====================
     public static final String MULTIMODAL_IMAGE_ENABLED   = "HARNESS_MULTIMODAL_IMAGE_ENABLED";
@@ -306,6 +332,20 @@ public final class EnvKey {
     public static final String KNOWLEDGE_PDF_ENABLED         = "HARNESS_KNOWLEDGE_PDF_ENABLED";
     public static final String KNOWLEDGE_DOCX_ENABLED        = "HARNESS_KNOWLEDGE_DOCX_ENABLED";
     public static final String KNOWLEDGE_XLSX_ENABLED        = "HARNESS_KNOWLEDGE_XLSX_ENABLED";
+
+    // ==================== Artifact (文件生成产物) ====================
+    /** 产物存储目录，默认 ./artifacts */
+    public static final String ARTIFACT_DIR              = "HARNESS_ARTIFACT_DIR";
+    /** 单文件最大大小（MB），默认 100 */
+    public static final String ARTIFACT_MAX_SIZE_MB      = "HARNESS_ARTIFACT_MAX_SIZE_MB";
+    /** 沙盒 Docker 镜像名，默认 cyrene-sandbox */
+    public static final String SANDBOX_DOCKER_IMAGE      = "HARNESS_SANDBOX_DOCKER_IMAGE";
+    /** 沙盒执行超时（秒），默认 120 */
+    public static final String SANDBOX_TIMEOUT_SECONDS   = "HARNESS_SANDBOX_TIMEOUT_SECONDS";
+    /** 沙盒内存限制（MB），默认 512 */
+    public static final String SANDBOX_MEMORY_MB         = "HARNESS_SANDBOX_MEMORY_MB";
+    /** 同时运行的沙盒容器数上限（信号量），默认 3 */
+    public static final String SANDBOX_MAX_CONCURRENT    = "HARNESS_SANDBOX_MAX_CONCURRENT";
 
     // ==================== Skill ====================
     /** Skill 文件目录，默认 ./skills */

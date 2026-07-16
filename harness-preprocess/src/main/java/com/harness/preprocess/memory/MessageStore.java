@@ -1,6 +1,7 @@
 package com.harness.preprocess.memory;
 
 import com.harness.core.model.MemoryMessage;
+import com.harness.core.model.MessageBlock;
 
 import java.util.List;
 
@@ -8,7 +9,11 @@ import java.util.List;
  * Persistence interface for conversation messages within a session.
  */
 public interface MessageStore {
-    void save(String sessionId, String role, String content, boolean isSummary);
+    /**
+     * Save a message with structured content blocks.
+     */
+    void save(String sessionId, String role, List<MessageBlock> content, boolean isSummary);
+
     List<MemoryMessage> loadForContext(String sessionId);
     int countUserMessages(String sessionId);
     int sumUserContentLength(String sessionId);

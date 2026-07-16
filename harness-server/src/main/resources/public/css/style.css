@@ -1039,10 +1039,69 @@ input[type="file"].input::file-selector-button:hover {
   max-width: 100%;
   border-radius: var(--radius-md);
 }
+.md-body video {
+  max-width: 100%;
+  border-radius: var(--radius-md);
+}
 
 .md-body input[type="checkbox"] {
   margin-right: 0.4em;
   accent-color: var(--rose);
+}
+
+/* ── Attached Files ── */
+.attached-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-bottom: 10px;
+}
+
+.attached-file-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  max-width: 240px;
+}
+
+.attached-file-icon {
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.attached-file-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+}
+
+.attached-file-size {
+  font-size: 11px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.attached-file-remove {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  padding: 0 2px;
+  flex-shrink: 0;
+  transition: color 0.15s;
+}
+
+.attached-file-remove:hover {
+  color: #ef4444;
 }
 
 /* ── Chat Input ── */
@@ -1244,6 +1303,18 @@ input[type="file"].input::file-selector-button:hover {
   padding: 8px 12px;
   margin: 8px 0;
   font-size: var(--text-sm);
+  animation: tool-call-enter 0.4s cubic-bezier(0.16, 1, 0.3, 1) both;
+  position: relative;
+  overflow: hidden;
+}
+/* Shimmer sweep on appear */
+.tool-call-block::before {
+  content: '';
+  position: absolute;
+  top: 0; left: -100%;
+  width: 100%; height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(139,126,200,0.12), transparent);
+  animation: tool-call-shimmer 1.2s ease 0.2s both;
 }
 
 .tool-call-header {
@@ -1251,13 +1322,16 @@ input[type="file"].input::file-selector-button:hover {
   font-weight: 500;
   font-family: var(--font-mono);
   font-size: 0.82em;
+  animation: tool-call-header-glow 2.5s ease-in-out infinite;
 }
 .tool-call-header svg {
   animation: crystal-shimmer 3s ease-in-out infinite;
 }
 @keyframes crystal-shimmer {
-  0%, 100% { opacity: 1; filter: brightness(1); }
-  50% { opacity: 0.8; filter: brightness(1.3); }
+  0%, 100% { opacity: 1; filter: brightness(1); transform: rotate(0deg); }
+  25% { filter: brightness(1.4) hue-rotate(15deg); }
+  50% { opacity: 0.85; filter: brightness(1.2) hue-rotate(-10deg); transform: rotate(3deg); }
+  75% { filter: brightness(1.3) hue-rotate(5deg); }
 }
 
 .tool-call-action {
@@ -1265,6 +1339,63 @@ input[type="file"].input::file-selector-button:hover {
   font-size: 0.78em;
   margin-top: 4px;
   line-height: 1.4;
+  animation: tool-call-action-enter 0.5s ease 0.15s both;
+}
+
+/* Running state — frosted glass glow */
+.tool-call-running {
+  background: rgba(139, 126, 200, 0.12);
+  border-color: rgba(139, 126, 200, 0.35);
+  box-shadow:
+    0 0 12px 2px rgba(139, 126, 200, 0.15),
+    0 0 30px 6px rgba(139, 126, 200, 0.08),
+    inset 0 0 8px rgba(255, 255, 255, 0.04);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  animation: tool-call-running-pulse 2s ease-in-out infinite;
+}
+.tool-call-running::after {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, rgba(139,126,200,0.2), transparent 40%, transparent 60%, rgba(232,160,191,0.15));
+  pointer-events: none;
+  animation: tool-call-running-sweep 3s linear infinite;
+}
+@keyframes tool-call-running-pulse {
+  0%, 100% { box-shadow: 0 0 12px 2px rgba(139,126,200,0.15), 0 0 30px 6px rgba(139,126,200,0.08), inset 0 0 8px rgba(255,255,255,0.04); }
+  50% { box-shadow: 0 0 18px 4px rgba(139,126,200,0.25), 0 0 40px 10px rgba(139,126,200,0.12), inset 0 0 12px rgba(255,255,255,0.06); }
+}
+@keyframes tool-call-running-sweep {
+  0% { opacity: 0.6; transform: rotate(0deg); }
+  50% { opacity: 1; }
+  100% { opacity: 0.6; transform: rotate(360deg); }
+}
+
+@keyframes tool-call-enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.98);
+    border-color: transparent;
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    border-color: rgba(139, 126, 200, 0.2);
+  }
+}
+@keyframes tool-call-shimmer {
+  from { left: -100%; }
+  to { left: 100%; }
+}
+@keyframes tool-call-header-glow {
+  0%, 100% { text-shadow: 0 0 0 transparent; }
+  50% { text-shadow: 0 0 8px rgba(139, 126, 200, 0.3); }
+}
+@keyframes tool-call-action-enter {
+  from { opacity: 0; transform: translateX(-4px); }
+  to { opacity: 1; transform: translateX(0); }
 }
 
 /* ── Compress Blocks ── */
@@ -1279,10 +1410,23 @@ input[type="file"].input::file-selector-button:hover {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  animation: compress-enter 0.35s ease both;
 }
 
 .compress-icon {
   font-size: 0.9em;
+  animation: compress-squeeze 0.6s ease 0.1s both;
+}
+
+@keyframes compress-enter {
+  from { opacity: 0; transform: scale(0.95); }
+  to { opacity: 1; transform: scale(1); }
+}
+@keyframes compress-squeeze {
+  0% { transform: scaleX(1) scaleY(1); }
+  30% { transform: scaleX(1.3) scaleY(0.7); }
+  60% { transform: scaleX(0.9) scaleY(1.1); }
+  100% { transform: scaleX(1) scaleY(1); }
 }
 
 .compress-label {
@@ -1778,6 +1922,39 @@ tr.status-dusk td {
 }
 
 /* ── Reduced Motion ── */
+/* Artifact loading animation — starfield */
+.artifact-loading-canvas {
+  width: 300px;
+  aspect-ratio: 1;
+  background: radial-gradient(ellipse at 50% 40%, var(--surface-3) 0%, var(--surface-2) 60%, var(--surface-1) 100%);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding-bottom: 24px;
+  position: relative;
+  overflow: hidden;
+}
+.artifact-loading-canvas .star {
+  position: absolute;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(255,255,255,0.95) 0%, rgba(200,190,230,0.4) 60%, transparent 100%);
+  box-shadow: 0 0 4px 1px rgba(200,190,230,0.3);
+  pointer-events: none;
+  animation: star-blink ease-in-out infinite alternate;
+}
+.artifact-loading-text {
+  color: var(--mist);
+  font-size: 0.85rem;
+  letter-spacing: 0.5px;
+  z-index: 1;
+}
+
+@keyframes star-blink {
+  0% { opacity: 0; transform: scale(0.5); }
+  50% { opacity: 1; transform: scale(1.2); }
+  100% { opacity: 0.15; transform: scale(0.8); }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

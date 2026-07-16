@@ -4,6 +4,7 @@ import com.harness.core.model.MemoryMessage;
 import com.harness.core.model.Session;
 import com.harness.env.MysqlConnectionPool;
 import com.harness.preprocess.memory.MessageStore;
+import com.harness.preprocess.memory.MessageWriteWorker;
 import com.harness.preprocess.memory.SessionMessageCache;
 import com.harness.preprocess.memory.SessionStore;
 import io.javalin.http.Context;
@@ -12,6 +13,7 @@ import org.slf4j.LoggerFactory;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
+import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Duration;
@@ -27,12 +29,14 @@ public class SessionHandler {
     private final SessionStore sessionStore;
     private final MessageStore messageStore;
     private final SessionMessageCache cache;
+    private final MessageWriteWorker messageWriteWorker;
 
     public SessionHandler(SessionStore sessionStore, MessageStore messageStore,
-                          SessionMessageCache cache) {
+                          SessionMessageCache cache, MessageWriteWorker messageWriteWorker) {
         this.sessionStore = sessionStore;
         this.messageStore = messageStore;
         this.cache = cache;
+        this.messageWriteWorker = messageWriteWorker;
     }
 
     /**
@@ -237,11 +241,29 @@ public class SessionHandler {
             return;
         }
 
+        // Flush any pending async writes before deletion
+        int flushed = messageWriteWorker.flushPending();
+        if (flushed > 0) {
+            log.debug("[Server] Flushed {} pending messages before session delete", flushed);
+        }
+
         // Transaction: delete session + messages atomically
         Connection conn = null;
         try {
             conn = MysqlConnectionPool.getConnection();
             conn.setAutoCommit(false);
+
+            // Diagnostic: count messages before delete
+            int existingCount = 0;
+            try (PreparedStatement ps = conn.prepareStatement(
+                    "SELECT COUNT(*) FROM messages WHERE session_id = ?")) {
+                ps.setString(1, sessionId);
+                ResultSet rs = ps.executeQuery();
+                if (rs.next()) existingCount = rs.getInt(1);
+            }
+            if (existingCount == 0) {
+                log.warn("[Server] Session {} has 0 messages in DB before delete — possible stale UI or write failure", sessionId);
+            }
 
             int deleted;
             try (PreparedStatement ps = conn.prepareStatement(
