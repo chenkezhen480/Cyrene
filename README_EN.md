@@ -1,178 +1,102 @@
 <p align="right"><a href="./README.md">中文</a></p>
 
-# Cyrene Agent - Autonomous AI Application Framework
+# Cyrene Agent — Out-of-the-Box AI Application Framework
 
-A Java AI Agent application development framework built on the **Harness orchestration architecture** with autonomous decision-making. For each request, it independently decides whether to enable thinking, use knowledge base retrieval, apply query rewriting, and enable web search — avoiding unnecessary RAG and thinking costs for simple queries (e.g., greetings, thanks). Provides pluggable model providers, built-in RAG knowledge base, session memory, and a 5-layer pipeline orchestration — use it as a scaffold to rapidly build and customize business-oriented Agent applications.  1768576157@qq.com
+> **In one sentence: Point it at your project directory, and Cyrene Agent automatically scans REST APIs, generates tool schemas, and plugs them into the conversation — your AI Agent can now interact with your system, no hand-written integration code needed.**
 
-## First Launch
+A Java AI Agent framework built on the **Harness orchestration architecture**. No manual API wiring required — includes automatic project API discovery, 7 model types, RAG knowledge base, session memory, and autonomous decision routing, so developers focus on business logic rather than plumbing.
 
-To integrate with an AI application, we inevitably need to connect to existing systems — that's exactly what initialization is for. Cyrene Agent has built-in project API discovery capabilities that automatically scan your existing projects. On top of basic Glob and Grep, I've also added ClassHierarchy for recursive parent-class lookup of discovered classes, retrieving complete parameter structures. It identifies REST API endpoints and generates structured parameter schemas, giving the Agent the ability to interact with the host system.
+## Key Feature: One-Click Project API Integration
 
-**One-click project API discovery:**
+Traditional AI Agent integration with existing systems requires manually writing API call code for each endpoint. Cyrene Agent automates this entirely:
 
-> On first launch via the Web UI, simply specify the project directory to automatically scan all Controller endpoints and generate a `project-apis.json` configuration file. Supports mainstream frameworks like Spring Boot, Express, Flask, etc., with automatic DTO/VO class inheritance resolution.
+```
+Specify project directory → Auto-scan Controllers → Parse DTO/VO inheritance → Generate project-apis.json → Tools auto-registered to Agent
+```
 
-![Initial Interface](docs/assets/init-scan.png)
+**How it works:**
 
-![Scan Results](docs/assets/scan-result.png)
+1. **Glob** scans the project for Controller files (supports Spring Boot, Express, Flask, and other major frameworks)
+2. **Grep** extracts route annotations and context (`@GetMapping`, `@PostMapping`, `router.get()`, etc.)
+3. **ReadClassHierarchy** recursively parses input/output parameter class inheritance chains (max depth 2) for complete field structures
+4. Generates a structured `project-apis.json` — each endpoint becomes a tool definition (name, description, parameter schema)
+5. Tools auto-register into the Agent's toolset, ready to use in conversation
 
-![API Details](docs/assets/api-detail.png)
+**Result:** Start the service → specify the project directory in Web UI → scan completes → Agent can now call your project's APIs. Zero integration code written.
 
-![Callback Demo](docs/assets/call-back.png)
+```
+User: "Help me query all in-use devices from the asset management system"
+Agent: [auto-calls the discovered GET /api/assets?status=in_use endpoint]
+Agent: "Found 156 devices currently in use, here's the list..."
+```
 
-## Quickly Build an AI Agent for Your System
+## Autonomous Decision Routing
 
-Building an AI Agent for your product doesn't have to start from scratch. Cyrene Agent provides production-ready foundational capabilities — tool configuration initialization, model abstraction, RAG, memory, tools, audit — so you can focus on business logic rather than plumbing. Configure models, register tools, and go live.
+Each request automatically determines which capabilities are needed, avoiding unnecessary costs:
 
-### Orchestration Architecture
+| Scenario | Thinking | Knowledge Base | Web Search | Query Rewrite |
+|----------|----------|----------------|------------|---------------|
+| "Hello" | ✗ | ✗ | ✗ | ✗ |
+| "What's our reimbursement policy?" | ✗ | ✓ | ✗ | ✓ (multi-query) |
+| "What's the weather in Shanghai today?" | ✗ | ✗ | ✓ | ✗ |
+| "Analyze the feasibility of this requirement" | ✓ | ✓ | ✗ | ✗ |
 
-Cyrene Agent uses the **Harness orchestration pattern**: a generic orchestration framework wraps domain components, with the framework handling cross-cutting concerns (model routing, memory, audit, tool execution) and business logic plugging in through predefined extension points. This means you can swap models, add tools, or adjust memory strategies without touching the pipeline core.
-
-## Core Features
-
-### One-Click Project API Discovery
-On first launch, the system automatically starts the Web UI console based on `HARNESS_PROJECT_DISCOVERY_ENABLED=true`, loading the glob, grep, and `read_class_hierarchy` tool trio. Glob handles file discovery, grep searches for key context (default 7 lines). By obtaining input/output parameter classes and calling `read_class_hierarchy` to retrieve parent class structures for complete parameter definitions (max recursion depth of 2), it generates a tool JSON file for the target project. This file is parsed and loaded into memory on subsequent project starts, managed through a set of JSON editing and list/get/read tools.
-
-### Autonomous Decision-Making
-A heuristic routing layer is added between the input and preprocessing layers, controlled by `HARNESS_GAP_ANALYSIS_ENABLED=true`. For each request, the system autonomously decides whether to enable thinking, use knowledge base retrieval, apply query rewriting, and enable web search — avoiding unnecessary RAG and thinking costs for simple queries (e.g., greetings, thanks).
-
-**Three-tier decision funnel (priority descending):**
+**Three-tier funnel (priority descending):**
 
 | Tier | Mechanism | Latency | Description |
 |------|-----------|---------|-------------|
-| Tier 0 | Explicit override | 0ms | Parameters specified directly in request context, highest priority |
-| Tier 1 | Rule engine | <1ms | Hardcoded regex/keyword matching for common scenarios (greeting intercept, time-sensitive web search, deep analysis thinking) |
-| Tier 2 | LLM classification | ~200ms | Lightweight Classifier model (default GLM-4.7-flash), analyzes remaining undetermined fields |
+| Tier 0 | Explicit override | 0ms | Parameters specified in request context |
+| Tier 1 | Rule engine | <1ms | Regex/keyword matching (greeting intercept, time-sensitive web search, etc.) |
+| Tier 2 | LLM classification | ~200ms | Lightweight Classifier model analyzes remaining fields |
 
-**Four independent decision fields:**
+Enabled via `HARNESS_GAP_ANALYSIS_ENABLED=true`.
 
-| Field | Description |
-|-------|-------------|
-| `needsThinking` | Whether to enable extended thinking |
-| `needsKnowledgeBase` | Whether to enable RAG knowledge base retrieval |
-| `rewriteStrategy` | Query rewriting strategy (NONE / HYDE / MULTI_QUERY / STEP_BACK) |
-| `needsWebSearch` | Whether to enable web search |
+## Built-In Capabilities
 
-Each field is decided independently; unmatched fields fall back to environment variables. Decision results are written to Trace metadata (`gap_source` = explicit / rule / llm / default). The system can later be swapped for a lightweight local ONNX model trained on semantic classification.
+### 7 Independent Model Types
 
-### 5-Layer Pipeline Architecture
+Each model can be independently configured with its own provider, API key, and endpoint — mix and match freely:
+
+| Type | Purpose | Providers |
+|------|---------|-----------|
+| Chat | Conversation + tool calling | OpenAI, Anthropic, Ollama, DashScope, etc. |
+| Vision | Image/video understanding | OpenAI, Anthropic |
+| Voice | Speech recognition + synthesis | OpenAI |
+| Embedding | Vectorization | OpenAI, Ollama |
+| Rerank | Search result reranking | OpenAI-compatible APIs |
+| Classifier | Intent classification | OpenAI-compatible APIs |
+| Realtime | Real-time multimodal (reserved) | — |
+
+### RAG Knowledge Base
+
+Upload documents (PDF, DOCX, XLSX, TXT, Markdown, etc.) → automatic extraction, chunking, embedding, and storage. Supports PostgreSQL pgvector and Milvus backends, switchable via `HARNESS_RAG_PROVIDER`.
+
+Built-in query rewriting (HyDE / Multi-Query / Step-Back), semantic context enhancement, optional Rerank. Large files automatically use a "split → merge → parallel summarize" strategy — a 1MB file requires only 5-8 LLM calls.
+
+### Session Memory
+
+- **Short-term**: Per-session LRU cache with optional Redis distributed cache
+- **Long-term**: AI-extracted user preferences from completed sessions, auto-injected into System Prompt
+- **Smart compression**: Minor compression strips tool call blocks (zero cost); major compression AI-distills old messages with time-decay weighting
+
+### 5-Layer Pipeline
 
 ```
 Input → Session Lifecycle → Preprocess → ReAct Loop (AI ↔ Tool ↔ Inspection) → Post-process → Audit
 ```
 
-Each request flows through a structured pipeline where each layer is independently observable, configurable, and traceable.
-
-### 7 Independent Model Types
-
-Each model type can be independently configured with its own provider, API key, and endpoint:
-
-| Type | Purpose | Supported Providers |
-|------|---------|---------------------|
-| Chat | Conversation + tool calling | OpenAI, Anthropic, Ollama, DashScope, etc. |
-| Vision | Image/video understanding | OpenAI, Anthropic |
-| Voice | Speech recognition + synthesis | OpenAI |
-| Embedding | Multimodal vectorization | OpenAI, Ollama |
-| Rerank | Search result reranking | OpenAI-compatible APIs |
-| Realtime | Real-time multimodal (reserved) | — |
-| Classifier | Gap Analyzer Tier 2 LLM classification | OpenAI |
-
-Mix and match freely — e.g., Chat with DashScope, Embedding with OpenAI, Rerank with local Ollama.
-
-### Built-in RAG Knowledge Base
-
-Upload documents via API (PDF, DOCX, XLSX, TXT, Markdown, etc.) — automatic text extraction, semantic chunking, embedding, and storage in vector database (PostgreSQL pgvector or Milvus, switchable via `HARNESS_RAG_PROVIDER`).
-
-**Complete RAG Pipeline:**
-
-```
-User Query
-  │
-  ▼
-Query Rewriting (optional, pluggable via env vars)
-  │  none       → Pass-through original query (default)
-  │  hyde       → LLM generates hypothetical document as retrieval query (improves precision)
-  │  multi-query → LLM generates multiple rephrased queries, retrieves for each, merges results (improves recall)
-  │  step-back  → LLM generates a more general abstract query (for overly specific questions)
-  │
-  ▼
-Vector Retrieval (unified interface, backend switchable via env vars)
-  │  pgvector   → cosine similarity + optional full-text search (tsvector/tsquery)
-  │  Milvus     → BM25 sparse + semantic vector hybrid search (HARNESS_RAG_BM25_WEIGHT controls weight)
-  │  Results ranked by similarity score, with HARNESS_RAG_SCORE_THRESHOLD filtering
-  │
-  ▼
-Semantic Context Enhancement
-  │  Heuristic detection of truncated chunks (punctuation/structure/continuation words)
-  │  Automatic prev_chunk lookback for context completion (max 2 rounds)
-  │
-  ▼
-Rerank (optional)
-  │  Cross-encoder fine-ranking, or sort by similarity score
-  │
-  ▼
-Inject into System Prompt → LLM generates response using knowledge base context + conversation history
-```
-
-**Query Rewriting Strategy Comparison:**
-
-| Strategy | Principle | Use Case |
-|----------|-----------|----------|
-| HyDE | LLM generates a "fake answer", uses it for vector retrieval | Short/abstract queries where direct embedding performs poorly |
-| Multi-Query | LLM generates N rephrased queries, retrieves and merges for each | Same question with multiple expressions, single query has incomplete recall |
-| Step-Back | LLM generates a more general version, first retrieves background knowledge | Overly specific questions with low direct retrieval hit rate |
-
-**Large File Processing:** Files exceeding 100KB use a "semantic splitting → merge to 40% of model context → parallel summarization" strategy, compressing hundreds of LLM calls to single digits (~5-8 calls for a 1MB file). Context window size is auto-detected from model name.
-
-### Session Memory & Intelligent Compression
-
-- **Short-term memory**: Per-session LRU cache for conversation history, with distributed Redis cache support
-- **Long-term memory**: AI-extracted user preferences from completed sessions, automatically injected into System Prompt
-- **Minor compression**: Strip tool call blocks in ReAct loop (pure code, zero cost)
-- **Major compression**: AI-powered intelligent distillation of old messages when context window approaches limit (time-decay weighted: RECENT / MIDDLE / OLD)
-
-**Compression flow:** Compress old messages → rebuild cache from DB → then save current user message. The current user message is never compressed.
-
-### Multimodal Fallback
-
-When the Chat model lacks vision/audio capabilities, `FallbackChatModel` transparently routes to Vision or Voice providers — no business code changes needed.
-
-### ReAct Engine & Inspection
-
-Tool calling loop with per-step heuristic result checking (PASS / TOOL_ERROR / WRONG_TOOL / INSUFFICIENT / NEEDS_RETRY). Configurable error-stop behavior, with automatic context trimming during long tool interactions.
-
-### Sub-Agent
-
-LLM spawns sub-tasks via the `spawn_subagent` tool, supporting dependency resolution and parallel execution. Each sub-agent has its own independent ReActEngine instance.
-
-### MCP Remote Tools
-
-Register external tools via MCP (Model Context Protocol) HTTP. Supports JSON config files or environment variables, with automatic `tools/list` discovery and caching.
-
-### Web Search
-
-`WebSearchTool` supports a multi-engine fallback chain: Tavily → SerpAPI → DuckDuckGo. Engines without API keys are automatically skipped; DuckDuckGo is always available.
-
-### Project API Discovery
-
-Automatically scans existing projects to identify REST API endpoints and generate structured configurations. Discovery tools (`code_glob`, `code_grep`, `read_class_hierarchy`) are registered into the main toolset when `HARNESS_PROJECT_DISCOVERY_ENABLED=true` and can be used in regular conversations. `read_class_hierarchy` supports multi-language class structure parsing (Java/C#/C++/Python/JS/TS, etc.) with automatic `.git` detection for cross-module parent class lookup.
-
-### Streaming Output & Cancellation
-
-- **SSE streaming output**: With `context.outputMode=streaming`, real-time push of tokens, ReAct steps, and completion events
-- **Request cancellation**: `DELETE /api/chat/{sessionId}` triggers `CancellationToken`, interrupting LLM calls, tool execution, and sub-agent threads
-- **JWT sliding window refresh**: Auto-refreshes when token remaining lifetime falls below threshold; new token returned via `X-New-Token` response header
+Each layer is independently observable, configurable, and traceable. ReAct engine includes heuristic inspection (PASS / TOOL_ERROR / WRONG_TOOL / INSUFFICIENT), automatic retry on tool failure, and loop detection.
 
 ### Six-Layer Fault Tolerance
 
-| Layer | Mechanism | Strategy |
-|-------|-----------|----------|
-| Tool call retry | Tool execution failure | Up to 3 retries, error results passed to LLM for decision |
-| LLM API retry | 429/503/timeout | Exponential backoff (1s→2s→4s), up to 3 times |
-| MCP disconnect recovery | IOException | Rebuild OkHttpClient and retry once |
-| Message write retry | DB write failure | Retry 3 times → single sync write → dead letter queue |
-| Stuck refinement recovery | Quality assessment stuck | Periodic scan, CAS reset to pending |
-| Knowledge base batch rollback | Batch insert failure | Explicit transaction rollback + orphan file cleanup |
+| Layer | Strategy |
+|-------|----------|
+| Tool call | Up to 3 retries, errors passed to LLM for decision |
+| LLM API | Exponential backoff (1s→2s→4s), up to 3 times |
+| MCP disconnect | Rebuild connection and retry once |
+| Message write | Retry 3 times → sync write → dead letter queue |
+| Stuck refinement | Periodic scan, CAS reset |
+| Knowledge base batch | Transaction rollback + orphan file cleanup |
 
 ## Quick Start
 
@@ -180,89 +104,56 @@ Automatically scans existing projects to identify REST API endpoints and generat
 
 - Java 21+
 - Maven 3.8+
-- PostgreSQL + pgvector extension (RAG, optional)
+- PostgreSQL + pgvector (RAG, optional)
 - MySQL 8+ (Audit + session memory, optional)
 - Redis (Distributed cache, optional)
 
-### Build
+### Build & Run
 
 ```bash
-# Build all modules (produces fat JARs for cli and server)
+# Build
 mvn clean package -DskipTests
 
-# Run tests
-mvn test
-
-# Run integration tests (requires database)
-mvn test -Pintegration
-```
-
-### Configuration
-
-```bash
+# Configure
 cp .env.example .env
 # Edit .env, configure at minimum:
 #   HARNESS_MODEL_CHAT_API_KEY
 #   HARNESS_MODEL_CHAT_PROVIDER
 #   HARNESS_MODEL_CHAT_BASE_URL
 #   HARNESS_MODEL_CHAT_MODEL
+
+# Start (default port 8080)
+java -jar harness-server/target/harness-server-${revision}.jar
 ```
 
-`.env` is auto-loaded by `EnvConfig` from the working directory; system environment variables take precedence.
+After startup, visit the Web UI — it will guide you through the project API scan on first launch.
 
-#### Environment Variable Categories
+### Environment Variable Tiers
 
 | Level | Variable | Description |
 |-------|----------|-------------|
-| **Required** | `HARNESS_MODEL_CHAT_API_KEY` | Chat model API key, required by all provider constructors |
-| **Required** | `HARNESS_MODEL_CHAT_BASE_URL` | API endpoint, required for non-OpenAI providers (e.g., DashScope) |
-| **Required** | `HARNESS_MODEL_CHAT_MODEL` | Model name, defaults to gpt-4o if not set |
+| **Required** | `HARNESS_MODEL_CHAT_API_KEY` | Chat model API key |
+| **Required** | `HARNESS_MODEL_CHAT_BASE_URL` | API endpoint (required for non-OpenAI providers) |
+| **Required** | `HARNESS_MODEL_CHAT_MODEL` | Model name (defaults to gpt-4o) |
 | Feature-required | `HARNESS_SERVER_ENABLED` / `HARNESS_CLI_ENABLED` | At least one must be enabled |
 | Feature-required | `HARNESS_AUTH_TOKEN` | Required when auth_mode=token |
-| Feature-required | `HARNESS_RAG_PG_*` | Required for RAG knowledge base |
+| Feature-required | `HARNESS_RAG_*` | Required for RAG knowledge base |
 | Feature-required | `HARNESS_AUDIT_DB_*` | Required for audit persistence |
 | Feature-required | `HARNESS_MODEL_EMBEDDING_*` | Required for knowledge base upload/retrieval |
 | Optional | All other variables | Have reasonable defaults or can be disabled |
 
-### Run
-
-```bash
-# Start HTTP server (default port 8080)
-java -jar harness-server/target/harness-server-${revision}.jar
-```
-
-Windows users can place `.env` in the project root and run the `java -jar` command directly without manually exporting environment variables.
-
-### Test
-
-```bash
-curl -X POST http://localhost:8080/api/chat \
-  -H "Content-Type: application/json; charset=utf-8" \
-  -d '{"text":"Hello, what can you do?"}'
-```
+See [.env.example](.env.example) for the complete list.
 
 ## API Endpoints
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/api/auth/token` | Get JWT token (when auth mode is jwt) |
-| `POST` | `/api/chat` | Send message, get Agent response (SSE stream) |
-| `DELETE` | `/api/chat/{sessionId}` | Cancel an in-progress chat request |
-| `POST` | `/api/sessions` | Create a new session |
-| `GET` | `/api/sessions` | List sessions (cursor pagination, filterable by userId/status) |
-| `GET` | `/api/sessions/{sessionId}` | Get session details |
-| `GET` | `/api/sessions/{sessionId}/messages` | Get session message history |
-| `GET` | `/api/sessions/{sessionId}/stats` | Get session statistics |
-| `DELETE` | `/api/sessions/{sessionId}` | Close session (messages retained in DB) |
-| `POST` | `/api/knowledge/upload` | Upload document to knowledge base (multipart) |
-| `GET` | `/api/knowledge/{collection}` | List documents in collection |
-| `DELETE` | `/api/knowledge/{collection}` | Delete all documents in collection |
-| `DELETE` | `/api/knowledge/{collection}/{documentId}` | Delete specific document |
-| `GET` | `/api/trace/{id}` | Get trace by ID |
-| `GET` | `/api/traces` | List recent traces |
-| `GET` | `/api/traces/stats` | Trace statistics and retention config |
-| `DELETE` | `/api/traces/cleanup` | Manually cleanup expired traces |
-| `DELETE` | `/api/traces/{traceId}` | Delete specific trace |
+| `POST` | `/api/chat` | Send message (SSE stream) |
+| `DELETE` | `/api/chat/{sessionId}` | Cancel in-progress request |
+| `POST` | `/api/sessions` | Create session |
+| `GET` | `/api/sessions` | List sessions (cursor pagination) |
+| `GET` | `/api/sessions/{sessionId}/messages` | Message history |
+| `POST` | `/api/knowledge/upload` | Upload document to knowledge base |
 | `POST` | `/api/project-discovery/scan` | Trigger project API scan |
 | `GET` | `/api/project-discovery/config` | Get API configuration |
 | `PUT` | `/api/project-discovery/config` | Update API configuration |
@@ -273,8 +164,7 @@ curl -X POST http://localhost:8080/api/chat \
 
 ```json
 {
-  "text": "What is the asset management system?",
-  "attachments": [],
+  "text": "Help me query all in-use devices",
   "context": {
     "outputMode": "streaming",
     "userId": "user-001",
@@ -283,131 +173,42 @@ curl -X POST http://localhost:8080/api/chat \
 }
 ```
 
-Request headers can include `X-Session-Id` to reuse a session. In JWT mode, when token remaining lifetime falls below threshold, a new token is returned via the `X-New-Token` response header.
-
-### Chat Response Example (Blocking Mode)
-
-```json
-{
-  "output": "...",
-  "riskLevel": "LOW",
-  "traceId": "uuid",
-  "steps": 1,
-  "sessionId": "abc123"
-}
-```
-
-### SSE Events
-
-- **Blocking mode**: `event: done` (full result JSON), `event: error` (error JSON)
-- **Streaming mode** (`context.outputMode=streaming`): `event: start`, `event: token`, `event: step`, `event: done`, `event: error`
-
-### Knowledge Base Upload
-
-```bash
-curl -X POST http://localhost:8080/api/knowledge/upload \
-  -F "file=@document.pdf" \
-  -F "collection=default"
-```
-
 ## Module Architecture
 
 ```
-harness-env           ← Foundation: all HARNESS_* env vars + HikariCP connection pools + Redis pool
-harness-core          ← Core models: AgentMessage, AgentTrace, ReActStep, ToolSpec, etc.
-    ├── harness-input        ← Authentication (JWT) + multimodal parsing + large file merge-summarize + text extraction + chunking
-    ├── harness-preprocess   ← RAG query rewriting + multi-route retrieval + semantic context + Rerank + memory management
-    ├── harness-tool         ← Tool interface, registry, executor, MCP adapter, Skill loading, code discovery tools
-    ├── harness-audit        ← TraceCollector + TraceStore
-    └── harness-ai           ← LangChain4j integration, 7 model types, ReActEngine, retry & fault tolerance
-harness-agent         ← AgentOrchestrator (wires all layers) + sub-agent orchestration + project API discovery
-harness-server        ← HTTP API entry point (Javalin, SSE streaming, Web UI)
+harness-env        ← Environment variables + connection pools
+harness-core       ← Core models (AgentMessage, AgentTrace, ReActStep, ToolSpec, etc.)
+├── harness-input       ← Auth + multimodal parsing + large file processing
+├── harness-preprocess  ← RAG + query rewriting + semantic context + memory management
+├── harness-tool        ← Tool interface + MCP adapter + Skill loading + code discovery tools
+├── harness-audit       ← Trace collection and storage
+└── harness-ai          ← LangChain4j + 7 model types + ReAct engine
+harness-agent      ← Orchestrator + sub-agents + project API discovery
+harness-server     ← HTTP API + Web UI
 ```
-
-## Configuration
-
-All configuration is managed via `HARNESS_` prefixed environment variables. See [.env.example](.env.example) for the complete list.
-
-| Config Group | Variables | Description |
-|--------------|-----------|-------------|
-| Models | `HARNESS_MODEL_CHAT_*`, etc. | 7 model types: provider, key, endpoint, timeout (default 300s), context window auto-detected |
-| Server | `HARNESS_SERVER_*` | Host, port, worker threads |
-| Auth | `HARNESS_AUTH_MODE` | `none` or `jwt` |
-| RAG Core | `HARNESS_RAG_*` | Vector store backend (`HARNESS_RAG_PROVIDER`: pgvector/milvus), connection, collection, TopK, similarity threshold, BM25 weight |
-| RAG Query Rewrite | `HARNESS_RAG_QUERY_REWRITE` | `none` / `hyde` / `multi-query` / `step-back` |
-| Storage (memory+trace) | `HARNESS_AUDIT_STORE` | `mysql` / `sqlite` / `none` (default) |
-| Cache | `HARNESS_MEMORY_REDIS_URL` | Set to enable Redis distributed cache (multi-instance deployment) |
-| Compression | `HARNESS_CTX_COMPRESS_*` | Minor compression (ReAct layer) + major compression (AI layer) thresholds |
-| Tools | `HARNESS_TOOL_*` | Built-in tool toggles and web search engine priority |
-| MCP | `HARNESS_MCP_CONFIG_FILE` | MCP server JSON config file |
-| API Discovery | `HARNESS_PROJECT_DISCOVERY_ENABLED` | Auto-scan project REST APIs; discovery tools usable in regular conversations |
-
-## Database Schemas
-
-- MySQL (excluding users): [`sql/schema-mysql.sql`](sql/schema-mysql.sql)
-- MySQL users table: [`sql/schema-users-mysql.sql`](sql/schema-users-mysql.sql)
-- PostgreSQL pgvector RAG: [`sql/schema-pgvector.sql`](sql/schema-pgvector.sql)
-- Table comments: [`sql/add-comments.sql`](sql/add-comments.sql)
-
-## Testing
-
-```bash
-# Unit tests (pure logic, no external dependencies)
-mvn test
-
-# Integration tests (requires MySQL + PostgreSQL + Redis)
-mvn test -Pintegration
-
-# Coverage report
-mvn jacoco:report
-```
-
-Test framework: JUnit 5 + Mockito + AssertJ. Integration tests use the `@Tag("integration")` annotation and run via the `-Pintegration` profile.
 
 ## Extension Guide
 
-### Adding a New LLM Provider
+### Adding an LLM Provider
 
-1. Implement the corresponding provider interface in `com.harness.ai.model.impl` (Chat/Vision/Voice/Embedding/Rerank/Classifier)
+1. Implement the corresponding provider interface in `com.harness.ai.model.impl`
 2. Register in `ModelProviderFactory`
-3. Add environment variable keys in `EnvKey.java` (follow `HARNESS_MODEL_*` naming convention)
+3. Add environment variable keys in `EnvKey.java`
 
-### Adding a New Vector Store Backend
-
-1. Implement `com.harness.preprocess.rag.VectorStore` (`retrieve()` + `insertBatch()` + `deleteByFile()`)
-2. Register the new backend name in `VectorStoreFactory`
-3. Set `HARNESS_RAG_PROVIDER=your-backend`
-
-### Adding a New Tool
+### Adding a Tool
 
 1. Implement `com.harness.tool.Tool` (`spec()` + `execute()`)
 2. Register in `AgentOrchestrator.registerBuiltinTools()`, or use MCP auto-discovery
 
-### Adding a New Query Rewriting Strategy
+### Adding a Vector Store Backend
 
-1. Implement `com.harness.preprocess.rag.rewrite.QueryRewriter` (`rewrite()` + `strategyName()`)
-2. Register the new strategy name in `QueryRewriterFactory.create()`
-3. Set `HARNESS_RAG_QUERY_REWRITE=your-strategy`
-
-## Known Limitations
-
-- **Realtime model**: Interface reserved, no provider implementation yet
-- **API discovery**: Supports LLM-based scanning for projects without OpenAPI specs, but complex nested type resolution still has room for improvement
+1. Implement `VectorStore` (`retrieve()` + `insertBatch()` + `deleteByFile()`)
+2. Register in `VectorStoreFactory`
+3. Set `HARNESS_RAG_PROVIDER=your-backend`
 
 ## Tech Stack
 
-- **Java 21** + Maven multi-module
-- **LangChain4j 1.15.0** — LLM integration, tool specifications, Chat Model
-- **Javalin 6.1.3** — HTTP server (SSE streaming)
-- **PostgreSQL + pgvector** — RAG vector storage + full-text search
-- **MySQL + HikariCP** — Audit traces + session memory
-- **Redis + Jedis** — Distributed session cache
-- **Jackson** — JSON serialization
-- **OkHttp** — HTTP client (voice/API/rerank/web search)
-- **Apache POI + PDFBox** — Document text extraction (PDF, DOCX, XLSX)
-- **dotenv-java** — `.env` file auto-loading
-- **SLF4J + Logback** — Logging
-- **JJWT** — JWT authentication
+Java 21 · LangChain4j 1.15.0 · Javalin 6.1.3 · PostgreSQL pgvector · MySQL · Redis · Jackson · OkHttp · Apache POI + PDFBox · dotenv-java
 
 ## License
 

@@ -335,6 +335,9 @@ const ChatPage = {
     const attachedFiles = ref([]);
     const chatFileInput = ref(null);
 
+    // Known file extensions for URL auto-detection on paste (office docs, images, video, audio)
+    const FILE_URL_REGEX = /https?:\/\/[^\s<>"'`]+?\.(?:pdf|docx?|xlsx?|pptx?|csv|json|rtf|odt|ods|txt|md|png|jpe?g|gif|webp|svg|bmp|tiff?|mp[34]|wav|ogg|webm|avi|mov|mkv|flv|wmv)(?:\?[^\s]*)?/gi;
+
     function triggerFileUpload() {
       chatFileInput.value?.click();
     }
@@ -390,6 +393,42 @@ const ChatPage = {
             showToast(t('uploadFailed') + err.message, 'error');
           }
           break; // 只处理第一个图片
+        }
+      }
+
+      // Auto-detect file URLs in pasted text → download → upload to server → get relative path
+      const pastedText = e.clipboardData?.getData('text/plain') || '';
+      if (pastedText) {
+        FILE_URL_REGEX.lastIndex = 0;
+        const matches = pastedText.match(FILE_URL_REGEX);
+        if (matches && matches.length > 0) {
+          e.preventDefault();
+          for (const url of matches) {
+            if (attachedFiles.value.some(f => f.uploading && f.file.name === url)) continue;
+            const urlPath = new URL(url).pathname;
+            const name = urlPath.substring(urlPath.lastIndexOf('/') + 1) || 'download';
+            // Add placeholder with uploading state
+            const itemObj = reactive({ file: { name, size: 0 }, url: null, uploading: true, error: null });
+            attachedFiles.value.push(itemObj);
+            console.log('[Chat] Detected file URL, downloading:', url);
+            // Download from URL → upload to server → get relative path
+            try {
+              const resp = await fetch(url);
+              if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+              const blob = await resp.blob();
+              const file = new File([blob], name, { type: blob.type || 'application/octet-stream' });
+              const result = await CyreneAPI.uploadFile(file);
+              itemObj.file = file;
+              itemObj.url = result.url;
+              itemObj.uploading = false;
+              console.log('[Chat] URL file uploaded to server:', result.url);
+            } catch (err) {
+              itemObj.uploading = false;
+              itemObj.error = err.message;
+              console.error('[Chat] URL file download/upload failed:', err);
+              showToast(t('uploadFailed') + err.message, 'error');
+            }
+          }
         }
       }
     }
@@ -477,7 +516,7 @@ const ChatPage = {
         return;
       }
 
-      // 获取已上传的 URL
+      // 获取已上传的文件相对路径
       const fileUrls = files.filter(f => f.url).map(f => ({ url: f.url, name: f.file.name }));
 
       // Add user message to UI (with file indicator)
@@ -500,7 +539,7 @@ const ChatPage = {
           userId: userId.value,
           outputMode: 'streaming',
         };
-        // If there are uploaded files, add them to context.File
+        // If there are uploaded files, add them to context.File (backend will resolve and extract)
         if (fileUrls.length > 0) {
           context.File = fileUrls.length === 1 ? fileUrls[0].url : fileUrls.map(f => f.url);
         }
@@ -534,20 +573,24 @@ const ChatPage = {
                     if (parsed.sessionId) {
                       currentSessionId.value = parsed.sessionId;
                     }
+                    // Show thinking placeholder immediately while LLM is streaming
+                    messages.value[msgIdx].content = '<div class="thinking-placeholder"><div class="loading-dots"><span></span><span></span><span></span></div><span class="thinking-label">思考中...</span></div>';
                     break;
                   case 'token':
+                    // Remove thinking placeholder on first token (text response, not tool call)
+                    if (typeof messages.value[msgIdx].content === 'string' && messages.value[msgIdx].content.includes('thinking-placeholder')) {
+                      messages.value[msgIdx].content = '';
+                    }
                     if (parsed.text) messages.value[msgIdx].content += parsed.text;
                     break;
                   case 'tool_call_start':
                     // Show tool call block + loading placeholder immediately when tool starts
                     {
                       const crystal = '<svg width="15" height="15" viewBox="0 0 16 16" fill="none" style="vertical-align:-2px;margin-right:3px"><defs><radialGradient id="cg"><stop offset="0%" stop-color="rgba(232,160,191,0.6)"/><stop offset="100%" stop-color="rgba(139,126,200,0.15)"/></radialGradient></defs><path d="M8 0.5L9.5 5 14 3.5 11 7.5 15.5 8 11 8.5 14 12.5 9.5 11 8 15.5 6.5 11 2 12.5 5 8.5 0.5 8 5 7.5 2 3.5 6.5 5z" fill="url(#cg)" stroke="var(--iris)" stroke-width="0.5" stroke-linejoin="round"/><circle cx="8" cy="8" r="1.8" fill="rgba(232,160,191,0.7)"/><circle cx="8" cy="8" r="0.8" fill="white" opacity="0.6"/></svg>';
-                      // Deduplicate: remove previous loading canvas and running blocks for same tool (retry case)
-                      const ARTIFACT_TOOLS = ['image_generation', 'video_generation', 'python_sandbox'];
-                      if (ARTIFACT_TOOLS.includes(parsed.toolName)) {
-                        messages.value[msgIdx].content = messages.value[msgIdx].content
-                          .replace(/\n?<div class="artifact-loading-canvas"[\s\S]*?<\/div>\n?/g, '');
-                      }
+                      // Remove thinking placeholder + previous loading canvas
+                      messages.value[msgIdx].content = (typeof messages.value[msgIdx].content === 'string' ? messages.value[msgIdx].content : '')
+                        .replace(/<div class="thinking-placeholder">[\s\S]*?<\/div>/g, '')
+                        .replace(/\n?<div class="artifact-loading-canvas"[\s\S]*?<\/div>\n?/g, '');
                       let toolHtml = `\n\n<div class="tool-call-block tool-call-running" data-tool="${parsed.toolName}"><div class="tool-call-header">${crystal} ${parsed.toolName}</div></div>\n\n`;
                       // Embed LOADING placeholder inline for artifact-producing tools
                       if (ARTIFACT_TOOLS.includes(parsed.toolName)) {

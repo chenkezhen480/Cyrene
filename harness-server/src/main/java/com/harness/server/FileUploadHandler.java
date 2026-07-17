@@ -9,6 +9,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -19,6 +20,19 @@ public class FileUploadHandler {
 
     private static final Logger log = LoggerFactory.getLogger(FileUploadHandler.class);
     private final Path uploadDir;
+
+    // Allowed file extensions whitelist
+    private static final Set<String> ALLOWED_EXTENSIONS = Set.of(
+            // Documents
+            "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx",
+            "csv", "json", "rtf", "odt", "ods", "txt", "md",
+            // Images
+            "png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "tiff", "tif",
+            // Video
+            "mp4", "webm", "avi", "mov", "mkv", "flv", "wmv",
+            // Audio
+            "mp3", "wav", "ogg"
+    );
 
     public FileUploadHandler(String baseDir) {
         this.uploadDir = Path.of(baseDir, "input");
@@ -42,7 +56,14 @@ public class FileUploadHandler {
 
             // 生成唯一文件名，保留原始扩展名
             String originalName = file.filename();
-            String ext = getExtension(originalName);
+            String ext = getExtension(originalName).toLowerCase();
+
+            // Validate file extension against whitelist
+            if (!ext.isEmpty() && !ALLOWED_EXTENSIONS.contains(ext)) {
+                ctx.status(400).json(Map.of("error", "File type not allowed: ." + ext));
+                return;
+            }
+
             String uniqueName = UUID.randomUUID() + (ext.isEmpty() ? "" : "." + ext);
 
             // 保存文件

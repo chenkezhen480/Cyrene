@@ -292,48 +292,41 @@ public class AgentOrchestrator {
             if (!input.parsedContents().isEmpty()) {
                 StringBuilder sb = new StringBuilder(text);
                 for (ParsedContent pc : input.parsedContents()) {
+                    if (pc == null) continue; // null placeholder for non-text attachments (images, etc.)
                     sb.append("\n\n[File: ").append(pc.metadata().get("file_name")).append("]\n");
                     sb.append(pc.text());
                 }
                 enhancedText = sb.toString();
             }
 
-            // Inject File URLs from context (for image-to-image and other file references)
+            // Inject File content from context: resolve path, read disk, extract text for documents
             if (agentContext != null && agentContext.data() != null) {
                 Object fileObj = agentContext.data().get("File");
                 if (fileObj != null) {
-                    StringBuilder sb = new StringBuilder(enhancedText);
-                    sb.append("\n\n[参考文件 / Reference Files]");
-                    if (fileObj instanceof String fileUrl) {
-                        // Single file URL
-                        sb.append("\n- ").append(fileUrl);
-                        log.debug("[Orchestrator] Injected File URL from context: {}", fileUrl);
-                    } else if (fileObj instanceof List<?> fileList) {
-                        // Multiple file URLs
-                        for (Object item : fileList) {
-                            if (item instanceof String url) {
-                                sb.append("\n- ").append(url);
-                            }
+                    List<String> filePaths = new ArrayList<>();
+                    if (fileObj instanceof String s) filePaths.add(s);
+                    else if (fileObj instanceof List<?> list) {
+                        for (Object item : list) {
+                            if (item instanceof String url) filePaths.add(url);
                         }
-                        log.debug("[Orchestrator] Injected {} File URLs from context", fileList.size());
+                    }
+
+                    StringBuilder sb = new StringBuilder(enhancedText);
+                    boolean hasContent = false;
+                    for (String filePath : filePaths) {
+                        String extracted = extractContextFileContent(filePath);
+                        if (extracted != null) {
+                            if (!hasContent) {
+                                sb.append("\n\n[参考文件 / Reference Files]");
+                                hasContent = true;
+                            }
+                            String name = filePath.substring(filePath.lastIndexOf('/') + 1);
+                            sb.append("\n\n[File: ").append(name).append("]\n");
+                            sb.append(extracted);
+                            log.debug("[Orchestrator] Extracted content from context.File: {}", filePath);
+                        }
                     }
                     enhancedText = sb.toString();
-                }
-            }
-
-            // Pre-detect skill files from attachments (register after sessionId is resolved)
-            List<com.harness.core.model.Skill> pendingSkills = new ArrayList<>();
-            if (attachments != null) {
-                for (var attachment : attachments) {
-                    if (attachment.name() != null && attachment.name().endsWith(".md")) {
-                        String content = extractAttachmentContent(attachment);
-                        if (content != null && SkillLoader.isSkillFile(content)) {
-                            com.harness.core.model.Skill skill = SkillLoader.loadFromContent(content);
-                            if (skill != null) {
-                                pendingSkills.add(skill);
-                            }
-                        }
-                    }
                 }
             }
 
@@ -410,11 +403,6 @@ public class AgentOrchestrator {
                 ragFuture.join();
                 // Memory disabled — use requested/active sessionId for skill isolation
                 sessionId = requestedSessionId != null ? requestedSessionId : java.util.UUID.randomUUID().toString();
-            }
-
-            // Register pending skill files with resolved sessionId
-            for (com.harness.core.model.Skill pending : pendingSkills) {
-                skillRegistry.addTemporary(sessionId, pending);
             }
 
             // Set ThreadLocal for skill tools session-scoped lookup
@@ -619,48 +607,41 @@ public class AgentOrchestrator {
             if (!input.parsedContents().isEmpty()) {
                 StringBuilder sb = new StringBuilder(text);
                 for (ParsedContent pc : input.parsedContents()) {
+                    if (pc == null) continue; // null placeholder for non-text attachments (images, etc.)
                     sb.append("\n\n[File: ").append(pc.metadata().get("file_name")).append("]\n");
                     sb.append(pc.text());
                 }
                 enhancedText = sb.toString();
             }
 
-            // Inject File URLs from context (for image-to-image and other file references)
+            // Inject File content from context: resolve path, read disk, extract text for documents
             if (agentContext != null && agentContext.data() != null) {
                 Object fileObj = agentContext.data().get("File");
                 if (fileObj != null) {
-                    StringBuilder sb = new StringBuilder(enhancedText);
-                    sb.append("\n\n[参考文件 / Reference Files]");
-                    if (fileObj instanceof String fileUrl) {
-                        // Single file URL
-                        sb.append("\n- ").append(fileUrl);
-                        log.debug("[Orchestrator] Injected File URL from context: {}", fileUrl);
-                    } else if (fileObj instanceof List<?> fileList) {
-                        // Multiple file URLs
-                        for (Object item : fileList) {
-                            if (item instanceof String url) {
-                                sb.append("\n- ").append(url);
-                            }
+                    List<String> filePaths = new ArrayList<>();
+                    if (fileObj instanceof String s) filePaths.add(s);
+                    else if (fileObj instanceof List<?> list) {
+                        for (Object item : list) {
+                            if (item instanceof String url) filePaths.add(url);
                         }
-                        log.debug("[Orchestrator] Injected {} File URLs from context", fileList.size());
+                    }
+
+                    StringBuilder sb = new StringBuilder(enhancedText);
+                    boolean hasContent = false;
+                    for (String filePath : filePaths) {
+                        String extracted = extractContextFileContent(filePath);
+                        if (extracted != null) {
+                            if (!hasContent) {
+                                sb.append("\n\n[参考文件 / Reference Files]");
+                                hasContent = true;
+                            }
+                            String name = filePath.substring(filePath.lastIndexOf('/') + 1);
+                            sb.append("\n\n[File: ").append(name).append("]\n");
+                            sb.append(extracted);
+                            log.debug("[Orchestrator] Extracted content from context.File: {}", filePath);
+                        }
                     }
                     enhancedText = sb.toString();
-                }
-            }
-
-            // Pre-detect skill files from attachments (register after sessionId is resolved)
-            List<com.harness.core.model.Skill> pendingSkills = new ArrayList<>();
-            if (attachments != null) {
-                for (var attachment : attachments) {
-                    if (attachment.name() != null && attachment.name().endsWith(".md")) {
-                        String content = extractAttachmentContent(attachment);
-                        if (content != null && SkillLoader.isSkillFile(content)) {
-                            com.harness.core.model.Skill skill = SkillLoader.loadFromContent(content);
-                            if (skill != null) {
-                                pendingSkills.add(skill);
-                            }
-                        }
-                    }
                 }
             }
 
@@ -732,10 +713,6 @@ public class AgentOrchestrator {
                 sessionId = requestedSessionId != null ? requestedSessionId : java.util.UUID.randomUUID().toString();
             }
 
-            // Register pending skill files with resolved sessionId
-            for (com.harness.core.model.Skill pending : pendingSkills) {
-                skillRegistry.addTemporary(sessionId, pending);
-            }
             final String finalSessionId = sessionId;
             LoadSkillTool.setCurrentSession(finalSessionId);
             UpdateMemoryTool.setCurrentUserId(userId);
@@ -903,7 +880,7 @@ public class AgentOrchestrator {
             CompletableFuture.runAsync(() -> {
                 try { trace.finish(); } catch (Exception ignored) {}
             });
-            callback.onEvent(StreamEvent.error(e.getMessage()));
+            callback.onEvent(StreamEvent.error(friendlyErrorMessage(e)));
         } finally {
             LoadSkillTool.clearCurrentSession();
         }
@@ -959,16 +936,6 @@ public class AgentOrchestrator {
         return total;
     }
 
-    private String extractAttachmentContent(MultimodalParser.RawAttachment attachment) {
-        if (attachment.data() == null) return null;
-        try {
-            return new String(attachment.data(), java.nio.charset.StandardCharsets.UTF_8);
-        } catch (Exception e) {
-            log.debug("Failed to extract attachment content: {}", e.getMessage());
-            return null;
-        }
-    }
-
     /** 将 GapAnalysis 结果写入 trace metadata，用于事后追溯 */
     private Map<String, String> gapMetadata(GapAnalysis gap, Map<String, String> existing) {
         Map<String, String> meta = new HashMap<>(existing);
@@ -978,6 +945,85 @@ public class AgentOrchestrator {
         meta.put("gap_needsWebSearch", String.valueOf(gap.needsWebSearch()));
         meta.put("gap_source", String.valueOf(gap.source()));
         return meta;
+    }
+
+    /**
+     * Extract a user-friendly error message from exception chain.
+     * Unwraps ExecutionException/RuntimeException, parses known API error types.
+     */
+    public static String friendlyErrorMessage(Exception e) {
+        // Unwrap exception chain
+        Throwable cause = e;
+        while (cause.getCause() != null && cause != cause.getCause()) {
+            cause = cause.getCause();
+        }
+        String msg = cause.getMessage();
+        if (msg == null || msg.isBlank()) {
+            return "服务内部错误，请稍后重试";
+        }
+
+        // Parse known API error patterns from JSON error bodies
+        String lower = msg.toLowerCase();
+        if (lower.contains("insufficient_quota") || lower.contains("exhausted")) {
+            return "API 额度已用完，请充值或更换 API Key";
+        }
+        if (lower.contains("invalid_api_key") || lower.contains("authentication") || lower.contains("unauthorized")) {
+            return "API Key 无效或已过期，请检查配置";
+        }
+        if (lower.contains("rate_limit") || lower.contains("too_many_requests") || lower.contains("429")) {
+            return "API 请求频率超限，请稍后重试";
+        }
+        if (lower.contains("timeout") || lower.contains("timed out")) {
+            return "API 请求超时，请稍后重试";
+        }
+        if (lower.contains("context_length") || lower.contains("token") && lower.contains("limit")) {
+            return "输入内容超出模型上下文长度限制";
+        }
+
+        // Generic: strip JSON formatting, keep first meaningful line
+        String clean = msg.replaceAll("\\{.*}", "").trim();
+        if (clean.isEmpty()) clean = msg;
+        // Truncate if too long
+        if (clean.length() > 200) clean = clean.substring(0, 200) + "...";
+        return "模型调用失败: " + clean;
+    }
+
+    /**
+     * Resolve a context.File path to disk, read the file, and extract text for document types.
+     * Returns null for images/video/audio (those are handled by the LLM directly).
+     */
+    private String extractContextFileContent(String filePath) {
+        try {
+            // Resolve relative path: /files/input/xxx.pdf → {knowledgeUploadDir}/input/xxx.pdf
+            String uploadDir = EnvConfig.get().getString(EnvKey.KNOWLEDGE_UPLOAD_DIR, "./knowledge-uploads");
+            String relativePath = filePath;
+            if (relativePath.startsWith("/files/")) {
+                relativePath = relativePath.substring("/files/".length());
+            }
+            java.nio.file.Path diskPath = java.nio.file.Path.of(uploadDir, relativePath);
+            if (!java.nio.file.Files.exists(diskPath)) {
+                log.debug("[Orchestrator] context.File not found on disk: {}", diskPath);
+                return null;
+            }
+
+            // Guess MIME and skip non-document types (images/video/audio)
+            String fileName = diskPath.getFileName().toString();
+            String mimeType = com.harness.input.multimodal.impl.TextExtractorRegistry.guessMimeType(fileName);
+            if (mimeType != null && (mimeType.startsWith("image/") || mimeType.startsWith("video/") || mimeType.startsWith("audio/"))) {
+                log.debug("[Orchestrator] Skipping non-document file: {} (mimeType={})", fileName, mimeType);
+                return null;
+            }
+
+            byte[] data = java.nio.file.Files.readAllBytes(diskPath);
+            String extracted = com.harness.input.multimodal.impl.TextExtractorRegistry.extract(data, fileName, mimeType);
+            if (extracted != null && !extracted.isBlank()) {
+                log.debug("[Orchestrator] Extracted {} chars from context.File: {}", extracted.length(), fileName);
+                return extracted;
+            }
+        } catch (Exception e) {
+            log.warn("[Orchestrator] Failed to extract context.File {}: {}", filePath, e.getMessage());
+        }
+        return null;
     }
 
     private RiskLevel determineRisk(ReActEngine.ReActResult result) {

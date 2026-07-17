@@ -70,10 +70,12 @@ public class ArtifactHandler {
         }
 
         ctx.contentType(artifact.mimeType() != null ? artifact.mimeType() : "application/octet-stream");
-        // RFC 5987: escape special characters in filename
+        // RFC 5987/6266: filename for ASCII, filename*=UTF-8 for non-ASCII (Chinese etc.)
         String safeName = artifact.name().replace("\"", "\\\"").replace("\n", "").replace("\r", "");
+        String encodedName = java.net.URLEncoder.encode(artifact.name(), java.nio.charset.StandardCharsets.UTF_8)
+                .replace("+", "%20");
         ctx.header("Content-Disposition",
-                disposition + "; filename=\"" + safeName + "\"");
+                disposition + "; filename=\"" + safeName + "\"; filename*=UTF-8''" + encodedName);
         ctx.header("Content-Length", String.valueOf(artifact.sizeBytes()));
 
         try (OutputStream out = ctx.res().getOutputStream()) {

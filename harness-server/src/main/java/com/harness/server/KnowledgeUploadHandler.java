@@ -13,10 +13,18 @@ import org.slf4j.LoggerFactory;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 public class KnowledgeUploadHandler {
 
     private static final Logger log = LoggerFactory.getLogger(KnowledgeUploadHandler.class);
+
+    // Only allow document types that TextExtractorRegistry can actually parse
+    private static final Set<String> ALLOWED_EXTENSIONS = Set.of(
+            "pdf", "doc", "docx", "xls", "xlsx", "csv", "json", "xml",
+            "rtf", "odt", "ods", "txt", "md"
+    );
+
     private final KnowledgeIngestService ingestService;
     private final TraceStore traceStore;
 
@@ -46,6 +54,14 @@ public class KnowledgeUploadHandler {
                 fileName = ctx.formParam("file") != null ? ctx.formParam("file") : "uploaded_file_" + System.currentTimeMillis();
             }
             String mimeType = uploadedFile.contentType();
+
+            // Validate file extension
+            String ext = getExtension(fileName).toLowerCase();
+            if (!ext.isEmpty() && !ALLOWED_EXTENSIONS.contains(ext)) {
+                ctx.status(400).json(Map.of("error", "File type not allowed for knowledge base: ." + ext));
+                return;
+            }
+
             log.debug("[Server] POST /api/knowledge/upload: file={}, size={}KB, mimeType={}, collection={}",
                     fileName, fileData.length / 1024, mimeType, collection);
 
@@ -92,5 +108,11 @@ public class KnowledgeUploadHandler {
             log.error("[Server] Knowledge upload failed: {}", e.getMessage(), e);
             ctx.status(500).json(Map.of("error", e.getMessage() != null ? e.getMessage() : "Internal server error during knowledge upload"));
         }
+    }
+
+    private String getExtension(String filename) {
+        if (filename == null) return "";
+        int dot = filename.lastIndexOf('.');
+        return dot >= 0 ? filename.substring(dot + 1) : "";
     }
 }

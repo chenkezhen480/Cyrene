@@ -217,7 +217,8 @@ public class ChatHandler {
                 log.error("[Server] Chat error after {}ms: {}", duration, e.getMessage(), e);
                 try {
                     OutputStream out = res.getOutputStream();
-                    Map<String, String> errorData = Map.of("error", e.getMessage() != null ? e.getMessage() : "Unknown error");
+                    String friendlyMsg = com.harness.agent.AgentOrchestrator.friendlyErrorMessage(e);
+                    Map<String, String> errorData = Map.of("error", friendlyMsg);
                     writeSseEvent(out, "error", mapper.writeValueAsString(errorData));
                 } catch (IOException ex) {
                     log.debug("[Server] Failed to write error event to stream: {}", ex.getMessage());

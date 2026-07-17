@@ -81,9 +81,9 @@ public class InputProcessor {
                 .map(MultimodalParser.ParsedAttachment::attachment)
                 .toList();
 
+        // Keep nulls to preserve 1:1 index mapping with attachments (used by skill detection for URL attachments)
         List<ParsedContent> parsedContents = parsedAttachments.stream()
                 .map(MultimodalParser.ParsedAttachment::parsedContent)
-                .filter(pc -> pc != null)
                 .toList();
 
         // Step 4: Build unified message

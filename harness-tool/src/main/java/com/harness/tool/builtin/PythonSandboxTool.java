@@ -158,7 +158,7 @@ public class PythonSandboxTool implements ArtifactProducingTool {
                     "--pids-limit=50",
                     "--network=none",
                     "--read-only",
-                    "--tmpfs", "/workspace/output:size=200m",
+                    "--tmpfs", "/tmp:size=100m",
                     "-v", hostPath + ":/workspace",
                     dockerImage,
                     "python", "/workspace/script.py"
@@ -204,6 +204,8 @@ public class PythonSandboxTool implements ArtifactProducingTool {
                     for (Path file : stream) {
                         if (Files.isRegularFile(file)) {
                             String fileName = file.getFileName().toString();
+                            long fileSize = Files.size(file);
+                            log.info("[Sandbox] Found output file: {} ({}KB)", fileName, fileSize / 1024);
                             String mimeType = inferMimeType(fileName);
                             // Copy file to a temp location before workDir cleanup
                             Path tempCopy = Files.createTempFile("sandbox-artifact-", "-" + fileName);
@@ -224,6 +226,8 @@ public class PythonSandboxTool implements ArtifactProducingTool {
                         }
                     }
                 }
+            } else {
+                log.warn("[Sandbox] Output directory does not exist: {}", outputDir);
             }
 
             // Build result JSON
