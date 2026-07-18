@@ -47,10 +47,8 @@ public class ReActEngine {
     private final ToolRegistry toolRegistry;
     private final ToolExecutor toolExecutor;
     private final Inspector inspector;
+    private final AdaptiveReflector adaptiveReflector;
     private final int maxIterations;
-    private final int maxToolRetries;
-    private final int reflectionInterval;
-    private final int loopDetectionThreshold;
     private final long llmTimeoutSeconds;
 
     public ReActEngine(ChatModelProvider chatModelProvider, ToolRegistry toolRegistry, ToolExecutor toolExecutor) {
@@ -81,9 +79,7 @@ public class ReActEngine {
         EnvConfig cfg = EnvConfig.get();
         int globalMax = cfg.getInt(EnvKey.REACT_MAX_ITERATIONS, 10);
         this.maxIterations = maxIterationsOverride > 0 ? maxIterationsOverride : globalMax;
-        this.maxToolRetries = cfg.getInt(EnvKey.REACT_MAX_TOOL_RETRIES, 3);
-        this.reflectionInterval = cfg.getInt(EnvKey.REACT_REFLECTION_INTERVAL, 3);
-        this.loopDetectionThreshold = cfg.getInt(EnvKey.REACT_LOOP_DETECTION_THRESHOLD, 3);
+        this.adaptiveReflector = new AdaptiveReflector(cfg.getInt(EnvKey.REACT_REFLECTION_THRESHOLD, 5));
         this.llmTimeoutSeconds = cfg.getInt(EnvKey.MODEL_CHAT_TIMEOUT_SECONDS, 300);
     }
 
@@ -123,14 +119,15 @@ public class ReActEngine {
         List<ReActStep> allSteps = new ArrayList<>();
         List<Artifact> allArtifacts = new ArrayList<>();
         ChatRequestParameters thinkingParams = buildThinkingParams(enableThinking);
-        int consecutiveFailures = 0;
+        int totalToolCalls = 0;
+        int reflectionChecks = 0;
 
         for (int i = 1; i <= maxIterations; i++) {
             log.debug("[L3-ReAct] Iteration {}/{}", i, maxIterations);
 
             if (cancellationToken != null && cancellationToken.isCancelled()) {
                 log.info("[L3-ReAct] Cancellation detected at iteration {}, stopping", i);
-                return cancelledResult(allSteps, allArtifacts);
+                return cancelledResult(allSteps, allArtifacts, totalToolCalls, i, reflectionChecks);
             }
 
             ChatRequestParameters mergedParams = buildMergedParams(thinkingParams, toolSpecs);
@@ -148,7 +145,7 @@ public class ReActEngine {
             } catch (Exception e) {
                 if (cancellationToken != null && cancellationToken.isCancelled()) {
                     log.info("[L3-ReAct] LLM call interrupted by cancellation");
-                    return cancelledResult(allSteps, allArtifacts);
+                    return cancelledResult(allSteps, allArtifacts, totalToolCalls, i, reflectionChecks);
                 }
                 throw e;
             } finally {
@@ -156,7 +153,7 @@ public class ReActEngine {
             }
             if (cancellationToken != null && cancellationToken.isCancelled()) {
                 log.info("[L3-ReAct] Cancellation detected after LLM call at iteration {}", i);
-                return cancelledResult(allSteps, allArtifacts);
+                return cancelledResult(allSteps, allArtifacts, totalToolCalls, i, reflectionChecks);
             }
 
             AiMessage aiMessage = response.aiMessage();
@@ -168,12 +165,14 @@ public class ReActEngine {
                 long totalMs = System.currentTimeMillis() - loopStart;
                 log.info("[L3-ReAct] Finished in {}ms, steps={}, outputLen={}", totalMs, allSteps.size(), answer != null ? answer.length() : 0);
                 buildFinalStep(i, answer, allSteps, messages, aiMessage, listener);
-                return new ReActResult(answer, allSteps, allArtifacts);
+                ReActLoopStats stats = new ReActLoopStats("completed", i, totalToolCalls, reflectionChecks);
+                return new ReActResult(answer, allSteps, allArtifacts, stats);
             }
 
             // Tool execution round
             messages.add(aiMessage);
             List<ToolExecutionRequest> toolReqs = aiMessage.toolExecutionRequests();
+            totalToolCalls += toolReqs.size();
             log.debug("[L3-ReAct] LLM requested {} tool calls", toolReqs.size());
             if (aiMessage.text() != null && !aiMessage.text().isBlank()) {
                 log.debug("[L3-ReAct] LLM reasoning: {}", truncate(aiMessage.text()));
@@ -182,12 +181,19 @@ public class ReActEngine {
             ToolExecutionOutput toolOutput = executeToolCalls(toolReqs, messages, allArtifacts, listener, cancellationToken);
             if (toolOutput.earlyReturn() != null) return toolOutput.earlyReturn();
 
-            // Post-tool processing: inspection, loop detection, failure tracking, hints, reflection
+            // Post-tool processing: inspection, hints, adaptive reflection
             RoundOutcome outcome = processToolRound(i, aiMessage, toolReqs,
                     toolOutput.toolCalls(), toolOutput.toolResults(),
-                    allSteps, allArtifacts, messages, listener, userMessage, consecutiveFailures);
-            consecutiveFailures = outcome.consecutiveFailures();
-            if (outcome.action() == RoundAction.RETURN_RESULT) return outcome.result();
+                    allSteps, allArtifacts, messages, listener, userMessage);
+            if (outcome.reflected()) reflectionChecks++;
+            if (outcome.action() == RoundAction.RETURN_RESULT) {
+                ReActResult r = outcome.result();
+                if (r.loopStats() == null) {
+                    ReActLoopStats stats = new ReActLoopStats("completed", i, totalToolCalls, reflectionChecks);
+                    return new ReActResult(r.output(), r.steps(), r.artifacts(), stats);
+                }
+                return r;
+            }
         }
 
         String lastOutput = allSteps.isEmpty() ? "Max iterations reached" :
@@ -195,7 +201,8 @@ public class ReActEngine {
         long totalMs = System.currentTimeMillis() - loopStart;
         log.warn("[L3-ReAct] Reached max iterations ({}), returning last output", maxIterations);
         log.info("[L3-ReAct] Finished in {}ms, steps={}, artifacts={}", totalMs, allSteps.size(), allArtifacts.size());
-        return new ReActResult(lastOutput, allSteps, allArtifacts);
+        ReActLoopStats stats = new ReActLoopStats("max_iterations", maxIterations, totalToolCalls, reflectionChecks);
+        return new ReActResult(lastOutput, allSteps, allArtifacts, stats);
     }
 
     /**
@@ -230,14 +237,15 @@ public class ReActEngine {
         List<ReActStep> allSteps = new ArrayList<>();
         List<Artifact> allArtifacts = new ArrayList<>();
         ChatRequestParameters thinkingParams = buildThinkingParams(enableThinking);
-        int consecutiveFailures = 0;
+        int totalToolCalls = 0;
+        int reflectionChecks = 0;
 
         for (int i = 1; i <= maxIterations; i++) {
             log.debug("[L3-ReAct] Streaming iteration {}/{}", i, maxIterations);
 
             if (cancellationToken != null && cancellationToken.isCancelled()) {
                 log.info("[L3-ReAct] Cancellation detected at iteration {}", i);
-                return cancelledResult(allSteps, allArtifacts);
+                return cancelledResult(allSteps, allArtifacts, totalToolCalls, i, reflectionChecks);
             }
 
             ChatRequestParameters mergedParams = buildMergedParams(thinkingParams, toolSpecs);
@@ -279,7 +287,7 @@ public class ReActEngine {
             } catch (Exception e) {
                 if (cancellationToken != null && cancellationToken.isCancelled()) {
                     log.info("[L3-ReAct] Streaming LLM call interrupted by cancellation");
-                    return cancelledResult(allSteps, allArtifacts);
+                    return cancelledResult(allSteps, allArtifacts, totalToolCalls, i, reflectionChecks);
                 }
                 Throwable cause = e instanceof java.util.concurrent.CompletionException && e.getCause() != null ? e.getCause() : e;
                 log.error("[L3-ReAct] Streaming LLM call failed: {}", cause.getMessage());
@@ -289,7 +297,7 @@ public class ReActEngine {
             }
             if (cancellationToken != null && cancellationToken.isCancelled()) {
                 log.info("[L3-ReAct] Cancellation detected after streaming LLM call at iteration {}", i);
-                return cancelledResult(allSteps, allArtifacts);
+                return cancelledResult(allSteps, allArtifacts, totalToolCalls, i, reflectionChecks);
             }
 
             AiMessage aiMessage = response.aiMessage();
@@ -301,23 +309,32 @@ public class ReActEngine {
                 long totalMs = System.currentTimeMillis() - loopStart;
                 log.info("[L3-ReAct] Finished in {}ms, steps={}", totalMs, allSteps.size());
                 buildFinalStep(i, answer, allSteps, messages, aiMessage, listener);
-                return new ReActResult(answer, allSteps, allArtifacts);
+                ReActLoopStats stats = new ReActLoopStats("completed", i, totalToolCalls, reflectionChecks);
+                return new ReActResult(answer, allSteps, allArtifacts, stats);
             }
 
             // Tool execution round
             messages.add(aiMessage);
             List<ToolExecutionRequest> toolReqs = aiMessage.toolExecutionRequests();
+            totalToolCalls += toolReqs.size();
             log.debug("[L3-ReAct] Streaming: LLM requested {} tool calls", toolReqs.size());
 
             ToolExecutionOutput toolOutput = executeToolCalls(toolReqs, messages, allArtifacts, listener, cancellationToken);
             if (toolOutput.earlyReturn() != null) return toolOutput.earlyReturn();
 
-            // Post-tool processing: inspection, loop detection, failure tracking, hints, reflection
+            // Post-tool processing: inspection, hints, adaptive reflection
             RoundOutcome outcome = processToolRound(i, aiMessage, toolReqs,
                     toolOutput.toolCalls(), toolOutput.toolResults(),
-                    allSteps, allArtifacts, messages, listener, userMessage, consecutiveFailures);
-            consecutiveFailures = outcome.consecutiveFailures();
-            if (outcome.action() == RoundAction.RETURN_RESULT) return outcome.result();
+                    allSteps, allArtifacts, messages, listener, userMessage);
+            if (outcome.reflected()) reflectionChecks++;
+            if (outcome.action() == RoundAction.RETURN_RESULT) {
+                ReActResult r = outcome.result();
+                if (r.loopStats() == null) {
+                    ReActLoopStats stats = new ReActLoopStats("completed", i, totalToolCalls, reflectionChecks);
+                    return new ReActResult(r.output(), r.steps(), r.artifacts(), stats);
+                }
+                return r;
+            }
         }
 
         String lastOutput = allSteps.isEmpty() ? "Max iterations reached" :
@@ -325,7 +342,8 @@ public class ReActEngine {
         long totalMs = System.currentTimeMillis() - loopStart;
         log.warn("[L3-ReAct] Streaming: reached max iterations ({}), returning last output", maxIterations);
         log.info("[L3-ReAct] Finished in {}ms, steps={}, artifacts={}", totalMs, allSteps.size(), allArtifacts.size());
-        return new ReActResult(lastOutput, allSteps, allArtifacts);
+        ReActLoopStats stats = new ReActLoopStats("max_iterations", maxIterations, totalToolCalls, reflectionChecks);
+        return new ReActResult(lastOutput, allSteps, allArtifacts, stats);
     }
 
     /**
@@ -372,52 +390,6 @@ public class ReActEngine {
                     cancellationToken.removeCancelCallback(cancellableTool::cancel);
                 }
             }
-        }
-    }
-
-    /**
-     * Strip tool call/result messages from the conversation to free context space.
-     * Keeps SystemMessage, UserMessage, and text-only AiMessages.
-     * Preserves load_skill results across minor compression.
-     */
-    /**
-     * 注入的消息仅存在于当前 ReAct 调用的 messages 列表中，不会被持久化。
-     */
-    private void maybeInjectReflection(List<ChatMessage> messages, int step, int reflectionInterval, String userInput) {
-        if (reflectionInterval <= 0) return;
-        if (step % reflectionInterval != 0 || step == 0) return;
-
-        String reflectionPrompt = """
-            [System Reflection]
-            Review the steps taken so far.
-            1. Are we stuck in a loop or repeating the same tool calls?
-            2. Are we actually making progress toward the user's original goal?
-            Think briefly and adjust your next action. If the task is impossible, output the final answer now.
-
-            Original task: %s
-            Steps executed so far: %d
-            """.formatted(userInput, step);
-
-        messages.add(UserMessage.from(reflectionPrompt));
-        log.debug("[L3-ReAct] Injected reflection at step {}", step);
-    }
-
-    /**
-     * 强制总结：用当前 messages 列表发起一次不带工具的 LLM 调用，让 LLM 基于已有信息做总结性回复。
-     * 用于 LOOP_DETECTED 时的收尾。
-     */
-    private String forceSummary(List<ChatMessage> messages, ChatModel model) {
-        try {
-            // 添加总结提示
-            messages.add(UserMessage.from(
-                    "[System] A loop was detected. You MUST now output a final answer based on the information gathered so far. Do NOT call any more tools."));
-
-            ChatRequest request = ChatRequest.builder().messages(messages).build();
-            ChatResponse response = model.chat(request);
-            return response.aiMessage().text();
-        } catch (Exception e) {
-            log.error("[L3-ReAct] Force summary failed: {}", e.getMessage(), e);
-            return "Unable to complete the task due to repeated tool call loops. Please try rephrasing your request.";
         }
     }
 
@@ -555,8 +527,10 @@ public class ReActEngine {
     private ReActStep buildFinalStep(int iteration, String answer, List<ReActStep> allSteps,
                                      List<ChatMessage> messages, AiMessage aiMessage,
                                      ReActListener listener) {
-        ReActStep step = new ReActStep(iteration, answer, "final_answer",
-                List.of(), List.of(), answer,
+        // thought=null, observation=null: the answer lives only in AgentTrace.finalOutput.
+        // Frontend does not consume step-level thought/observation — only finalOutput matters.
+        ReActStep step = new ReActStep(iteration, null, "final_answer",
+                List.of(), List.of(), null,
                 new ReActStep.InspectionResult(ReActStep.InspectionResult.InspectionStatus.PASS, "complete"));
         allSteps.add(step);
         if (listener != null) listener.onStep(step);
@@ -617,17 +591,17 @@ public class ReActEngine {
     }
 
     /**
-     * Post-tool round processing: inspection → step → loop detection → failure tracking → hints → reflection.
+     * Post-tool round processing: inspection → step → failure tracking → hints → adaptive reflection.
      * Returns CONTINUE to proceed to next iteration, or RETURN_RESULT with a ReActResult to exit.
      */
-    private record RoundOutcome(RoundAction action, ReActResult result, int consecutiveFailures) {}
+    private record RoundOutcome(RoundAction action, ReActResult result, boolean reflected) {}
 
     private RoundOutcome processToolRound(int iteration, AiMessage aiMessage,
                                           List<ToolExecutionRequest> toolReqs,
                                           List<ToolCall> toolCalls, List<ToolResult> toolResults,
                                           List<ReActStep> allSteps, List<Artifact> allArtifacts,
                                           List<ChatMessage> messages, ReActListener listener,
-                                          String userMessage, int consecutiveFailures) {
+                                          String userMessage) {
 
         ReActStep.InspectionResult inspection = inspector.inspect(toolCalls, toolResults);
         ReActStep step = new ReActStep(iteration,
@@ -639,31 +613,7 @@ public class ReActEngine {
         allSteps.add(step);
         if (listener != null) listener.onStep(step);
 
-        // 同工具同参数循环检测
-        if (inspection.status() == ReActStep.InspectionResult.InspectionStatus.PASS) {
-            ReActStep.InspectionResult sameToolResult = Inspector.detectSameToolConsecutive(
-                    allSteps, loopDetectionThreshold);
-            if (sameToolResult != null) {
-                inspection = sameToolResult;
-                allSteps.set(allSteps.size() - 1, new ReActStep(iteration, aiMessage.text(),
-                        step.action(), toolCalls, toolResults, step.observation(), sameToolResult));
-            }
-        }
-
-        // Track consecutive tool failures
-        if (inspection.status() == ReActStep.InspectionResult.InspectionStatus.TOOL_ERROR) {
-            consecutiveFailures++;
-            log.debug("[L3-ReAct] Tool failure {}/{}", consecutiveFailures, maxToolRetries);
-            if (consecutiveFailures >= maxToolRetries) {
-                log.warn("[L3-ReAct] Max consecutive tool failures ({}), stopping loop", maxToolRetries);
-                String failOutput = step.observation() != null ? step.observation() : "Tool failed after " + maxToolRetries + " attempts";
-                return new RoundOutcome(RoundAction.RETURN_RESULT, new ReActResult(failOutput, allSteps, allArtifacts), consecutiveFailures);
-            }
-        } else {
-            consecutiveFailures = 0;
-        }
-
-        // Inspection hint injection
+        // Inspection hint injection (for non-PASS statuses)
         if (inspection.status() != ReActStep.InspectionResult.InspectionStatus.PASS) {
             log.debug("[L3-ReAct] Inspection: status={}, reason={}", inspection.status(), inspection.reason());
             String hint = Inspector.buildInspectionHint(inspection);
@@ -673,19 +623,17 @@ public class ReActEngine {
             }
         }
 
-        // LOOP_DETECTED: 强制总结
-        if (inspection.status() == ReActStep.InspectionResult.InspectionStatus.LOOP_DETECTED) {
-            log.warn("[L3-ReAct] Loop detected at iteration {}, forcing summary", iteration);
-            String summary = forceSummary(messages, chatModel);
-            allSteps.add(new ReActStep(iteration, summary, "summary", List.of(), List.of(), summary,
-                    new ReActStep.InspectionResult(ReActStep.InspectionResult.InspectionStatus.PASS, "loop summary")));
-            return new RoundOutcome(RoundAction.RETURN_RESULT, new ReActResult(summary, allSteps, allArtifacts), consecutiveFailures);
+        // Adaptive reflection: signal-driven, per-tool tracking
+        boolean reflected = false;
+        AdaptiveReflector.ReflectionSignal signal = adaptiveReflector.shouldReflect(
+                inspection, toolCalls, toolResults, allSteps, userMessage);
+        if (signal != null) {
+            messages.add(UserMessage.from(signal.prompt()));
+            reflected = true;
+            log.debug("[L3-ReAct] Adaptive reflection triggered at step {}", iteration);
         }
 
-        // 反思注入
-        maybeInjectReflection(messages, iteration, reflectionInterval, userMessage);
-
-        return new RoundOutcome(RoundAction.CONTINUE, null, consecutiveFailures);
+        return new RoundOutcome(RoundAction.CONTINUE, null, reflected);
     }
 
     /** Log token usage from response metadata and accumulate into traceBuilder. */
@@ -703,10 +651,19 @@ public class ReActEngine {
         }
     }
 
-    private ReActResult cancelledResult(List<ReActStep> allSteps, List<Artifact> allArtifacts) {
+    private ReActResult cancelledResult(List<ReActStep> allSteps, List<Artifact> allArtifacts,
+                                         int totalToolCalls, int rounds, int reflectionChecks) {
         String output = allSteps.isEmpty() ? "Request cancelled" :
                 allSteps.get(allSteps.size() - 1).observation();
-        return new ReActResult(output, allSteps, allArtifacts);
+        ReActLoopStats stats = new ReActLoopStats("cancelled", rounds, totalToolCalls, reflectionChecks);
+        return new ReActResult(output, allSteps, allArtifacts, stats);
+    }
+
+    /** Overload for cancellation inside executeToolCalls where stats counters are not available. */
+    private ReActResult cancelledResult(List<ReActStep> allSteps, List<Artifact> allArtifacts) {
+        String output = allSteps == null || allSteps.isEmpty() ? "Request cancelled" :
+                allSteps.get(allSteps.size() - 1).observation();
+        return new ReActResult(output, allSteps != null ? allSteps : List.of(), allArtifacts);
     }
 
     /**
@@ -766,9 +723,24 @@ public class ReActEngine {
         }
     }
 
-    public record ReActResult(String output, List<ReActStep> steps, List<Artifact> artifacts) {
+    /**
+     * Loop-level statistics captured during the ReAct loop.
+     * Written into trace metadata as react_* fields after the loop completes.
+     */
+    public record ReActLoopStats(
+            String outcome,        // completed | max_iterations | cancelled
+            int rounds,            // total iterations executed
+            int toolCalls,         // total tool calls across all iterations
+            int reflectionChecks   // how many times adaptive reflection was triggered
+    ) {}
+
+    public record ReActResult(String output, List<ReActStep> steps, List<Artifact> artifacts, ReActLoopStats loopStats) {
         public ReActResult(String output, List<ReActStep> steps) {
-            this(output, steps, List.of());
+            this(output, steps, List.of(), null);
+        }
+
+        public ReActResult(String output, List<ReActStep> steps, List<Artifact> artifacts) {
+            this(output, steps, artifacts, null);
         }
     }
 }

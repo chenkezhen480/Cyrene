@@ -496,6 +496,13 @@ public class AgentOrchestrator {
             ReActEngine.ReActResult result = reactEngine.execute(systemPrompt, finalUserMessage, historyChatMessages, trace.builder(), blockListener, cancellationToken, effectiveThinking);
             result.steps().forEach(trace::addStep);
 
+            // Record ReAct loop quality signals into trace metadata
+            if (result.loopStats() != null) {
+                ReActEngine.ReActLoopStats stats = result.loopStats();
+                trace.recordReactStats(stats.outcome(), stats.rounds(), stats.toolCalls(),
+                        stats.reflectionChecks());
+            }
+
             // Flush remaining text after loop
             if (textAccumulator.length() > 0) {
                 blockAccumulator.add(new MessageBlock(MessageBlock.BlockType.TEXT, textAccumulator.toString(), null));
@@ -801,6 +808,13 @@ public class AgentOrchestrator {
             ReActEngine.ReActResult result = reactEngine.streamExecute(
                     systemPrompt, finalUserMessage, historyChatMessages, trace.builder(), listener, cancellationToken, effectiveThinking);
             result.steps().forEach(trace::addStep);
+
+            // Record ReAct loop quality signals into trace metadata
+            if (result.loopStats() != null) {
+                ReActEngine.ReActLoopStats stats = result.loopStats();
+                trace.recordReactStats(stats.outcome(), stats.rounds(), stats.toolCalls(),
+                        stats.reflectionChecks());
+            }
 
             // Flush remaining text after loop
             if (textAccumulator.length() > 0) {

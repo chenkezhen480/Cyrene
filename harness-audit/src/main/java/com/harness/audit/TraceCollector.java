@@ -74,6 +74,23 @@ public class TraceCollector {
                 risk, output != null ? output.length() : 0, userConfirmed);
     }
 
+    // ==================== ReAct Loop Stats ====================
+
+    /**
+     * Record ReAct loop quality signals into trace metadata.
+     * Called after the ReAct loop completes, before finish().
+     */
+    public void recordReactStats(String outcome, int rounds, int toolCalls, int reflectionChecks) {
+        java.util.Map<String, String> meta = new java.util.HashMap<>(builder.build().metadata());
+        meta.put("react_outcome", outcome);
+        meta.put("react_rounds", String.valueOf(rounds));
+        meta.put("react_tool_calls", String.valueOf(toolCalls));
+        meta.put("react_reflection_checks", String.valueOf(reflectionChecks));
+        meta.put("react_reflection_flagged_offtrack", "false"); // placeholder: future LLM-based offtrack detection
+        builder.metadata(meta);
+        log.debug("[L5-Trace] React stats recorded: outcome={}, rounds={}, tools={}", outcome, rounds, toolCalls);
+    }
+
     // ==================== Persist ====================
 
     /**
@@ -92,6 +109,25 @@ public class TraceCollector {
         }
 
         return trace;
+    }
+
+    // ==================== Post-write Updates ====================
+
+    /**
+     * Update trace metadata after initial write (e.g., user feedback).
+     * Supports "事后按 trace id 更新" — e.g., thumbs up/down from UI.
+     *
+     * @param traceId the trace to update
+     * @param key metadata key (e.g., "user_feedback")
+     * @param value metadata value (e.g., "positive" / "negative")
+     */
+    public void updateFeedback(String traceId, String key, String value) {
+        try {
+            store.updateMetadata(traceId, java.util.Map.of(key, value));
+            log.debug("[L5-Trace] Feedback updated: traceId={}, {}={}", traceId, key, value);
+        } catch (Exception e) {
+            log.error("[L5-Trace] Failed to update feedback: traceId={}, {}", traceId, e.getMessage(), e);
+        }
     }
 
     /**

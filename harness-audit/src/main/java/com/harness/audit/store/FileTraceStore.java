@@ -11,7 +11,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -114,6 +116,22 @@ public class FileTraceStore implements TraceStore {
             log.error("Failed to count traces: {}", e.getMessage(), e);
             return 0;
         }
+    }
+
+    @Override
+    public void updateMetadata(String traceId, Map<String, String> entries) {
+        // Read-modify-write: load JSON, merge metadata, save back
+        findById(traceId).ifPresent(trace -> {
+            Map<String, String> merged = new HashMap<>(trace.metadata());
+            merged.putAll(entries);
+            AgentTrace updated = new AgentTrace(
+                    trace.traceId(), trace.timestamp(), trace.userId(), trace.sessionId(),
+                    trace.inputText(), trace.inputAttachments(), trace.intent(), trace.ragHits(),
+                    trace.rerankResult(), trace.llmModel(), trace.promptVersion(), trace.steps(),
+                    trace.finalOutput(), trace.riskLevel(), trace.userConfirmed(),
+                    trace.totalDurationMs(), trace.totalTokens(), merged);
+            save(updated);
+        });
     }
 
     @Override

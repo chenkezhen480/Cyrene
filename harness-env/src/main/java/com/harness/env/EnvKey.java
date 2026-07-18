@@ -214,12 +214,8 @@ public final class EnvKey {
     /** ReAct 循环最大迭代次数，默认 10 */
     public static final String REACT_MAX_ITERATIONS      = "HARNESS_REACT_MAX_ITERATIONS";
     public static final String REACT_STRATEGY            = "HARNESS_REACT_STRATEGY";
-    /** 工具失败后最大重试轮数（LLM 每轮可调整策略），默认 3 */
-    public static final String REACT_MAX_TOOL_RETRIES    = "HARNESS_REACT_MAX_TOOL_RETRIES";
-    /** 反思间隔轮数（每隔 N 步注入反思消息），默认 3（0=禁用） */
-    public static final String REACT_REFLECTION_INTERVAL = "HARNESS_REACT_REFLECTION_INTERVAL";
-    /** 循环检测阈值（连续 N 次相同工具调用判定为循环），默认 3（0=禁用） */
-    public static final String REACT_LOOP_DETECTION_THRESHOLD = "HARNESS_REACT_LOOP_DETECTION_THRESHOLD";
+    /** 自适应反思触发阈值（连续 N 次非 PASS 结果触发反思），默认 5 */
+    public static final String REACT_REFLECTION_THRESHOLD = "HARNESS_REACT_REFLECTION_THRESHOLD";
 
     // ==================== Sub-Agent ====================
     /** 每个编排器最大并发子代理任务数，默认 3 */

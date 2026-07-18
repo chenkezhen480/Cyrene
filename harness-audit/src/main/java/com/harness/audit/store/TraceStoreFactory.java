@@ -32,6 +32,7 @@ public final class TraceStoreFactory {
         @Override public int cleanup(int retentionDays) { return 0; }
         @Override public boolean deleteById(String traceId) { return false; }
         @Override public int count() { return 0; }
+        @Override public void updateMetadata(String traceId, java.util.Map<String, String> entries) {}
         @Override public void close() {}
     }
 }

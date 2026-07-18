@@ -1,14 +1,11 @@
 package com.harness.ai.react;
 
-import com.harness.core.model.ReActStep;
 import com.harness.core.model.ReActStep.InspectionResult;
 import com.harness.core.model.ReActStep.InspectionResult.InspectionStatus;
 import com.harness.core.model.ToolCall;
 import com.harness.core.model.ToolResult;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
-import com.fasterxml.jackson.databind.JsonNode;
 
 import java.util.List;
 import java.util.Set;
@@ -135,58 +132,6 @@ public class Inspector {
                     + ". You MUST output the final answer now based on available information.";
             case PASS -> null;
         };
-    }
-
-    /**
-     * Detect consecutive calls to the same tool with the same arguments.
-     * This catches cases where the LLM retries the exact same call that already
-     * produced no useful results.
-     *
-     * @param recentSteps recent ReAct steps
-     * @param threshold   consecutive same-call count to trigger
-     * @return InspectionResult if detected, null otherwise
-     */
-    public static InspectionResult detectSameToolConsecutive(List<ReActStep> recentSteps, int threshold) {
-        if (recentSteps == null || threshold <= 0 || recentSteps.size() < threshold) {
-            return null;
-        }
-
-        List<ReActStep> tail = recentSteps.subList(recentSteps.size() - threshold, recentSteps.size());
-
-        // Extract first step's tool calls signature (sorted by tool name for consistency)
-        String firstSig = buildToolCallsSignature(tail.get(0).toolCalls());
-        if (firstSig == null) return null;
-
-        for (int i = 1; i < tail.size(); i++) {
-            String sig = buildToolCallsSignature(tail.get(i).toolCalls());
-            if (!firstSig.equals(sig)) {
-                return null;  // Different tool or arguments, not a loop
-            }
-        }
-
-        String toolName = tail.get(0).toolCalls().isEmpty() ? "unknown"
-                : tail.get(0).toolCalls().get(0).toolName();
-        log.warn("[Inspector] Same tool+args loop: '{}' called {} times with identical arguments", toolName, threshold);
-        return new InspectionResult(
-                InspectionStatus.LOOP_DETECTED,
-                String.format("Tool '%s' called %d times with identical arguments. "
-                        + "It is clearly not producing useful results. "
-                        + "Stop retrying and output the final answer.", toolName, threshold));
-    }
-
-    /**
-     * Build a deterministic signature string from a list of tool calls
-     * (tool name + sorted arguments JSON).
-     */
-    private static String buildToolCallsSignature(List<ToolCall> toolCalls) {
-        if (toolCalls == null || toolCalls.isEmpty()) return null;
-        StringBuilder sb = new StringBuilder();
-        for (ToolCall tc : toolCalls) {
-            sb.append(tc.toolName()).append(':');
-            JsonNode args = tc.arguments();
-            sb.append(args != null ? args.toString() : "null").append('|');
-        }
-        return sb.toString();
     }
 
 }

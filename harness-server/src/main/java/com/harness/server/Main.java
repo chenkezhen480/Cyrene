@@ -25,7 +25,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * HTTP API server entry point for Harness Agent.
- * Run with: java -jar harness-server.jar
+ * Run with: java -jar harness-server.
  *
  * Endpoints:
  *   POST   /api/auth/token        - Get JWT token (userId/username + password)

@@ -3,6 +3,7 @@ package com.harness.audit.store;
 import com.harness.core.model.AgentTrace;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -41,6 +42,16 @@ public interface TraceStore {
      * Return total number of traces stored.
      */
     int count();
+
+    /**
+     * Update specific metadata fields of an existing trace.
+     * Merges the given entries into the trace's existing metadata map.
+     * Used for post-write updates (e.g., user feedback via thumbs up/down).
+     *
+     * @param traceId the trace to update
+     * @param entries metadata key-value pairs to merge
+     */
+    void updateMetadata(String traceId, Map<String, String> entries);
 
     /**
      * Close the store (release connections).
