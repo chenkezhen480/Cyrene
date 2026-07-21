@@ -18,6 +18,15 @@ Before running: copy `.env.example` → `.env`. Minimum required:
 - `HARNESS_MODEL_CHAT_PROVIDER` + `HARNESS_MODEL_CHAT_API_KEY`
 - Auto-loaded by `EnvConfig` from working directory; system env vars take precedence.
 
+### Docker Compose Deployment
+
+```bash
+cp .env.example .env   # fill in API keys
+cd docker && docker compose up -d   # one-click deploy
+```
+
+Services: `cyrene` (app), `mysql`, `milvus`, `redis`, `searxng`. All images auto-pulled. Sandbox (`docker/sandbox/`) is separate — spawned dynamically by `PythonSandboxTool` via `docker run`.
+
 ## Architecture
 
 5-layer pipeline orchestrated by `AgentOrchestrator`:
@@ -62,11 +71,11 @@ Cross-module deps: `harness-ai` → `harness-tool`; `harness-input`/`harness-pre
 - **File Injection** — Small files (< `HARNESS_INPUT_FILE_SIZE_THRESHOLD_KB`, default 100KB) extracted directly; large files via `LargeFileParser` merge-then-summarize.
 - **ReAct Inspection** — Each tool call inspected by `Inspector` (heuristic, no LLM). States: PASS / TOOL_ERROR / WRONG_TOOL / INSUFFICIENT / LOOP_DETECTED. Non-PASS states inject hints for next iteration.
 - **ReAct Reflection** — Periodic reflection prompts every `HARNESS_REACT_REFLECTION_INTERVAL` (default 3) iterations. Loop detection at `HARNESS_REACT_LOOP_DETECTION_THRESHOLD` (default 3) consecutive identical calls.
-- **GapAnalyzer** — 3-tier routing funnel for `needsThinking`/`needsKnowledgeBase`/`rewriteStrategy`/`needsWebSearch`. Tier 0: explicit (AgentContext) → Tier 1: rule engine (regex/keywords, <1ms) → Tier 2: LLM classification (ClassifierModelProvider). `HARNESS_GAP_ANALYSIS_ENABLED` (default `true`). Tier 2 failure degrades to env defaults.
+- **GapAnalyzer** — 3-tier routing funnel for `needsThinking`/`needsKnowledgeBase`/`rewriteStrategy`/`needsWebSearch`. Tier 0: explicit (AgentContext) → Tier 1: rule engine (regex/keywords, <1ms) → Tier 2: LLM classification (ClassifierModelProvider). `HARNESS_GAP_ANALYSIS_ENABLED` (default `true`). Tier 2 failure degrades to env defaults. `needsWebSearch=true` injects a system prompt constraint forcing the LLM to call `web_search` before answering.
 - **Streaming** — `AgentOrchestrator.streamRun()` via `StreamCallback` pushing `StreamEvent` (START/TOKEN/STEP/TOOL_CALL_START/COMPRESS/ARTIFACT/DONE/CANCELLED/ERROR). `CancellationToken` supports polling + thread interrupt.
 - **Sub-Agent** — `SubAgentOrchestrator` manages lifecycle with dependency resolution + parallel execution. LLM spawns via `spawn_subagent` tool. `HARNESS_AGENT_MAX_SUBAGENTS` (default 3).
-- **Web Search** — `WebSearchTool` fallback chain: Tavily → SerpAPI → DuckDuckGo. Priority via `HARNESS_TOOL_WEB_SEARCH_PRIORITY`.
-- **MCP Discovery** — `McpToolDiscovery` via JSON-RPC `tools/list`. Config: `HARNESS_MCP_CONFIG_FILE` (JSON) or `HARNESS_MCP_SERVERS` (`name=url` CSV).
+- **Web Search** — `WebSearchTool` backed by self-hosted SearXNG (aggregates 70+ search engines, no API key). Endpoint via `HARNESS_TOOL_WEB_SEARCH_SEARXNG_URL`. `needsWebSearch=true` from GapAnalyzer forces the LLM to call `web_search` before answering (system prompt injection).
+- **MCP Discovery** — `McpToolDiscovery` via JSON-RPC `tools/list`. Config: `HARNESS_MCP_CONFIG_FILE` (JSON). No config file → MCP disabled with info log.
 - **Retry & Robustness** — 6 layers: Tool (single attempt, error→LLM adjusts), LLM API (`RetryingChatModel`, exponential backoff 1s→2s→4s, max 3), MCP reconnect (1 retry), message write (3 retries → sync → dead letter queue), refinement stuck recovery (CAS reset), knowledge batch rollback (pgvector transaction, Milvus batch insert).
 - **JWT refresh** — Auto-refresh when remaining < `HARNESS_AUTH_JWT_REFRESH_THRESHOLD_MINUTES` (default 60). New token via `X-New-Token` header.
 - **Audit** — TraceCollector per run → TraceStore (sqlite/mysql/file/none). Cleanup: `HARNESS_AUDIT_RETENTION_DAYS` (default 30). `HARNESS_SERVER_WORKERS` (default `availableProcessors * 2`).
@@ -118,10 +127,10 @@ All use `chatModelNoThinking()`. LLM failure → original query.
 
 | Provider | Env | Backend |
 |----------|-----|---------|
+| MilvusVectorStore | `HARNESS_RAG_PROVIDER=milvus` **(default)** | Milvus BM25 sparse + dense hybrid |
 | PgVectorStore | `HARNESS_RAG_PROVIDER=pgvector` | pgvector cosine + optional fulltext |
-| MilvusVectorStore | `HARNESS_RAG_PROVIDER=milvus` | Milvus BM25 sparse + dense hybrid |
 
-Key env vars: `HARNESS_RAG_PROVIDER` (pgvector), `HARNESS_RAG_URL`, `HARNESS_RAG_DATABASE`, `HARNESS_RAG_USER`, `HARNESS_RAG_PASS`, `HARNESS_RAG_API_KEY`, `HARNESS_RAG_COLLECTION`, `HARNESS_RAG_EMBED_DIM` (1536), `HARNESS_RAG_TOP_K` (5), `HARNESS_RAG_SCORE_THRESHOLD`, `HARNESS_RAG_BM25_WEIGHT` (0.3, Milvus), `HARNESS_RAG_LANG` (english), `HARNESS_RAG_MILVUS_METRIC_TYPE` (COSINE).
+Key env vars: `HARNESS_RAG_PROVIDER` (milvus), `HARNESS_RAG_URL` (Milvus: `http://host:19530`, PG: `jdbc:postgresql://...`), `HARNESS_RAG_DATABASE`, `HARNESS_RAG_USER`, `HARNESS_RAG_PASS`, `HARNESS_RAG_API_KEY`, `HARNESS_RAG_COLLECTION`, `HARNESS_RAG_EMBED_DIM` (1536), `HARNESS_RAG_TOP_K` (5), `HARNESS_RAG_SCORE_THRESHOLD`, `HARNESS_RAG_BM25_WEIGHT` (0.3, Milvus), `HARNESS_RAG_LANG` (english), `HARNESS_RAG_MILVUS_METRIC_TYPE` (COSINE).
 
 > Deprecated: `HARNESS_RAG_PG_*`, `HARNESS_RAG_MULTI_ROUTE`, `HARNESS_RAG_FULLTEXT_ENABLED`.
 

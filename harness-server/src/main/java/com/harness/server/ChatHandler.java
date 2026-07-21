@@ -135,18 +135,40 @@ public class ChatHandler {
                                         }
                                         case TOKEN -> writeSseEvent(out, "token",
                                                 mapper.writeValueAsString(Map.of("text", event.data())));
-                                        case STEP -> {
-                                            ReActStep step = (ReActStep) event.metadata().get("step");
-                                            writeSseEvent(out, "step", mapper.writeValueAsString(Map.of(
-                                                    "stepNumber", step.stepNumber(),
-                                                    "action", step.action(),
-                                                    "toolCalls", step.toolCalls().stream().map(ToolCall::toolName).toList()
-                                            )));
-                                        }
+
+
+
+
+
+
+
+
                                         case TOOL_CALL_START -> writeSseEvent(out, "tool_call_start",
                                                 mapper.writeValueAsString(Map.of(
                                                         "toolName", event.metadata().get("toolName"),
                                                         "arguments", event.metadata().get("arguments"))));
+                                        case TOOL_CALL_DONE -> writeSseEvent(out, "tool_call_done",
+                                                mapper.writeValueAsString(Map.of(
+                                                        "toolName", event.metadata().get("toolName"),
+                                                        "success", event.metadata().get("success"),
+                                                        "durationMs", event.metadata().get("durationMs"))));
+                                        case STEP -> {
+                                            // ReActStep is serialized by Jackson, extract inspection from the map
+                                            Object stepObj = event.metadata().get("step");
+                                            String inspectionStatus = "PASS";
+                                            if (stepObj instanceof java.util.Map<?,?> stepMap) {
+                                                Object insp = stepMap.get("inspection");
+                                                if (insp instanceof java.util.Map<?,?> inspMap) {
+                                                    Object status = inspMap.get("status");
+                                                    if (status != null) inspectionStatus = status.toString();
+                                                }
+                                            } else if (stepObj instanceof com.harness.core.model.ReActStep step) {
+                                                var insp = step.inspection();
+                                                if (insp != null) inspectionStatus = insp.status().name();
+                                            }
+                                            writeSseEvent(out, "step",
+                                                    mapper.writeValueAsString(Map.of("status", inspectionStatus)));
+                                        }
                                         case COMPRESS -> writeSseEvent(out, "compress",
                                                 mapper.writeValueAsString(Map.of(
                                                         "mode", event.metadata().get("mode"),

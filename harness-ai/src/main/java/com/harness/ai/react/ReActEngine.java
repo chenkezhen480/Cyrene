@@ -567,8 +567,14 @@ public class ReActEngine {
             toolCalls.add(tc);
 
             log.debug("[L3-ReAct] Executing tool: {}", tc.toolName());
+            long toolStart = System.currentTimeMillis();
             ToolResult result = executeWithRetry(tc, listener, cancellationToken);
+            long toolDuration = System.currentTimeMillis() - toolStart;
             toolResults.add(result);
+
+            if (listener != null) {
+                listener.onToolCallDone(tc.toolName(), result.success(), toolDuration);
+            }
 
             // Check cancellation after long-running tool execution
             if (cancellationToken != null && cancellationToken.isCancelled()) {

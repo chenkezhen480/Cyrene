@@ -14,14 +14,6 @@ Traditional AI Agent integration with existing systems requires manually writing
 Specify project directory → Auto-scan Controllers → Parse DTO/VO inheritance → Generate project-apis.json → Tools auto-registered to Agent
 ```
 
-**How it works:**
-
-1. **Glob** scans the project for Controller files (supports Spring Boot, Express, Flask, and other major frameworks)
-2. **Grep** extracts route annotations and context (`@GetMapping`, `@PostMapping`, `router.get()`, etc.)
-3. **ReadClassHierarchy** recursively parses input/output parameter class inheritance chains (max depth 2) for complete field structures
-4. Generates a structured `project-apis.json` — each endpoint becomes a tool definition (name, description, parameter schema)
-5. Tools auto-register into the Agent's toolset, ready to use in conversation
-
 **Result:** Start the service → specify the project directory in Web UI → scan completes → Agent can now call your project's APIs. Zero integration code written.
 
 ```
@@ -38,7 +30,7 @@ Each request automatically determines which capabilities are needed, avoiding un
 |----------|----------|----------------|------------|---------------|
 | "Hello" | ✗ | ✗ | ✗ | ✗ |
 | "What's our reimbursement policy?" | ✗ | ✓ | ✗ | ✓ (multi-query) |
-| "What's the weather in Shanghai today?" | ✗ | ✗ | ✓ | ✗ |
+| "What's the weather in Shanghai today?" | ✗ | ✗ | ✓ (SearXNG) | ✗ |
 | "Analyze the feasibility of this requirement" | ✓ | ✓ | ✗ | ✗ |
 
 **Three-tier funnel (priority descending):**
@@ -69,7 +61,7 @@ Each model can be independently configured with its own provider, API key, and e
 
 ### RAG Knowledge Base
 
-Upload documents (PDF, DOCX, XLSX, TXT, Markdown, etc.) → automatic extraction, chunking, embedding, and storage. Supports PostgreSQL pgvector and Milvus backends, switchable via `HARNESS_RAG_PROVIDER`.
+Upload documents (PDF, DOCX, XLSX, TXT, Markdown, etc.) → automatic extraction, chunking, embedding, and storage. Defaults to Milvus vector database; also supports PostgreSQL pgvector, switchable via `HARNESS_RAG_PROVIDER`.
 
 Built-in query rewriting (HyDE / Multi-Query / Step-Back), semantic context enhancement, optional Rerank. Large files automatically use a "split → merge → parallel summarize" strategy — a 1MB file requires only 5-8 LLM calls.
 
@@ -104,11 +96,19 @@ Each layer is independently observable, configurable, and traceable. ReAct engin
 
 - Java 21+
 - Maven 3.8+
-- PostgreSQL + pgvector (RAG, optional)
-- MySQL 8+ (Audit + session memory, optional)
-- Redis (Distributed cache, optional)
+- Docker + Docker Compose (recommended, one-click deploy all dependencies)
+- Or manual install: Milvus 2.5+ (vector database, default), MySQL 8+ (session/memory/audit), Redis 7+ (distributed cache), SearXNG (web search)
 
-### Build & Run
+### Docker Compose One-Click Deploy (Recommended)
+
+```bash
+cp .env.example .env   # edit .env, fill in LLM API key
+cd docker && docker compose up -d
+```
+
+Auto-pulls and starts 5 services: `cyrene` (app), `mysql`, `milvus`, `redis`, `searxng`. MySQL auto-runs schema scripts on first start; Milvus collections are auto-created by the application.
+
+### Manual Build & Run
 
 ```bash
 # Build
@@ -205,10 +205,6 @@ harness-server     ← HTTP API + Web UI
 1. Implement `VectorStore` (`retrieve()` + `insertBatch()` + `deleteByFile()`)
 2. Register in `VectorStoreFactory`
 3. Set `HARNESS_RAG_PROVIDER=your-backend`
-
-## Tech Stack
-
-Java 21 · LangChain4j 1.15.0 · Javalin 6.1.3 · PostgreSQL pgvector · MySQL · Redis · Jackson · OkHttp · Apache POI + PDFBox · dotenv-java
 
 ## License
 

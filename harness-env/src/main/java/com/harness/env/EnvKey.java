@@ -192,19 +192,14 @@ public final class EnvKey {
     public static final String RAG_KNOWLEDGE_GRAPH_ENABLED = "HARNESS_RAG_KNOWLEDGE_GRAPH_ENABLED";
 
     // ==================== MCP ====================
-    public static final String MCP_SERVERS           = "HARNESS_MCP_SERVERS";
     public static final String MCP_CONNECT_TIMEOUT   = "HARNESS_MCP_CONNECT_TIMEOUT_MS";
     public static final String MCP_CALL_TIMEOUT      = "HARNESS_MCP_CALL_TIMEOUT_MS";
     public static final String MCP_CONFIG_FILE       = "HARNESS_MCP_CONFIG_FILE";
 
     // ==================== Built-in Tools ====================
     public static final String TOOL_WEB_SEARCH_ENABLED        = "HARNESS_TOOL_WEB_SEARCH_ENABLED";
-    public static final String TOOL_WEB_SEARCH_API_KEY        = "HARNESS_TOOL_WEB_SEARCH_API_KEY";
-    public static final String TOOL_WEB_SEARCH_ENGINE         = "HARNESS_TOOL_WEB_SEARCH_ENGINE";
-    /** 搜索引擎回退链优先级，逗号分隔，默认 tavily,serpapi,duckduckgo */
-    public static final String TOOL_WEB_SEARCH_PRIORITY       = "HARNESS_TOOL_WEB_SEARCH_PRIORITY";
-    public static final String TOOL_WEB_SEARCH_TAVILY_API_KEY = "HARNESS_TOOL_WEB_SEARCH_TAVILY_API_KEY";
-    public static final String TOOL_WEB_SEARCH_SERPAPI_API_KEY = "HARNESS_TOOL_WEB_SEARCH_SERPAPI_API_KEY";
+    /** SearXNG 实例地址，默认 http://localhost:8888 */
+    public static final String TOOL_WEB_SEARCH_SEARXNG_URL   = "HARNESS_TOOL_WEB_SEARCH_SEARXNG_URL";
     public static final String TOOL_FFMPEG_ENABLED       = "HARNESS_TOOL_FFMPEG_ENABLED";
     public static final String TOOL_FFMPEG_PATH          = "HARNESS_TOOL_FFMPEG_PATH";
     /** 工具返回结果数量上限（code_glob/code_grep 等），默认 100 */

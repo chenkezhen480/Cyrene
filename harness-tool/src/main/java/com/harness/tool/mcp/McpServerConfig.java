@@ -9,18 +9,16 @@ import org.slf4j.LoggerFactory;
 
 import java.io.File;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 
 /**
- * Parses MCP server configurations from either a JSON file or environment variables.
+ * Parses MCP server configurations from a JSON file.
  *
- * <p>Loading priority:
- * <ol>
- *   <li>{@code HARNESS_MCP_CONFIG_FILE} — path to a JSON file</li>
- *   <li>{@code HARNESS_MCP_SERVERS} — comma-separated {@code name=url} pairs</li>
- * </ol>
+ * <p>Configure via {@code HARNESS_MCP_CONFIG_FILE} pointing to a JSON file.
+ * If not set, no MCP servers are loaded.
  *
  * <p>JSON format:
  * <pre>{@code
@@ -53,31 +51,29 @@ public class McpServerConfig {
     public int callTimeoutMs() { return callTimeoutMs; }
 
     /**
-     * Load all MCP server configs: JSON file first, then env var fallback.
+     * Load MCP server configs from JSON config file.
+     * Returns empty list if no config file is configured.
      */
     public static List<McpServerConfig> loadAll() {
         EnvConfig cfg = EnvConfig.get();
+        String configFile = cfg.getString(EnvKey.MCP_CONFIG_FILE);
+
+        if (configFile == null || configFile.isBlank()) {
+            log.info("No MCP config file configured (HARNESS_MCP_CONFIG_FILE not set), MCP tools disabled");
+            return Collections.emptyList();
+        }
+
         int defaultConnect = cfg.getInt(EnvKey.MCP_CONNECT_TIMEOUT, 5000);
         int defaultCall = cfg.getInt(EnvKey.MCP_CALL_TIMEOUT, 30000);
 
-        // Priority 1: JSON config file
-        String configFile = cfg.getString(EnvKey.MCP_CONFIG_FILE);
-        if (configFile != null && !configFile.isBlank()) {
-            List<McpServerConfig> fromFile = loadFromJson(configFile, defaultConnect, defaultCall);
-            if (fromFile != null) {
-                return fromFile;
-            }
-            log.warn("JSON config file '{}' failed, falling back to env var", configFile);
-        }
-
-        // Priority 2: env var
-        return loadFromEnv(cfg, defaultConnect, defaultCall);
+        List<McpServerConfig> result = loadFromJson(configFile, defaultConnect, defaultCall);
+        return result != null ? result : Collections.emptyList();
     }
 
     private static List<McpServerConfig> loadFromJson(String path, int defaultConnect, int defaultCall) {
         File file = new File(path);
         if (!file.exists()) {
-            log.error("MCP config file not found: {}", path);
+            log.warn("MCP config file not found: {}, no MCP servers loaded", path);
             return null;
         }
 
@@ -109,19 +105,5 @@ public class McpServerConfig {
             log.error("Failed to parse MCP config file '{}': {}", path, e.getMessage(), e);
             return null;
         }
-    }
-
-    private static List<McpServerConfig> loadFromEnv(EnvConfig cfg, int defaultConnect, int defaultCall) {
-        List<String> servers = cfg.getCommaList(EnvKey.MCP_SERVERS);
-        List<McpServerConfig> configs = new ArrayList<>();
-        for (String server : servers) {
-            String[] parts = server.split("=", 2);
-            if (parts.length == 2) {
-                configs.add(new McpServerConfig(parts[0].trim(), parts[1].trim(), defaultConnect, defaultCall));
-            } else {
-                log.warn("Invalid MCP server config: {}", server);
-            }
-        }
-        return configs;
     }
 }

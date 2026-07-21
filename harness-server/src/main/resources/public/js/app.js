@@ -24,6 +24,7 @@ function renderMarkdown(text) {
 // Strip artifact markdown links from text to prevent double-rendering
 // when both TEXT and ARTIFACT blocks are present
 const ARTIFACT_LINK_RE = /!\[.*?\]\(\/api\/artifacts\/[^)]+\)/g;
+const CRYSTAL_SVG = '<svg width="15" height="15" viewBox="0 0 16 16" fill="none" style="vertical-align:-2px;margin-right:3px"><defs><radialGradient id="cg"><stop offset="0%" stop-color="rgba(232,160,191,0.6)"/><stop offset="100%" stop-color="rgba(139,126,200,0.15)"/></radialGradient></defs><path d="M8 0.5L9.5 5 14 3.5 11 7.5 15.5 8 11 8.5 14 12.5 9.5 11 8 15.5 6.5 11 2 12.5 5 8.5 0.5 8 5 7.5 2 3.5 6.5 5z" fill="url(#cg)" stroke="var(--iris)" stroke-width="0.5" stroke-linejoin="round"/><circle cx="8" cy="8" r="1.8" fill="rgba(232,160,191,0.7)"/><circle cx="8" cy="8" r="0.8" fill="white" opacity="0.6"/></svg>';
 function stripArtifactLinks(text) {
   if (!text) return '';
   return text.replace(ARTIFACT_LINK_RE, '').trim();
@@ -46,6 +47,7 @@ const Icons = {
   close: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`,
   save: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>`,
   search: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>`,
+  tool: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 12 C9.5 9 7.5 5.5 12 2 C16.5 5.5 14.5 9 12 12" fill="currentColor" opacity="0.15" stroke-width="0.8"/><path d="M12 12 C9.5 9 7.5 5.5 12 2 C16.5 5.5 14.5 9 12 12" fill="currentColor" opacity="0.15" stroke-width="0.8" transform="rotate(45,12,12)"/><path d="M12 12 C9.5 9 7.5 5.5 12 2 C16.5 5.5 14.5 9 12 12" fill="currentColor" opacity="0.15" stroke-width="0.8" transform="rotate(90,12,12)"/><path d="M12 12 C9.5 9 7.5 5.5 12 2 C16.5 5.5 14.5 9 12 12" fill="currentColor" opacity="0.15" stroke-width="0.8" transform="rotate(135,12,12)"/><path d="M12 12 C9.5 9 7.5 5.5 12 2 C16.5 5.5 14.5 9 12 12" fill="currentColor" opacity="0.15" stroke-width="0.8" transform="rotate(180,12,12)"/><path d="M12 12 C9.5 9 7.5 5.5 12 2 C16.5 5.5 14.5 9 12 12" fill="currentColor" opacity="0.15" stroke-width="0.8" transform="rotate(225,12,12)"/><path d="M12 12 C9.5 9 7.5 5.5 12 2 C16.5 5.5 14.5 9 12 12" fill="currentColor" opacity="0.15" stroke-width="0.8" transform="rotate(270,12,12)"/><path d="M12 12 C9.5 9 7.5 5.5 12 2 C16.5 5.5 14.5 9 12 12" fill="currentColor" opacity="0.15" stroke-width="0.8" transform="rotate(315,12,12)"/><path d="M12 12 C10.5 10 9 7.5 12 5 C15 7.5 13.5 10 12 12" fill="currentColor" opacity="0.08" stroke-width="0.5" transform="rotate(22.5,12,12)"/><path d="M12 12 C10.5 10 9 7.5 12 5 C15 7.5 13.5 10 12 12" fill="currentColor" opacity="0.08" stroke-width="0.5" transform="rotate(67.5,12,12)"/><path d="M12 12 C10.5 10 9 7.5 12 5 C15 7.5 13.5 10 12 12" fill="currentColor" opacity="0.08" stroke-width="0.5" transform="rotate(112.5,12,12)"/><path d="M12 12 C10.5 10 9 7.5 12 5 C15 7.5 13.5 10 12 12" fill="currentColor" opacity="0.08" stroke-width="0.5" transform="rotate(157.5,12,12)"/><path d="M12 12 C10.5 10 9 7.5 12 5 C15 7.5 13.5 10 12 12" fill="currentColor" opacity="0.08" stroke-width="0.5" transform="rotate(202.5,12,12)"/><path d="M12 12 C10.5 10 9 7.5 12 5 C15 7.5 13.5 10 12 12" fill="currentColor" opacity="0.08" stroke-width="0.5" transform="rotate(247.5,12,12)"/><path d="M12 12 C10.5 10 9 7.5 12 5 C15 7.5 13.5 10 12 12" fill="currentColor" opacity="0.08" stroke-width="0.5" transform="rotate(292.5,12,12)"/><path d="M12 12 C10.5 10 9 7.5 12 5 C15 7.5 13.5 10 12 12" fill="currentColor" opacity="0.08" stroke-width="0.5" transform="rotate(337.5,12,12)"/><circle cx="12" cy="12" r="2" fill="currentColor" opacity="0.2"/><circle cx="12" cy="12" r="0.8" fill="currentColor" opacity="0.45"/></svg>`,
 };
 
 // ── i18n (data in i18n.js) ──
@@ -530,7 +532,7 @@ const ChatPage = {
       scrollToBottom();
 
       isStreaming.value = true;
-      messages.value.push({ role: 'assistant', content: '' });
+      messages.value.push({ role: 'assistant', content: '', toolCalls: [] });
       const msgIdx = messages.value.length - 1;
 
       try {
@@ -573,8 +575,6 @@ const ChatPage = {
                     if (parsed.sessionId) {
                       currentSessionId.value = parsed.sessionId;
                     }
-                    // Show thinking placeholder immediately while LLM is streaming
-                    messages.value[msgIdx].content = '<div class="thinking-placeholder"><div class="loading-dots"><span></span><span></span><span></span></div><span class="thinking-label">思考中...</span></div>';
                     break;
                   case 'token':
                     // Remove thinking placeholder on first token (text response, not tool call)
@@ -584,34 +584,13 @@ const ChatPage = {
                     if (parsed.text) messages.value[msgIdx].content += parsed.text;
                     break;
                   case 'tool_call_start':
-                    // Show tool call block + loading placeholder immediately when tool starts
-                    {
-                      const crystal = '<svg width="15" height="15" viewBox="0 0 16 16" fill="none" style="vertical-align:-2px;margin-right:3px"><defs><radialGradient id="cg"><stop offset="0%" stop-color="rgba(232,160,191,0.6)"/><stop offset="100%" stop-color="rgba(139,126,200,0.15)"/></radialGradient></defs><path d="M8 0.5L9.5 5 14 3.5 11 7.5 15.5 8 11 8.5 14 12.5 9.5 11 8 15.5 6.5 11 2 12.5 5 8.5 0.5 8 5 7.5 2 3.5 6.5 5z" fill="url(#cg)" stroke="var(--iris)" stroke-width="0.5" stroke-linejoin="round"/><circle cx="8" cy="8" r="1.8" fill="rgba(232,160,191,0.7)"/><circle cx="8" cy="8" r="0.8" fill="white" opacity="0.6"/></svg>';
-                      // Remove thinking placeholder + previous loading canvas
-                      messages.value[msgIdx].content = (typeof messages.value[msgIdx].content === 'string' ? messages.value[msgIdx].content : '')
-                        .replace(/<div class="thinking-placeholder">[\s\S]*?<\/div>/g, '')
-                        .replace(/\n?<div class="artifact-loading-canvas"[\s\S]*?<\/div>\n?/g, '');
-                      let toolHtml = `\n\n<div class="tool-call-block tool-call-running" data-tool="${parsed.toolName}"><div class="tool-call-header">${crystal} ${parsed.toolName}</div></div>\n\n`;
-                      // Embed LOADING placeholder inline for artifact-producing tools
-                      if (ARTIFACT_TOOLS.includes(parsed.toolName)) {
-                        const loadId = 'ld-' + Date.now();
-                        const stars = genStars(24);
-                        const starHtml = stars.map(s => `<span class="star" style="left:${s.x}%;top:${s.y}%;width:${s.r}px;height:${s.r}px;animation-delay:${s.d}s;animation-duration:${s.dur}s"></span>`).join('');
-                        const label = parsed.toolName === 'image_generation' ? '正在绘图中...' : parsed.toolName === 'video_generation' ? '正在生成视频...' : '正在执行代码...';
-                        toolHtml += `\n<div class="artifact-loading-canvas" data-load-id="${loadId}">${starHtml}<div class="artifact-loading-text">${label}</div></div>\n`;
-                      }
-                      messages.value[msgIdx].content += toolHtml;
-                    }
+                    messages.value[msgIdx].toolCalls.push({ name: parsed.toolName, status: 'pending' });
                     break;
-                  case 'step':
-                    // Tool completed — remove running glow from tool call blocks
+                  case 'tool_call_done':
                     {
-                      const container = document.querySelector(`[data-msg-idx="${msgIdx}"]`);
-                      if (container) {
-                        container.querySelectorAll('.tool-call-running').forEach(el => {
-                          el.classList.remove('tool-call-running');
-                        });
-                      }
+                      const tc = messages.value[msgIdx].toolCalls;
+                      const last = tc.findLast(t => t.name === parsed.toolName && t.status === 'pending');
+                      if (last) last.status = parsed.success ? 'success' : 'error';
                     }
                     break;
                   case 'compress':
@@ -639,43 +618,13 @@ const ChatPage = {
                     }
                     break;
                   case 'done':
-                    {
-                      const doneOutput = parsed.output || '';
-                      const doneArtifacts = parsed.artifacts || [];
-                      if (doneArtifacts.length > 0) {
-                        // Build blocks from output + artifacts
-                        const blocks = [];
-                        let textBuf = doneOutput;
-                        for (const art of doneArtifacts) {
-                          blocks.push({ type: 'TEXT', text: textBuf });
-                          blocks.push({
-                            type: 'ARTIFACT',
-                            artifactId: art.id,
-                            metadata: {
-                              type: art.type,
-                              mimeType: art.mimeType,
-                              name: art.name,
-                              previewUrl: art.previewUrl,
-                              downloadUrl: art.downloadUrl
-                            }
-                          });
-                          textBuf = '';
-                        }
-                        if (textBuf) blocks.push({ type: 'TEXT', text: textBuf });
-                        messages.value[msgIdx].content = blocks;
-                      } else {
-                        if (doneOutput) messages.value[msgIdx].content = [{ type: 'TEXT', text: doneOutput }];
-                      }
-                      if (parsed.sessionId) {
-                        currentSessionId.value = parsed.sessionId;
-                      }
+                    // Don't replace streamed content — tool call blocks + tokens already in place
+                    if (parsed.sessionId) {
+                      currentSessionId.value = parsed.sessionId;
                     }
                     break;
                   case 'cancelled':
-                    // Convert streamed string to blocks format
-                    if (typeof messages.value[msgIdx].content === 'string' && messages.value[msgIdx].content) {
-                      messages.value[msgIdx].content = [{ type: 'TEXT', text: messages.value[msgIdx].content }];
-                    }
+                    // Keep streamed content as-is (tool call blocks + tokens already in place)
                     break;
                   case 'error':
                     messages.value[msgIdx].content = `⚠️ Error: ${parsed.error || t('unknownError')}`;
@@ -802,24 +751,41 @@ const ChatPage = {
                 <div class="message-avatar">
                   {{ msg.role === 'user' ? 'U' : 'C' }}
                 </div>
+                <!-- User message: single block -->
                 <div v-if="msg.role === 'user'" class="message-content">{{ typeof msg.content === 'string' ? msg.content : (msg.content && msg.content[0] && msg.content[0].text || '') }}</div>
-                <div v-else-if="Array.isArray(msg.content) && msg.content.length" class="message-content md-body">
-                  <template v-for="(block, bi) in msg.content" :key="bi">
-                    <span v-if="block.type === 'TEXT'" v-html="renderMarkdown(stripArtifactLinks(block.text))"></span>
-                    <span v-else-if="block.type === 'ARTIFACT'">
-                      <img v-if="(block.metadata && block.metadata.type === 'IMAGE') || (!block.metadata?.type && block.metadata?.mimeType && block.metadata.mimeType.startsWith('image/'))"
-                           :src="getArtifactPreviewUrl(block.artifactId)"
-                           :alt="(block.metadata && block.metadata.name) || 'image'"
-                           style="max-width:100%;border-radius:8px;margin:8px 0;" />
-                      <video v-else-if="(block.metadata && block.metadata.type === 'VIDEO') || (!block.metadata?.type && block.metadata?.mimeType && block.metadata.mimeType.startsWith('video/'))"
-                             controls :src="getArtifactPreviewUrl(block.artifactId)"
-                             style="max-width:100%;border-radius:8px;margin:8px 0;"></video>
-                      <a v-else :href="getArtifactUrl(block.artifactId)">📎 {{ (block.metadata && block.metadata.name) || 'file' }}</a>
-                    </span>
-                  </template>
+                <!-- Assistant message: single merged bubble -->
+                <div v-else class="message-content">
+                  <!-- Tool calls inside the bubble -->
+                  <div v-if="msg.toolCalls && msg.toolCalls.length" class="tool-calls-section">
+                    <div v-for="(tc, ti) in msg.toolCalls" :key="ti"
+                         :class="['tool-call-block', tc.status === 'pending' ? 'tool-call-running' : '']">
+                      <div class="tool-call-header">
+                        <span class="tool-call-name"><span v-html="Icons.tool" class="tool-call-icon"></span>{{ tc.name }}</span>
+                        <span v-if="tc.status === 'pending'" class="tool-call-status tool-call-pending">⏳</span>
+                        <span v-else-if="tc.status === 'success'" class="tool-call-status tool-call-success">✅</span>
+                        <span v-else class="tool-call-status tool-call-error">❌</span>
+                      </div>
+                    </div>
+                  </div>
+                  <!-- Text / artifact content -->
+                  <div v-if="Array.isArray(msg.content) && msg.content.length" class="md-body">
+                    <template v-for="(block, bi) in msg.content" :key="bi">
+                      <span v-if="block.type === 'TEXT'" v-html="renderMarkdown(stripArtifactLinks(block.text))"></span>
+                      <span v-else-if="block.type === 'ARTIFACT'">
+                        <img v-if="(block.metadata && block.metadata.type === 'IMAGE') || (!block.metadata?.type && block.metadata?.mimeType && block.metadata.mimeType.startsWith('image/'))"
+                             :src="getArtifactPreviewUrl(block.artifactId)"
+                             :alt="(block.metadata && block.metadata.name) || 'image'"
+                             style="max-width:100%;border-radius:8px;margin:8px 0;" />
+                        <video v-else-if="(block.metadata && block.metadata.type === 'VIDEO') || (!block.metadata?.type && block.metadata?.mimeType && block.metadata.mimeType.startsWith('video/'))"
+                               controls :src="getArtifactPreviewUrl(block.artifactId)"
+                               style="max-width:100%;border-radius:8px;margin:8px 0;"></video>
+                        <a v-else :href="getArtifactUrl(block.artifactId)">📎 {{ (block.metadata && block.metadata.name) || 'file' }}</a>
+                      </span>
+                    </template>
+                  </div>
+                  <div v-else-if="typeof msg.content === 'string' && msg.content" class="md-body" v-html="renderMarkdown(msg.content)"></div>
+                  <div v-else class="loading-dots" v-meteor><span></span><span></span><span></span></div>
                 </div>
-                <div v-else-if="typeof msg.content === 'string' && msg.content" class="message-content md-body" v-html="renderMarkdown(msg.content)"></div>
-                <div v-else class="message-content"><div class="loading-dots" v-meteor><span></span><span></span><span></span></div></div>
               </div>
             </template>
             <empty-state v-else

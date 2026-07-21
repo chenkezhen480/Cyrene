@@ -1,0 +1,151 @@
+# Cyrene Agent - Docker Compose 一键部署
+# 启动: cd docker && docker compose up -d
+# 构建镜像: docker compose build
+# 查看日志: docker compose logs -f cyrene
+
+name: cyrene
+
+services:
+  # ============================================================
+  # Cyrene Agent - 主应用
+  # ============================================================
+  cyrene-agent:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: cyrene-agent
+    ports:
+      - "${HARNESS_SERVER_PORT:-8080}:8080"
+    volumes:
+      # 挂载 .env 配置文件
+      - ../.env:/app/.env:ro
+      # 知识库上传目录
+      - knowledge-uploads:/app/knowledge-uploads
+      # 产物存储
+      - artifacts:/app/artifacts
+      # Docker socket（沙盒容器需要）
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      # 覆盖容器内部的服务地址（使用 Docker 网络内的服务名）
+      - HARNESS_RAG_URL=http://milvus:19530
+      - HARNESS_AUDIT_DB_URL=jdbc:mysql://mysql:3306/agent?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai
+      - HARNESS_AUDIT_DB_USER=root
+      - HARNESS_AUDIT_DB_PASS=${HARNESS_AUDIT_DB_PASS:-cyrene123}
+      - HARNESS_MEMORY_REDIS_URL=redis://redis:6379
+      - HARNESS_TOOL_WEB_SEARCH_SEARXNG_URL=http://searxng:8080
+    depends_on:
+      mysql:
+        condition: service_healthy
+      milvus:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      searxng:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - cyrene-net
+
+  # ============================================================
+  # MySQL 8.0 - 会话/消息/记忆/审计存储
+  # ============================================================
+  mysql:
+    image: mysql:8.0
+    container_name: cyrene-mysql
+    ports:
+      - "3306:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: ${HARNESS_AUDIT_DB_PASS:-cyrene123}
+      MYSQL_DATABASE: agent
+      MYSQL_CHARSET: utf8mb4
+      MYSQL_COLLATION: utf8mb4_unicode_ci
+    volumes:
+      - mysql-data:/var/lib/mysql
+      # 自动执行建表脚本（仅首次启动生效）
+      - ../sql/schema-mysql.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+      - ../sql/schema-users-mysql.sql:/docker-entrypoint-initdb.d/02-users.sql:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${HARNESS_AUDIT_DB_PASS:-cyrene123}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      - cyrene-net
+
+  # ============================================================
+  # Milvus Standalone - 向量数据库（内置 etcd + MinIO）
+  # ============================================================
+  milvus:
+    image: milvusdb/milvus:v2.5.4
+    container_name: cyrene-milvus
+    ports:
+      - "19530:19530"   # gRPC
+      - "9091:9091"     # Metrics
+    environment:
+      ETCD_USE_EMBED: "true"
+      COMMON_STORAGETYPE: local
+    volumes:
+      - milvus-data:/var/lib/milvus
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      - cyrene-net
+
+  # ============================================================
+  # Redis 7 - 会话缓存（分布式）
+  # ============================================================
+  redis:
+    image: redis:7-alpine
+    container_name: cyrene-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - cyrene-net
+
+  # ============================================================
+  # SearXNG - 元搜索引擎（联网搜索后端）
+  # ============================================================
+  searxng:
+    image: searxng/searxng:latest
+    container_name: cyrene-searxng
+    ports:
+      - "8888:8088"
+    volumes:
+      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
+    environment:
+      - SEARXNG_BASE_URL=http://localhost:8888/
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - cyrene-net
+
+volumes:
+  mysql-data:
+  milvus-data:
+  redis-data:
+  knowledge-uploads:
+  artifacts:
+
+networks:
+  cyrene-net:
+    driver: bridge

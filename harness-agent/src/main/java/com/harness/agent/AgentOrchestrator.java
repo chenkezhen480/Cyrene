@@ -414,9 +414,9 @@ public class AgentOrchestrator {
             // ===== Layer 2: Preprocess =====
             ContextBuilder.ContextResult ctx = ragFuture.join();
             trace.recordPreprocess(null, ctx.ragHitIds(), null);
-            String systemPrompt = buildSystemPrompt(longtermPrefs, systemPromptOverride, sessionId);
-            log.debug("[Orchestrator] System prompt: {} chars, longterm={}",
-                    systemPrompt.length(), !longtermPrefs.isEmpty());
+            String systemPrompt = buildSystemPrompt(longtermPrefs, systemPromptOverride, sessionId, Boolean.TRUE.equals(gapAnalysis.needsWebSearch()));
+            log.debug("[Orchestrator] System prompt: {} chars, longterm={}, needsWebSearch={}",
+                    systemPrompt.length(), !longtermPrefs.isEmpty(), gapAnalysis.needsWebSearch());
 
             // Inject RAG context into user message (not system prompt) to preserve prompt cache
             String finalUserMessage = enhancedText;
@@ -728,7 +728,7 @@ public class AgentOrchestrator {
             // Layer 2: Preprocess
             ContextBuilder.ContextResult ctx = ragFuture.join();
             trace.recordPreprocess(null, ctx.ragHitIds(), null);
-            String systemPrompt = buildSystemPrompt(longtermPrefs, systemPromptOverride, sessionId);
+            String systemPrompt = buildSystemPrompt(longtermPrefs, systemPromptOverride, sessionId, Boolean.TRUE.equals(gapAnalysis.needsWebSearch()));
             trace.recordLlmMeta(chatModelProvider.modelName(), "v1");
 
             // Inject RAG context into user message (not system prompt) to preserve prompt cache
@@ -781,6 +781,11 @@ public class AgentOrchestrator {
                 @Override
                 public void onToolCallStart(String toolName, String arguments) {
                     callback.onEvent(StreamEvent.toolCallStart(toolName, arguments));
+                }
+
+                @Override
+                public void onToolCallDone(String toolName, boolean success, long durationMs) {
+                    callback.onEvent(StreamEvent.toolCallDone(toolName, success, durationMs));
                 }
 
                 @Override
@@ -900,7 +905,7 @@ public class AgentOrchestrator {
         }
     }
 
-    private String buildSystemPrompt(List<Preference> longtermPrefs, String systemPromptOverride, String sessionId) {
+    private String buildSystemPrompt(List<Preference> longtermPrefs, String systemPromptOverride, String sessionId, boolean needsWebSearch) {
         StringBuilder sb = new StringBuilder();
         String basePrompt = (systemPromptOverride != null && !systemPromptOverride.isBlank())
                 ? systemPromptOverride
@@ -908,6 +913,10 @@ public class AgentOrchestrator {
                         "You are a helpful AI assistant with access to tools. Use tools when needed to answer questions. Think step by step. If a tool fails, try an alternative approach.");
         sb.append(basePrompt).append("\n\n");
         sb.append("IMPORTANT: After image/video generation tools succeed, do NOT include download links, file paths, image markdown syntax (![name](url)), or descriptive repetitions of the image in your text reply. The frontend automatically renders generated content as inline cards. Your text reply should only contain natural language commentary (e.g. style notes, asking if adjustments are needed).\n\n");
+
+        if (needsWebSearch) {
+            sb.append("CRITICAL: This query requires up-to-date information. You MUST call the web_search tool FIRST before composing your answer. Do NOT answer from memory alone.\n\n");
+        }
 
         // Inject skill index — name + when-to-use description
         if (skillRegistry.size(sessionId) > 0) {

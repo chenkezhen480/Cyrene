@@ -14,14 +14,6 @@
 指定项目目录 → 自动扫描 Controller → 解析 DTO/VO 继承结构 → 生成 project-apis.json → 工具自动注册到 Agent
 ```
 
-**工作原理：**
-
-1. **Glob** 扫描项目中的 Controller 文件（支持 Spring Boot、Express、Flask 等主流框架）
-2. **Grep** 提取路由注解和上下文（`@GetMapping`、`@PostMapping`、`router.get()` 等）
-3. **ReadClassHierarchy** 递归解析输入/输出参数类的继承链（最大深度 2），获取完整字段结构
-4. 生成结构化的 `project-apis.json`，每个接口对应一个工具定义（名称、描述、参数 Schema）
-5. 工具自动注册到 Agent 的工具集，对话中即可调用，身份认证接受拓展context上下文，透传token认证。
-
 **效果：** 启动服务 → 在 Web UI 指定项目目录 → 扫描完成 → Agent 已具备调用你项目接口的能力。无需写一行对接代码。
 
 ```
@@ -38,7 +30,7 @@ Agent: "查询到 156 台在用设备，以下是列表..."
 |------|------|--------|------|----------|
 | "你好" | ✗ | ✗ | ✗ | ✗ |
 | "公司报销政策是什么" | ✗ | ✓ | ✗ | ✓ (multi-query) |
-| "今天上海天气怎么样" | ✗ | ✗ | ✓ | ✗ |
+| "今天上海天气怎么样" | ✗ | ✗ | ✓（SearXNG） | ✗ |
 | "分析这个需求的可行性" | ✓ | ✓ | ✗ | ✗ |
 
 **三层漏斗（优先级递减）：**
@@ -69,7 +61,7 @@ Agent: "查询到 156 台在用设备，以下是列表..."
 
 ### RAG 知识库
 
-上传文档（PDF、DOCX、XLSX、TXT、Markdown 等）→ 自动提取、分块、Embedding、存储。支持 PostgreSQL pgvector 和 Milvus 两种向量后端，通过 `HARNESS_RAG_PROVIDER` 切换。
+上传文档（PDF、DOCX、XLSX、TXT、Markdown 等）→ 自动提取、分块、Embedding、存储。默认使用 Milvus 向量数据库，也支持 PostgreSQL pgvector，通过 `HARNESS_RAG_PROVIDER` 切换。
 
 内置查询改写（HyDE / Multi-Query / Step-Back）、语义上下文增强、可选 Rerank 重排序。大文件自动采用"切片 → 合并 → 并行摘要"策略，1MB 文件仅需 5-8 次 LLM 调用。
 
@@ -104,11 +96,19 @@ Input → Session Lifecycle → Preprocess → ReAct Loop (AI ↔ Tool ↔ Inspe
 
 - Java 21+
 - Maven 3.8+
-- PostgreSQL + pgvector（RAG，可选）
-- MySQL 8+（审计 + 会话记忆，可选）
-- Redis（分布式缓存，可选）
+- Docker + Docker Compose（推荐，一键部署所有依赖）
+- 或手动安装：Milvus 2.5+（向量数据库，默认）、MySQL 8+（会话/记忆/审计）、Redis 7+（分布式缓存）、SearXNG（联网搜索）
 
-### 构建 & 运行
+### Docker Compose 一键部署（推荐）
+
+```bash
+cp .env.example .env   # 编辑 .env，填入 LLM API Key
+cd docker && docker compose up -d
+```
+
+自动拉取并启动 5 个服务：`cyrene`（主应用）、`mysql`、`milvus`、`redis`、`searxng`。首次启动 MySQL 自动执行建表脚本，Milvus 集合由应用自动创建。
+
+### 手动构建 & 运行
 
 ```bash
 # 构建
@@ -186,29 +186,6 @@ harness-core       ← 核心模型（AgentMessage、AgentTrace、ReActStep、To
 harness-agent      ← 编排器 + 子代理 + 项目接口发现
 harness-server     ← HTTP API + Web UI
 ```
-
-## 扩展指南
-
-### 添加 LLM Provider
-
-1. 在 `com.harness.ai.model.impl` 实现对应 Provider 接口
-2. 在 `ModelProviderFactory` 中注册
-3. 在 `EnvKey.java` 中添加环境变量键
-
-### 添加工具
-
-1. 实现 `com.harness.tool.Tool`（`spec()` + `execute()`）
-2. 在 `AgentOrchestrator.registerBuiltinTools()` 注册，或通过 MCP 自动发现
-
-### 添加向量存储后端
-
-1. 实现 `VectorStore`（`retrieve()` + `insertBatch()` + `deleteByFile()`）
-2. 在 `VectorStoreFactory` 注册
-3. 设置 `HARNESS_RAG_PROVIDER=your-backend`
-
-## 技术栈
-
-Java 21 · LangChain4j 1.15.0 · Javalin 6.1.3 · PostgreSQL pgvector · MySQL · Redis · Jackson · OkHttp · Apache POI + PDFBox · dotenv-java
 
 ## 许可证
 

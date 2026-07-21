@@ -31,6 +31,16 @@ public interface ReActListener {
     default void onToolCallStart(String toolName, String arguments) {}
 
     /**
+     * Called when a tool call finishes execution.
+     * Default is no-op for backward compatibility.
+     *
+     * @param toolName   the tool that was called
+     * @param success    whether the tool returned a successful result
+     * @param durationMs execution time in milliseconds
+     */
+    default void onToolCallDone(String toolName, boolean success, long durationMs) {}
+
+    /**
      * Called when an artifact-producing tool generates downloadable files.
      * Default is no-op for backward compatibility.
      */
