@@ -69,9 +69,10 @@ Cross-module deps: `harness-ai` → `harness-tool`; `harness-input`/`harness-pre
 - **ReActEngine** — LangChain4j 1.15.0 `ChatModel.chat(ChatRequest)` with `ToolSpecification`. Wraps in `FallbackChatModel` (multimodal fallback) + `SemaphoreChatModel` (concurrency, `HARNESS_MODEL_API_MAX_CONCURRENT` default 10). Streaming via `StreamingChatModel.streamExecute()`. No intra-iteration retry — errors returned to LLM. `HARNESS_REACT_MAX_TOOL_RETRIES` (default 3) stops loop after consecutive TOOL_ERRORs. Timeout: `HARNESS_MODEL_CHAT_TIMEOUT_SECONDS` (default 300s).
 - **Thinking Mode** — `HARNESS_MODEL_CHAT_THINKING` (default `true`). `chatModelNoThinking()` for cost-sensitive calls (LargeFileParser, query rewriting). Per-request override via `AgentContext.enableThinking()`.
 - **File Injection** — Small files (< `HARNESS_INPUT_FILE_SIZE_THRESHOLD_KB`, default 100KB) extracted directly; large files via `LargeFileParser` merge-then-summarize.
-- **ReAct Inspection** — Each tool call inspected by `Inspector` (heuristic, no LLM). States: PASS / TOOL_ERROR / WRONG_TOOL / INSUFFICIENT / LOOP_DETECTED. Non-PASS states inject hints for next iteration.
+- **ReAct Inspection** — Each tool call inspected by `Inspector` (no LLM). Two-layer detection: (1) explicit `ToolResult.ResultStatus` (EMPTY/LOW_RELEVANCE/SUCCESS) set by internal tools via ThreadLocal — authoritative, zero guessing; (2) heuristic length/phrase fallback for external MCP tools. States: PASS / TOOL_ERROR / WRONG_TOOL / INSUFFICIENT / LOOP_DETECTED. Non-PASS states inject hints for next iteration.
+- **KnowledgeBaseTool** — RAG retrieval as a ReAct tool (not pre-fetched). Model only sees `query` parameter; rewrite decision is invisible. Internal logic: fast path (single query) on first call → auto-upgrade to combined rewrite (5 queries: 3 multi-query + 1 step-back + 1 hyde) when Inspector reports INSUFFICIENT. Uses `ReActStep.ThreadLocal` to read inspection history. `ToolResult.ResultStatus` declares EMPTY (0 results), LOW_RELEVANCE (topScore < threshold), or SUCCESS.
 - **ReAct Reflection** — Periodic reflection prompts every `HARNESS_REACT_REFLECTION_INTERVAL` (default 3) iterations. Loop detection at `HARNESS_REACT_LOOP_DETECTION_THRESHOLD` (default 3) consecutive identical calls.
-- **GapAnalyzer** — 3-tier routing funnel for `needsThinking`/`needsKnowledgeBase`/`rewriteStrategy`/`needsWebSearch`. Tier 0: explicit (AgentContext) → Tier 1: rule engine (regex/keywords, <1ms) → Tier 2: LLM classification (ClassifierModelProvider). `HARNESS_GAP_ANALYSIS_ENABLED` (default `true`). Tier 2 failure degrades to env defaults. `needsWebSearch=true` injects a system prompt constraint forcing the LLM to call `web_search` before answering.
+- **GapAnalyzer** — 3-tier routing funnel for `needsThinking`/`needsKnowledgeBase`/`needsWebSearch`. Tier 0: explicit (AgentContext) → Tier 1: rule engine (regex/keywords, <1ms) → Tier 2: LLM classification (ClassifierModelProvider). `HARNESS_GAP_ANALYSIS_ENABLED` (default `true`). Tier 2 failure degrades to env defaults. `needsWebSearch=true` injects a system prompt constraint forcing the LLM to call `web_search` before answering. `needsKnowledgeBase=true` injects a constraint forcing the LLM to call `knowledge_base_search` first.
 - **Streaming** — `AgentOrchestrator.streamRun()` via `StreamCallback` pushing `StreamEvent` (START/TOKEN/STEP/TOOL_CALL_START/COMPRESS/ARTIFACT/DONE/CANCELLED/ERROR). `CancellationToken` supports polling + thread interrupt.
 - **Sub-Agent** — `SubAgentOrchestrator` manages lifecycle with dependency resolution + parallel execution. LLM spawns via `spawn_subagent` tool. `HARNESS_AGENT_MAX_SUBAGENTS` (default 3).
 - **Web Search** — `WebSearchTool` backed by self-hosted SearXNG (aggregates 70+ search engines, no API key). Endpoint via `HARNESS_TOOL_WEB_SEARCH_SEARXNG_URL`. `needsWebSearch=true` from GapAnalyzer forces the LLM to call `web_search` before answering (system prompt injection).
@@ -130,7 +131,7 @@ All use `chatModelNoThinking()`. LLM failure → original query.
 | MilvusVectorStore | `HARNESS_RAG_PROVIDER=milvus` **(default)** | Milvus BM25 sparse + dense hybrid |
 | PgVectorStore | `HARNESS_RAG_PROVIDER=pgvector` | pgvector cosine + optional fulltext |
 
-Key env vars: `HARNESS_RAG_PROVIDER` (milvus), `HARNESS_RAG_URL` (Milvus: `http://host:19530`, PG: `jdbc:postgresql://...`), `HARNESS_RAG_DATABASE`, `HARNESS_RAG_USER`, `HARNESS_RAG_PASS`, `HARNESS_RAG_API_KEY`, `HARNESS_RAG_COLLECTION`, `HARNESS_RAG_EMBED_DIM` (1536), `HARNESS_RAG_TOP_K` (5), `HARNESS_RAG_SCORE_THRESHOLD`, `HARNESS_RAG_BM25_WEIGHT` (0.3, Milvus), `HARNESS_RAG_LANG` (english), `HARNESS_RAG_MILVUS_METRIC_TYPE` (COSINE).
+Key env vars: `HARNESS_RAG_PROVIDER` (milvus), `HARNESS_RAG_URL` (Milvus: `http://host:19530`, PG: `jdbc:postgresql://...`), `HARNESS_RAG_DATABASE`, `HARNESS_RAG_USER`, `HARNESS_RAG_PASS`, `HARNESS_RAG_API_KEY`, `HARNESS_RAG_COLLECTION`, `HARNESS_MODEL_EMBEDDING_DIM` (1024), `HARNESS_RAG_TOP_K` (5), `HARNESS_RAG_SCORE_THRESHOLD` (0.7, also used as LOW_RELEVANCE threshold), `HARNESS_RAG_BM25_WEIGHT` (0.3, Milvus), `HARNESS_RAG_LANG` (english), `HARNESS_RAG_MILVUS_METRIC_TYPE` (COSINE).
 
 > Deprecated: `HARNESS_RAG_PG_*`, `HARNESS_RAG_MULTI_ROUTE`, `HARNESS_RAG_FULLTEXT_ENABLED`.
 
@@ -146,6 +147,7 @@ Session-based memory with short-term and long-term subsystems. `HARNESS_AUDIT_ST
 Input → Session Lifecycle (timeout + resolution + title) → parallel load (short-term + long-term + RAG)
   → Preprocess (system msg assembly, major compression if >85%, save user msg)
   → ReAct Loop (AI ↔ Tool, minor compression after iteration > HARNESS_CTX_COMPRESS_MINOR)
+    → RAG retrieval now happens inside ReAct via KnowledgeBaseTool (not pre-fetched)
   → Post-process (ReplyAuditor, save reply, cache sync)
   → Audit (TraceCollector → TraceStore)
 ```
@@ -167,6 +169,15 @@ Input → Session Lifecycle (timeout + resolution + title) → parallel load (sh
 
 ### Rate Limiting (harness-ai)
 `SemaphoreChatModel`/`SemaphoreStreamingChatModel` — Java Semaphore concurrency control. `HARNESS_MODEL_API_MAX_CONCURRENT` (default 10).
+
+### Log Storage (harness-server)
+`LogBufferAppender` (Logback) buffers WARN/ERROR events in memory. `LogStorageService` flushes to local files every 1 hour + on shutdown. Auto-cleans files older than retention period.
+
+- `HARNESS_LOG_STORAGE_DIR` (default `./logs`)
+- `HARNESS_LOG_RETENTION_DAYS` (default `7`)
+- File format: `warn-errors-{date}.log`
+
+Key classes: `LogBufferAppender`, `LogStorageService`.
 
 ### Knowledge Base (harness-input + harness-preprocess + harness-server)
 Upload via `POST /api/knowledge/upload`. Flow:

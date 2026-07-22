@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.harness.core.exception.ToolExecutionException;
 import com.harness.core.model.ApiEndpoint;
 import com.harness.core.model.AuthMode;
+import com.harness.core.model.ToolResult;
 import com.harness.core.model.ToolSpec;
 import okhttp3.*;
 import org.slf4j.Logger;
@@ -105,6 +106,7 @@ public class HttpApiTool implements Tool {
                 throw new ToolExecutionException(toolName, errMsg);
             }
             log.debug("[HttpApi] {} succeeded: {} chars", toolName, body.length());
+            ToolResult.setCurrentStatus(ToolResult.ResultStatus.SUCCESS);
             return truncate(body, 4000);
         } catch (ToolExecutionException e) {
             throw e;

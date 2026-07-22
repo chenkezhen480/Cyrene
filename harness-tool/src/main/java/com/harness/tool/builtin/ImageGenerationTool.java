@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.harness.core.exception.ToolExecutionException;
 import com.harness.core.model.Artifact;
+import com.harness.core.model.ToolResult;
 import com.harness.core.model.ToolSpec;
 import com.harness.tool.ArtifactProducingTool;
 import com.harness.tool.CancellableTool;
@@ -158,6 +159,7 @@ public class ImageGenerationTool implements ArtifactProducingTool, CancellableTo
                 String previewUrl = downloadUrl + "/preview";
                 sb.append("![").append(a.get("name")).append("](").append(previewUrl).append(")\n\n");
             }
+            ToolResult.setCurrentStatus(ToolResult.ResultStatus.SUCCESS);
             return sb.toString();
 
         } catch (ToolExecutionException e) {

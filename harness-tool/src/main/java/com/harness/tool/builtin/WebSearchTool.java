@@ -3,6 +3,7 @@ package com.harness.tool.builtin;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.harness.core.exception.ToolExecutionException;
+import com.harness.core.model.ToolResult;
 import com.harness.core.model.ToolSpec;
 import com.harness.env.EnvConfig;
 import com.harness.env.EnvKey;
@@ -81,7 +82,13 @@ public class WebSearchTool implements Tool {
             if (!response.isSuccessful()) {
                 throw new IOException("SearXNG HTTP " + response.code() + ": " + body);
             }
-            return formatResponse(body, query);
+            String result = formatResponse(body, query);
+            if (result.startsWith("No results found")) {
+                ToolResult.setCurrentStatus(ToolResult.ResultStatus.EMPTY);
+            } else {
+                ToolResult.setCurrentStatus(ToolResult.ResultStatus.SUCCESS);
+            }
+            return result;
         } catch (IOException e) {
             throw new ToolExecutionException("web_search",
                     "SearXNG request failed (" + baseUrl + "): " + e.getMessage());

@@ -22,7 +22,7 @@ public class OpenAiEmbeddingModelProvider implements EmbeddingModelProvider {
         this.apiKey = cfg.requireString(EnvKey.MODEL_EMBEDDING_API_KEY);
         this.baseUrl = cfg.getString(EnvKey.MODEL_EMBEDDING_BASE_URL, "https://api.openai.com/v1");
         this.modelName = cfg.getString(EnvKey.MODEL_EMBEDDING_MODEL, "text-embedding-3-small");
-        this.dim = cfg.getInt(EnvKey.MODEL_EMBEDDING_DIM, EnvKey.RAG_EMBED_DIM_DEFAULT);
+        this.dim = cfg.getInt(EnvKey.MODEL_EMBEDDING_DIM, EnvKey.MODEL_EMBEDDING_DIM_DEFAULT);
     }
 
     private OpenAiEmbeddingModel getOrCreate() {

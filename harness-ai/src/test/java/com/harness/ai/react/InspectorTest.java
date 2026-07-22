@@ -76,11 +76,71 @@ class InspectorTest {
     @Test
     void inspect_nullOutput_returnsWrongTool() {
         ToolCall call = toolCall("fetch");
-        ToolResult result = new ToolResult("id1", "fetch", true, null, null, 100);
+        ToolResult result = new ToolResult("id1", "fetch", true, null, null, 100, null);
 
         var inspection = inspector.inspect(List.of(call), List.of(result));
 
         assertThat(inspection.status()).isEqualTo(InspectionStatus.WRONG_TOOL);
+    }
+
+    @Test
+    void inspect_explicitEmpty_returnsInsufficient() {
+        ToolCall call = toolCall("knowledge_base_search");
+        ToolResult result = ToolResult.ok("id1", "knowledge_base_search",
+                "No results found in knowledge base for: test query", 200, ToolResult.ResultStatus.EMPTY);
+
+        var inspection = inspector.inspect(List.of(call), List.of(result));
+
+        assertThat(inspection.status()).isEqualTo(InspectionStatus.INSUFFICIENT);
+        assertThat(inspection.reason()).contains("exhausted all retrieval strategies");
+    }
+
+    @Test
+    void inspect_explicitEscalating_returnsInsufficient() {
+        ToolCall call = toolCall("knowledge_base_search");
+        ToolResult result = ToolResult.ok("id1", "knowledge_base_search",
+                "No results found in knowledge base for: test query", 200, ToolResult.ResultStatus.ESCALATING);
+
+        var inspection = inspector.inspect(List.of(call), List.of(result));
+
+        assertThat(inspection.status()).isEqualTo(InspectionStatus.INSUFFICIENT);
+        assertThat(inspection.reason()).contains("auto-escalated");
+        assertThat(inspection.reason()).doesNotContain("Do NOT retry");
+    }
+
+    @Test
+    void inspect_explicitLowRelevance_returnsInsufficient() {
+        ToolCall call = toolCall("knowledge_base_search");
+        ToolResult result = ToolResult.ok("id1", "knowledge_base_search",
+                "Some context that is not very relevant to the query at all", 200, ToolResult.ResultStatus.LOW_RELEVANCE);
+
+        var inspection = inspector.inspect(List.of(call), List.of(result));
+
+        assertThat(inspection.status()).isEqualTo(InspectionStatus.INSUFFICIENT);
+        assertThat(inspection.reason()).contains("none are relevant");
+    }
+
+    @Test
+    void inspect_explicitSuccess_returnsPass() {
+        ToolCall call = toolCall("knowledge_base_search");
+        ToolResult result = ToolResult.ok("id1", "knowledge_base_search",
+                "Detailed context about the refund policy from the knowledge base", 200, ToolResult.ResultStatus.SUCCESS);
+
+        var inspection = inspector.inspect(List.of(call), List.of(result));
+
+        assertThat(inspection.status()).isEqualTo(InspectionStatus.PASS);
+    }
+
+    @Test
+    void inspect_explicitStatusTakesPriority_overHeuristics() {
+        // Even though the output is short (would be INSUFFICIENT by heuristics),
+        // explicit SUCCESS should take priority
+        ToolCall call = toolCall("custom_tool");
+        ToolResult result = ToolResult.ok("id1", "custom_tool", "ok", 100, ToolResult.ResultStatus.SUCCESS);
+
+        var inspection = inspector.inspect(List.of(call), List.of(result));
+
+        assertThat(inspection.status()).isEqualTo(InspectionStatus.PASS);
     }
 
     @Test

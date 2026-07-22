@@ -51,10 +51,12 @@ public class ToolExecutor {
         try {
             String output = tool.execute(toolCall.arguments());
             long duration = System.currentTimeMillis() - start;
+            // Consume explicit status set by tool via ThreadLocal (null if tool didn't set one)
+            ToolResult.ResultStatus status = ToolResult.consumeCurrentStatus();
             log.debug("[L3-Tool] [{}] executed in {}ms", name, duration);
             log.debug("[L3-Tool] [{}] result: {}", name,
                     output != null && output.length() > 200 ? output.substring(0, 200) + "..." : output);
-            return ToolResult.ok(toolCall.id(), name, output, duration);
+            return ToolResult.ok(toolCall.id(), name, output, duration, status);
         } catch (ToolExecutionException e) {
             long duration = System.currentTimeMillis() - start;
             log.error("[L3-Tool] [{}] failed in {}ms: {}", name, duration, e.getMessage());

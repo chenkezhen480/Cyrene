@@ -2,6 +2,8 @@ package com.harness.tool.discovery;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.harness.core.exception.ToolExecutionException;
+import com.harness.core.model.ToolResult;
 import com.harness.core.model.ToolSpec;
 import com.harness.env.EnvConfig;
 import com.harness.env.EnvKey;
@@ -76,7 +78,8 @@ public class CodeGlobTool implements Tool {
         // Project not initialized — rootDir is still the default "."
         Path cwd = Path.of(".").toAbsolutePath().normalize();
         if (rootDir.equals(cwd)) {
-            return "This tool is unavailable: project path not configured yet. You MUST explain to the user that the project needs to be initialized first via the project discovery scan in the UI before code search tools can work. Do NOT retry this tool.";
+            throw new ToolExecutionException("code_glob",
+                    "Project path not configured. Initialize via project discovery scan first.");
         }
 
         log.debug("[CodeGlob] Searching: {} in {}", pattern, rootDir);
@@ -123,9 +126,11 @@ public class CodeGlobTool implements Tool {
             });
 
             if (matches.isEmpty()) {
+                ToolResult.setCurrentStatus(ToolResult.ResultStatus.EMPTY);
                 return "No files found matching pattern: " + pattern;
             }
 
+            ToolResult.setCurrentStatus(ToolResult.ResultStatus.SUCCESS);
             StringBuilder sb = new StringBuilder();
             sb.append("Found ").append(matches.size()).append(" files");
             if (matches.size() >= maxResults) {

@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.harness.core.exception.ToolExecutionException;
 import com.harness.core.model.Artifact;
+import com.harness.core.model.ToolResult;
 import com.harness.core.model.ToolSpec;
 import com.harness.tool.ArtifactProducingTool;
 import com.harness.env.EnvConfig;
@@ -248,6 +249,13 @@ public class PythonSandboxTool implements ArtifactProducingTool {
                 log.warn("Sandbox exited with code {}: stdout={}, stderr={}", exitCode, stdoutStr.length(), stderrStr.length());
             } else {
                 log.info("Sandbox completed: {} artifacts produced", artifactList.size());
+            }
+
+            // Declare explicit status for Inspector
+            if (stdoutStr.isBlank() && artifactList.isEmpty()) {
+                ToolResult.setCurrentStatus(ToolResult.ResultStatus.EMPTY);
+            } else {
+                ToolResult.setCurrentStatus(ToolResult.ResultStatus.SUCCESS);
             }
 
             return mapper.writeValueAsString(result);

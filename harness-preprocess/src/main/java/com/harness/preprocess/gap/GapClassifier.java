@@ -30,9 +30,8 @@ public class GapClassifier {
     private static final ObjectMapper mapper = new ObjectMapper();
 
     private static final String SYSTEM_PROMPT = """
-            Output JSON: {"t":bool,"k":bool,"w":"NONE|HYDE|MULTI_QUERY|STEP_BACK","s":bool}
-            t=needsThinking k=needsKnowledgeBase w=rewriteStrategy(k=false→NONE) s=needsWebSearch
-            w: NONE=default, HYDE=ambiguous→hypothetical answer, MULTI_QUERY=broad coverage, STEP_BACK=specific→general
+            Output JSON: {"t":bool,"k":bool,"s":bool}
+            t=needsThinking k=needsKnowledgeBase s=needsWebSearch
             Output ONLY the JSON, no explanation.""";
 
     private final ChatModel model;
@@ -96,10 +95,7 @@ public class GapClassifier {
             Boolean k = node.has("k") && !node.get("k").isNull() ? node.get("k").asBoolean() : null;
             Boolean s = node.has("s") && !node.get("s").isNull() ? node.get("s").asBoolean() : null;
 
-            String wStr = node.has("w") && !node.get("w").isNull() ? node.get("w").asText() : null;
-            RewriteStrategy w = RewriteStrategy.fromString(wStr);
-
-            GapAnalysis result = new GapAnalysis(k, w, t, s, "llm");
+            GapAnalysis result = new GapAnalysis(k, t, s, "llm");
             log.debug("[GapClassifier] query=\"{}\" → {}", truncate(query), result);
             return result;
         } catch (Exception e) {

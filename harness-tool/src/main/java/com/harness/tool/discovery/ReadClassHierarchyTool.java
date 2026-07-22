@@ -3,6 +3,8 @@ package com.harness.tool.discovery;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.harness.core.exception.ToolExecutionException;
+import com.harness.core.model.ToolResult;
 import com.harness.core.model.ToolSpec;
 import com.harness.tool.Tool;
 import org.slf4j.Logger;
@@ -62,7 +64,8 @@ public class ReadClassHierarchyTool implements Tool {
         // Project not initialized — sourceRoot is still the default "."
         Path cwd = Path.of(".").toAbsolutePath().normalize();
         if (sourceRoot.equals(cwd)) {
-            return "This tool is unavailable: project path not configured yet. You MUST explain to the user that the project needs to be initialized first via the project discovery scan in the UI before code search tools can work. Do NOT retry this tool.";
+            throw new ToolExecutionException("read_class_hierarchy",
+                    "Project path not configured. Initialize via project discovery scan first.");
         }
 
         log.debug("[ReadClassHierarchy] Reading hierarchy for: {} in {}", className, sourceRoot);
@@ -71,6 +74,7 @@ public class ReadClassHierarchyTool implements Tool {
             List<ClassHierarchyReader.ClassInfo> hierarchy = reader.readHierarchy(className);
 
             if (hierarchy.isEmpty()) {
+                ToolResult.setCurrentStatus(ToolResult.ResultStatus.EMPTY);
                 return "Class not found: " + className;
             }
 
@@ -107,6 +111,7 @@ public class ReadClassHierarchyTool implements Tool {
             sb.append("\nJSON Schema:\n");
             sb.append(generateJsonSchema(className, mergedFields));
 
+            ToolResult.setCurrentStatus(ToolResult.ResultStatus.SUCCESS);
             return sb.toString();
 
         } catch (Exception e) {

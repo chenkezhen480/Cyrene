@@ -10,6 +10,7 @@ import com.harness.core.model.CancellationToken;
 import com.harness.env.EnvConfig;
 import com.harness.env.EnvKey;
 import com.harness.preprocess.knowledge.KnowledgeIngestService;
+import com.harness.server.log.LogStorageService;
 import io.javalin.Javalin;
 import org.eclipse.jetty.util.thread.QueuedThreadPool;
 import org.slf4j.Logger;
@@ -101,6 +102,10 @@ public class Main {
         AuditCleanupScheduler auditCleanup = new AuditCleanupScheduler(traceStore);
         auditCleanup.start();
         Runtime.getRuntime().addShutdownHook(new Thread(auditCleanup::stop));
+
+        // Log storage: buffer WARN/ERROR, flush every 1h + on shutdown
+        LogStorageService logStorage = new LogStorageService();
+        logStorage.start();
 
         QueuedThreadPool pool = new QueuedThreadPool(workers, workers, 60000);
         pool.setName("harness-server");

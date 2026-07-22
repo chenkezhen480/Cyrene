@@ -2,6 +2,7 @@ package com.harness.tool.builtin;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.harness.core.model.ToolResult;
 import com.harness.core.model.ToolSpec;
 import com.harness.tool.Tool;
 import org.slf4j.Logger;
@@ -90,6 +91,7 @@ public class UpdateMemoryTool implements Tool {
         try {
             saver.save(userId, memory, sessionId);
             log.info("Updated long-term memory for user {} ({} chars)", userId, memory.length());
+            ToolResult.setCurrentStatus(ToolResult.ResultStatus.SUCCESS);
             return "Memory updated successfully (" + memory.length() + " chars)";
         } catch (Exception e) {
             log.error("Failed to update memory: {}", e.getMessage(), e);

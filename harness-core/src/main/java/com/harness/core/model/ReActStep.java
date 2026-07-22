@@ -1,5 +1,6 @@
 package com.harness.core.model;
 
+import java.util.Collections;
 import java.util.List;
 
 /**
@@ -14,6 +15,74 @@ public record ReActStep(
         String observation,
         InspectionResult inspection
 ) {
+
+    // ── ThreadLocal: 由 ReActEngine 在每轮工具执行前设置，供 Tool 读取执行历史 ──
+
+    private static final ThreadLocal<List<ReActStep>> CURRENT_STEPS = new ThreadLocal<>();
+
+    /**
+     * ReActEngine 在执行工具调用前设置当前轮次的历史步骤。
+     */
+    public static void setCurrentSteps(List<ReActStep> steps) {
+        CURRENT_STEPS.set(steps);
+    }
+
+    /**
+     * ReActEngine 在工具调用完成后清理。
+     */
+    public static void clearCurrentSteps() {
+        CURRENT_STEPS.remove();
+    }
+
+    /**
+     * 获取当前 ReAct 循环中已执行的所有步骤（只读）。
+     * 工具内部可据此判断调用历史，不经过模型参数。
+     */
+    public static List<ReActStep> getCurrentSteps() {
+        List<ReActStep> steps = CURRENT_STEPS.get();
+        return steps != null ? steps : Collections.emptyList();
+    }
+
+    /**
+     * 统计指定工具在当前 ReAct 循环中已被调用的次数。
+     * 工具内部可据此判断是否为重试，无需模型传参。
+     */
+    public static int getInvocationCount(String toolName) {
+        List<ReActStep> steps = getCurrentSteps();
+        int count = 0;
+        for (ReActStep step : steps) {
+            if (step.toolCalls() != null) {
+                for (ToolCall tc : step.toolCalls()) {
+                    if (toolName.equals(tc.toolName())) {
+                        count++;
+                    }
+                }
+            }
+        }
+        return count;
+    }
+
+    /**
+     * 获取指定工具在上一次调用时的 InspectionStatus。
+     * 若该工具从未被调用过，返回 null。
+     */
+    public static ReActStep.InspectionResult.InspectionStatus getLastInspectionStatus(String toolName) {
+        List<ReActStep> steps = getCurrentSteps();
+        for (int i = steps.size() - 1; i >= 0; i--) {
+            ReActStep step = steps.get(i);
+            if (step.toolCalls() != null && step.inspection() != null) {
+                for (ToolCall tc : step.toolCalls()) {
+                    if (toolName.equals(tc.toolName())) {
+                        return step.inspection().status();
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    // ── Record 本体 ──
+
     public record InspectionResult(
             InspectionStatus status,
             String reason

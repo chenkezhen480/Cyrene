@@ -29,7 +29,7 @@ Each request automatically determines which capabilities are needed, avoiding un
 | Scenario | Thinking | Knowledge Base | Web Search | Query Rewrite |
 |----------|----------|----------------|------------|---------------|
 | "Hello" | ✗ | ✗ | ✗ | ✗ |
-| "What's our reimbursement policy?" | ✗ | ✓ | ✗ | ✓ (multi-query) |
+| "What's our reimbursement policy?" | ✗ | ✓ | ✗ | auto-upgrade |
 | "What's the weather in Shanghai today?" | ✗ | ✗ | ✓ (SearXNG) | ✗ |
 | "Analyze the feasibility of this requirement" | ✓ | ✓ | ✗ | ✗ |
 
@@ -63,32 +63,13 @@ Each model can be independently configured with its own provider, API key, and e
 
 Upload documents (PDF, DOCX, XLSX, TXT, Markdown, etc.) → automatic extraction, chunking, embedding, and storage. Defaults to Milvus vector database; also supports PostgreSQL pgvector, switchable via `HARNESS_RAG_PROVIDER`.
 
-Built-in query rewriting (HyDE / Multi-Query / Step-Back), semantic context enhancement, optional Rerank. Large files automatically use a "split → merge → parallel summarize" strategy — a 1MB file requires only 5-8 LLM calls.
+RAG retrieval is exposed to the ReAct engine as a tool (`knowledge_base_search`). The model calls it on demand. First call uses a fast path (single query); if results are insufficient, it auto-upgrades to combined rewriting (5 queries: 3 multi-query + 1 step-back + 1 hyde) — fully transparent to the model. Includes semantic context enhancement and optional Rerank. Large files automatically use a "split → merge → parallel summarize" strategy — a 1MB file requires only 5-8 LLM calls.
 
 ### Session Memory
 
 - **Short-term**: Per-session LRU cache with optional Redis distributed cache
 - **Long-term**: AI-extracted user preferences from completed sessions, auto-injected into System Prompt
 - **Smart compression**: Minor compression strips tool call blocks (zero cost); major compression AI-distills old messages with time-decay weighting
-
-### 5-Layer Pipeline
-
-```
-Input → Session Lifecycle → Preprocess → ReAct Loop (AI ↔ Tool ↔ Inspection) → Post-process → Audit
-```
-
-Each layer is independently observable, configurable, and traceable. ReAct engine includes heuristic inspection (PASS / TOOL_ERROR / WRONG_TOOL / INSUFFICIENT), automatic retry on tool failure, and loop detection.
-
-### Six-Layer Fault Tolerance
-
-| Layer | Strategy |
-|-------|----------|
-| Tool call | Up to 3 retries, errors passed to LLM for decision |
-| LLM API | Exponential backoff (1s→2s→4s), up to 3 times |
-| MCP disconnect | Rebuild connection and retry once |
-| Message write | Retry 3 times → sync write → dead letter queue |
-| Stuck refinement | Periodic scan, CAS reset |
-| Knowledge base batch | Transaction rollback + orphan file cleanup |
 
 ## Quick Start
 

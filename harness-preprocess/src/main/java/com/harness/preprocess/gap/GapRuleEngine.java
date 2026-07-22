@@ -58,7 +58,7 @@ public class GapRuleEngine {
         // 1. Intercept：极简查询短路
         if (INTERCEPT_PATTERN.matcher(trimmed).matches()) {
             log.info("[GapRuleEngine] intercept matched: \"{}\" → all false", trimmed);
-            return new GapAnalysis(false, RewriteStrategy.NONE, false, false, "rule");
+            return new GapAnalysis(false, false, false, "rule");
         }
 
         // 2. Force：逐字段强制触发
@@ -75,6 +75,6 @@ public class GapRuleEngine {
         }
 
         // 未命中任何 force 规则的字段保持 null，放行到 Tier 2
-        return new GapAnalysis(null, null, needsThinking, needsWebSearch, "rule");
+        return new GapAnalysis(null, needsThinking, needsWebSearch, "rule");
     }
 }

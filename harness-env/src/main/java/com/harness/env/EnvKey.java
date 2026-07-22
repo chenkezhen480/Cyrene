@@ -55,6 +55,8 @@ public final class EnvKey {
     public static final String MODEL_EMBEDDING_BASE_URL = "HARNESS_MODEL_EMBEDDING_BASE_URL";
     public static final String MODEL_EMBEDDING_MODEL    = "HARNESS_MODEL_EMBEDDING_MODEL";
     public static final String MODEL_EMBEDDING_DIM      = "HARNESS_MODEL_EMBEDDING_DIM";
+    /** Embedding 向量维度默认值 */
+    public static final int MODEL_EMBEDDING_DIM_DEFAULT = 1024;
 
     // ==================== 5. Rerank Model (向量检索结果排序) ====================
     public static final String MODEL_RERANK_PROVIDER  = "HARNESS_MODEL_RERANK_PROVIDER";
@@ -104,6 +106,12 @@ public final class EnvKey {
     /** 视频状态查询 endpoint 路径（拼接在 BASE_URL 后 + /{taskId}），默认 /status */
     public static final String TOOL_VIDEO_GEN_STATUS_PATH = "HARNESS_TOOL_VIDEO_GEN_STATUS_PATH";
 
+    // ==================== Log Storage ====================
+    /** 日志存储目录，默认 ./logs */
+    public static final String LOG_STORAGE_DIR       = "HARNESS_LOG_STORAGE_DIR";
+    /** 日志保留天数，默认 7 */
+    public static final String LOG_RETENTION_DAYS    = "HARNESS_LOG_RETENTION_DAYS";
+
     // ==================== Auth ====================
     public static final String AUTH_MODE             = "HARNESS_AUTH_MODE";
     public static final String AUTH_TOKEN            = "HARNESS_AUTH_TOKEN";
@@ -131,10 +139,6 @@ public final class EnvKey {
     public static final String RAG_USER              = "HARNESS_RAG_USER";
     /** 数据库密码（PG 用，Milvus 不需要） */
     public static final String RAG_PASS              = "HARNESS_RAG_PASS";
-    /** 向量维度，默认 1536 */
-    public static final String RAG_EMBED_DIM         = "HARNESS_RAG_EMBED_DIM";
-    /** 向量维度默认值 */
-    public static final int RAG_EMBED_DIM_DEFAULT    = 1024;
     /** BM25/全文检索在混合检索中的权重（0.0-1.0），默认 0.3 */
     public static final String RAG_BM25_WEIGHT       = "HARNESS_RAG_BM25_WEIGHT";
 
@@ -164,7 +168,7 @@ public final class EnvKey {
      */
     @Deprecated public static final String RAG_PG_TABLE     = "HARNESS_RAG_PG_TABLE";
     /**
-     * @deprecated Use {@link #RAG_EMBED_DIM} instead.
+     * @deprecated Use {@link #MODEL_EMBEDDING_DIM} instead.
      * PG 向量维度
      */
     @Deprecated public static final String RAG_PG_EMBED_DIM = "HARNESS_RAG_PG_EMBED_DIM";

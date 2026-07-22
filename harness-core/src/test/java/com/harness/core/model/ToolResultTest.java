@@ -16,6 +16,15 @@ class ToolResultTest {
         assertThat(result.output()).isEqualTo("search results");
         assertThat(result.error()).isNull();
         assertThat(result.durationMs()).isEqualTo(150);
+        assertThat(result.status()).isNull();
+    }
+
+    @Test
+    void ok_withStatus_createsResultWithStatus() {
+        var result = ToolResult.ok("call-3", "knowledge_base_search", "some context", 200, ToolResult.ResultStatus.SUCCESS);
+
+        assertThat(result.success()).isTrue();
+        assertThat(result.status()).isEqualTo(ToolResult.ResultStatus.SUCCESS);
     }
 
     @Test
@@ -28,5 +37,14 @@ class ToolResultTest {
         assertThat(result.output()).isNull();
         assertThat(result.error()).isEqualTo("timeout error");
         assertThat(result.durationMs()).isEqualTo(3000);
+        assertThat(result.status()).isNull();
+    }
+
+    @Test
+    void threadLocal_setAndConsume() {
+        ToolResult.setCurrentStatus(ToolResult.ResultStatus.EMPTY);
+        assertThat(ToolResult.consumeCurrentStatus()).isEqualTo(ToolResult.ResultStatus.EMPTY);
+        // Should be cleared after consume
+        assertThat(ToolResult.consumeCurrentStatus()).isNull();
     }
 }

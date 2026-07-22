@@ -89,7 +89,33 @@ public class Inspector {
             }
         }
 
-        // Check for INSUFFICIENT: very short result or contains "no results" phrases
+        // Check for explicit status from tools that declare their own result quality.
+        // This is authoritative — no guessing needed. Tools like KnowledgeBaseTool set this
+        // via ThreadLocal before returning, and ToolExecutor attaches it to ToolResult.
+        for (ToolResult result : toolResults) {
+            if (result.status() != null) {
+                return switch (result.status()) {
+                    case ESCALATING -> new InspectionResult(
+                            InspectionStatus.INSUFFICIENT,
+                            "Tool '" + result.toolName() + "' found no results but has auto-escalated its retrieval strategy. "
+                                    + "Wait for the next iteration to see if the escalated strategy produces results.");
+                    case EMPTY -> new InspectionResult(
+                            InspectionStatus.INSUFFICIENT,
+                            "Tool '" + result.toolName() + "' exhausted all retrieval strategies with no results. "
+                                    + "Try a different tool, adjust your approach, or output the final answer with available information.");
+                    case LOW_RELEVANCE -> new InspectionResult(
+                            InspectionStatus.INSUFFICIENT,
+                            "Tool '" + result.toolName() + "' found results but none are relevant to the query, "
+                                    + "and no further escalation is available. "
+                                    + "Try a different tool, rephrase your query, or output the final answer with available information.");
+                    case SUCCESS -> new InspectionResult(InspectionStatus.PASS,
+                            "Tool '" + result.toolName() + "' explicitly reported success");
+                };
+            }
+        }
+
+        // Fallback: heuristic detection for external/MCP tools that don't declare explicit status.
+        // These tools return arbitrary text — we have no choice but to guess.
         for (ToolResult result : toolResults) {
             String output = result.output();
             if (output != null) {

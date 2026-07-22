@@ -330,21 +330,14 @@ public class AgentOrchestrator {
                 }
             }
 
-            final String ragInput = enhancedText;
-
             // GapAnalyzer: 动态路由判定
             AgentContext actx = agentContext != null ? agentContext : AgentContext.empty();
-            GapAnalysis gapAnalysis = gapAnalyzer.analyze(ragInput, actx);
+            GapAnalysis gapAnalysis = gapAnalyzer.analyze(enhancedText, actx);
             trace.builder().metadata(gapMetadata(gapAnalysis, trace.builder().build().metadata()));
 
             // ===== Layer 1.5: Session lifecycle =====
             List<MemoryMessage> shorttermMessages = List.of();
             List<Preference> longtermPrefs = List.of();
-
-            // RAG retrieval; GapAnalysis controls whether retrieval happens
-            final GapAnalysis finalGap = gapAnalysis;
-            CompletableFuture<ContextBuilder.ContextResult> ragFuture = CompletableFuture.supplyAsync(() ->
-                    contextBuilder.build(ragInput, finalGap));
 
             final String userId = input.userId();
             if (MemoryStoreFactory.isEnabled() && userId != null) {
@@ -379,7 +372,7 @@ public class AgentOrchestrator {
                     });
                 }
 
-                // Load short-term memory and long-term prefs in parallel with RAG
+                // Load short-term memory and long-term prefs in parallel
                 CompletableFuture<List<MemoryMessage>> shorttermFuture = CompletableFuture.supplyAsync(() -> {
                     List<MemoryMessage> cached = messageCache.getIfPresent(sid);
                     if (cached != null) {
@@ -396,12 +389,10 @@ public class AgentOrchestrator {
                     return prefs;
                 });
 
-                CompletableFuture.allOf(shorttermFuture, longtermFuture, ragFuture).join();
+                CompletableFuture.allOf(shorttermFuture, longtermFuture).join();
                 shorttermMessages = shorttermFuture.join();
                 longtermPrefs = longtermFuture.join();
             } else {
-                ragFuture.join();
-                // Memory disabled — use requested/active sessionId for skill isolation
                 sessionId = requestedSessionId != null ? requestedSessionId : java.util.UUID.randomUUID().toString();
             }
 
@@ -412,17 +403,14 @@ public class AgentOrchestrator {
             UpdateMemoryTool.setCurrentSessionId(finalSessionId);
 
             // ===== Layer 2: Preprocess =====
-            ContextBuilder.ContextResult ctx = ragFuture.join();
-            trace.recordPreprocess(null, ctx.ragHitIds(), null);
-            String systemPrompt = buildSystemPrompt(longtermPrefs, systemPromptOverride, sessionId, Boolean.TRUE.equals(gapAnalysis.needsWebSearch()));
-            log.debug("[Orchestrator] System prompt: {} chars, longterm={}, needsWebSearch={}",
-                    systemPrompt.length(), !longtermPrefs.isEmpty(), gapAnalysis.needsWebSearch());
+            // RAG 现在由 KnowledgeBaseTool 在 ReAct 循环中按需调用，不再预取
+            String systemPrompt = buildSystemPrompt(longtermPrefs, systemPromptOverride, sessionId,
+                    Boolean.TRUE.equals(gapAnalysis.needsKnowledgeBase()),
+                    Boolean.TRUE.equals(gapAnalysis.needsWebSearch()));
+            log.debug("[Orchestrator] System prompt: {} chars, longterm={}, needsKB={}, needsWebSearch={}",
+                    systemPrompt.length(), !longtermPrefs.isEmpty(), gapAnalysis.needsKnowledgeBase(), gapAnalysis.needsWebSearch());
 
-            // Inject RAG context into user message (not system prompt) to preserve prompt cache
             String finalUserMessage = enhancedText;
-            if (ctx.hasContext()) {
-                finalUserMessage = enhancedText + "\n\n" + ctx.contextBlock();
-            }
             trace.recordLlmMeta(chatModelProvider.modelName(), "v1");
 
             // 压缩检查
@@ -652,21 +640,14 @@ public class AgentOrchestrator {
                 }
             }
 
-            final String ragInput = enhancedText;
-
             // GapAnalyzer: 动态路由判定
             AgentContext actx = agentContext != null ? agentContext : AgentContext.empty();
-            GapAnalysis gapAnalysis = gapAnalyzer.analyze(ragInput, actx);
+            GapAnalysis gapAnalysis = gapAnalyzer.analyze(enhancedText, actx);
             trace.builder().metadata(gapMetadata(gapAnalysis, trace.builder().build().metadata()));
 
             // Layer 1.5: Session lifecycle
             List<MemoryMessage> shorttermMessages = List.of();
             List<Preference> longtermPrefs = List.of();
-
-            // RAG retrieval; GapAnalysis controls whether retrieval happens
-            final GapAnalysis finalGap = gapAnalysis;
-            CompletableFuture<ContextBuilder.ContextResult> ragFuture = CompletableFuture.supplyAsync(() ->
-                    contextBuilder.build(ragInput, finalGap));
 
             final String userId = input.userId();
             if (MemoryStoreFactory.isEnabled() && userId != null) {
@@ -701,7 +682,7 @@ public class AgentOrchestrator {
                     });
                 }
 
-                // Load short-term memory and long-term prefs in parallel with RAG
+                // Load short-term memory and long-term prefs in parallel
                 CompletableFuture<List<MemoryMessage>> shorttermFuture = CompletableFuture.supplyAsync(() -> {
                     List<MemoryMessage> cached = messageCache.getIfPresent(sid);
                     if (cached != null) return cached;
@@ -712,11 +693,10 @@ public class AgentOrchestrator {
                 CompletableFuture<List<Preference>> longtermFuture = CompletableFuture.supplyAsync(() ->
                         preferenceStore.loadByUser(userId));
 
-                CompletableFuture.allOf(shorttermFuture, longtermFuture, ragFuture).join();
+                CompletableFuture.allOf(shorttermFuture, longtermFuture).join();
                 shorttermMessages = shorttermFuture.join();
                 longtermPrefs = longtermFuture.join();
             } else {
-                ragFuture.join();
                 sessionId = requestedSessionId != null ? requestedSessionId : java.util.UUID.randomUUID().toString();
             }
 
@@ -726,16 +706,13 @@ public class AgentOrchestrator {
             UpdateMemoryTool.setCurrentSessionId(finalSessionId);
 
             // Layer 2: Preprocess
-            ContextBuilder.ContextResult ctx = ragFuture.join();
-            trace.recordPreprocess(null, ctx.ragHitIds(), null);
-            String systemPrompt = buildSystemPrompt(longtermPrefs, systemPromptOverride, sessionId, Boolean.TRUE.equals(gapAnalysis.needsWebSearch()));
+            // RAG 现在由 KnowledgeBaseTool 在 ReAct 循环中按需调用，不再预取
+            String systemPrompt = buildSystemPrompt(longtermPrefs, systemPromptOverride, sessionId,
+                    Boolean.TRUE.equals(gapAnalysis.needsKnowledgeBase()),
+                    Boolean.TRUE.equals(gapAnalysis.needsWebSearch()));
             trace.recordLlmMeta(chatModelProvider.modelName(), "v1");
 
-            // Inject RAG context into user message (not system prompt) to preserve prompt cache
             String finalUserMessage = enhancedText;
-            if (ctx.hasContext()) {
-                finalUserMessage = enhancedText + "\n\n" + ctx.contextBlock();
-            }
 
             // 压缩检查
             if (sessionId != null && userId != null) {
@@ -905,7 +882,8 @@ public class AgentOrchestrator {
         }
     }
 
-    private String buildSystemPrompt(List<Preference> longtermPrefs, String systemPromptOverride, String sessionId, boolean needsWebSearch) {
+    private String buildSystemPrompt(List<Preference> longtermPrefs, String systemPromptOverride, String sessionId,
+                                      boolean needsKnowledgeBase, boolean needsWebSearch) {
         StringBuilder sb = new StringBuilder();
         String basePrompt = (systemPromptOverride != null && !systemPromptOverride.isBlank())
                 ? systemPromptOverride
@@ -913,6 +891,10 @@ public class AgentOrchestrator {
                         "You are a helpful AI assistant with access to tools. Use tools when needed to answer questions. Think step by step. If a tool fails, try an alternative approach.");
         sb.append(basePrompt).append("\n\n");
         sb.append("IMPORTANT: After image/video generation tools succeed, do NOT include download links, file paths, image markdown syntax (![name](url)), or descriptive repetitions of the image in your text reply. The frontend automatically renders generated content as inline cards. Your text reply should only contain natural language commentary (e.g. style notes, asking if adjustments are needed).\n\n");
+
+        if (needsKnowledgeBase) {
+            sb.append("CRITICAL: This query may benefit from internal knowledge base. You MUST call the knowledge_base_search tool FIRST before composing your answer. The query MUST be a complete, standalone question with no pronouns or context-dependent references.\n\n");
+        }
 
         if (needsWebSearch) {
             sb.append("CRITICAL: This query requires up-to-date information. You MUST call the web_search tool FIRST before composing your answer. Do NOT answer from memory alone.\n\n");
@@ -963,7 +945,6 @@ public class AgentOrchestrator {
     private Map<String, String> gapMetadata(GapAnalysis gap, Map<String, String> existing) {
         Map<String, String> meta = new HashMap<>(existing);
         meta.put("gap_needsKnowledgeBase", String.valueOf(gap.needsKnowledgeBase()));
-        meta.put("gap_rewriteStrategy", String.valueOf(gap.rewriteStrategy()));
         meta.put("gap_needsThinking", String.valueOf(gap.needsThinking()));
         meta.put("gap_needsWebSearch", String.valueOf(gap.needsWebSearch()));
         meta.put("gap_source", String.valueOf(gap.source()));
@@ -1060,6 +1041,14 @@ public class AgentOrchestrator {
         EnvConfig cfg = EnvConfig.get();
         if (cfg.getBool(EnvKey.TOOL_WEB_SEARCH_ENABLED, true)) {
             toolRegistry.register(new WebSearchTool());
+        }
+        // Knowledge base search tool — registered when RAG provider is configured
+        String ragProvider = cfg.getString(EnvKey.RAG_PROVIDER, "pgvector");
+        if (!"none".equalsIgnoreCase(ragProvider) && embeddingModelProvider != null && embeddingModelProvider.isAvailable()) {
+            toolRegistry.register(new KnowledgeBaseTool(embeddingModelProvider, rerankModelProvider, chatModelProvider));
+        } else {
+            log.info("[Orchestrator] Knowledge base tool disabled (ragProvider={}, embedding={})",
+                    ragProvider, embeddingModelProvider != null && embeddingModelProvider.isAvailable());
         }
         if (cfg.getBool(EnvKey.TOOL_FFMPEG_ENABLED, false)) {
             toolRegistry.register(new FfmpegTool());

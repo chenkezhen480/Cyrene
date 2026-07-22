@@ -29,7 +29,7 @@ Agent: "查询到 156 台在用设备，以下是列表..."
 | 场景 | 思考 | 知识库 | 联网 | 查询改写 |
 |------|------|--------|------|----------|
 | "你好" | ✗ | ✗ | ✗ | ✗ |
-| "公司报销政策是什么" | ✗ | ✓ | ✗ | ✓ (multi-query) |
+| "公司报销政策是什么" | ✗ | ✓ | ✗ | 自动升级 |
 | "今天上海天气怎么样" | ✗ | ✗ | ✓（SearXNG） | ✗ |
 | "分析这个需求的可行性" | ✓ | ✓ | ✗ | ✗ |
 
@@ -63,32 +63,13 @@ Agent: "查询到 156 台在用设备，以下是列表..."
 
 上传文档（PDF、DOCX、XLSX、TXT、Markdown 等）→ 自动提取、分块、Embedding、存储。默认使用 Milvus 向量数据库，也支持 PostgreSQL pgvector，通过 `HARNESS_RAG_PROVIDER` 切换。
 
-内置查询改写（HyDE / Multi-Query / Step-Back）、语义上下文增强、可选 Rerank 重排序。大文件自动采用"切片 → 合并 → 并行摘要"策略，1MB 文件仅需 5-8 次 LLM 调用。
+RAG 检索以工具形式暴露给 ReAct 引擎（`knowledge_base_search`），模型按需调用。首次调用走快速路径（单 query），检索结果不理想时自动升级为组合改写（5 个 query：3 multi-query + 1 step-back + 1 hyde），全程对模型透明。内置语义上下文增强、可选 Rerank 重排序。大文件自动采用"切片 → 合并 → 并行摘要"策略，1MB 文件仅需 5-8 次 LLM 调用。
 
 ### 会话记忆
 
 - **短期记忆**：按会话 LRU 缓存，支持 Redis 分布式缓存
 - **长期记忆**：AI 从已结束会话中提取用户偏好，自动注入 System Prompt
 - **智能压缩**：小压缩去除工具调用块（零成本），大压缩 AI 提炼旧消息（时间衰减加权）
-
-### 5 层流水线
-
-```
-Input → Session Lifecycle → Preprocess → ReAct Loop (AI ↔ Tool ↔ Inspection) → Post-process → Audit
-```
-
-每层独立可观测、可配置、可追踪。ReAct 引擎内置启发式 Inspection（PASS / TOOL_ERROR / WRONG_TOOL / INSUFFICIENT），工具调用失败自动重试，循环检测自动中断。
-
-### 六层容错
-
-| 层级 | 策略 |
-|------|------|
-| Tool 调用 | 最多重试 3 次，错误传递给 LLM 决策 |
-| LLM API | 指数退避（1s→2s→4s），最多 3 次 |
-| MCP 断线 | 重建连接并重试 1 次 |
-| 消息写入 | 重试 3 次 → 同步写 → 死信队列 |
-| Refinement 卡住 | 定时扫描，CAS 重置 |
-| 知识库批量 | 事务回滚 + 清理孤立文件 |
 
 ## 快速开始
 

@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.harness.core.model.ApiEndpoint;
 import com.harness.core.model.ProjectApiConfig;
+import com.harness.core.model.ToolResult;
 import com.harness.core.model.ToolSpec;
 
 import java.util.function.Supplier;
@@ -42,9 +43,11 @@ public class ListApiEndpointsTool implements Tool {
     public String execute(JsonNode arguments) {
         ProjectApiConfig config = configSupplier.get();
         if (config == null || config.endpoints() == null || config.endpoints().isEmpty()) {
+            ToolResult.setCurrentStatus(ToolResult.ResultStatus.EMPTY);
             return "No API endpoints configured. Use the project discovery scan first.";
         }
 
+        ToolResult.setCurrentStatus(ToolResult.ResultStatus.SUCCESS);
         ArrayNode arr = mapper.createArrayNode();
         for (ApiEndpoint ep : config.endpoints()) {
             ObjectNode node = mapper.createObjectNode();

@@ -9,13 +9,60 @@ public record ToolResult(
         boolean success,
         String output,
         String error,
-        long durationMs
+        long durationMs,
+        ResultStatus status
 ) {
+
+    /**
+     * Structured result status that tools can explicitly declare.
+     * When present, Inspector trusts it directly instead of guessing from output text.
+     * null means "no explicit status" — Inspector falls back to heuristic detection.
+     */
+    public enum ResultStatus {
+        /** Tool found and returned useful results. */
+        SUCCESS,
+        /** Tool found zero results (empty retrieval, no matches, etc.). */
+        EMPTY,
+        /** Tool found results but they are irrelevant to the query (e.g. low rerank scores). */
+        LOW_RELEVANCE,
+        /** Tool found no results but has auto-escalated its strategy (e.g. rewrite → multi-query).
+         *  Reflector should NOT count this as failure — the tool is still actively trying. */
+        ESCALATING
+    }
+
+    // --- ThreadLocal for tools to communicate status without changing Tool.execute() signature ---
+
+    private static final ThreadLocal<ResultStatus> CURRENT_STATUS = new ThreadLocal<>();
+
+    /**
+     * Set the result status for the current tool execution.
+     * Called by tools (e.g. KnowledgeBaseTool) before returning from execute().
+     */
+    public static void setCurrentStatus(ResultStatus status) {
+        CURRENT_STATUS.set(status);
+    }
+
+    /**
+     * Consume the result status set by the tool and clear the ThreadLocal.
+     * Called by ToolExecutor after tool.execute() returns.
+     */
+    public static ResultStatus consumeCurrentStatus() {
+        ResultStatus s = CURRENT_STATUS.get();
+        CURRENT_STATUS.remove();
+        return s;
+    }
+
+    // --- Factory methods ---
+
     public static ToolResult ok(String toolCallId, String toolName, String output, long durationMs) {
-        return new ToolResult(toolCallId, toolName, true, output, null, durationMs);
+        return new ToolResult(toolCallId, toolName, true, output, null, durationMs, null);
+    }
+
+    public static ToolResult ok(String toolCallId, String toolName, String output, long durationMs, ResultStatus status) {
+        return new ToolResult(toolCallId, toolName, true, output, null, durationMs, status);
     }
 
     public static ToolResult fail(String toolCallId, String toolName, String error, long durationMs) {
-        return new ToolResult(toolCallId, toolName, false, null, error, durationMs);
+        return new ToolResult(toolCallId, toolName, false, null, error, durationMs, null);
     }
 }

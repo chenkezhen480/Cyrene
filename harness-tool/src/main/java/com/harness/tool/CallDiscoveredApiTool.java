@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.harness.core.model.ApiEndpoint;
 import com.harness.core.model.ProjectApiConfig;
+import com.harness.core.model.ToolResult;
 import com.harness.core.model.ToolSpec;
 
 import java.util.function.Supplier;
@@ -75,6 +76,7 @@ public class CallDiscoveredApiTool implements Tool {
             }
         }
         if (target == null) {
+            ToolResult.setCurrentStatus(ToolResult.ResultStatus.EMPTY);
             return "Error: Endpoint '" + endpointId + "' not found. Call list_api_endpoints() to see available endpoints.";
         }
 
@@ -95,6 +97,8 @@ public class CallDiscoveredApiTool implements Tool {
 
         // Delegate to HttpApiTool for actual HTTP execution
         HttpApiTool httpTool = new HttpApiTool(resolved);
-        return httpTool.execute(params);
+        String result = httpTool.execute(params);
+        ToolResult.setCurrentStatus(ToolResult.ResultStatus.SUCCESS);
+        return result;
     }
 }

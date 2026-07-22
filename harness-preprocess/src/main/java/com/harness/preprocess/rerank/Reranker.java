@@ -29,27 +29,39 @@ public class Reranker {
     }
 
     /**
-     * Rerank documents. Uses RerankModelProvider if available, otherwise sorts by original score.
+     * Rerank result with documents and the top relevance score.
      */
-    public List<RagRetriever.RagDocument> rerank(String query, List<RagRetriever.RagDocument> documents) {
+    public record RerankResult(List<RagRetriever.RagDocument> documents, double topScore) {
+        public boolean isEmpty() { return documents == null || documents.isEmpty(); }
+    }
+
+    /**
+     * Rerank documents. Uses RerankModelProvider if available, otherwise sorts by original score.
+     * Returns both the reranked documents and the top relevance score.
+     */
+    public RerankResult rerank(String query, List<RagRetriever.RagDocument> documents) {
         if (documents == null || documents.isEmpty()) {
-            return Collections.emptyList();
+            return new RerankResult(Collections.emptyList(), 0.0);
         }
 
         if (rerankModelProvider != null && rerankModelProvider.isAvailable()) {
             log.debug("Using RerankModelProvider: {}", rerankModelProvider.providerName());
             List<String> docTexts = documents.stream().map(RagRetriever.RagDocument::content).toList();
             List<RerankModelProvider.RankedResult> ranked = rerankModelProvider.rerank(query, docTexts, topN);
-            return ranked.stream()
+            List<RagRetriever.RagDocument> reranked = ranked.stream()
                     .filter(r -> r.index() >= 0 && r.index() < documents.size())
                     .map(r -> documents.get(r.index()))
                     .toList();
+            double topScore = ranked.isEmpty() ? 0.0 : ranked.get(0).score();
+            return new RerankResult(reranked, topScore);
         }
 
         log.debug("Rerank provider not available, falling back to score sort (topN={})", topN);
-        return documents.stream()
+        List<RagRetriever.RagDocument> sorted = documents.stream()
                 .sorted(Comparator.comparingDouble(RagRetriever.RagDocument::score).reversed())
                 .limit(topN)
                 .toList();
+        double topScore = sorted.isEmpty() ? 0.0 : sorted.get(0).score();
+        return new RerankResult(sorted, topScore);
     }
 }

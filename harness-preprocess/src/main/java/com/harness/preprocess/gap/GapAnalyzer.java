@@ -50,7 +50,6 @@ public class GapAnalyzer {
         // Tier 0: 显式覆盖
         GapAnalysis explicit = GapAnalysis.from(
                 context.needsKnowledgeBase(),
-                context.rewriteStrategy(),
                 context.enableThinking(),
                 context.needsWebSearch()
         );

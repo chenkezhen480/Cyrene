@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.harness.core.model.Skill;
 import com.harness.core.model.SkillIndex;
+import com.harness.core.model.ToolResult;
 import com.harness.core.model.ToolSpec;
 import com.harness.tool.Tool;
 import com.harness.tool.ToolRegistry;
@@ -93,12 +94,14 @@ public class LoadSkillTool implements Tool {
         // Look up skill
         SkillIndex index = skillRegistry.get(skillName, sessionId);
         if (index == null) {
+            ToolResult.setCurrentStatus(ToolResult.ResultStatus.EMPTY);
             return "Error: skill '" + skillName + "' not found. Available skills: " +
                     skillRegistry.listAll(sessionId).stream().map(SkillIndex::name).toList();
         }
 
         Skill skill = skillRegistry.getFull(skillName, sessionId);
         if (skill == null) {
+            ToolResult.setCurrentStatus(ToolResult.ResultStatus.EMPTY);
             return "Error: failed to load skill '" + skillName + "'";
         }
 
@@ -107,10 +110,17 @@ public class LoadSkillTool implements Tool {
 
         // Search mode: return matching sections
         if (query != null && !query.isBlank()) {
-            return executeSearch(skill, query);
+            String searchResult = executeSearch(skill, query);
+            if (searchResult.startsWith("No matches found")) {
+                ToolResult.setCurrentStatus(ToolResult.ResultStatus.EMPTY);
+            } else {
+                ToolResult.setCurrentStatus(ToolResult.ResultStatus.SUCCESS);
+            }
+            return searchResult;
         }
 
         // Full load mode: return complete content
+        ToolResult.setCurrentStatus(ToolResult.ResultStatus.SUCCESS);
         return executeFullLoad(skill);
     }
 

@@ -3,6 +3,7 @@ package com.harness.tool.builtin;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.harness.core.exception.ToolExecutionException;
+import com.harness.core.model.ToolResult;
 import com.harness.core.model.ToolSpec;
 import com.harness.env.EnvConfig;
 import com.harness.env.EnvKey;
@@ -78,6 +79,7 @@ public class FfmpegTool implements Tool {
                 throw new ToolExecutionException("ffmpeg", "Exit code " + exitCode + ": " + output);
             }
 
+            ToolResult.setCurrentStatus(ToolResult.ResultStatus.SUCCESS);
             return output.toString();
         } catch (IOException | InterruptedException e) {
             throw new ToolExecutionException("ffmpeg", "Execution failed: " + e.getMessage(), e);

@@ -61,15 +61,15 @@ public class AdaptiveReflector {
                                           String userInput) {
         if (toolCalls == null || toolCalls.isEmpty()) return null;
 
-        // Update per-tool counters
+        // Update per-tool counters: SUCCESS resets, everything else increments.
         for (int i = 0; i < toolCalls.size(); i++) {
             String toolName = toolCalls.get(i).toolName();
             ToolResult result = (toolResults != null && i < toolResults.size()) ? toolResults.get(i) : null;
 
-            if (isNonPass(result)) {
-                toolFailureCounts.merge(toolName, 1, Integer::sum);
-            } else {
+            if (isSuccess(result)) {
                 toolFailureCounts.put(toolName, 0);
+            } else {
+                toolFailureCounts.merge(toolName, 1, Integer::sum);
             }
         }
 
@@ -118,17 +118,22 @@ public class AdaptiveReflector {
         return true;
     }
 
-    private boolean isNonPass(ToolResult result) {
-        if (result == null) return true;
-        if (!result.success()) return true;
-        if (result.output() == null || result.output().isBlank()) return true;
-        // Check for "no results" style output
-        String lower = result.output().toLowerCase().strip();
-        if (lower.length() < 50) return true;
-        for (String phrase : INSUFFICIENT_PHRASES) {
-            if (lower.contains(phrase)) return true;
+    private boolean isSuccess(ToolResult result) {
+        if (result == null) return false;
+        if (!result.success()) return false;
+        // Explicit status from tool — authoritative
+        if (result.status() != null) {
+            return result.status() == ToolResult.ResultStatus.SUCCESS;
         }
-        return false;
+        // Fallback: heuristic detection for external/MCP tools without explicit status
+        String output = result.output();
+        if (output == null || output.isBlank()) return false;
+        String lower = output.toLowerCase().strip();
+        if (lower.length() < 50) return false;
+        for (String phrase : INSUFFICIENT_PHRASES) {
+            if (lower.contains(phrase)) return false;
+        }
+        return true;
     }
 
     private static final java.util.Set<String> INSUFFICIENT_PHRASES = java.util.Set.of(

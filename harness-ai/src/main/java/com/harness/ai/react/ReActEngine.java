@@ -122,87 +122,93 @@ public class ReActEngine {
         int totalToolCalls = 0;
         int reflectionChecks = 0;
 
-        for (int i = 1; i <= maxIterations; i++) {
-            log.debug("[L3-ReAct] Iteration {}/{}", i, maxIterations);
+        // 设置 ThreadLocal，整个 ReAct 循环期间工具都可读取步骤历史
+        ReActStep.setCurrentSteps(allSteps);
+        try {
+            for (int i = 1; i <= maxIterations; i++) {
+                log.debug("[L3-ReAct] Iteration {}/{}", i, maxIterations);
 
-            if (cancellationToken != null && cancellationToken.isCancelled()) {
-                log.info("[L3-ReAct] Cancellation detected at iteration {}, stopping", i);
-                return cancelledResult(allSteps, allArtifacts, totalToolCalls, i, reflectionChecks);
-            }
-
-            ChatRequestParameters mergedParams = buildMergedParams(thinkingParams, toolSpecs);
-            ChatRequest.Builder reqBuilder = ChatRequest.builder().messages(messages);
-            if (mergedParams != null) {
-                reqBuilder.parameters(mergedParams);
-            }
-
-            // Blocking LLM call
-            long llmStart = System.currentTimeMillis();
-            ChatResponse response;
-            if (cancellationToken != null) cancellationToken.trackCurrentThread();
-            try {
-                response = chatModel.chat(reqBuilder.build());
-            } catch (Exception e) {
                 if (cancellationToken != null && cancellationToken.isCancelled()) {
-                    log.info("[L3-ReAct] LLM call interrupted by cancellation");
+                    log.info("[L3-ReAct] Cancellation detected at iteration {}, stopping", i);
                     return cancelledResult(allSteps, allArtifacts, totalToolCalls, i, reflectionChecks);
                 }
-                throw e;
-            } finally {
-                if (cancellationToken != null) cancellationToken.untrackCurrentThread();
-            }
-            if (cancellationToken != null && cancellationToken.isCancelled()) {
-                log.info("[L3-ReAct] Cancellation detected after LLM call at iteration {}", i);
-                return cancelledResult(allSteps, allArtifacts, totalToolCalls, i, reflectionChecks);
-            }
 
-            AiMessage aiMessage = response.aiMessage();
-            logTokenUsage(response, traceBuilder, System.currentTimeMillis() - llmStart);
-
-            // Final answer (no tool calls)
-            if (aiMessage.toolExecutionRequests() == null || aiMessage.toolExecutionRequests().isEmpty()) {
-                String answer = aiMessage.text();
-                long totalMs = System.currentTimeMillis() - loopStart;
-                log.info("[L3-ReAct] Finished in {}ms, steps={}, outputLen={}", totalMs, allSteps.size(), answer != null ? answer.length() : 0);
-                buildFinalStep(i, answer, allSteps, messages, aiMessage, listener);
-                ReActLoopStats stats = new ReActLoopStats("completed", i, totalToolCalls, reflectionChecks);
-                return new ReActResult(answer, allSteps, allArtifacts, stats);
-            }
-
-            // Tool execution round
-            messages.add(aiMessage);
-            List<ToolExecutionRequest> toolReqs = aiMessage.toolExecutionRequests();
-            totalToolCalls += toolReqs.size();
-            log.debug("[L3-ReAct] LLM requested {} tool calls", toolReqs.size());
-            if (aiMessage.text() != null && !aiMessage.text().isBlank()) {
-                log.debug("[L3-ReAct] LLM reasoning: {}", truncate(aiMessage.text()));
-            }
-
-            ToolExecutionOutput toolOutput = executeToolCalls(toolReqs, messages, allArtifacts, listener, cancellationToken);
-            if (toolOutput.earlyReturn() != null) return toolOutput.earlyReturn();
-
-            // Post-tool processing: inspection, hints, adaptive reflection
-            RoundOutcome outcome = processToolRound(i, aiMessage, toolReqs,
-                    toolOutput.toolCalls(), toolOutput.toolResults(),
-                    allSteps, allArtifacts, messages, listener, userMessage);
-            if (outcome.reflected()) reflectionChecks++;
-            if (outcome.action() == RoundAction.RETURN_RESULT) {
-                ReActResult r = outcome.result();
-                if (r.loopStats() == null) {
-                    ReActLoopStats stats = new ReActLoopStats("completed", i, totalToolCalls, reflectionChecks);
-                    return new ReActResult(r.output(), r.steps(), r.artifacts(), stats);
+                ChatRequestParameters mergedParams = buildMergedParams(thinkingParams, toolSpecs);
+                ChatRequest.Builder reqBuilder = ChatRequest.builder().messages(messages);
+                if (mergedParams != null) {
+                    reqBuilder.parameters(mergedParams);
                 }
-                return r;
-            }
-        }
 
-        String lastOutput = allSteps.isEmpty() ? "Max iterations reached" :
-                allSteps.get(allSteps.size() - 1).observation();
-        long totalMs = System.currentTimeMillis() - loopStart;
-        log.warn("[L3-ReAct] Reached max iterations ({}), returning last output", maxIterations);
-        log.info("[L3-ReAct] Finished in {}ms, steps={}, artifacts={}", totalMs, allSteps.size(), allArtifacts.size());
-        ReActLoopStats stats = new ReActLoopStats("max_iterations", maxIterations, totalToolCalls, reflectionChecks);
-        return new ReActResult(lastOutput, allSteps, allArtifacts, stats);
+                // Blocking LLM call
+                long llmStart = System.currentTimeMillis();
+                ChatResponse response;
+                if (cancellationToken != null) cancellationToken.trackCurrentThread();
+                try {
+                    response = chatModel.chat(reqBuilder.build());
+                } catch (Exception e) {
+                    if (cancellationToken != null && cancellationToken.isCancelled()) {
+                        log.info("[L3-ReAct] LLM call interrupted by cancellation");
+                        return cancelledResult(allSteps, allArtifacts, totalToolCalls, i, reflectionChecks);
+                    }
+                    throw e;
+                } finally {
+                    if (cancellationToken != null) cancellationToken.untrackCurrentThread();
+                }
+                if (cancellationToken != null && cancellationToken.isCancelled()) {
+                    log.info("[L3-ReAct] Cancellation detected after LLM call at iteration {}", i);
+                    return cancelledResult(allSteps, allArtifacts, totalToolCalls, i, reflectionChecks);
+                }
+
+                AiMessage aiMessage = response.aiMessage();
+                logTokenUsage(response, traceBuilder, System.currentTimeMillis() - llmStart);
+
+                // Final answer (no tool calls)
+                if (aiMessage.toolExecutionRequests() == null || aiMessage.toolExecutionRequests().isEmpty()) {
+                    String answer = aiMessage.text();
+                    long totalMs = System.currentTimeMillis() - loopStart;
+                    log.info("[L3-ReAct] Finished in {}ms, steps={}, outputLen={}", totalMs, allSteps.size(), answer != null ? answer.length() : 0);
+                    buildFinalStep(i, answer, allSteps, messages, aiMessage, listener);
+                    ReActLoopStats stats = new ReActLoopStats("completed", i, totalToolCalls, reflectionChecks);
+                    return new ReActResult(answer, allSteps, allArtifacts, stats);
+                }
+
+                // Tool execution round
+                messages.add(aiMessage);
+                List<ToolExecutionRequest> toolReqs = aiMessage.toolExecutionRequests();
+                totalToolCalls += toolReqs.size();
+                log.debug("[L3-ReAct] LLM requested {} tool calls", toolReqs.size());
+                if (aiMessage.text() != null && !aiMessage.text().isBlank()) {
+                    log.debug("[L3-ReAct] LLM reasoning: {}", truncate(aiMessage.text()));
+                }
+
+                ToolExecutionOutput toolOutput = executeToolCalls(toolReqs, messages, allArtifacts, listener, cancellationToken);
+                if (toolOutput.earlyReturn() != null) return toolOutput.earlyReturn();
+
+                // Post-tool processing: inspection, hints, adaptive reflection
+                RoundOutcome outcome = processToolRound(i, aiMessage, toolReqs,
+                        toolOutput.toolCalls(), toolOutput.toolResults(),
+                        allSteps, allArtifacts, messages, listener, userMessage);
+                if (outcome.reflected()) reflectionChecks++;
+                if (outcome.action() == RoundAction.RETURN_RESULT) {
+                    ReActResult r = outcome.result();
+                    if (r.loopStats() == null) {
+                        ReActLoopStats stats = new ReActLoopStats("completed", i, totalToolCalls, reflectionChecks);
+                        return new ReActResult(r.output(), r.steps(), r.artifacts(), stats);
+                    }
+                    return r;
+                }
+            }
+
+            String lastOutput = allSteps.isEmpty() ? "Max iterations reached" :
+                    allSteps.get(allSteps.size() - 1).observation();
+            long totalMs = System.currentTimeMillis() - loopStart;
+            log.warn("[L3-ReAct] Reached max iterations ({}), returning last output", maxIterations);
+            log.info("[L3-ReAct] Finished in {}ms, steps={}, artifacts={}", totalMs, allSteps.size(), allArtifacts.size());
+            ReActLoopStats stats = new ReActLoopStats("max_iterations", maxIterations, totalToolCalls, reflectionChecks);
+            return new ReActResult(lastOutput, allSteps, allArtifacts, stats);
+        } finally {
+            ReActStep.clearCurrentSteps();
+        }
     }
 
     /**
@@ -240,110 +246,116 @@ public class ReActEngine {
         int totalToolCalls = 0;
         int reflectionChecks = 0;
 
-        for (int i = 1; i <= maxIterations; i++) {
-            log.debug("[L3-ReAct] Streaming iteration {}/{}", i, maxIterations);
+        // 设置 ThreadLocal，整个 ReAct 循环期间工具都可读取步骤历史
+        ReActStep.setCurrentSteps(allSteps);
+        try {
+            for (int i = 1; i <= maxIterations; i++) {
+                log.debug("[L3-ReAct] Streaming iteration {}/{}", i, maxIterations);
 
-            if (cancellationToken != null && cancellationToken.isCancelled()) {
-                log.info("[L3-ReAct] Cancellation detected at iteration {}", i);
-                return cancelledResult(allSteps, allArtifacts, totalToolCalls, i, reflectionChecks);
-            }
-
-            ChatRequestParameters mergedParams = buildMergedParams(thinkingParams, toolSpecs);
-            ChatRequest.Builder reqBuilder = ChatRequest.builder().messages(messages);
-            if (mergedParams != null) {
-                reqBuilder.parameters(mergedParams);
-            }
-
-            // Streaming LLM call
-            long llmStart = System.currentTimeMillis();
-            CompletableFuture<ChatResponse> responseFuture = new CompletableFuture<>();
-
-            streamingChatModel.chat(reqBuilder.build(), new StreamingChatResponseHandler() {
-                @Override
-                public void onPartialResponse(String text) {
-                    if (listener != null) {
-                        listener.onToken(text);
-                    }
-                }
-
-                @Override
-                public void onCompleteResponse(ChatResponse response) {
-                    responseFuture.complete(response);
-                }
-
-                @Override
-                public void onError(Throwable error) {
-                    responseFuture.completeExceptionally(error);
-                }
-            });
-
-            ChatResponse response;
-            if (cancellationToken != null) cancellationToken.trackCurrentThread();
-            try {
-                response = responseFuture.get(llmTimeoutSeconds, TimeUnit.SECONDS);
-            } catch (TimeoutException e) {
-                log.error("[L3-ReAct] Streaming LLM call timed out after {}s", llmTimeoutSeconds);
-                throw new RuntimeException("Streaming LLM call timed out after " + llmTimeoutSeconds + "s", e);
-            } catch (Exception e) {
                 if (cancellationToken != null && cancellationToken.isCancelled()) {
-                    log.info("[L3-ReAct] Streaming LLM call interrupted by cancellation");
+                    log.info("[L3-ReAct] Cancellation detected at iteration {}", i);
                     return cancelledResult(allSteps, allArtifacts, totalToolCalls, i, reflectionChecks);
                 }
-                Throwable cause = e instanceof java.util.concurrent.CompletionException && e.getCause() != null ? e.getCause() : e;
-                log.error("[L3-ReAct] Streaming LLM call failed: {}", cause.getMessage());
-                throw cause instanceof RuntimeException ? (RuntimeException) cause : new RuntimeException(cause);
-            } finally {
-                if (cancellationToken != null) cancellationToken.untrackCurrentThread();
-            }
-            if (cancellationToken != null && cancellationToken.isCancelled()) {
-                log.info("[L3-ReAct] Cancellation detected after streaming LLM call at iteration {}", i);
-                return cancelledResult(allSteps, allArtifacts, totalToolCalls, i, reflectionChecks);
-            }
 
-            AiMessage aiMessage = response.aiMessage();
-            logTokenUsage(response, traceBuilder, System.currentTimeMillis() - llmStart);
-
-            // Final answer (no tool calls)
-            if (aiMessage.toolExecutionRequests() == null || aiMessage.toolExecutionRequests().isEmpty()) {
-                String answer = aiMessage.text();
-                long totalMs = System.currentTimeMillis() - loopStart;
-                log.info("[L3-ReAct] Finished in {}ms, steps={}", totalMs, allSteps.size());
-                buildFinalStep(i, answer, allSteps, messages, aiMessage, listener);
-                ReActLoopStats stats = new ReActLoopStats("completed", i, totalToolCalls, reflectionChecks);
-                return new ReActResult(answer, allSteps, allArtifacts, stats);
-            }
-
-            // Tool execution round
-            messages.add(aiMessage);
-            List<ToolExecutionRequest> toolReqs = aiMessage.toolExecutionRequests();
-            totalToolCalls += toolReqs.size();
-            log.debug("[L3-ReAct] Streaming: LLM requested {} tool calls", toolReqs.size());
-
-            ToolExecutionOutput toolOutput = executeToolCalls(toolReqs, messages, allArtifacts, listener, cancellationToken);
-            if (toolOutput.earlyReturn() != null) return toolOutput.earlyReturn();
-
-            // Post-tool processing: inspection, hints, adaptive reflection
-            RoundOutcome outcome = processToolRound(i, aiMessage, toolReqs,
-                    toolOutput.toolCalls(), toolOutput.toolResults(),
-                    allSteps, allArtifacts, messages, listener, userMessage);
-            if (outcome.reflected()) reflectionChecks++;
-            if (outcome.action() == RoundAction.RETURN_RESULT) {
-                ReActResult r = outcome.result();
-                if (r.loopStats() == null) {
-                    ReActLoopStats stats = new ReActLoopStats("completed", i, totalToolCalls, reflectionChecks);
-                    return new ReActResult(r.output(), r.steps(), r.artifacts(), stats);
+                ChatRequestParameters mergedParams = buildMergedParams(thinkingParams, toolSpecs);
+                ChatRequest.Builder reqBuilder = ChatRequest.builder().messages(messages);
+                if (mergedParams != null) {
+                    reqBuilder.parameters(mergedParams);
                 }
-                return r;
-            }
-        }
 
-        String lastOutput = allSteps.isEmpty() ? "Max iterations reached" :
-                allSteps.get(allSteps.size() - 1).observation();
-        long totalMs = System.currentTimeMillis() - loopStart;
-        log.warn("[L3-ReAct] Streaming: reached max iterations ({}), returning last output", maxIterations);
-        log.info("[L3-ReAct] Finished in {}ms, steps={}, artifacts={}", totalMs, allSteps.size(), allArtifacts.size());
-        ReActLoopStats stats = new ReActLoopStats("max_iterations", maxIterations, totalToolCalls, reflectionChecks);
-        return new ReActResult(lastOutput, allSteps, allArtifacts, stats);
+                // Streaming LLM call
+                long llmStart = System.currentTimeMillis();
+                CompletableFuture<ChatResponse> responseFuture = new CompletableFuture<>();
+
+                streamingChatModel.chat(reqBuilder.build(), new StreamingChatResponseHandler() {
+                    @Override
+                    public void onPartialResponse(String text) {
+                        if (listener != null) {
+                            listener.onToken(text);
+                        }
+                    }
+
+                    @Override
+                    public void onCompleteResponse(ChatResponse response) {
+                        responseFuture.complete(response);
+                    }
+
+                    @Override
+                    public void onError(Throwable error) {
+                        responseFuture.completeExceptionally(error);
+                    }
+                });
+
+                ChatResponse response;
+                if (cancellationToken != null) cancellationToken.trackCurrentThread();
+                try {
+                    response = responseFuture.get(llmTimeoutSeconds, TimeUnit.SECONDS);
+                } catch (TimeoutException e) {
+                    log.error("[L3-ReAct] Streaming LLM call timed out after {}s", llmTimeoutSeconds);
+                    throw new RuntimeException("Streaming LLM call timed out after " + llmTimeoutSeconds + "s", e);
+                } catch (Exception e) {
+                    if (cancellationToken != null && cancellationToken.isCancelled()) {
+                        log.info("[L3-ReAct] Streaming LLM call interrupted by cancellation");
+                        return cancelledResult(allSteps, allArtifacts, totalToolCalls, i, reflectionChecks);
+                    }
+                    Throwable cause = e instanceof java.util.concurrent.CompletionException && e.getCause() != null ? e.getCause() : e;
+                    log.error("[L3-ReAct] Streaming LLM call failed: {}", cause.getMessage());
+                    throw cause instanceof RuntimeException ? (RuntimeException) cause : new RuntimeException(cause);
+                } finally {
+                    if (cancellationToken != null) cancellationToken.untrackCurrentThread();
+                }
+                if (cancellationToken != null && cancellationToken.isCancelled()) {
+                    log.info("[L3-ReAct] Cancellation detected after streaming LLM call at iteration {}", i);
+                    return cancelledResult(allSteps, allArtifacts, totalToolCalls, i, reflectionChecks);
+                }
+
+                AiMessage aiMessage = response.aiMessage();
+                logTokenUsage(response, traceBuilder, System.currentTimeMillis() - llmStart);
+
+                // Final answer (no tool calls)
+                if (aiMessage.toolExecutionRequests() == null || aiMessage.toolExecutionRequests().isEmpty()) {
+                    String answer = aiMessage.text();
+                    long totalMs = System.currentTimeMillis() - loopStart;
+                    log.info("[L3-ReAct] Finished in {}ms, steps={}", totalMs, allSteps.size());
+                    buildFinalStep(i, answer, allSteps, messages, aiMessage, listener);
+                    ReActLoopStats stats = new ReActLoopStats("completed", i, totalToolCalls, reflectionChecks);
+                    return new ReActResult(answer, allSteps, allArtifacts, stats);
+                }
+
+                // Tool execution round
+                messages.add(aiMessage);
+                List<ToolExecutionRequest> toolReqs = aiMessage.toolExecutionRequests();
+                totalToolCalls += toolReqs.size();
+                log.debug("[L3-ReAct] Streaming: LLM requested {} tool calls", toolReqs.size());
+
+                ToolExecutionOutput toolOutput = executeToolCalls(toolReqs, messages, allArtifacts, listener, cancellationToken);
+                if (toolOutput.earlyReturn() != null) return toolOutput.earlyReturn();
+
+                // Post-tool processing: inspection, hints, adaptive reflection
+                RoundOutcome outcome = processToolRound(i, aiMessage, toolReqs,
+                        toolOutput.toolCalls(), toolOutput.toolResults(),
+                        allSteps, allArtifacts, messages, listener, userMessage);
+                if (outcome.reflected()) reflectionChecks++;
+                if (outcome.action() == RoundAction.RETURN_RESULT) {
+                    ReActResult r = outcome.result();
+                    if (r.loopStats() == null) {
+                        ReActLoopStats stats = new ReActLoopStats("completed", i, totalToolCalls, reflectionChecks);
+                        return new ReActResult(r.output(), r.steps(), r.artifacts(), stats);
+                    }
+                    return r;
+                }
+            }
+
+            String lastOutput = allSteps.isEmpty() ? "Max iterations reached" :
+                    allSteps.get(allSteps.size() - 1).observation();
+            long totalMs = System.currentTimeMillis() - loopStart;
+            log.warn("[L3-ReAct] Streaming: reached max iterations ({}), returning last output", maxIterations);
+            log.info("[L3-ReAct] Finished in {}ms, steps={}, artifacts={}", totalMs, allSteps.size(), allArtifacts.size());
+            ReActLoopStats stats = new ReActLoopStats("max_iterations", maxIterations, totalToolCalls, reflectionChecks);
+            return new ReActResult(lastOutput, allSteps, allArtifacts, stats);
+        } finally {
+            ReActStep.clearCurrentSteps();
+        }
     }
 
     /**
@@ -552,7 +564,6 @@ public class ReActEngine {
                                                  com.harness.core.model.CancellationToken cancellationToken) {
         List<ToolCall> toolCalls = new ArrayList<>();
         List<ToolResult> toolResults = new ArrayList<>();
-
         for (ToolExecutionRequest toolReq : toolReqs) {
             if (cancellationToken != null && cancellationToken.isCancelled()) {
                 return new ToolExecutionOutput(toolCalls, toolResults, cancelledResult(null, allArtifacts));

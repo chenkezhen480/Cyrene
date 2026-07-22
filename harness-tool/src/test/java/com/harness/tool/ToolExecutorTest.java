@@ -119,4 +119,35 @@ class ToolExecutorTest {
     void requiresConfirmation_notConfigured_returnsFalse() {
         assertThat(executor.requiresConfirmation("search")).isFalse();
     }
+
+    @Test
+    void execute_toolSetsStatus_statusIsAttached() {
+        // Tool that sets explicit status via ThreadLocal
+        Tool tool = new Tool() {
+            @Override public ToolSpec spec() {
+                return new ToolSpec("kb", "desc", MAPPER.createObjectNode());
+            }
+            @Override public String execute(JsonNode args) {
+                ToolResult.setCurrentStatus(ToolResult.ResultStatus.EMPTY);
+                return "No results found";
+            }
+        };
+        when(registry.get("kb")).thenReturn(tool);
+
+        ToolResult result = executor.execute(toolCall("kb"));
+
+        assertThat(result.success()).isTrue();
+        assertThat(result.status()).isEqualTo(ToolResult.ResultStatus.EMPTY);
+    }
+
+    @Test
+    void execute_toolDoesNotSetStatus_statusIsNull() {
+        Tool tool = createTool("search", "results found");
+        when(registry.get("search")).thenReturn(tool);
+
+        ToolResult result = executor.execute(toolCall("search"));
+
+        assertThat(result.success()).isTrue();
+        assertThat(result.status()).isNull();
+    }
 }

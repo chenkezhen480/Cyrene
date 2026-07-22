@@ -3,6 +3,7 @@ package com.harness.agent;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.harness.core.exception.ToolExecutionException;
+import com.harness.core.model.ToolResult;
 import com.harness.core.model.ToolSpec;
 import com.harness.tool.Tool;
 import org.slf4j.Logger;
@@ -85,10 +86,12 @@ public class SpawnSubAgentTool implements Tool {
             if (result.success()) {
                 log.info("[SpawnSubAgent] Sub-agent {} completed in {}ms, outputLen={}",
                         taskId, result.durationMs(), result.output() != null ? result.output().length() : 0);
+                ToolResult.setCurrentStatus(ToolResult.ResultStatus.SUCCESS);
                 return String.format("Sub-agent task %s completed successfully.\n\nResult:\n%s\n\nSteps taken: %d, Duration: %dms",
                         taskId, result.output(), result.steps().size(), result.durationMs());
             } else {
                 log.warn("[SpawnSubAgent] Sub-agent {} failed: {}", taskId, result.output());
+                ToolResult.setCurrentStatus(ToolResult.ResultStatus.EMPTY);
                 return String.format("Sub-agent task %s failed: %s", taskId, result.output());
             }
         } catch (Exception e) {

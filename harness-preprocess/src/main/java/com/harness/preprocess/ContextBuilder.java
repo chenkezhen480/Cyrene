@@ -7,7 +7,6 @@ import com.harness.env.EnvConfig;
 import com.harness.env.EnvKey;
 import com.harness.preprocess.rag.*;
 import com.harness.preprocess.gap.GapAnalysis;
-import com.harness.preprocess.gap.RewriteStrategy;
 import com.harness.preprocess.rag.rewrite.*;
 import com.harness.preprocess.rerank.Reranker;
 import org.slf4j.Logger;
@@ -30,7 +29,6 @@ public class ContextBuilder {
     private final Reranker reranker;
     private final SemanticContextRetriever semanticRetriever;
     private final QueryRewriter queryRewriter;
-    private final ChatModelProvider chatModelProvider;
 
     public ContextBuilder(RerankModelProvider rerankModelProvider,
                           EmbeddingModelProvider embeddingModelProvider,
@@ -39,7 +37,6 @@ public class ContextBuilder {
         this.semanticRetriever = vectorStore != null ? new SemanticContextRetriever(vectorStore) : null;
         this.reranker = new Reranker(rerankModelProvider);
         this.queryRewriter = QueryRewriterFactory.create(chatModelProvider);
-        this.chatModelProvider = chatModelProvider;
     }
 
     /**
@@ -56,48 +53,80 @@ public class ContextBuilder {
      * Build enriched context from user input, with GapAnalysis controlling behavior.
      *
      * @param userText    the raw user input text
-     * @param gapAnalysis 动态路由分析结果，控制是否检索、用哪种改写策略
+     * @param gapAnalysis 动态路由分析结果，控制是否检索
      * @return context result with RAG hits and formatted context string
      */
     public ContextResult build(String userText, GapAnalysis gapAnalysis) {
-        log.debug("[L2-RAG] Building context for text ({} chars)", userText != null ? userText.length() : 0);
+        log.debug("[L3-RAG] Building context for text ({} chars)", userText != null ? userText.length() : 0);
 
         // GapAnalysis: 显式禁用检索时直接返回空结果
         if (Boolean.FALSE.equals(gapAnalysis.needsKnowledgeBase())) {
-            log.debug("[L2-RAG] Skipped: needsKnowledgeBase=false (explicit)");
+            log.debug("[L3-RAG] Skipped: needsKnowledgeBase=false (explicit)");
             return ContextResult.empty();
         }
 
         // RAG provider 未配置时提前返回，避免查询改写白跑 LLM 调用
         if (vectorStore == null) {
-            log.warn("[L2-RAG] GapAnalyzer decided needsKnowledgeBase=true but RAG provider is none, skipping");
+            log.warn("[L3-RAG] GapAnalyzer decided needsKnowledgeBase=true but RAG provider is none, skipping");
             return ContextResult.empty();
         }
 
-        // Step 0: Query rewriting（按 GapAnalysis 动态选择策略，null 时用默认）
-        QueryRewriter activeRewriter = resolveRewriter(gapAnalysis.rewriteStrategy());
-        List<String> queries = activeRewriter.rewrite(userText);
+        // Step 0: Query rewriting（使用构造时的默认 rewriter）
+        List<String> queries = queryRewriter.rewrite(userText);
         if (queries.size() > 1) {
-            log.debug("[L2-RAG] Query rewrite [{}]: {} queries", activeRewriter.strategyName(), queries.size());
+            log.debug("[L3-RAG] Query rewrite [{}]: {} queries", queryRewriter.strategyName(), queries.size());
         }
 
-        // Step 1: RAG retrieval (support multi-query)
-        List<RagRetriever.RagDocument> ragDocs;
-        if (queries.size() == 1) {
-            ragDocs = doRetrieve(queries.get(0));
-        } else {
-            ragDocs = queries.stream()
-                    .map(this::doRetrieve)
-                    .flatMap(List::stream)
-                    .collect(Collectors.toMap(
-                            RagRetriever.RagDocument::id,
-                            Function.identity(),
-                            (a, b) -> a.score() >= b.score() ? a : b))
-                    .values().stream()
-                    .sorted(Comparator.comparingDouble(RagRetriever.RagDocument::score).reversed())
-                    .toList();
+        // Step 1-4: retrieve → enhance → rerank → format
+        return executeRetrieval(queries, userText);
+    }
+
+    /**
+     * 为 KnowledgeBaseTool 提供的 RAG 检索入口（无改写）。
+     * 跳过 GapAnalysis 路由，直接执行检索流程。
+     *
+     * @param query   用户查询（已由 LLM 保证完整独立）
+     * @param rewrite 是否进行查询改写（由工具层调用 LLM 生成多查询后调用 buildRagWithQueries）
+     * @return context result
+     */
+    public ContextResult buildRagForTool(String query, boolean rewrite) {
+        if (vectorStore == null) {
+            log.warn("[L3-RAG] RAG provider is none, skipping tool-based retrieval");
+            return ContextResult.empty();
         }
-        log.debug("[L2-RAG] Retrieved {} docs", ragDocs.size());
+        return executeRetrieval(List.of(query), query);
+    }
+
+    /**
+     * 为 KnowledgeBaseTool 提供的多查询 RAG 检索入口。
+     * 由工具层完成查询改写后，传入多个查询执行检索。
+     *
+     * @param queries 多个检索查询（至少 1 个）
+     * @return context result
+     */
+    public ContextResult buildRagWithQueries(List<String> queries) {
+        if (vectorStore == null) {
+            log.warn("[L3-RAG] RAG provider is none, skipping multi-query retrieval");
+            return ContextResult.empty();
+        }
+        if (queries == null || queries.isEmpty()) {
+            return ContextResult.empty();
+        }
+        // 使用第一个查询作为 rerank 的参考文本
+        return executeRetrieval(queries, queries.get(0));
+    }
+
+    /**
+     * 核心检索流程：多查询检索 → 合并去重 → 语义增强 → Rerank → 格式化。
+     *
+     * @param queries    检索查询列表
+     * @param rerankText 用于 rerank 的参考文本（通常为原始查询）
+     * @return context result
+     */
+    private ContextResult executeRetrieval(List<String> queries, String rerankText) {
+        // Step 1: RAG retrieval (support multi-query with dedup)
+        List<RagRetriever.RagDocument> ragDocs = doMultiRetrieve(queries);
+        log.debug("[L3-RAG] Retrieved {} docs from {} queries", ragDocs.size(), queries.size());
 
         // Step 2: Semantic enhancement (lookback for truncated chunks)
         int totalLookback = 0;
@@ -110,30 +139,32 @@ public class ContextBuilder {
                     .toList();
             ragDocs = enhanced.stream().map(SemanticContextRetriever.EnhancedChunk::document).toList();
             if (totalLookback > 0) {
-                log.debug("[L2-RAG] Semantic enhancement: {} lookbacks for {} chunks", totalLookback, lookbackChunkIds.size());
+                log.debug("[L3-RAG] Semantic enhancement: {} lookbacks for {} chunks", totalLookback, lookbackChunkIds.size());
             }
         }
 
         // Step 3: Rerank (with timing)
         long rerankStart = System.currentTimeMillis();
-        List<RagRetriever.RagDocument> reranked = reranker.rerank(userText, ragDocs);
+        Reranker.RerankResult rerankResult = reranker.rerank(rerankText, ragDocs);
         long rerankMs = System.currentTimeMillis() - rerankStart;
-        log.debug("[L2-RAG] Reranked {} → {} docs in {}ms", ragDocs.size(), reranked.size(), rerankMs);
+        List<RagRetriever.RagDocument> reranked = rerankResult.documents();
+        log.debug("[L3-RAG] Reranked {} → {} docs in {}ms (topScore={})", ragDocs.size(), reranked.size(), rerankMs,
+                String.format("%.4f", rerankResult.topScore()));
 
-        // Step 4: Format context string for injection into prompt
+        // Step 4: Format context string
         String contextBlock = formatContext(reranked);
         if (contextBlock.isEmpty()) {
-            log.debug("[L2-RAG] No RAG results, skipping context injection");
+            log.debug("[L3-RAG] No RAG results");
         } else {
-            log.debug("[L2-RAG] Context block: {} chars", contextBlock.length());
+            log.debug("[L3-RAG] Context block: {} chars", contextBlock.length());
         }
 
         Map<String, String> metadata = new HashMap<>();
         metadata.put("rerank_ms", String.valueOf(rerankMs));
         metadata.put("rag_doc_count", String.valueOf(ragDocs.size()));
         metadata.put("reranked_doc_count", String.valueOf(reranked.size()));
+        metadata.put("top_score", String.valueOf(rerankResult.topScore()));
         metadata.put("lookback_count", String.valueOf(totalLookback));
-        metadata.put("query_rewrite", activeRewriter.strategyName());
         metadata.put("query_count", String.valueOf(queries.size()));
         metadata.put("provider", vectorStore != null ? vectorStore.providerName() : "none");
         if (!lookbackChunkIds.isEmpty()) {
@@ -148,21 +179,23 @@ public class ContextBuilder {
     }
 
     /**
-     * 根据 GapAnalysis 的 rewriteStrategy 动态选择 QueryRewriter。
-     * null 时返回构造时的默认 rewriter。
+     * 多查询检索并合并去重。
+     * 每个查询独立检索，结果按 document ID 去重，保留最高分。
      */
-    private QueryRewriter resolveRewriter(RewriteStrategy strategy) {
-        if (strategy == null) return this.queryRewriter;
-        if (chatModelProvider == null) {
-            log.warn("[L2-RAG] Strategy '{}' requires ChatModelProvider, falling back to default", strategy);
-            return this.queryRewriter;
+    private List<RagRetriever.RagDocument> doMultiRetrieve(List<String> queries) {
+        if (queries.size() == 1) {
+            return doRetrieve(queries.get(0));
         }
-        return switch (strategy) {
-            case NONE -> new NoOpQueryRewriter();
-            case HYDE -> new HydeQueryRewriter(chatModelProvider);
-            case MULTI_QUERY -> new MultiQueryRewriter(chatModelProvider);
-            case STEP_BACK -> new StepBackQueryRewriter(chatModelProvider);
-        };
+        return queries.stream()
+                .map(this::doRetrieve)
+                .flatMap(List::stream)
+                .collect(Collectors.toMap(
+                        RagRetriever.RagDocument::id,
+                        Function.identity(),
+                        (a, b) -> a.score() >= b.score() ? a : b))
+                .values().stream()
+                .sorted(Comparator.comparingDouble(RagRetriever.RagDocument::score).reversed())
+                .toList();
     }
 
     private List<RagRetriever.RagDocument> doRetrieve(String query) {
@@ -201,6 +234,18 @@ public class ContextBuilder {
     ) {
         public boolean hasContext() {
             return contextBlock != null && !contextBlock.isBlank();
+        }
+
+        /**
+         * Top rerank relevance score. 0.0 if not available.
+         */
+        public double topScore() {
+            if (metadata == null || !metadata.containsKey("top_score")) return 0.0;
+            try {
+                return Double.parseDouble(metadata.get("top_score"));
+            } catch (NumberFormatException e) {
+                return 0.0;
+            }
         }
 
         public static ContextResult empty() {

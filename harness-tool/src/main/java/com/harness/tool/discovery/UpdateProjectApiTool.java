@@ -7,6 +7,7 @@ import com.harness.core.model.ApiEndpoint;
 import com.harness.core.model.AuthMode;
 import com.harness.core.model.ProjectApiConfig;
 import com.harness.core.model.TokenInjection;
+import com.harness.core.model.ToolResult;
 import com.harness.core.model.ToolSpec;
 import com.harness.tool.Tool;
 import com.harness.tool.ToolRegistry;
@@ -129,6 +130,7 @@ public class UpdateProjectApiTool implements Tool {
         }
 
         log.info("[UpdateProjectApi] Added endpoint: {} {} ({})", method, path, nextId);
+        ToolResult.setCurrentStatus(ToolResult.ResultStatus.SUCCESS);
         return "Endpoint added successfully:\n"
                 + "  id: " + nextId + "\n"
                 + "  name: " + name + "\n"
@@ -156,6 +158,7 @@ public class UpdateProjectApiTool implements Tool {
         }
 
         log.info("[UpdateProjectApi] Removed endpoint: {} {} ({})", found.method(), found.path(), id);
+        ToolResult.setCurrentStatus(ToolResult.ResultStatus.SUCCESS);
         return "Endpoint removed: " + found.method() + " " + found.path() + " (" + id + ")";
     }
 
@@ -213,6 +216,7 @@ public class UpdateProjectApiTool implements Tool {
         }
 
         log.info("[UpdateProjectApi] Updated endpoint: {} {} ({})", updated.method(), updated.path(), id);
+        ToolResult.setCurrentStatus(ToolResult.ResultStatus.SUCCESS);
         return "Endpoint updated: " + updated.method() + " " + updated.path() + " (" + id + ")";
     }
 

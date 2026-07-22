@@ -8,9 +8,13 @@
         </encoder>
     </appender>
 
+    <!-- Buffer WARN/ERROR events for periodic flush to file -->
+    <appender name="LOG_BUFFER" class="com.harness.server.log.LogBufferAppender"/>
+
     <!-- ==================== Root ==================== -->
     <root level="INFO">
         <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="LOG_BUFFER"/>
     </root>
 
     <!-- ==================== Cyrene Agent ==================== -->

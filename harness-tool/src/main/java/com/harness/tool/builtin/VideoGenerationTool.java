@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.harness.core.exception.ToolExecutionException;
 import com.harness.core.model.Artifact;
+import com.harness.core.model.ToolResult;
 import com.harness.core.model.ToolSpec;
 import com.harness.tool.ArtifactProducingTool;
 import com.harness.env.EnvConfig;
@@ -180,6 +181,7 @@ public class VideoGenerationTool implements ArtifactProducingTool {
                 result.put("status", "submitted");
                 result.put("task_id", taskId);
                 result.put("message", "视频正在生成中，完成后会自动通知。可稍后使用 action='check', task_id='" + taskId + "' 查询状态。");
+                ToolResult.setCurrentStatus(ToolResult.ResultStatus.SUCCESS);
                 return mapper.writeValueAsString(result);
             }
 
@@ -220,6 +222,7 @@ public class VideoGenerationTool implements ArtifactProducingTool {
                     "downloadUrl", state.artifact.downloadUrl()
             ))));
             try {
+                ToolResult.setCurrentStatus(ToolResult.ResultStatus.SUCCESS);
                 return mapper.writeValueAsString(result);
             } catch (Exception e) {
                 throw new ToolExecutionException("video_generation", "Serialization failed: " + e.getMessage(), e);
@@ -231,6 +234,7 @@ public class VideoGenerationTool implements ArtifactProducingTool {
         result.put("task_id", taskId);
         result.put("message", "视频仍在生成中，请稍后再试。");
         try {
+            ToolResult.setCurrentStatus(ToolResult.ResultStatus.EMPTY);
             return mapper.writeValueAsString(result);
         } catch (Exception e) {
             throw new ToolExecutionException("video_generation", "Serialization failed: " + e.getMessage(), e);
