@@ -9,6 +9,8 @@ import java.util.concurrent.CopyOnWriteArrayList;
  * Thread-safe token for cancelling in-progress agent runs.
  * Supports both polling (isCancelled) and preemptive interruption (Thread.interrupt).
  * Shared between the HTTP handler (which signals cancellation) and the ReAct loop (which checks it).
+ *
+ * Supports parent-child relationships: cancelling a parent token also cancels all children.
  */
 public class CancellationToken {
 
@@ -16,6 +18,40 @@ public class CancellationToken {
     private final Set<Thread> trackedThreads = ConcurrentHashMap.newKeySet();
     private final List<Runnable> onCancelCallbacks = new CopyOnWriteArrayList<>();
     private volatile Runnable onCancel;
+
+    // Parent-child support
+    private final CancellationToken parent;
+    private final Set<CancellationToken> children = ConcurrentHashMap.newKeySet();
+
+    /**
+     * Create a root cancellation token (no parent).
+     */
+    public CancellationToken() {
+        this.parent = null;
+    }
+
+    /**
+     * Create a child token linked to a parent.
+     * When parent is cancelled, child is also cancelled.
+     */
+    private CancellationToken(CancellationToken parent) {
+        this.parent = parent;
+        if (parent != null) {
+            parent.children.add(this);
+            // If parent is already cancelled, cancel self immediately
+            if (parent.isCancelled()) {
+                this.cancelled = true;
+            }
+        }
+    }
+
+    /**
+     * Create a child token. When parent is cancelled, child is automatically cancelled.
+     * Child cancellation does NOT cancel parent.
+     */
+    public static CancellationToken createChild(CancellationToken parent) {
+        return new CancellationToken(parent);
+    }
 
     /**
      * Register the current thread for interruption on cancel.
@@ -34,7 +70,7 @@ public class CancellationToken {
 
     /**
      * Register an arbitrary thread for interruption on cancel.
-     * Used by SubAgentOrchestrator to register sub-agent worker threads.
+     * Used by SubAgentManager to register sub-agent worker threads.
      */
     public void trackThread(Thread thread) {
         trackedThreads.add(thread);
@@ -74,11 +110,20 @@ public class CancellationToken {
 
     /**
      * Signal cancellation, interrupt all tracked threads, and invoke all cancel callbacks.
+     * Also cancels all child tokens.
      * Safe to call from any thread.
      */
     public void cancel() {
+        if (this.cancelled) {
+            return;  // Already cancelled
+        }
         this.cancelled = true;
-        // Cancel HTTP calls first (closes sockets immediately)
+
+        // Cancel all children first
+        for (CancellationToken child : children) {
+            child.cancel();
+        }
+
         // Execute all registered callbacks
         for (Runnable cb : onCancelCallbacks) {
             try { cb.run(); } catch (Exception ignored) {}
@@ -96,8 +141,31 @@ public class CancellationToken {
 
     /**
      * Check if cancellation has been requested.
+     * Also checks parent chain.
      */
     public boolean isCancelled() {
-        return cancelled;
+        if (cancelled) {
+            return true;
+        }
+        // Check parent chain
+        if (parent != null && parent.isCancelled()) {
+            this.cancelled = true;  // Propagate down
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Get the parent token, or null if this is a root token.
+     */
+    public CancellationToken getParent() {
+        return parent;
+    }
+
+    /**
+     * Check if this is a child token.
+     */
+    public boolean isChild() {
+        return parent != null;
     }
 }

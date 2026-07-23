@@ -219,6 +219,12 @@ public final class EnvKey {
     // ==================== Sub-Agent ====================
     /** 每个编排器最大并发子代理任务数，默认 3 */
     public static final String AGENT_MAX_SUBAGENTS       = "HARNESS_AGENT_MAX_SUBAGENTS";
+    /** 每个运行最大任务数，默认 16 */
+    public static final String AGENT_MAX_TASKS_PER_RUN   = "HARNESS_AGENT_MAX_TASKS_PER_RUN";
+    /** Scope TTL（分钟），默认 30 */
+    public static final String AGENT_SCOPE_TTL_MINUTES   = "HARNESS_AGENT_SCOPE_TTL_MINUTES";
+    /** await_subagents 共享超时（秒），默认 120；超时后未完成任务转为 Session Resume */
+    public static final String AGENT_AWAIT_TIMEOUT_SECONDS = "HARNESS_AGENT_AWAIT_TIMEOUT_SECONDS";
 
     // ==================== LLM API 并发保护 ====================
     /** LLM API 最大并发调用数（Semaphore 保护上游 RPM/TPM 限制），默认 10 */

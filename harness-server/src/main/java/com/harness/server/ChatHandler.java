@@ -107,6 +107,10 @@ public class ChatHandler {
             final java.util.concurrent.atomic.AtomicReference<String> resolvedSessionIdRef =
                     new java.util.concurrent.atomic.AtomicReference<>(null);
 
+            // Track whether the request completed normally (for auto-cancel on disconnect)
+            final java.util.concurrent.atomic.AtomicBoolean completedNormally =
+                    new java.util.concurrent.atomic.AtomicBoolean(false);
+
             AgentContext agentContext = AgentContext.of(req.context());
             Boolean enableThinking = agentContext.enableThinking();
             String contextUserId = agentContext.userId();
@@ -179,6 +183,7 @@ public class ChatHandler {
                                             Map<String, Object> donePayload = new java.util.HashMap<>(event.metadata());
                                             donePayload.put("output", event.data() != null ? event.data() : "");
                                             writeSseEvent(out, "done", mapper.writeValueAsString(donePayload));
+                                            completedNormally.set(true);
                                         }
                                         case CANCELLED -> writeSseEvent(out, "cancelled",
                                                 mapper.writeValueAsString(Map.of("message", event.data())));
@@ -232,6 +237,7 @@ public class ChatHandler {
                         )).toList());
                     }
                     writeSseEvent(out, "done", mapper.writeValueAsString(doneData));
+                    completedNormally.set(true);
                 }
 
             } catch (Exception e) {
@@ -246,6 +252,12 @@ public class ChatHandler {
                     log.debug("[Server] Failed to write error event to stream: {}", ex.getMessage());
                 }
             } finally {
+                // Auto-cancel if client disconnected or request didn't complete normally
+                if (!completedNormally.get()) {
+                    log.info("[Server] Request did not complete normally, auto-cancelling: requestId={}", requestId);
+                    cancellationToken.cancel();
+                }
+
                 HttpApiTool.clearCurrentCredentials();
                 activeRequests.remove(requestId);
                 String alias = resolvedSessionIdRef.get();
