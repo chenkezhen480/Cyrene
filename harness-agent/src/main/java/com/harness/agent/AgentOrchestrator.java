@@ -159,6 +159,10 @@ public class AgentOrchestrator {
         // Load project API discovery config (HttpApiTools for confirmed endpoints)
         loadProjectApiConfig();
 
+        // Layer 5: Audit (initialized early — needed by SubAgentManager for sub-agent trace persistence)
+        this.traceStore = TraceStoreFactory.create();
+        this.replyAuditor = new ReplyAuditor();
+
         // Session inbox and resume dispatcher for sub-agent completion events
         this.sessionInbox = new SessionInbox();
         this.resumeDispatcher = new SessionResumeDispatcher(sessionInbox, this::resumeSession);
@@ -166,7 +170,7 @@ public class AgentOrchestrator {
         // Sub-agent manager (initialized before ReActEngine so spawn_subagent is available)
         this.subAgentManager = new SubAgentManager(
                 chatModelProvider, visionModelProvider, voiceModelProvider, toolRegistry, toolExecutor,
-                sessionInbox, resumeDispatcher);
+                traceStore, sessionInbox, resumeDispatcher);
         // Register sub-agent tools
         toolRegistry.register(new SpawnSubAgentTool(subAgentManager));
         toolRegistry.register(new AwaitSubAgentsTool(subAgentManager));
@@ -176,10 +180,6 @@ public class AgentOrchestrator {
         // ReAct Engine (LangChain4j ChatLanguageModel + tools + multimodal fallback)
         this.reactEngine = new ReActEngine(chatModelProvider, toolRegistry, toolExecutor,
                 visionModelProvider, voiceModelProvider);
-
-        // Layer 5: Audit
-        this.traceStore = TraceStoreFactory.create();
-        this.replyAuditor = new ReplyAuditor();
 
         // GapAnalyzer (动态路由)
         this.gapAnalyzer = new GapAnalyzer(new GapRuleEngine(), new GapClassifier(classifierModelProvider));
@@ -447,7 +447,8 @@ public class AgentOrchestrator {
             // ===== Layer 3+4: ReAct loop（AI决策 + 工具执行 + 小压缩去除工具块） =====
             // Create run context for sub-agent isolation
             runId = java.util.UUID.randomUUID().toString();
-            AgentRunContext runContext = new AgentRunContext(runId, sessionId, cancellationToken);
+            String parentTraceId = trace.builder().build().traceId();
+            AgentRunContext runContext = new AgentRunContext(runId, sessionId, cancellationToken, parentTraceId);
             SubAgentRunScope runScope = subAgentManager.openScope(runId);
             SpawnSubAgentTool.setCurrentRunContext(runContext);
             log.debug("[Orchestrator] Sub-agent scope opened: runId={}", runId);
@@ -505,7 +506,8 @@ public class AgentOrchestrator {
             if (result.loopStats() != null) {
                 ReActEngine.ReActLoopStats stats = result.loopStats();
                 trace.recordReactStats(stats.outcome(), stats.rounds(), stats.toolCalls(),
-                        stats.reflectionChecks());
+                        stats.reflectionChecks(), stats.inputTokens(), stats.outputTokens(),
+                        stats.llmCalls(), stats.toolRetries());
             }
 
             // Flush remaining text after loop
@@ -762,7 +764,8 @@ public class AgentOrchestrator {
             // Layer 3+4: Streaming ReAct loop
             // Create run context for sub-agent isolation
             runId = java.util.UUID.randomUUID().toString();
-            AgentRunContext runContext = new AgentRunContext(runId, sessionId, cancellationToken);
+            String parentTraceId = trace.builder().build().traceId();
+            AgentRunContext runContext = new AgentRunContext(runId, sessionId, cancellationToken, parentTraceId);
             SubAgentRunScope runScope = subAgentManager.openScope(runId);
             SpawnSubAgentTool.setCurrentRunContext(runContext);
             log.debug("[Orchestrator] Sub-agent scope opened: runId={}", runId);
@@ -782,6 +785,11 @@ public class AgentOrchestrator {
                 public void onToken(String tokenText) {
                     textAccumulator.append(tokenText);
                     callback.onEvent(StreamEvent.token(tokenText));
+                }
+
+                @Override
+                public void onToolCallCreated(String toolName, String arguments) {
+                    callback.onEvent(StreamEvent.toolCallCreated(toolName, arguments));
                 }
 
                 @Override
@@ -824,7 +832,8 @@ public class AgentOrchestrator {
             if (result.loopStats() != null) {
                 ReActEngine.ReActLoopStats stats = result.loopStats();
                 trace.recordReactStats(stats.outcome(), stats.rounds(), stats.toolCalls(),
-                        stats.reflectionChecks());
+                        stats.reflectionChecks(), stats.inputTokens(), stats.outputTokens(),
+                        stats.llmCalls(), stats.toolRetries());
             }
 
             // Flush remaining text after loop
@@ -1474,31 +1483,42 @@ public class AgentOrchestrator {
             // Create a CancellationToken for this resume run
             CancellationToken cancellationToken = new CancellationToken();
 
-            // Build system prompt
-            GapAnalysis gapAnalysis = gapAnalyzer.analyze(eventMessage.toString(), AgentContext.empty());
-            String systemPrompt = buildSystemPrompt(longtermPrefs, null, sessionId,
-                    gapAnalysis.needsKnowledgeBase(), gapAnalysis.needsWebSearch());
+            // Set up sub-agent infrastructure so the resumed session can spawn sub-agents
+            String resumeRunId = java.util.UUID.randomUUID().toString();
+            AgentRunContext resumeContext = new AgentRunContext(resumeRunId, sessionId, cancellationToken);
+            subAgentManager.openScope(resumeRunId);
+            SpawnSubAgentTool.setCurrentRunContext(resumeContext);
 
-            // Convert messages and add runtime event
-            List<ChatMessage> historyChatMessages = convertToChatMessages(shorttermMessages);
-            historyChatMessages.add(UserMessage.from(eventMessage.toString()));
+            try {
+                // Build system prompt
+                GapAnalysis gapAnalysis = gapAnalyzer.analyze(eventMessage.toString(), AgentContext.empty());
+                String systemPrompt = buildSystemPrompt(longtermPrefs, null, sessionId,
+                        gapAnalysis.needsKnowledgeBase(), gapAnalysis.needsWebSearch());
 
-            // Execute ReAct loop
-            AgentTrace.Builder traceBuilder = AgentTrace.builder();
-            ReActEngine.ReActResult result = reactEngine.execute(systemPrompt, eventMessage.toString(),
-                    historyChatMessages, traceBuilder, null, cancellationToken, null);
+                // Convert messages and add runtime event
+                List<ChatMessage> historyChatMessages = convertToChatMessages(shorttermMessages);
+                historyChatMessages.add(UserMessage.from(eventMessage.toString()));
 
-            // Save assistant message
-            if (userId != null) {
-                List<MessageBlock> asstBlocks = List.of(new MessageBlock(MessageBlock.BlockType.TEXT,
-                        result.output() != null ? result.output() : "", null));
-                messageWriteWorker.submit(sessionId, "assistant", asstBlocks, false);
-                messageCache.append(sessionId, userId, new MemoryMessage(0, sessionId, "assistant", asstBlocks, false, null));
-                sessionStore.updateLastActive(sessionId);
+                // Execute ReAct loop
+                AgentTrace.Builder traceBuilder = AgentTrace.builder();
+                ReActEngine.ReActResult result = reactEngine.execute(systemPrompt, eventMessage.toString(),
+                        historyChatMessages, traceBuilder, null, cancellationToken, null);
+
+                // Save assistant message
+                if (userId != null) {
+                    List<MessageBlock> asstBlocks = List.of(new MessageBlock(MessageBlock.BlockType.TEXT,
+                            result.output() != null ? result.output() : "", null));
+                    messageWriteWorker.submit(sessionId, "assistant", asstBlocks, false);
+                    messageCache.append(sessionId, userId, new MemoryMessage(0, sessionId, "assistant", asstBlocks, false, null));
+                    sessionStore.updateLastActive(sessionId);
+                }
+
+                log.info("[Orchestrator] Session {} resumed successfully, outputLen={}", sessionId,
+                        result.output() != null ? result.output().length() : 0);
+            } finally {
+                SpawnSubAgentTool.clearCurrentRunContext();
+                subAgentManager.finishRun(resumeRunId);
             }
-
-            log.info("[Orchestrator] Session {} resumed successfully, outputLen={}", sessionId,
-                    result.output() != null ? result.output().length() : 0);
 
         } catch (Exception e) {
             log.error("[Orchestrator] Failed to resume session {}: {}", sessionId, e.getMessage(), e);

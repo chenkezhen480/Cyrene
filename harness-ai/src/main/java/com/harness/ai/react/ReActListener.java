@@ -25,6 +25,12 @@ public interface ReActListener {
     default void onToken(String token) {}
 
     /**
+     * Called when a tool call is created (LLM returned the tool call, before execution).
+     * Default is no-op for backward compatibility.
+     */
+    default void onToolCallCreated(String toolName, String arguments) {}
+
+    /**
      * Called when a tool call begins execution during streaming.
      * Default is no-op for backward compatibility.
      */

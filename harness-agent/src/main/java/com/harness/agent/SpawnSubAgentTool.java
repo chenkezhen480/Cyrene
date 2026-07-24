@@ -21,7 +21,7 @@ import java.util.List;
  * - persona: specific role/identity for the sub-agent
  * - system_prompt: task-specific system instructions
  * - context: relevant context (summarized/compressed)
- * - tools: list of tool names the sub-agent needs
+ * - tools: (optional) list of tool names the sub-agent needs; defaults to all available tools
  */
 public class SpawnSubAgentTool implements Tool {
 
@@ -70,8 +70,8 @@ public class SpawnSubAgentTool implements Tool {
                         "- system_prompt: task-specific instructions including methodology, output format, constraints\n" +
                         "- task_description: clear description of what to accomplish\n" +
                         "- context: relevant background info, compressed conversation history, and prior results. " +
-                        "The sub-agent has NO access to conversation history — you MUST include relevant history here.\n" +
-                        "- tools: list of tool names this sub-agent needs (only include necessary tools)\n\n" +
+                        "The sub-agent has NO access to conversation history — you MUST include relevant history here.\n\n" +
+                        "Optionally provide 'tools' to give the sub-agent specific tools. If omitted, the sub-agent has NO tools (text-only analysis).\n\n" +
                         "Available tool names: web_search, knowledge_base_search, image_generation, " +
                         "code_sandbox, load_skill, and any registered MCP tools.",
                 mapper.createObjectNode()
@@ -102,7 +102,7 @@ public class SpawnSubAgentTool implements Tool {
                                         .<ObjectNode>set("tools",
                                                 mapper.createObjectNode()
                                                         .put("type", "array")
-                                                        .put("description", "List of tool names this sub-agent needs. Only include tools relevant to the task. Sub-agent orchestration tools (spawn/await/get/cancel_subagent) are automatically excluded.")
+                                                        .put("description", "List of tool names this sub-agent needs. If omitted, the sub-agent has NO tools (pure text analysis). Include tools like web_search, knowledge_base_search, code_sandbox, etc. when the task requires them.")
                                                         .<ObjectNode>set("items",
                                                                 mapper.createObjectNode().put("type", "string")))
                                         .<ObjectNode>set("dependencies",
@@ -116,8 +116,7 @@ public class SpawnSubAgentTool implements Tool {
                                         .add("persona")
                                         .add("system_prompt")
                                         .add("task_description")
-                                        .add("context")
-                                        .add("tools"))
+                                        .add("context"))
         );
     }
 
@@ -144,13 +143,10 @@ public class SpawnSubAgentTool implements Tool {
             throw new ToolExecutionException("spawn_subagent", "Missing required parameter: task_description");
         }
 
-        // Parse tool list
+        // Parse tool list (optional — empty means "all available tools")
         List<String> tools = new ArrayList<>();
         if (arguments.has("tools") && arguments.get("tools").isArray()) {
             arguments.get("tools").forEach(node -> tools.add(node.asText()));
-        }
-        if (tools.isEmpty()) {
-            throw new ToolExecutionException("spawn_subagent", "Missing required parameter: tools (at least one tool must be specified)");
         }
 
         // Parse dependencies

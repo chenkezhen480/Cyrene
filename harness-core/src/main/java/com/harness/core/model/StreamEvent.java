@@ -15,6 +15,7 @@ public record StreamEvent(
         START,
         TOKEN,
         STEP,
+        TOOL_CALL_CREATED,
         TOOL_CALL_START,
         TOOL_CALL_DONE,
         COMPRESS,
@@ -36,6 +37,13 @@ public record StreamEvent(
 
     public static StreamEvent step(ReActStep step) {
         return new StreamEvent(Type.STEP, "", Map.of("step", step));
+    }
+
+    public static StreamEvent toolCallCreated(String toolName, String arguments) {
+        return new StreamEvent(Type.TOOL_CALL_CREATED, "", Map.of(
+                "toolName", toolName != null ? toolName : "",
+                "arguments", arguments != null ? arguments : ""
+        ));
     }
 
     public static StreamEvent toolCallStart(String toolName, String arguments) {

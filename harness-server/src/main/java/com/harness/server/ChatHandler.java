@@ -147,6 +147,10 @@ public class ChatHandler {
 
 
 
+                                        case TOOL_CALL_CREATED -> writeSseEvent(out, "tool_call_created",
+                                                mapper.writeValueAsString(Map.of(
+                                                        "toolName", event.metadata().get("toolName"),
+                                                        "arguments", event.metadata().get("arguments"))));
                                         case TOOL_CALL_START -> writeSseEvent(out, "tool_call_start",
                                                 mapper.writeValueAsString(Map.of(
                                                         "toolName", event.metadata().get("toolName"),

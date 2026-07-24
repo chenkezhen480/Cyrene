@@ -9,10 +9,16 @@ import com.harness.core.model.CancellationToken;
 public record AgentRunContext(
         String runId,
         String sessionId,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        String parentTraceId
 ) {
     public AgentRunContext {
         if (runId == null) throw new IllegalArgumentException("runId cannot be null");
         if (cancellationToken == null) throw new IllegalArgumentException("cancellationToken cannot be null");
+    }
+
+    /** Convenience constructor without parentTraceId (for backward compatibility). */
+    public AgentRunContext(String runId, String sessionId, CancellationToken cancellationToken) {
+        this(runId, sessionId, cancellationToken, null);
     }
 }

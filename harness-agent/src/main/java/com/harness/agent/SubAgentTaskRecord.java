@@ -60,19 +60,33 @@ public class SubAgentTaskRecord {
     }
 
     /**
-     * Mark as succeeded with result.
+     * Mark as succeeded with result. Uses CAS to prevent overwriting terminal states.
      */
     public void succeed(SubAgentResult result) {
-        status.set(SubAgentStatus.SUCCEEDED);
+        SubAgentStatus current;
+        do {
+            current = status.get();
+            if (current == SubAgentStatus.FAILED || current == SubAgentStatus.CANCELLED ||
+                current == SubAgentStatus.TIMED_OUT) {
+                return; // Already in a terminal state, don't overwrite
+            }
+        } while (!status.compareAndSet(current, SubAgentStatus.SUCCEEDED));
         this.storedResult = result;
         completion.complete(result);
     }
 
     /**
-     * Mark as failed with error.
+     * Mark as failed with error. Uses CAS to prevent overwriting terminal states.
      */
     public void fail(SubAgentResult result) {
-        status.set(SubAgentStatus.FAILED);
+        SubAgentStatus current;
+        do {
+            current = status.get();
+            if (current == SubAgentStatus.SUCCEEDED || current == SubAgentStatus.CANCELLED ||
+                current == SubAgentStatus.TIMED_OUT) {
+                return; // Already in a terminal state, don't overwrite
+            }
+        } while (!status.compareAndSet(current, SubAgentStatus.FAILED));
         this.storedResult = result;
         completion.complete(result);
     }

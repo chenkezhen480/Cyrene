@@ -81,37 +81,22 @@ public class AwaitSubAgentsTool implements Tool {
 
     @Override
     public String execute(JsonNode arguments) {
-        AgentRunContext runContext = SpawnSubAgentTool.getCurrentRunContext();
-        if (runContext == null) {
-            throw new ToolExecutionException("await_subagents", "No active run context.");
-        }
+        AgentRunContext runContext = SubAgentToolHelper.requireRunContext("await_subagents");
 
-        // Parse task IDs
-        List<String> taskIds = new ArrayList<>();
-        if (arguments.has("task_ids") && arguments.get("task_ids").isArray()) {
-            arguments.get("task_ids").forEach(node -> taskIds.add(node.asText()));
-        }
+        List<String> taskIds = SubAgentToolHelper.parseTaskIds(arguments);
         if (taskIds.isEmpty()) {
             throw new ToolExecutionException("await_subagents", "Missing required parameter: task_ids");
         }
 
-        // Parse return_when
         String returnWhen = arguments.has("return_when") ? arguments.get("return_when").asText().toUpperCase() : "ALL";
-
-        // Parse timeout (shared deadline for all tasks)
         int defaultTimeout = EnvConfig.get().getInt(EnvKey.AGENT_AWAIT_TIMEOUT_SECONDS, 120);
         int timeoutSeconds = arguments.has("timeout_seconds") ? arguments.get("timeout_seconds").asInt() : defaultTimeout;
-
-        // Parse on_timeout
         String onTimeout = arguments.has("on_timeout") ? arguments.get("on_timeout").asText().toUpperCase() : "RESUME_SESSION";
 
         log.info("[AwaitSubAgents] Awaiting tasks: ids={}, returnWhen={}, timeout={}s, onTimeout={}",
                 taskIds, returnWhen, timeoutSeconds, onTimeout);
 
-        SubAgentRunScope scope = subAgentManager.getScope(runContext.runId());
-        if (scope == null) {
-            throw new ToolExecutionException("await_subagents", "No scope found for run " + runContext.runId());
-        }
+        SubAgentRunScope scope = SubAgentToolHelper.requireScope(subAgentManager, runContext, "await_subagents");
 
         try {
             ObjectNode result = mapper.createObjectNode();
@@ -131,67 +116,43 @@ public class AwaitSubAgentsTool implements Tool {
         }
     }
 
+    // ===== Await strategies =====
+
     /**
      * Wait for all tasks to complete. Shared deadline across all tasks.
-     * Completed tasks are consumed inline; timed-out tasks are detached or cancelled.
      */
     private void awaitAll(SubAgentRunScope scope, List<String> taskIds, int timeoutSeconds,
                           String onTimeout, ObjectNode result) {
         Instant deadline = Instant.now().plusSeconds(timeoutSeconds);
         List<SubAgentTaskRecord> completedRecords = new ArrayList<>();
         List<SubAgentTaskRecord> pendingRecords = new ArrayList<>();
+        List<SubAgentTaskRecord> records = SubAgentToolHelper.resolveTaskRecords(scope, taskIds);
 
-        // Resolve task records
-        List<SubAgentTaskRecord> records = new ArrayList<>();
-        for (String taskId : taskIds) {
-            SubAgentTaskRecord record = scope.getTask(taskId);
-            if (record != null) {
-                records.add(record);
-            }
-        }
-
-        // Wait for each task with shared deadline
         for (SubAgentTaskRecord record : records) {
             if (record.isTerminal()) {
-                // Already done, consume inline
-                if (record.consumeInline()) {
-                    completedRecords.add(record);
-                } else {
-                    pendingRecords.add(record); // Was detached, include in pending
-                }
+                addToCompletedOrPending(record, completedRecords, pendingRecords);
                 continue;
             }
 
             long remainingMs = Instant.now().until(deadline, java.time.temporal.ChronoUnit.MILLIS);
             if (remainingMs <= 0) {
-                // Deadline already passed, handle below
                 pendingRecords.add(record);
                 continue;
             }
 
             try {
                 record.completion().get(remainingMs, TimeUnit.MILLISECONDS);
-                if (record.consumeInline()) {
-                    completedRecords.add(record);
-                } else {
-                    pendingRecords.add(record);
-                }
+                addToCompletedOrPending(record, completedRecords, pendingRecords);
             } catch (TimeoutException e) {
-                // Timeout for this task
                 log.info("[AwaitSubAgents] Task {} await timed out", record.taskId());
                 pendingRecords.add(record);
             } catch (Exception e) {
                 log.error("[AwaitSubAgents] Task {} wait error: {}", record.taskId(), e.getMessage());
-                if (record.consumeInline()) {
-                    completedRecords.add(record);
-                }
+                addToCompletedOrPending(record, completedRecords, pendingRecords);
             }
         }
 
-        // Handle pending tasks based on onTimeout strategy
         applyTimeoutStrategy(pendingRecords, onTimeout);
-
-        // Build response
         buildResponse(result, completedRecords, pendingRecords, onTimeout);
     }
 
@@ -200,46 +161,47 @@ public class AwaitSubAgentsTool implements Tool {
      */
     private void awaitAny(SubAgentRunScope scope, List<String> taskIds, int timeoutSeconds,
                           String onTimeout, ObjectNode result) {
+        awaitFirstMatch(scope, taskIds, timeoutSeconds, onTimeout, result, r -> r.isTerminal());
+    }
+
+    /**
+     * Wait for first successful task.
+     */
+    private void awaitFirstSuccess(SubAgentRunScope scope, List<String> taskIds, int timeoutSeconds,
+                                   String onTimeout, ObjectNode result) {
+        awaitFirstMatch(scope, taskIds, timeoutSeconds, onTimeout, result,
+                r -> r.isTerminal() && r.status().get() == SubAgentStatus.SUCCEEDED);
+    }
+
+    /**
+     * Shared poll loop for ANY and FIRST_SUCCESS modes.
+     * Returns as soon as a record matches the predicate, or on timeout.
+     */
+    private void awaitFirstMatch(SubAgentRunScope scope, List<String> taskIds, int timeoutSeconds,
+                                 String onTimeout, ObjectNode result,
+                                 java.util.function.Predicate<SubAgentTaskRecord> match) {
         Instant deadline = Instant.now().plusSeconds(timeoutSeconds);
         List<SubAgentTaskRecord> completedRecords = new ArrayList<>();
         List<SubAgentTaskRecord> pendingRecords = new ArrayList<>();
+        List<SubAgentTaskRecord> records = SubAgentToolHelper.resolveTaskRecords(scope, taskIds);
 
-        List<SubAgentTaskRecord> records = new ArrayList<>();
-        for (String taskId : taskIds) {
-            SubAgentTaskRecord record = scope.getTask(taskId);
-            if (record != null) records.add(record);
-        }
-
-        // Check if any already done
+        // Check if any already match
         for (SubAgentTaskRecord record : records) {
-            if (record.isTerminal()) {
-                if (record.consumeInline()) {
-                    completedRecords.add(record);
-                } else {
-                    pendingRecords.add(record);
-                }
-                // Rest are pending
-                for (SubAgentTaskRecord r : records) {
-                    if (r != record) pendingRecords.add(r);
-                }
+            if (match.test(record)) {
+                addToCompletedOrPending(record, completedRecords, pendingRecords);
+                addRemainingAsPending(records, record, pendingRecords);
                 applyTimeoutStrategy(pendingRecords, onTimeout);
                 buildResponse(result, completedRecords, pendingRecords, onTimeout);
                 return;
             }
         }
 
-        // Wait for first completion
+        // Poll until match or timeout
         while (Instant.now().isBefore(deadline)) {
             for (SubAgentTaskRecord record : records) {
-                if (record.isTerminal()) {
-                    if (record.consumeInline()) {
-                        completedRecords.add(record);
-                    } else {
-                        pendingRecords.add(record);
-                    }
-                    for (SubAgentTaskRecord r : records) {
-                        if (r != record) pendingRecords.add(r);
-                    }
+                if (match.test(record)) {
+                    addToCompletedOrPending(record, completedRecords, pendingRecords);
+                    addRemainingAsPending(records, record, pendingRecords);
                     applyTimeoutStrategy(pendingRecords, onTimeout);
                     buildResponse(result, completedRecords, pendingRecords, onTimeout);
                     return;
@@ -259,67 +221,29 @@ public class AwaitSubAgentsTool implements Tool {
         buildResponse(result, completedRecords, pendingRecords, onTimeout);
     }
 
+    // ===== Helpers =====
+
     /**
-     * Wait for first successful task.
+     * Try to consume inline; add to completed list on success, pending list otherwise.
      */
-    private void awaitFirstSuccess(SubAgentRunScope scope, List<String> taskIds, int timeoutSeconds,
-                                   String onTimeout, ObjectNode result) {
-        Instant deadline = Instant.now().plusSeconds(timeoutSeconds);
-        List<SubAgentTaskRecord> completedRecords = new ArrayList<>();
-        List<SubAgentTaskRecord> pendingRecords = new ArrayList<>();
-
-        List<SubAgentTaskRecord> records = new ArrayList<>();
-        for (String taskId : taskIds) {
-            SubAgentTaskRecord record = scope.getTask(taskId);
-            if (record != null) records.add(record);
+    private void addToCompletedOrPending(SubAgentTaskRecord record,
+                                         List<SubAgentTaskRecord> completed,
+                                         List<SubAgentTaskRecord> pending) {
+        if (record.consumeInline()) {
+            completed.add(record);
+        } else {
+            pending.add(record);
         }
+    }
 
-        // Check if any already succeeded
-        for (SubAgentTaskRecord record : records) {
-            if (record.isTerminal() && record.status().get() == SubAgentStatus.SUCCEEDED) {
-                if (record.consumeInline()) {
-                    completedRecords.add(record);
-                } else {
-                    pendingRecords.add(record);
-                }
-                for (SubAgentTaskRecord r : records) {
-                    if (r != record) pendingRecords.add(r);
-                }
-                applyTimeoutStrategy(pendingRecords, onTimeout);
-                buildResponse(result, completedRecords, pendingRecords, onTimeout);
-                return;
-            }
+    /**
+     * Add all records except the matched one to the pending list.
+     */
+    private void addRemainingAsPending(List<SubAgentTaskRecord> all, SubAgentTaskRecord matched,
+                                       List<SubAgentTaskRecord> pending) {
+        for (SubAgentTaskRecord r : all) {
+            if (r != matched) pending.add(r);
         }
-
-        // Wait for first success
-        while (Instant.now().isBefore(deadline)) {
-            for (SubAgentTaskRecord record : records) {
-                if (record.isTerminal() && record.status().get() == SubAgentStatus.SUCCEEDED) {
-                    if (record.consumeInline()) {
-                        completedRecords.add(record);
-                    } else {
-                        pendingRecords.add(record);
-                    }
-                    for (SubAgentTaskRecord r : records) {
-                        if (r != record) pendingRecords.add(r);
-                    }
-                    applyTimeoutStrategy(pendingRecords, onTimeout);
-                    buildResponse(result, completedRecords, pendingRecords, onTimeout);
-                    return;
-                }
-            }
-            try {
-                Thread.sleep(100);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                break;
-            }
-        }
-
-        // Timeout
-        pendingRecords.addAll(records);
-        applyTimeoutStrategy(pendingRecords, onTimeout);
-        buildResponse(result, completedRecords, pendingRecords, onTimeout);
     }
 
     /**
@@ -328,14 +252,11 @@ public class AwaitSubAgentsTool implements Tool {
     private void applyTimeoutStrategy(List<SubAgentTaskRecord> pending, String onTimeout) {
         for (SubAgentTaskRecord record : pending) {
             if (record.isTerminal()) {
-                // Already completed (race), consume inline
                 record.consumeInline();
                 continue;
             }
-
             switch (onTimeout) {
                 case "RESUME_SESSION" -> {
-                    // Detach: result will go to SessionInbox when task completes
                     if (record.detach()) {
                         log.info("[AwaitSubAgents] Task {} detached for session resume", record.taskId());
                     }
@@ -344,9 +265,7 @@ public class AwaitSubAgentsTool implements Tool {
                     record.requestCancel();
                     log.info("[AwaitSubAgents] Task {} cancel requested", record.taskId());
                 }
-                case "RETURN_PENDING" -> {
-                    // Do nothing, just return status
-                }
+                case "RETURN_PENDING" -> { /* just return status */ }
             }
         }
     }
@@ -365,16 +284,7 @@ public class AwaitSubAgentsTool implements Tool {
             ObjectNode taskNode = mapper.createObjectNode();
             taskNode.put("task_id", record.taskId());
             taskNode.put("status", record.status().get().name());
-            SubAgentResult subResult = record.storedResult();
-            if (subResult != null) {
-                if (subResult.success()) {
-                    taskNode.put("output", subResult.output());
-                    taskNode.put("steps", subResult.steps().size());
-                    taskNode.put("duration_ms", subResult.durationMs());
-                } else {
-                    taskNode.put("error", subResult.output());
-                }
-            }
+            SubAgentToolHelper.serializeResult(taskNode, record.storedResult(), mapper);
             completedArray.add(taskNode);
         }
         result.set("completed", completedArray);
@@ -386,11 +296,7 @@ public class AwaitSubAgentsTool implements Tool {
             taskNode.put("task_id", record.taskId());
             taskNode.put("status", record.status().get().name());
             if (record.isTerminal()) {
-                // Completed while we were building response
-                SubAgentResult subResult = record.storedResult();
-                if (subResult != null && subResult.success()) {
-                    taskNode.put("output", subResult.output());
-                }
+                SubAgentToolHelper.serializeResult(taskNode, record.storedResult(), mapper);
             } else {
                 taskNode.put("delivery", record.isDetached() ? "RESUME_SESSION" : "PENDING");
             }
@@ -399,12 +305,15 @@ public class AwaitSubAgentsTool implements Tool {
         result.set("deferred", deferredArray);
 
         // Message
-        if (waitTimedOut && onTimeout.equals("RESUME_SESSION")) {
-            result.put("message", pending.size() + " task(s) still running. Results will be delivered via session resume when complete.");
-        } else if (waitTimedOut && onTimeout.equals("RETURN_PENDING")) {
-            result.put("message", pending.size() + " task(s) still running. Use get_subagents to check status.");
-        } else if (waitTimedOut && onTimeout.equals("CANCEL")) {
-            result.put("message", pending.size() + " task(s) were cancelled due to timeout.");
+        if (waitTimedOut) {
+            switch (onTimeout) {
+                case "RESUME_SESSION" -> result.put("message",
+                        pending.size() + " task(s) still running. Results will be delivered via session resume when complete.");
+                case "RETURN_PENDING" -> result.put("message",
+                        pending.size() + " task(s) still running. Use get_subagents to check status.");
+                case "CANCEL" -> result.put("message",
+                        pending.size() + " task(s) were cancelled due to timeout.");
+            }
         }
     }
 }

@@ -4,8 +4,11 @@ import com.harness.ai.model.ChatModelProvider;
 import com.harness.ai.model.VisionModelProvider;
 import com.harness.ai.model.VoiceModelProvider;
 import com.harness.ai.react.ReActEngine;
+import com.harness.audit.TraceCollector;
+import com.harness.audit.store.TraceStore;
 import com.harness.core.model.AgentTrace;
 import com.harness.core.model.CancellationToken;
+import com.harness.core.model.RiskLevel;
 import com.harness.env.EnvConfig;
 import com.harness.env.EnvKey;
 import com.harness.tool.FilteredToolRegistry;
@@ -41,6 +44,7 @@ public class SubAgentManager {
     private final VoiceModelProvider voiceModelProvider;
     private final ToolRegistry toolRegistry;
     private final ToolExecutor toolExecutor;
+    private final TraceStore traceStore;
 
     // Session resume support
     private final SessionInbox sessionInbox;
@@ -69,6 +73,7 @@ public class SubAgentManager {
                            VoiceModelProvider voiceModelProvider,
                            ToolRegistry toolRegistry,
                            ToolExecutor toolExecutor,
+                           TraceStore traceStore,
                            SessionInbox sessionInbox,
                            SessionResumeDispatcher resumeDispatcher) {
         this.chatModelProvider = chatModelProvider;
@@ -76,6 +81,7 @@ public class SubAgentManager {
         this.voiceModelProvider = voiceModelProvider;
         this.toolRegistry = toolRegistry;
         this.toolExecutor = toolExecutor;
+        this.traceStore = traceStore;
         this.sessionInbox = sessionInbox;
         this.resumeDispatcher = resumeDispatcher;
 
@@ -242,8 +248,10 @@ public class SubAgentManager {
             log.debug("[SubAgentManager] Executing task: id={}, activeTasks={}", taskId, activeTasks.get());
 
             try {
-                // Build task-specific tool registry: only tools the task needs + auto-exclude orchestration tools
-                ToolRegistry subAgentToolRegistry = FilteredToolRegistry.forTask(toolRegistry, record.task().tools());
+                // Build task-specific tool registry: whitelist if specified, no tools if not
+                ToolRegistry subAgentToolRegistry = record.task().tools().isEmpty()
+                        ? FilteredToolRegistry.forNoTools(toolRegistry)
+                        : FilteredToolRegistry.forTask(toolRegistry, record.task().tools());
 
                 // Each sub-agent gets its own ReActEngine with task-specific tools
                 ReActEngine engine = new ReActEngine(chatModelProvider, subAgentToolRegistry, toolExecutor,
@@ -260,7 +268,10 @@ public class SubAgentManager {
                 long duration = System.currentTimeMillis() - start;
                 log.info("[SubAgentManager] Task {} completed in {}ms, steps={}", taskId, duration, result.steps().size());
 
-                SubAgentResult subResult = SubAgentResult.success(taskId, result.output(), result.steps(), duration);
+                // Persist sub-agent trace and record steps in parent trace
+                String subTraceId = saveSubAgentTrace(traceBuilder, record, runContext, result, duration);
+
+                SubAgentResult subResult = SubAgentResult.success(taskId, result.output(), result.steps(), duration, subTraceId);
                 record.succeed(subResult);
                 return subResult;
 
@@ -408,6 +419,51 @@ public class SubAgentManager {
         sb.append("[Task]\n").append(task.description()).append("\n");
 
         return sb.toString();
+    }
+
+    /**
+     * Persist sub-agent trace to TraceStore.
+     * Records input, steps, output, and links to parent via metadata.
+     *
+     * @return the sub-agent's trace ID, or null if persistence failed
+     */
+    private String saveSubAgentTrace(AgentTrace.Builder traceBuilder, SubAgentTaskRecord record,
+                                     AgentRunContext runContext, ReActEngine.ReActResult result, long durationMs) {
+        if (traceStore == null) return null;
+        try {
+            traceBuilder
+                    .sessionId(runContext.sessionId())
+                    .inputText(record.task().description())
+                    .llmModel(chatModelProvider.modelName())
+                    .promptVersion("sub-agent")
+                    .steps(result.steps())
+                    .finalOutput(result.output())
+                    .riskLevel(result.steps().stream()
+                            .flatMap(s -> s.toolResults().stream())
+                            .anyMatch(r -> !r.success()) ? RiskLevel.MEDIUM : RiskLevel.LOW)
+                    .totalDurationMs(durationMs);
+
+            // Link to parent trace via metadata
+            java.util.Map<String, String> meta = new java.util.HashMap<>(traceBuilder.build().metadata());
+            meta.put("sub_agent_task_id", record.taskId());
+            meta.put("parent_run_id", runContext.runId());
+            if (runContext.parentTraceId() != null) {
+                meta.put("parent_trace_id", runContext.parentTraceId());
+            }
+            meta.put("sub_agent_persona", record.task().persona() != null ? record.task().persona() : "");
+            meta.put("sub_agent_tools", String.join(",", record.task().tools()));
+            traceBuilder.metadata(meta);
+
+            AgentTrace subTrace = traceBuilder.build();
+            traceStore.save(subTrace);
+            log.info("[SubAgentManager] Sub-agent trace saved: taskId={}, traceId={}, steps={}",
+                    record.taskId(), subTrace.traceId(), subTrace.steps().size());
+            return subTrace.traceId();
+        } catch (Exception e) {
+            log.warn("[SubAgentManager] Failed to save sub-agent trace for task {}: {}",
+                    record.taskId(), e.getMessage());
+            return null;
+        }
     }
 
     /**

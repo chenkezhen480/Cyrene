@@ -81,14 +81,33 @@ public class TraceCollector {
      * Called after the ReAct loop completes, before finish().
      */
     public void recordReactStats(String outcome, int rounds, int toolCalls, int reflectionChecks) {
+        recordReactStats(outcome, rounds, toolCalls, reflectionChecks, 0, 0, 0, 0);
+    }
+
+    /**
+     * Record ReAct loop quality signals with full metrics.
+     */
+    public void recordReactStats(String outcome, int rounds, int toolCalls, int reflectionChecks,
+                                  long inputTokens, long outputTokens, int llmCalls, int toolRetries) {
         java.util.Map<String, String> meta = new java.util.HashMap<>(builder.build().metadata());
         meta.put("react_outcome", outcome);
         meta.put("react_rounds", String.valueOf(rounds));
         meta.put("react_tool_calls", String.valueOf(toolCalls));
         meta.put("react_reflection_checks", String.valueOf(reflectionChecks));
         meta.put("react_reflection_flagged_offtrack", "false"); // placeholder: future LLM-based offtrack detection
+        if (inputTokens > 0 || outputTokens > 0) {
+            meta.put("react_input_tokens", String.valueOf(inputTokens));
+            meta.put("react_output_tokens", String.valueOf(outputTokens));
+        }
+        if (llmCalls > 0) {
+            meta.put("react_llm_calls", String.valueOf(llmCalls));
+        }
+        if (toolRetries > 0) {
+            meta.put("react_tool_retries", String.valueOf(toolRetries));
+        }
         builder.metadata(meta);
-        log.debug("[L5-Trace] React stats recorded: outcome={}, rounds={}, tools={}", outcome, rounds, toolCalls);
+        log.debug("[L5-Trace] React stats recorded: outcome={}, rounds={}, tools={}, llmCalls={}, inTok={}, outTok={}, retries={}",
+                outcome, rounds, toolCalls, llmCalls, inputTokens, outputTokens, toolRetries);
     }
 
     // ==================== Persist ====================

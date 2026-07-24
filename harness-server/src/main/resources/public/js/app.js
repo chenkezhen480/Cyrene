@@ -583,13 +583,20 @@ const ChatPage = {
                     }
                     if (parsed.text) messages.value[msgIdx].content += parsed.text;
                     break;
+                  case 'tool_call_created':
+                    messages.value[msgIdx].toolCalls.push({ name: parsed.toolName, status: 'queued' });
+                    break;
                   case 'tool_call_start':
-                    messages.value[msgIdx].toolCalls.push({ name: parsed.toolName, status: 'pending' });
+                    {
+                      const tc = messages.value[msgIdx].toolCalls;
+                      const queued = tc.findLast(t => t.name === parsed.toolName && t.status === 'queued');
+                      if (queued) queued.status = 'running';
+                    }
                     break;
                   case 'tool_call_done':
                     {
                       const tc = messages.value[msgIdx].toolCalls;
-                      const last = tc.findLast(t => t.name === parsed.toolName && t.status === 'pending');
+                      const last = tc.findLast(t => t.name === parsed.toolName && (t.status === 'pending' || t.status === 'running' || t.status === 'queued'));
                       if (last) last.status = parsed.success ? 'success' : 'error';
                     }
                     break;
@@ -758,10 +765,11 @@ const ChatPage = {
                   <!-- Tool calls inside the bubble -->
                   <div v-if="msg.toolCalls && msg.toolCalls.length" class="tool-calls-section">
                     <div v-for="(tc, ti) in msg.toolCalls" :key="ti"
-                         :class="['tool-call-block', tc.status === 'pending' ? 'tool-call-running' : '']">
+                         :class="['tool-call-block', tc.status === 'queued' || tc.status === 'running' ? 'tool-call-running' : '']">
                       <div class="tool-call-header">
                         <span class="tool-call-name"><span v-html="Icons.tool" class="tool-call-icon"></span>{{ tc.name }}</span>
-                        <span v-if="tc.status === 'pending'" class="tool-call-status tool-call-pending">⏳</span>
+                        <span v-if="tc.status === 'queued'" class="tool-call-status tool-call-pending">⏳</span>
+                        <span v-else-if="tc.status === 'running'" class="tool-call-status tool-call-pending">⏳</span>
                         <span v-else-if="tc.status === 'success'" class="tool-call-status tool-call-success">✅</span>
                         <span v-else class="tool-call-status tool-call-error">❌</span>
                       </div>

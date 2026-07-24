@@ -40,6 +40,10 @@ public class RedisSessionMessageCache implements SessionMessageCache {
 
     private Consumer<String> onEvict;
 
+    // Debounce: skip enforcePerUserLimits if recently enforced for the same user
+    private volatile String lastEnforcedUserId;
+    private volatile long lastEnforcedTime;
+
     public RedisSessionMessageCache() {
         EnvConfig cfg = EnvConfig.get();
         this.prefix = cfg.getString(EnvKey.MEMORY_REDIS_KEY_PREFIX, "harness");
@@ -249,6 +253,12 @@ public class RedisSessionMessageCache implements SessionMessageCache {
     }
 
     private void enforcePerUserLimits(Jedis jedis, String userId) {
+        // Debounce: skip if enforced within 1 second for the same user (batch appends trigger redundant checks)
+        long now = System.currentTimeMillis();
+        if (userId.equals(lastEnforcedUserId) && (now - lastEnforcedTime) < 1000) {
+            return;
+        }
+
         // Session count limit
         long sessionCount = jedis.scard(userSessionsKey(userId));
         while (sessionCount > maxSessionsPerUser) {
@@ -272,6 +282,9 @@ public class RedisSessionMessageCache implements SessionMessageCache {
             userBytesStr = jedis.get(userBytesKey(userId));
             userBytes = userBytesStr != null ? Long.parseLong(userBytesStr) : 0;
         }
+
+        lastEnforcedUserId = userId;
+        lastEnforcedTime = now;
     }
 
     private void enforceGlobalMemoryLimit(Jedis jedis) {

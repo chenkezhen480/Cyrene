@@ -61,6 +61,16 @@ public class FilteredToolRegistry extends ToolRegistry {
         return new FilteredToolRegistry(delegate, excluded);
     }
 
+    /**
+     * Create a registry with NO tools (all excluded).
+     * Used when spawn_subagent doesn't specify a tool whitelist — sub-agent is text-only.
+     */
+    public static FilteredToolRegistry forNoTools(ToolRegistry delegate) {
+        Set<String> allToolNames = ConcurrentHashMap.newKeySet();
+        delegate.getAll().forEach(spec -> allToolNames.add(spec.name()));
+        return new FilteredToolRegistry(delegate, allToolNames);
+    }
+
     @Override
     public void register(Tool tool) {
         // Sub-agents shouldn't register new tools

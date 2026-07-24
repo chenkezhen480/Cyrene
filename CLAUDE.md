@@ -44,7 +44,7 @@ harness-core       ← models (AgentMessage, AgentTrace, ReActStep, ToolSpec, et
 ├── harness-tool        ← Tool interface, ToolRegistry, ToolExecutor, MCP adapter, built-in tools
 ├── harness-audit       ← TraceCollector + TraceStore (sqlite/mysql/file/none)
 └── harness-ai          ← LangChain4j, 7 model types, ModelProviderFactory, ReActEngine
-harness-agent      ← AgentOrchestrator, SubAgentOrchestrator, ProjectDiscoveryService
+harness-agent      ← AgentOrchestrator, SubAgentManager, ProjectDiscoveryService
 harness-server     ← HTTP API (Javalin) + Web UI (static resources)
 ```
 
@@ -74,7 +74,7 @@ Cross-module deps: `harness-ai` → `harness-tool`; `harness-input`/`harness-pre
 - **ReAct Reflection** — Periodic reflection prompts every `HARNESS_REACT_REFLECTION_INTERVAL` (default 3) iterations. Loop detection at `HARNESS_REACT_LOOP_DETECTION_THRESHOLD` (default 3) consecutive identical calls.
 - **GapAnalyzer** — 3-tier routing funnel for `needsThinking`/`needsKnowledgeBase`/`needsWebSearch`. Tier 0: explicit (AgentContext) → Tier 1: rule engine (regex/keywords, <1ms) → Tier 2: LLM classification (ClassifierModelProvider). `HARNESS_GAP_ANALYSIS_ENABLED` (default `true`). Tier 2 failure degrades to env defaults. `needsWebSearch=true` injects a system prompt constraint forcing the LLM to call `web_search` before answering. `needsKnowledgeBase=true` injects a constraint forcing the LLM to call `knowledge_base_search` first.
 - **Streaming** — `AgentOrchestrator.streamRun()` via `StreamCallback` pushing `StreamEvent` (START/TOKEN/STEP/TOOL_CALL_START/COMPRESS/ARTIFACT/DONE/CANCELLED/ERROR). `CancellationToken` supports polling + thread interrupt.
-- **Sub-Agent** — `SubAgentOrchestrator` manages lifecycle with dependency resolution + parallel execution. LLM spawns via `spawn_subagent` tool. `HARNESS_AGENT_MAX_SUBAGENTS` (default 3).
+- **Sub-Agent** — `SubAgentManager` manages lifecycle with per-run isolation (`SubAgentRunScope`). LLM spawns via `spawn_subagent` tool (persona, system_prompt, context, optional tools whitelist). Results delivered inline via `await_subagents` (shared 120s deadline) or auto-resume session on timeout. CAS-based delivery state prevents duplicate delivery. `HARNESS_AGENT_MAX_SUBAGENTS` (default 3), `HARNESS_AGENT_AWAIT_TIMEOUT_SECONDS` (default 120).
 - **Web Search** — `WebSearchTool` backed by self-hosted SearXNG (aggregates 70+ search engines, no API key). Endpoint via `HARNESS_TOOL_WEB_SEARCH_SEARXNG_URL`. `needsWebSearch=true` from GapAnalyzer forces the LLM to call `web_search` before answering (system prompt injection).
 - **MCP Discovery** — `McpToolDiscovery` via JSON-RPC `tools/list`. Config: `HARNESS_MCP_CONFIG_FILE` (JSON). No config file → MCP disabled with info log.
 - **Retry & Robustness** — 6 layers: Tool (single attempt, error→LLM adjusts), LLM API (`RetryingChatModel`, exponential backoff 1s→2s→4s, max 3), MCP reconnect (1 retry), message write (3 retries → sync → dead letter queue), refinement stuck recovery (CAS reset), knowledge batch rollback (pgvector transaction, Milvus batch insert).
@@ -191,9 +191,15 @@ Formats: TXT, MD, CSV, JSON, XML (PlainTextExtractor), PDF (PDFBox), DOCX/XLSX (
 Key classes: `TextExtractor` + `TextExtractorRegistry`, `TextChunker`, `KnowledgeIngestService`, `FileStorageService`, `KnowledgeUploadHandler`, `KnowledgeManagementHandler`.
 
 ### Sub-Agent (harness-agent)
-`SubAgentOrchestrator` — task submission, dependency resolution, parallel execution. LLM spawns via `spawn_subagent`. Each sub-agent: independent ReActEngine, shared ToolRegistry.
+`SubAgentManager` — per-run scoped task management. LLM spawns via `spawn_subagent` with persona, system_prompt, context (compressed history), and optional tools whitelist. Each sub-agent: independent ReActEngine + filtered ToolRegistry (`FilteredToolRegistry.forTask()` or `.forNoTools()`). Results delivered inline via `await_subagents` or auto-resume session via `SessionInbox` + `SessionResumeDispatcher` on timeout.
 
-Key classes: `SubAgentOrchestrator`, `SubAgentTask`, `SubAgentResult`, `SpawnSubAgentTool`, `MultiAgentOrchestrator`.
+**Key design:**
+- Per-run scope isolation (`SubAgentRunScope` keyed by runId, not sessionId)
+- CAS-based state transitions (`SubAgentStatus`, `ResultDeliveryState`)
+- 120s shared await deadline (not per-task)
+- `SubAgentToolHelper` — shared parsing/validation for all sub-agent tools
+
+Key classes: `SubAgentManager`, `SubAgentRunScope`, `SubAgentTaskRecord`, `SubAgentTask`, `SubAgentResult`, `SpawnSubAgentTool`, `AwaitSubAgentsTool`, `GetSubAgentsTool`, `CancelSubAgentsTool`, `SubAgentToolHelper`, `FilteredToolRegistry`, `SessionInbox`, `SessionResumeDispatcher`.
 
 ### Skill Loading (harness-tool + harness-agent)
 Markdown + YAML frontmatter. Two-phase: startup scan (name+description index) → on-demand full load via `load_skill` tool.
@@ -263,7 +269,7 @@ Same pattern for Vision/Voice/Embedding/Rerank/Classifier.
 | GET | `/api/artifacts/{id}` | Download artifact |
 | GET | `/api/artifacts/{id}/preview` | Inline preview |
 
-**SSE events (streaming):** `start` (sessionId), `token` (partial text), `step` (ReAct step), `tool_call_start` (tool name + args), `artifact` (media), `done` (final), `cancelled` (user cancel, keeps partial), `error`.
+**SSE events (streaming):** `start` (sessionId), `token` (partial text), `step` (ReAct step), `tool_call_created` (tool queued, name + args), `tool_call_start` (tool executing), `tool_call_done` (tool result), `artifact` (media), `done` (final), `cancelled` (user cancel, keeps partial), `error`.
 
 **Cancellation:** `CancellableHttpClient` (ServiceLoader) wraps JDK HttpClient for SSE cancel. `CancellationToken` registered in `ChatHandler`. Tools with `CancellableTool` interface auto-register/unregister during execution.
 

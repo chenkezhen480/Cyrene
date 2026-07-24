@@ -11,7 +11,6 @@ import com.harness.tool.Tool;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -52,24 +51,14 @@ public class CancelSubAgentsTool implements Tool {
 
     @Override
     public String execute(JsonNode arguments) {
-        AgentRunContext runContext = SpawnSubAgentTool.getCurrentRunContext();
-        if (runContext == null) {
-            throw new ToolExecutionException("cancel_subagents", "No active run context.");
-        }
+        AgentRunContext runContext = SubAgentToolHelper.requireRunContext("cancel_subagents");
 
-        // Parse task IDs
-        List<String> taskIds = new ArrayList<>();
-        if (arguments.has("task_ids") && arguments.get("task_ids").isArray()) {
-            arguments.get("task_ids").forEach(node -> taskIds.add(node.asText()));
-        }
+        List<String> taskIds = SubAgentToolHelper.parseTaskIds(arguments);
         if (taskIds.isEmpty()) {
             throw new ToolExecutionException("cancel_subagents", "Missing required parameter: task_ids");
         }
 
-        SubAgentRunScope scope = subAgentManager.getScope(runContext.runId());
-        if (scope == null) {
-            throw new ToolExecutionException("cancel_subagents", "No scope found for run " + runContext.runId());
-        }
+        SubAgentRunScope scope = SubAgentToolHelper.requireScope(subAgentManager, runContext, "cancel_subagents");
 
         try {
             ObjectNode result = mapper.createObjectNode();
@@ -83,14 +72,11 @@ public class CancelSubAgentsTool implements Tool {
                     notFound.add(taskId);
                 } else if (record.isTerminal()) {
                     alreadyCompleted.add(taskId);
+                } else if (record.requestCancel()) {
+                    cancelled.add(taskId);
+                    log.info("[CancelSubAgents] Cancel requested for task {}", taskId);
                 } else {
-                    if (record.requestCancel()) {
-                        cancelled.add(taskId);
-                        log.info("[CancelSubAgents] Cancel requested for task {}", taskId);
-                    } else {
-                        // Race condition: task became terminal between checks
-                        alreadyCompleted.add(taskId);
-                    }
+                    alreadyCompleted.add(taskId);
                 }
             }
 

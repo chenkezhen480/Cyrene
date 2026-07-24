@@ -11,7 +11,6 @@ import com.harness.tool.Tool;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -51,34 +50,18 @@ public class GetSubAgentsTool implements Tool {
 
     @Override
     public String execute(JsonNode arguments) {
-        AgentRunContext runContext = SpawnSubAgentTool.getCurrentRunContext();
-        if (runContext == null) {
-            throw new ToolExecutionException("get_subagents", "No active run context.");
-        }
+        AgentRunContext runContext = SubAgentToolHelper.requireRunContext("get_subagents");
+        SubAgentRunScope scope = SubAgentToolHelper.requireScope(subAgentManager, runContext, "get_subagents");
 
-        SubAgentRunScope scope = subAgentManager.getScope(runContext.runId());
-        if (scope == null) {
-            throw new ToolExecutionException("get_subagents", "No scope found for run " + runContext.runId());
-        }
-
-        // Parse task IDs (optional)
-        List<String> taskIds = new ArrayList<>();
-        if (arguments.has("task_ids") && arguments.get("task_ids").isArray()) {
-            arguments.get("task_ids").forEach(node -> taskIds.add(node.asText()));
-        }
+        List<String> taskIds = SubAgentToolHelper.parseTaskIds(arguments);
 
         try {
             ObjectNode result = mapper.createObjectNode();
             ArrayNode tasksArray = mapper.createArrayNode();
 
-            Map<String, SubAgentTaskRecord> tasks;
-            if (taskIds.isEmpty()) {
-                // Get all tasks
-                tasks = scope.getAllTasks();
-            } else {
-                // Get specified tasks
-                tasks = scope.getTasks(taskIds);
-            }
+            Map<String, SubAgentTaskRecord> tasks = taskIds.isEmpty()
+                    ? scope.getAllTasks()
+                    : scope.getTasks(taskIds);
 
             for (Map.Entry<String, SubAgentTaskRecord> entry : tasks.entrySet()) {
                 SubAgentTaskRecord record = entry.getValue();
@@ -87,18 +70,11 @@ public class GetSubAgentsTool implements Tool {
                 taskNode.put("status", record.status().get().name());
                 taskNode.put("created_at", record.createdAt().toString());
 
-                // Add result if terminal
                 if (record.isTerminal()) {
                     SubAgentResult subResult = record.completion().join();
                     ObjectNode resultNode = taskNode.putObject("result");
                     resultNode.put("success", subResult.success());
-                    if (subResult.success()) {
-                        resultNode.put("output", subResult.output());
-                        resultNode.put("steps", subResult.steps().size());
-                        resultNode.put("duration_ms", subResult.durationMs());
-                    } else {
-                        resultNode.put("error", subResult.output());
-                    }
+                    SubAgentToolHelper.serializeResult(resultNode, subResult, mapper);
                 }
 
                 tasksArray.add(taskNode);

@@ -12,13 +12,18 @@ public record SubAgentResult(
         String output,
         boolean success,
         List<ReActStep> steps,
-        long durationMs
+        long durationMs,
+        String traceId
 ) {
     public static SubAgentResult success(String taskId, String output, List<ReActStep> steps, long durationMs) {
-        return new SubAgentResult(taskId, output, true, steps, durationMs);
+        return new SubAgentResult(taskId, output, true, steps, durationMs, null);
+    }
+
+    public static SubAgentResult success(String taskId, String output, List<ReActStep> steps, long durationMs, String traceId) {
+        return new SubAgentResult(taskId, output, true, steps, durationMs, traceId);
     }
 
     public static SubAgentResult failure(String taskId, String error, List<ReActStep> steps, long durationMs) {
-        return new SubAgentResult(taskId, error, false, steps, durationMs);
+        return new SubAgentResult(taskId, error, false, steps, durationMs, null);
     }
 }

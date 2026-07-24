@@ -40,10 +40,15 @@ public class SessionInbox {
 
     /**
      * Submit a sub-agent completion event to the session inbox.
+     * Uses compute() for atomicity — no concurrent drain() can lose the event.
      */
     public void submit(SubAgentCompletedEvent event) {
         String sessionId = event.sessionId();
-        inboxes.computeIfAbsent(sessionId, k -> new CopyOnWriteArrayList<>()).add(event);
+        inboxes.compute(sessionId, (key, list) -> {
+            if (list == null) list = new CopyOnWriteArrayList<>();
+            list.add(event);
+            return list;
+        });
         log.debug("[SessionInbox] Event submitted: sessionId={}, taskId={}, eventId={}",
                 sessionId, event.taskId(), event.eventId());
     }
