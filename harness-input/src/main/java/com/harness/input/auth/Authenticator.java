@@ -18,7 +18,7 @@ public class Authenticator {
     public Authenticator() {
         this.mode = EnvConfig.get().getString(EnvKey.AUTH_MODE, "none");
         this.jwtUtil = "jwt".equals(mode) ? new JwtUtil() : null;
-        log.info("[L1-Auth] Initialized: mode={}", mode);
+//        log.info("[L1-Auth] Initialized: mode={}", mode);
         if ("none".equals(mode)) {
             log.warn("[L1-Auth] Auth disabled (mode=none), all requests will be anonymous");
         }
