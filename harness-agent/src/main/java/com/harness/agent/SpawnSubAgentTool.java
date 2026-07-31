@@ -21,7 +21,7 @@ import java.util.List;
  * - persona: specific role/identity for the sub-agent
  * - system_prompt: task-specific system instructions
  * - context: relevant context (summarized/compressed)
- * - tools: (optional) list of tool names the sub-agent needs; defaults to all available tools
+ * - tools: (optional) list of tool names the sub-agent needs; defaults to no tools
  */
 public class SpawnSubAgentTool implements Tool {
 
@@ -143,7 +143,7 @@ public class SpawnSubAgentTool implements Tool {
             throw new ToolExecutionException("spawn_subagent", "Missing required parameter: task_description");
         }
 
-        // Parse tool list (optional — empty means "all available tools")
+        // Parse tool list (optional — empty means no tools)
         List<String> tools = new ArrayList<>();
         if (arguments.has("tools") && arguments.get("tools").isArray()) {
             arguments.get("tools").forEach(node -> tools.add(node.asText()));

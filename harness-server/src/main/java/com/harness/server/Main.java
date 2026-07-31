@@ -9,7 +9,11 @@ import com.harness.core.model.AgentTrace;
 import com.harness.core.model.CancellationToken;
 import com.harness.env.EnvConfig;
 import com.harness.env.EnvKey;
+import com.harness.graph.build.GraphBuildService;
+import com.harness.graph.build.GraphDataConverterRegistry;
 import com.harness.preprocess.knowledge.KnowledgeIngestService;
+import com.harness.server.api.ApiErrorCode;
+import com.harness.server.api.ApiResponses;
 import com.harness.server.log.LogStorageService;
 import io.javalin.Javalin;
 import org.eclipse.jetty.util.thread.QueuedThreadPool;
@@ -163,9 +167,57 @@ public class Main {
         app.delete("/api/knowledge/{collection}", knowledgeMgmtHandler::deleteCollection);
         app.delete("/api/knowledge/{collection}/{documentId}", knowledgeMgmtHandler::deleteDocument);
 
+        // Structured knowledge graph endpoints (independent from vector RAG)
+        GraphRequestExecutor graphRequestExecutor =
+                new GraphRequestExecutor(new GraphRequestAuthenticator());
+        GraphManagementHandler graphHandler = new GraphManagementHandler(
+                agent.knowledgeGraphStore(),
+                agent.graphSchemaRegistry(),
+                agent.graphSettings(),
+                graphRequestExecutor
+        );
+        GraphBuildService graphBuildService = new GraphBuildService(
+                agent.knowledgeGraphStore(),
+                GraphDataConverterRegistry.withDefaults(mapper)
+        );
+        GraphBuildHandler graphBuildHandler =
+                new GraphBuildHandler(graphBuildService, graphRequestExecutor);
+        GraphSchemaManagementHandler graphSchemaHandler = new GraphSchemaManagementHandler(
+                agent.graphSchemaManagementService(),
+                agent.graphSettings(),
+                graphRequestExecutor
+        );
+        app.get("/api/graph/status", graphHandler::status);
+        app.get("/api/graph/graphs", graphHandler::listGraphSpaces);
+        app.get("/api/graph/schemas", graphHandler::listSchemas);
+        app.get("/api/graph/schemas/{schemaId}", graphHandler::getSchema);
+        app.get("/api/graph/schema-configs", graphSchemaHandler::list);
+        app.get("/api/graph/schema-configs/{schemaId}", graphSchemaHandler::get);
+        app.post("/api/graph/schema-configs", graphSchemaHandler::create);
+        app.put("/api/graph/schema-configs/{schemaId}", graphSchemaHandler::update);
+        app.post("/api/graph/schema-configs/{schemaId}/enable", graphSchemaHandler::enable);
+        app.post("/api/graph/schema-configs/{schemaId}/disable", graphSchemaHandler::disable);
+        app.delete("/api/graph/schema-configs/{schemaId}", graphSchemaHandler::delete);
+        app.post("/api/graph/build", graphBuildHandler::build);
+        app.post("/api/graph/mutations", graphHandler::mutate);
+        app.post("/api/graph/nodes/batch", graphHandler::upsertNodes);
+        app.get("/api/graph/nodes", graphHandler::listNodes);
+        app.get("/api/graph/nodes/{nodeId}", graphHandler::getNode);
+        app.delete("/api/graph/nodes/{nodeId}", graphHandler::deleteNode);
+        app.post("/api/graph/relations/batch", graphHandler::upsertRelations);
+        app.get("/api/graph/relations", graphHandler::listRelations);
+        app.delete("/api/graph/relations/{relationId}", graphHandler::deleteRelation);
+        app.delete("/api/graph/sources/{sourceId}", graphHandler::deleteSource);
+        app.post("/api/graph/query", graphHandler::query);
+
         // Chat endpoint (SSE streaming)
         ChatHandler chatHandler = new ChatHandler(agent, activeRequests);
         app.post("/api/chat", chatHandler::handle);
+
+        ConfirmationHandler confirmationHandler =
+                new ConfirmationHandler(agent.confirmationManager());
+        app.post("/api/confirmations/{requestId}/approve", confirmationHandler::approve);
+        app.post("/api/confirmations/{requestId}/reject", confirmationHandler::reject);
 
         // Global exception handler: format framework-level errors (e.g. body too large) as SSE for chat
         app.exception(io.javalin.http.HttpResponseException.class, (e, ctx) -> {
@@ -173,13 +225,17 @@ public class Main {
             if (accept != null && accept.contains("text/event-stream")) {
                 ctx.contentType("text/event-stream");
                 try {
-                    ctx.result("event: error\ndata: " + new ObjectMapper()
+                    ctx.result("event: error\ndata: " + mapper
                             .writeValueAsString(Map.of("error", e.getMessage())) + "\n\n");
                 } catch (JsonProcessingException ex) {
                     throw new RuntimeException(ex);
                 }
             } else {
-                ctx.status(e.getStatus()).json(Map.of("error", e.getMessage()));
+                ApiResponses.error(
+                        ctx,
+                        e.getStatus(),
+                        ApiErrorCode.fromHttpStatus(e.getStatus()),
+                        e.getMessage());
             }
         });
 
@@ -197,7 +253,8 @@ public class Main {
             String sessionId = ctx.pathParam("sessionId");
             CancellationToken token = activeRequests.get(sessionId);
             if (token == null) {
-                ctx.status(404).json(Map.of("error", "No active request found for session: " + sessionId));
+                ApiResponses.error(ctx, 404, ApiErrorCode.NOT_FOUND,
+                        "No active request found for session: " + sessionId);
                 return;
             }
             token.cancel();
@@ -212,7 +269,8 @@ public class Main {
             if (trace.isPresent()) {
                 ctx.json(trace.get());
             } else {
-                ctx.status(404).json(Map.of("error", "Trace not found: " + traceId));
+                ApiResponses.error(
+                        ctx, 404, ApiErrorCode.NOT_FOUND, "Trace not found: " + traceId);
             }
         });
 
@@ -224,7 +282,8 @@ public class Main {
                 try {
                     limit = Integer.parseInt(limitParam);
                 } catch (NumberFormatException e) {
-                    ctx.status(400).json(Map.of("error", "Invalid limit parameter: " + limitParam));
+                    ApiResponses.error(ctx, 400, ApiErrorCode.INVALID_REQUEST,
+                            "Invalid limit parameter: " + limitParam);
                     return;
                 }
             }
@@ -251,7 +310,8 @@ public class Main {
             if (deleted) {
                 ctx.json(Map.of("status", "deleted", "traceId", traceId));
             } else {
-                ctx.status(404).json(Map.of("error", "Trace not found: " + traceId));
+                ApiResponses.error(
+                        ctx, 404, ApiErrorCode.NOT_FOUND, "Trace not found: " + traceId);
             }
         });
 

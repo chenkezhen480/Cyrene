@@ -3,6 +3,7 @@ package com.harness.tool;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.harness.core.exception.ToolExecutionException;
 import com.harness.core.model.ApiEndpoint;
 import com.harness.core.model.ProjectApiConfig;
 import com.harness.core.model.ToolResult;
@@ -78,6 +79,10 @@ public class CallDiscoveredApiTool implements Tool {
         if (target == null) {
             ToolResult.setCurrentStatus(ToolResult.ResultStatus.EMPTY);
             return "Error: Endpoint '" + endpointId + "' not found. Call list_api_endpoints() to see available endpoints.";
+        }
+        if (!ProjectApiPolicy.isCallable(target)) {
+            throw new ToolExecutionException("call_discovered_api",
+                    ProjectApiPolicy.rejectionReason(target));
         }
 
         // Resolve baseUrl: endpoint-level overrides global config-level

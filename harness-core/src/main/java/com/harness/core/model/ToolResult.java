@@ -27,7 +27,15 @@ public record ToolResult(
         LOW_RELEVANCE,
         /** Tool found no results but has auto-escalated its strategy (e.g. rewrite → multi-query).
          *  Reflector should NOT count this as failure — the tool is still actively trying. */
-        ESCALATING
+        ESCALATING,
+        /** Tool execution was blocked until an explicit confirmation policy allows it. */
+        CONFIRMATION_REQUIRED,
+        /** User explicitly rejected the pending tool execution. */
+        CONFIRMATION_REJECTED,
+        /** The pending confirmation expired before the user decided. */
+        CONFIRMATION_EXPIRED,
+        /** The enclosing request was cancelled while waiting for confirmation. */
+        CONFIRMATION_CANCELLED
     }
 
     // --- ThreadLocal for tools to communicate status without changing Tool.execute() signature ---
@@ -52,6 +60,13 @@ public record ToolResult(
         return s;
     }
 
+    /**
+     * Clear any status left by a failed tool execution.
+     */
+    public static void clearCurrentStatus() {
+        CURRENT_STATUS.remove();
+    }
+
     // --- Factory methods ---
 
     public static ToolResult ok(String toolCallId, String toolName, String output, long durationMs) {
@@ -64,5 +79,25 @@ public record ToolResult(
 
     public static ToolResult fail(String toolCallId, String toolName, String error, long durationMs) {
         return new ToolResult(toolCallId, toolName, false, null, error, durationMs, null);
+    }
+
+    public static ToolResult confirmationRequired(String toolCallId, String toolName, String message) {
+        return new ToolResult(toolCallId, toolName, false, null, message, 0,
+                ResultStatus.CONFIRMATION_REQUIRED);
+    }
+
+    public static ToolResult confirmationRejected(String toolCallId, String toolName, String message) {
+        return new ToolResult(toolCallId, toolName, false, null, message, 0,
+                ResultStatus.CONFIRMATION_REJECTED);
+    }
+
+    public static ToolResult confirmationExpired(String toolCallId, String toolName, String message) {
+        return new ToolResult(toolCallId, toolName, false, null, message, 0,
+                ResultStatus.CONFIRMATION_EXPIRED);
+    }
+
+    public static ToolResult confirmationCancelled(String toolCallId, String toolName, String message) {
+        return new ToolResult(toolCallId, toolName, false, null, message, 0,
+                ResultStatus.CONFIRMATION_CANCELLED);
     }
 }

@@ -3,7 +3,6 @@ package com.harness.preprocess.rag;
 import com.harness.ai.model.EmbeddingModelProvider;
 import com.harness.env.EnvConfig;
 import com.harness.env.EnvKey;
-import com.harness.env.MilvusConnectionPool;
 import com.harness.env.PgConnectionPool;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

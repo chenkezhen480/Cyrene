@@ -2,6 +2,8 @@ package com.harness.server;
 
 import com.harness.core.model.Artifact;
 import com.harness.core.model.ArtifactStore;
+import com.harness.server.api.ApiErrorCode;
+import com.harness.server.api.ApiResponses;
 import io.javalin.http.Context;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -10,7 +12,6 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -32,7 +33,7 @@ public class ArtifactHandler {
         String id = ctx.pathParam("id");
         Optional<Artifact> artifactOpt = artifactStore.get(id);
         if (artifactOpt.isEmpty()) {
-            ctx.status(404).json(Map.of("error", "Artifact not found: " + id));
+            ApiResponses.error(ctx, 404, ApiErrorCode.NOT_FOUND, "Artifact not found: " + id);
             return;
         }
         Artifact artifact = artifactOpt.get();
@@ -46,7 +47,7 @@ public class ArtifactHandler {
         String id = ctx.pathParam("id");
         Optional<Artifact> artifactOpt = artifactStore.get(id);
         if (artifactOpt.isEmpty()) {
-            ctx.status(404).json(Map.of("error", "Artifact not found: " + id));
+            ApiResponses.error(ctx, 404, ApiErrorCode.NOT_FOUND, "Artifact not found: " + id);
             return;
         }
         Artifact artifact = artifactOpt.get();
@@ -65,7 +66,8 @@ public class ArtifactHandler {
         Path filePath = Path.of(artifact.filePath());
         if (!Files.exists(filePath)) {
             log.warn("Artifact file missing on disk: {}", artifact.filePath());
-            ctx.status(410).json(Map.of("error", "Artifact file no longer available"));
+            ApiResponses.error(
+                    ctx, 410, ApiErrorCode.NOT_FOUND, "Artifact file no longer available");
             return;
         }
 

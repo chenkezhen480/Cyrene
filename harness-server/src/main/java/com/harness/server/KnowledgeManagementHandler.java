@@ -2,6 +2,8 @@ package com.harness.server;
 
 import com.harness.preprocess.knowledge.FileStorageService;
 import com.harness.preprocess.rag.VectorStore;
+import com.harness.server.api.ApiErrorCode;
+import com.harness.server.api.ApiResponses;
 import io.javalin.http.Context;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -33,7 +35,8 @@ public class KnowledgeManagementHandler {
     public void listDocuments(Context ctx) {
         String collection = ctx.pathParam("collection");
         if (collection == null || collection.isBlank()) {
-            ctx.status(400).json(Map.of("error", "Collection name is required"));
+            ApiResponses.error(ctx, 400, ApiErrorCode.INVALID_REQUEST,
+                    "Collection name is required");
             return;
         }
 
@@ -46,7 +49,7 @@ public class KnowledgeManagementHandler {
             ));
         } catch (Exception e) {
             log.error("[Server] Failed to list documents for collection '{}': {}", collection, e.getMessage(), e);
-            ctx.status(500).json(Map.of("error", e.getMessage()));
+            ApiResponses.error(ctx, 500, ApiErrorCode.INTERNAL_ERROR, e.getMessage());
         }
     }
 
@@ -56,7 +59,8 @@ public class KnowledgeManagementHandler {
     public void deleteCollection(Context ctx) {
         String collection = ctx.pathParam("collection");
         if (collection == null || collection.isBlank()) {
-            ctx.status(400).json(Map.of("error", "Collection name is required"));
+            ApiResponses.error(ctx, 400, ApiErrorCode.INVALID_REQUEST,
+                    "Collection name is required");
             return;
         }
 
@@ -77,7 +81,7 @@ public class KnowledgeManagementHandler {
             ));
         } catch (Exception e) {
             log.error("[Server] Failed to delete collection '{}': {}", collection, e.getMessage(), e);
-            ctx.status(500).json(Map.of("error", e.getMessage()));
+            ApiResponses.error(ctx, 500, ApiErrorCode.INTERNAL_ERROR, e.getMessage());
         }
     }
 
@@ -87,7 +91,7 @@ public class KnowledgeManagementHandler {
     public void getDocument(Context ctx) {
         String documentId = ctx.pathParam("documentId");
         if (documentId == null || documentId.isBlank()) {
-            ctx.status(400).json(Map.of("error", "Document ID is required"));
+            ApiResponses.error(ctx, 400, ApiErrorCode.INVALID_REQUEST, "Document ID is required");
             return;
         }
 
@@ -96,11 +100,12 @@ public class KnowledgeManagementHandler {
             if (doc != null) {
                 ctx.json(doc);
             } else {
-                ctx.status(404).json(Map.of("error", "Document not found: " + documentId));
+                ApiResponses.error(
+                        ctx, 404, ApiErrorCode.NOT_FOUND, "Document not found: " + documentId);
             }
         } catch (Exception e) {
             log.error("[Server] Failed to get document '{}': {}", documentId, e.getMessage(), e);
-            ctx.status(500).json(Map.of("error", e.getMessage()));
+            ApiResponses.error(ctx, 500, ApiErrorCode.INTERNAL_ERROR, e.getMessage());
         }
     }
 
@@ -111,7 +116,7 @@ public class KnowledgeManagementHandler {
         String documentId = ctx.pathParam("documentId");
         String collection = ctx.pathParam("collection");
         if (documentId == null || documentId.isBlank()) {
-            ctx.status(400).json(Map.of("error", "Document ID is required"));
+            ApiResponses.error(ctx, 400, ApiErrorCode.INVALID_REQUEST, "Document ID is required");
             return;
         }
 
@@ -119,14 +124,15 @@ public class KnowledgeManagementHandler {
             var body = ctx.bodyAsClass(java.util.Map.class);
             String content = (String) body.get("content");
             if (content == null || content.isBlank()) {
-                ctx.status(400).json(Map.of("error", "Content is required"));
+                ApiResponses.error(ctx, 400, ApiErrorCode.INVALID_REQUEST, "Content is required");
                 return;
             }
 
             // Get existing doc to preserve metadata
             VectorStore.Document existing = vectorStore.fetchById(documentId);
             if (existing == null) {
-                ctx.status(404).json(Map.of("error", "Document not found: " + documentId));
+                ApiResponses.error(
+                        ctx, 404, ApiErrorCode.NOT_FOUND, "Document not found: " + documentId);
                 return;
             }
 
@@ -141,7 +147,7 @@ public class KnowledgeManagementHandler {
             ctx.json(Map.of("documentId", documentId, "updated", true));
         } catch (Exception e) {
             log.error("[Server] Failed to update document '{}': {}", documentId, e.getMessage(), e);
-            ctx.status(500).json(Map.of("error", e.getMessage()));
+            ApiResponses.error(ctx, 500, ApiErrorCode.INTERNAL_ERROR, e.getMessage());
         }
     }
 
@@ -152,7 +158,8 @@ public class KnowledgeManagementHandler {
         String collection = ctx.pathParam("collection");
         String documentId = ctx.pathParam("documentId");
         if (collection == null || collection.isBlank() || documentId == null || documentId.isBlank()) {
-            ctx.status(400).json(Map.of("error", "Collection name and document ID are required"));
+            ApiResponses.error(ctx, 400, ApiErrorCode.INVALID_REQUEST,
+                    "Collection name and document ID are required");
             return;
         }
 
@@ -166,15 +173,12 @@ public class KnowledgeManagementHandler {
                         "deleted", true
                 ));
             } else {
-                ctx.status(404).json(Map.of(
-                        "error", "Document not found",
-                        "collection", collection,
-                        "documentId", documentId
-                ));
+                ApiResponses.error(ctx, 404, ApiErrorCode.NOT_FOUND, "Document not found",
+                        Map.of("collection", collection, "documentId", documentId));
             }
         } catch (Exception e) {
             log.error("[Server] Failed to delete document {} from collection '{}': {}", documentId, collection, e.getMessage(), e);
-            ctx.status(500).json(Map.of("error", e.getMessage()));
+            ApiResponses.error(ctx, 500, ApiErrorCode.INTERNAL_ERROR, e.getMessage());
         }
     }
 }

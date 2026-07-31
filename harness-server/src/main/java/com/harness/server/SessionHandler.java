@@ -1,12 +1,16 @@
 package com.harness.server;
 
 import com.harness.core.model.MemoryMessage;
+import com.harness.core.model.PageInfo;
+import com.harness.core.model.PageResponse;
 import com.harness.core.model.Session;
 import com.harness.env.MysqlConnectionPool;
 import com.harness.preprocess.memory.MessageStore;
 import com.harness.preprocess.memory.MessageWriteWorker;
 import com.harness.preprocess.memory.SessionMessageCache;
 import com.harness.preprocess.memory.SessionStore;
+import com.harness.server.api.ApiErrorCode;
+import com.harness.server.api.ApiResponses;
 import io.javalin.http.Context;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -46,7 +50,8 @@ public class SessionHandler {
         Map<String, String> body = ctx.bodyAsClass(Map.class);
         String userId = body.get("userId");
         if (userId == null || userId.isBlank()) {
-            ctx.status(400).json(Map.of("error", "userId is required"));
+            ApiResponses.error(
+                    ctx, 400, ApiErrorCode.INVALID_REQUEST, "userId is required");
             return;
         }
         String title = body.get("title");
@@ -66,18 +71,14 @@ public class SessionHandler {
     public void list(Context ctx) {
         String userId = ctx.queryParam("userId");
         String statusParam = ctx.queryParam("status");
-        String limitParam = ctx.queryParam("limit");
         String cursorParam = ctx.queryParam("cursor");
 
-        int limit = 20;
-        if (limitParam != null) {
-            try {
-                limit = Integer.parseInt(limitParam);
-                limit = Math.min(Math.max(limit, 1), 100);
-            } catch (NumberFormatException e) {
-                ctx.status(400).json(Map.of("error", "Invalid limit: " + limitParam));
-                return;
-            }
+        int limit;
+        try {
+            limit = ApiRequestParameters.limit(ctx, 20, 100);
+        } catch (IllegalArgumentException e) {
+            ApiResponses.error(ctx, 400, ApiErrorCode.INVALID_REQUEST, e.getMessage());
+            return;
         }
 
         Session.SessionStatus status = null;
@@ -85,7 +86,8 @@ public class SessionHandler {
             try {
                 status = Session.SessionStatus.valueOf(statusParam);
             } catch (IllegalArgumentException e) {
-                ctx.status(400).json(Map.of("error", "Invalid status: " + statusParam + ". Use: active, ended, timeout"));
+                ApiResponses.error(ctx, 400, ApiErrorCode.INVALID_REQUEST,
+                        "Invalid status: " + statusParam + ". Use: active, ended, timeout");
                 return;
             }
         }
@@ -95,27 +97,15 @@ public class SessionHandler {
             try {
                 cursor = Instant.parse(cursorParam);
             } catch (DateTimeParseException e) {
-                ctx.status(400).json(Map.of("error", "Invalid cursor format. Use ISO-8601 (e.g., 2026-06-01T10:00:00Z)"));
+                ApiResponses.error(ctx, 400, ApiErrorCode.INVALID_REQUEST,
+                        "Invalid cursor format. Use ISO-8601 (e.g., 2026-06-01T10:00:00Z)");
                 return;
             }
         }
 
         List<Session> sessions = sessionStore.findAll(userId, status, cursor, limit + 1);
-        boolean hasMore = sessions.size() > limit;
-        if (hasMore) {
-            sessions = sessions.subList(0, limit);
-        }
-
-        String nextCursor = null;
-        if (hasMore && !sessions.isEmpty()) {
-            nextCursor = sessions.get(sessions.size() - 1).lastActive().toString();
-        }
-
-        ctx.json(Map.of(
-                "sessions", sessions,
-                "nextCursor", nextCursor != null ? nextCursor : "",
-                "hasMore", hasMore
-        ));
+        ctx.json(PageResponse.fromFetched(
+                sessions, limit, session -> session.lastActive().toString()));
     }
 
     /**
@@ -125,7 +115,8 @@ public class SessionHandler {
         String sessionId = ctx.pathParam("sessionId");
         Optional<Session> session = sessionStore.findById(sessionId);
         if (session.isEmpty()) {
-            ctx.status(404).json(Map.of("error", "Session not found: " + sessionId));
+            ApiResponses.error(ctx, 404, ApiErrorCode.NOT_FOUND,
+                    "Session not found: " + sessionId);
             return;
         }
         ctx.json(session.get());
@@ -138,23 +129,20 @@ public class SessionHandler {
     public void messages(Context ctx) {
         String sessionId = ctx.pathParam("sessionId");
         if (sessionStore.findById(sessionId).isEmpty()) {
-            ctx.status(404).json(Map.of("error", "Session not found: " + sessionId));
+            ApiResponses.error(ctx, 404, ApiErrorCode.NOT_FOUND,
+                    "Session not found: " + sessionId);
             return;
         }
 
-        String limitParam = ctx.queryParam("limit");
         String cursorParam = ctx.queryParam("cursor");
         String directionParam = ctx.queryParam("direction");
 
-        int limit = 50;
-        if (limitParam != null) {
-            try {
-                limit = Integer.parseInt(limitParam);
-                limit = Math.min(Math.max(limit, 1), 200);
-            } catch (NumberFormatException e) {
-                ctx.status(400).json(Map.of("error", "Invalid limit: " + limitParam));
-                return;
-            }
+        int limit;
+        try {
+            limit = ApiRequestParameters.limit(ctx, 50, 200);
+        } catch (IllegalArgumentException e) {
+            ApiResponses.error(ctx, 400, ApiErrorCode.INVALID_REQUEST, e.getMessage());
+            return;
         }
 
         long cursor = 0;
@@ -162,7 +150,8 @@ public class SessionHandler {
             try {
                 cursor = Long.parseLong(cursorParam);
             } catch (NumberFormatException e) {
-                ctx.status(400).json(Map.of("error", "Invalid cursor: " + cursorParam));
+                ApiResponses.error(ctx, 400, ApiErrorCode.INVALID_REQUEST,
+                        "Invalid cursor: " + cursorParam);
                 return;
             }
         }
@@ -175,19 +164,21 @@ public class SessionHandler {
         List<MemoryMessage> messages = messageStore.loadPage(sessionId, cursor, limit + 1, ascending);
         boolean hasMore = messages.size() > limit;
         if (hasMore) {
-            messages = messages.subList(0, limit);
+            messages = ascending
+                    ? List.copyOf(messages.subList(0, limit))
+                    : List.copyOf(messages.subList(messages.size() - limit, messages.size()));
         }
 
-        Long nextCursor = null;
+        String nextCursor = "";
         if (hasMore && !messages.isEmpty()) {
-            nextCursor = messages.get(messages.size() - 1).id();
+            long cursorId = ascending
+                    ? messages.get(messages.size() - 1).id()
+                    : messages.get(0).id();
+            nextCursor = Long.toString(cursorId);
         }
 
-        ctx.json(Map.of(
-                "messages", messages,
-                "nextCursor", nextCursor != null ? nextCursor : 0,
-                "hasMore", hasMore
-        ));
+        ctx.json(new PageResponse<>(
+                messages, new PageInfo(limit, nextCursor, hasMore)));
     }
 
     /**
@@ -197,7 +188,8 @@ public class SessionHandler {
         String sessionId = ctx.pathParam("sessionId");
         Optional<Session> sessionOpt = sessionStore.findById(sessionId);
         if (sessionOpt.isEmpty()) {
-            ctx.status(404).json(Map.of("error", "Session not found: " + sessionId));
+            ApiResponses.error(ctx, 404, ApiErrorCode.NOT_FOUND,
+                    "Session not found: " + sessionId);
             return;
         }
         Session session = sessionOpt.get();
@@ -237,7 +229,8 @@ public class SessionHandler {
     public void delete(Context ctx) {
         String sessionId = ctx.pathParam("sessionId");
         if (sessionStore.findById(sessionId).isEmpty()) {
-            ctx.status(404).json(Map.of("error", "Session not found: " + sessionId));
+            ApiResponses.error(ctx, 404, ApiErrorCode.NOT_FOUND,
+                    "Session not found: " + sessionId);
             return;
         }
 
@@ -287,7 +280,8 @@ public class SessionHandler {
             if (conn != null) {
                 try { conn.rollback(); } catch (SQLException ex) { log.error("Rollback failed: {}", ex.getMessage()); }
             }
-            ctx.status(500).json(Map.of("error", "Failed to delete session: " + e.getMessage()));
+            ApiResponses.error(ctx, 500, ApiErrorCode.INTERNAL_ERROR,
+                    "Failed to delete session: " + e.getMessage());
         } finally {
             if (conn != null) {
                 try { conn.setAutoCommit(true); conn.close(); } catch (SQLException ignored) {}

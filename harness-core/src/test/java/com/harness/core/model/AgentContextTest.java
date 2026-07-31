@@ -2,9 +2,11 @@ package com.harness.core.model;
 
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class AgentContextTest {
 
@@ -71,5 +73,52 @@ class AgentContextTest {
     void enableThinking_stringFalse() {
         var ctx = AgentContext.of(Map.of("enableThinking", "false"));
         assertThat(ctx.enableThinking()).isFalse();
+    }
+
+    @Test
+    void graphRequestContext_usesExplicitGraphSpace() {
+        AgentContext context = AgentContext.of(Map.of(
+                "graphRequestContext", Map.of(
+                        "graphId", "graph-1",
+                        "schemaId", "project-graph",
+                        "subjectIds", List.of("project-1"),
+                        "allowedQueryIds", List.of("anchored-neighborhood")
+                )
+        ));
+
+        GraphRequestContext graphContext = context.graphRequestContext();
+
+        assertThat(graphContext.graphId()).isEqualTo("graph-1");
+        assertThat(graphContext.schemaId()).isEqualTo("project-graph");
+        assertThat(graphContext.subjectIds()).containsExactly("project-1");
+    }
+
+    @Test
+    void graphRequestContext_requiresGraphId() {
+        AgentContext context = AgentContext.of(Map.of(
+                "graphRequestContext", Map.of(
+                        "schemaId", "project-graph",
+                        "subjectIds", List.of("project-1")
+                )
+        ));
+
+        assertThatThrownBy(context::graphRequestContext)
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("graphId");
+    }
+
+    @Test
+    void withClearedCredentials_removesGraphScope() {
+        AgentContext context = AgentContext.of(Map.of(
+                "graphRequestContext", Map.of(
+                        "schemaId", "project-graph",
+                        "subjectIds", List.of("project-1")
+                )
+        ));
+
+        AgentContext isolated = context.withClearedCredentials();
+
+        assertThat(isolated.graphRequestContext()).isNull();
+        assertThat(isolated.data()).doesNotContainKey(AgentContext.KEY_NEEDS_GRAPH_KNOWLEDGE);
     }
 }

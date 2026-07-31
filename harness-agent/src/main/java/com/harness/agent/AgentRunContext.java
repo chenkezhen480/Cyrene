@@ -1,6 +1,7 @@
 package com.harness.agent;
 
 import com.harness.core.model.CancellationToken;
+import com.harness.tool.RunToolCatalog;
 
 /**
  * Context for a single agent run, bound to a specific request.
@@ -10,15 +11,12 @@ public record AgentRunContext(
         String runId,
         String sessionId,
         CancellationToken cancellationToken,
-        String parentTraceId
+        String parentTraceId,
+        RunToolCatalog toolCatalog
 ) {
     public AgentRunContext {
         if (runId == null) throw new IllegalArgumentException("runId cannot be null");
         if (cancellationToken == null) throw new IllegalArgumentException("cancellationToken cannot be null");
-    }
-
-    /** Convenience constructor without parentTraceId (for backward compatibility). */
-    public AgentRunContext(String runId, String sessionId, CancellationToken cancellationToken) {
-        this(runId, sessionId, cancellationToken, null);
+        if (toolCatalog == null) throw new IllegalArgumentException("toolCatalog cannot be null");
     }
 }

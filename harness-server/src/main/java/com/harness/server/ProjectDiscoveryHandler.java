@@ -6,6 +6,8 @@ import com.harness.agent.ProjectDiscoveryService;
 import com.harness.core.model.ProjectApiConfig;
 import com.harness.env.EnvConfig;
 import com.harness.env.EnvKey;
+import com.harness.server.api.ApiErrorCode;
+import com.harness.server.api.ApiResponses;
 import io.javalin.http.Context;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -35,7 +37,8 @@ public class ProjectDiscoveryHandler {
     public ProjectDiscoveryHandler(ObjectMapper mapper, AgentOrchestrator agent) {
         this.mapper = mapper;
         this.agent = agent;
-        this.discoveryService = new ProjectDiscoveryService(agent.chatModel());
+        this.discoveryService = new ProjectDiscoveryService(
+                agent.chatModel(), agent.confirmationManager());
     }
 
     /**
@@ -49,13 +52,15 @@ public class ProjectDiscoveryHandler {
             String sourceRoot = body.get("sourceRoot");
             String baseUrl = body.getOrDefault("baseUrl", "");
             if (sourceRoot == null || sourceRoot.isBlank()) {
-                ctx.status(400).json(Map.of("error", "sourceRoot is required"));
+                ApiResponses.error(ctx, 400, ApiErrorCode.INVALID_REQUEST,
+                        "sourceRoot is required");
                 return;
             }
 
             Path root = Path.of(sourceRoot).toAbsolutePath().normalize();
             if (!Files.isDirectory(root)) {
-                ctx.status(400).json(Map.of("error", "sourceRoot is not a directory: " + root));
+                ApiResponses.error(ctx, 400, ApiErrorCode.INVALID_REQUEST,
+                        "sourceRoot is not a directory: " + root);
                 return;
             }
 
@@ -75,7 +80,7 @@ public class ProjectDiscoveryHandler {
 
         } catch (Exception e) {
             log.error("[Discovery] Scan failed: {}", e.getMessage(), e);
-            ctx.status(500).json(Map.of("error", e.getMessage()));
+            ApiResponses.error(ctx, 500, ApiErrorCode.INTERNAL_ERROR, e.getMessage());
         }
     }
 
@@ -87,7 +92,8 @@ public class ProjectDiscoveryHandler {
         try {
             ProjectApiConfig config = ctx.bodyAsClass(ProjectApiConfig.class);
             if (config.endpoints() == null || config.endpoints().isEmpty()) {
-                ctx.status(400).json(Map.of("error", "endpoints array is required and must not be empty"));
+                ApiResponses.error(ctx, 400, ApiErrorCode.INVALID_REQUEST,
+                        "endpoints array is required and must not be empty");
                 return;
             }
 
@@ -107,7 +113,7 @@ public class ProjectDiscoveryHandler {
 
         } catch (Exception e) {
             log.error("[Discovery] Generate failed: {}", e.getMessage(), e);
-            ctx.status(500).json(Map.of("error", e.getMessage()));
+            ApiResponses.error(ctx, 500, ApiErrorCode.INTERNAL_ERROR, e.getMessage());
         }
     }
 
@@ -118,10 +124,8 @@ public class ProjectDiscoveryHandler {
         try {
             Path configPath = getConfigPath();
             if (!Files.exists(configPath)) {
-                ctx.status(404).json(Map.of(
-                        "error", "Config file not found",
-                        "path", configPath.toString()
-                ));
+                ApiResponses.error(ctx, 404, ApiErrorCode.NOT_FOUND, "Config file not found",
+                        Map.of("path", configPath.toString()));
                 return;
             }
 
@@ -133,7 +137,7 @@ public class ProjectDiscoveryHandler {
 
         } catch (Exception e) {
             log.error("[Discovery] Failed to read config: {}", e.getMessage(), e);
-            ctx.status(500).json(Map.of("error", e.getMessage()));
+            ApiResponses.error(ctx, 500, ApiErrorCode.INTERNAL_ERROR, e.getMessage());
         }
     }
 
@@ -157,7 +161,7 @@ public class ProjectDiscoveryHandler {
 
         } catch (Exception e) {
             log.error("[Discovery] Failed to update config: {}", e.getMessage(), e);
-            ctx.status(500).json(Map.of("error", e.getMessage()));
+            ApiResponses.error(ctx, 500, ApiErrorCode.INTERNAL_ERROR, e.getMessage());
         }
     }
 
@@ -171,7 +175,7 @@ public class ProjectDiscoveryHandler {
             ctx.json(Map.of("status", "ok"));
         } catch (Exception e) {
             log.error("[Discovery] Reload failed: {}", e.getMessage(), e);
-            ctx.status(500).json(Map.of("error", e.getMessage()));
+            ApiResponses.error(ctx, 500, ApiErrorCode.INTERNAL_ERROR, e.getMessage());
         }
     }
 

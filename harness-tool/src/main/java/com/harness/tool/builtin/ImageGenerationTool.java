@@ -150,17 +150,15 @@ public class ImageGenerationTool implements ArtifactProducingTool, CancellableTo
                 artifactList = executeText2Img(prompt, size, arguments);
             }
 
-            // Output with markdown image — LLM naturally includes it in response
-            StringBuilder sb = new StringBuilder();
-            sb.append("Image generated successfully (").append(model).append("). ");
-            sb.append("You MUST include the following image in your response to the user:\n\n");
+            ObjectNode result = mapper.createObjectNode();
+            result.put("status", "completed");
+            result.put("model", model);
+            var artifacts = result.putArray("artifacts");
             for (Map<String, Object> a : artifactList) {
-                String downloadUrl = a.get("downloadUrl").toString();
-                String previewUrl = downloadUrl + "/preview";
-                sb.append("![").append(a.get("name")).append("](").append(previewUrl).append(")\n\n");
+                artifacts.add(mapper.valueToTree(a));
             }
             ToolResult.setCurrentStatus(ToolResult.ResultStatus.SUCCESS);
-            return sb.toString();
+            return mapper.writeValueAsString(result);
 
         } catch (ToolExecutionException e) {
             throw e;

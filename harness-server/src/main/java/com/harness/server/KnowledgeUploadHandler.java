@@ -5,6 +5,8 @@ import com.harness.core.model.AgentTrace;
 import com.harness.core.model.RiskLevel;
 import com.harness.preprocess.knowledge.IngestResult;
 import com.harness.preprocess.knowledge.KnowledgeIngestService;
+import com.harness.server.api.ApiErrorCode;
+import com.harness.server.api.ApiResponses;
 import io.javalin.http.Context;
 import io.javalin.http.UploadedFile;
 import org.slf4j.Logger;
@@ -38,7 +40,7 @@ public class KnowledgeUploadHandler {
             UploadedFile uploadedFile = ctx.uploadedFile("file");
             if (uploadedFile == null) {
                 log.warn("[Server] Knowledge upload: no file provided");
-                ctx.status(400).json(Map.of("error", "No file uploaded"));
+                ApiResponses.error(ctx, 400, ApiErrorCode.INVALID_REQUEST, "No file uploaded");
                 return;
             }
 
@@ -58,7 +60,8 @@ public class KnowledgeUploadHandler {
             // Validate file extension
             String ext = getExtension(fileName).toLowerCase();
             if (!ext.isEmpty() && !ALLOWED_EXTENSIONS.contains(ext)) {
-                ctx.status(400).json(Map.of("error", "File type not allowed for knowledge base: ." + ext));
+                ApiResponses.error(ctx, 400, ApiErrorCode.INVALID_REQUEST,
+                        "File type not allowed for knowledge base: ." + ext);
                 return;
             }
 
@@ -103,10 +106,13 @@ public class KnowledgeUploadHandler {
 
         } catch (IllegalArgumentException e) {
             log.warn("[Server] Knowledge upload validation failed: {}", e.getMessage());
-            ctx.status(400).json(Map.of("error", e.getMessage()));
+            ApiResponses.error(ctx, 400, ApiErrorCode.INVALID_REQUEST, e.getMessage());
         } catch (Exception e) {
             log.error("[Server] Knowledge upload failed: {}", e.getMessage(), e);
-            ctx.status(500).json(Map.of("error", e.getMessage() != null ? e.getMessage() : "Internal server error during knowledge upload"));
+            ApiResponses.error(ctx, 500, ApiErrorCode.INTERNAL_ERROR,
+                    e.getMessage() != null
+                            ? e.getMessage()
+                            : "Internal server error during knowledge upload");
         }
     }
 

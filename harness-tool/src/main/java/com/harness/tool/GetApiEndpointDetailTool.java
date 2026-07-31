@@ -58,6 +58,10 @@ public class GetApiEndpointDetailTool implements Tool {
 
         for (ApiEndpoint ep : config.endpoints()) {
             if (ep.id().equals(endpointId)) {
+                if (!ProjectApiPolicy.isCallable(ep)) {
+                    ToolResult.setCurrentStatus(ToolResult.ResultStatus.EMPTY);
+                    return "Error: " + ProjectApiPolicy.rejectionReason(ep);
+                }
                 ObjectNode json = endpointToJson(ep);
                 // Show effective baseUrl (global config-level if endpoint doesn't have one)
                 String effectiveBaseUrl = config.resolveBaseUrl(ep);

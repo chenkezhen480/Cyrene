@@ -3,6 +3,7 @@ package com.harness.tool.discovery;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.harness.core.exception.ToolExecutionException;
 import com.harness.core.model.ApiEndpoint;
 import com.harness.core.model.AuthMode;
 import com.harness.core.model.ProjectApiConfig;
@@ -16,6 +17,7 @@ import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Tool for managing project API endpoints in memory with auto-sync to disk.
@@ -37,6 +39,29 @@ public class UpdateProjectApiTool implements Tool {
 
     @Override
     public ToolSpec spec() {
+        ObjectNode properties = mapper.createObjectNode();
+        ObjectNode actionSchema = stringProperty("Action to perform");
+        actionSchema.putArray("enum").add("add").add("remove").add("update");
+        properties.set("action", actionSchema);
+        properties.set("id", stringProperty("Endpoint ID; required for remove and update"));
+        properties.set("name", stringProperty("Endpoint name; required for add"));
+        properties.set("description", stringProperty("Endpoint description"));
+        properties.set("method", stringProperty("HTTP method: GET, POST, PUT, DELETE, or PATCH"));
+        properties.set("path", stringProperty("URL path such as /api/users; required for add"));
+        properties.set("baseUrl", stringProperty("Optional base URL override for this endpoint"));
+        properties.set("parameters", objectProperty("JSON Schema object describing endpoint parameters"));
+        properties.set("authMode", stringProperty("Auth mode: USER_PASSTHROUGH or BOT"));
+        properties.set("confirmed", booleanProperty(
+                "Human confirmation state; this tool may only preserve or revoke it"));
+        properties.set("riskAcknowledged", booleanProperty(
+                "Human risk acknowledgement state; this tool may only preserve or revoke it"));
+
+        ObjectNode parametersSchema = mapper.createObjectNode()
+                .put("type", "object")
+                .set("properties", properties);
+        parametersSchema.putArray("required").add("action");
+        parametersSchema.put("additionalProperties", false);
+
         return new ToolSpec(
                 "update_project_api",
                 "Add, remove, or update a single API endpoint in the project configuration. "
@@ -45,22 +70,9 @@ public class UpdateProjectApiTool implements Tool {
                         + "For 'add': provide name, method, path at minimum. "
                         + "For 'remove': provide endpoint 'id'. "
                         + "For 'update': provide 'id' plus fields to change.",
-                mapper.createObjectNode()
-                        .put("type", "object")
-                        .put("required", "action")
-                        .set("properties", mapper.createObjectNode()
-                                .put("action", "Action: 'add', 'remove', or 'update'")
-                                .put("id", "Endpoint ID (required for remove/update)")
-                                .put("name", "Endpoint name (required for add)")
-                                .put("description", "Endpoint description")
-                                .put("method", "HTTP method: GET, POST, PUT, DELETE, PATCH (default GET)")
-                                .put("path", "URL path like /api/users (required for add)")
-                                .put("baseUrl", "Override base URL for this endpoint (optional)")
-                                .put("parameters", "JSON Schema object for parameters")
-                                .put("authMode", "Auth mode: NONE, USER_PASSTHROUGH, BOT (default USER_PASSTHROUGH)")
-                                .put("confirmed", "Whether endpoint is confirmed (boolean)")
-                                .put("riskAcknowledged", "Whether risk is acknowledged (boolean)")
-                        )
+                parametersSchema,
+                Set.of("configuration", "write"),
+                true
         );
     }
 
@@ -98,7 +110,9 @@ public class UpdateProjectApiTool implements Tool {
 
         String baseUrl = extractString(args, "baseUrl");
         String authModeStr = extractString(args, "authMode");
-        AuthMode authMode = parseAuthMode(authModeStr, AuthMode.USER_PASSTHROUGH);
+        AuthMode authMode = authModeStr != null
+                ? parseAuthMode(authModeStr)
+                : AuthMode.USER_PASSTHROUGH;
 
         JsonNode parameters = args.get("parameters");
         if (parameters == null || parameters.isNull()) {
@@ -107,6 +121,11 @@ public class UpdateProjectApiTool implements Tool {
 
         boolean confirmed = extractBool(args, "confirmed", false);
         boolean riskAcknowledged = extractBool(args, "riskAcknowledged", false);
+        if (confirmed || riskAcknowledged) {
+            throw new ToolExecutionException("update_project_api",
+                    "Agent tools cannot confirm endpoints or acknowledge risk. "
+                            + "Use the human-reviewed project API configuration flow.");
+        }
 
         ProjectApiConfig config = toolRegistry.getProjectApiConfig();
         if (config == null) return error("No project API config loaded. Run discovery scan first.");
@@ -126,7 +145,7 @@ public class UpdateProjectApiTool implements Tool {
 
         ProjectApiConfig newConfig = config.withEndpoints(updated);
         if (!toolRegistry.updateProjectApiConfig(newConfig)) {
-            return error("Failed to save config to disk. Endpoint added in memory only.");
+            return error("Failed to save config to disk. No changes were applied.");
         }
 
         log.info("[UpdateProjectApi] Added endpoint: {} {} ({})", method, path, nextId);
@@ -154,7 +173,7 @@ public class UpdateProjectApiTool implements Tool {
 
         ProjectApiConfig newConfig = config.withEndpoints(updated);
         if (!toolRegistry.updateProjectApiConfig(newConfig)) {
-            return error("Failed to save config to disk. Endpoint removed in memory only.");
+            return error("Failed to save config to disk. No changes were applied.");
         }
 
         log.info("[UpdateProjectApi] Removed endpoint: {} {} ({})", found.method(), found.path(), id);
@@ -188,14 +207,29 @@ public class UpdateProjectApiTool implements Tool {
         JsonNode parameters = args.get("parameters");
         Boolean confirmed = extractOptionalBool(args, "confirmed");
         Boolean riskAcknowledged = extractOptionalBool(args, "riskAcknowledged");
+        if (Boolean.TRUE.equals(confirmed) && !old.confirmed()) {
+            throw new ToolExecutionException("update_project_api",
+                    "Agent tools cannot confirm endpoints. Use the human-reviewed configuration flow.");
+        }
+        if (Boolean.TRUE.equals(riskAcknowledged) && !old.riskAcknowledged()) {
+            throw new ToolExecutionException("update_project_api",
+                    "Agent tools cannot acknowledge endpoint risk. "
+                            + "Use the human-reviewed configuration flow.");
+        }
 
-        AuthMode authMode = authModeStr != null ? parseAuthMode(authModeStr, old.authMode()) : old.authMode();
+        AuthMode authMode = authModeStr != null ? parseAuthMode(authModeStr) : old.authMode();
+        String updatedMethod = method != null ? method.toUpperCase() : old.method();
+        boolean riskDefinitionChanged = !updatedMethod.equalsIgnoreCase(old.method())
+                || authMode != old.authMode();
+        boolean updatedRiskAcknowledged = riskDefinitionChanged
+                ? false
+                : (riskAcknowledged != null ? riskAcknowledged : old.riskAcknowledged());
 
         ApiEndpoint updated = new ApiEndpoint(
                 old.id(),
                 name != null ? name : old.name(),
                 description != null ? description : old.description(),
-                method != null ? method.toUpperCase() : old.method(),
+                updatedMethod,
                 path != null ? path : old.path(),
                 baseUrl != null ? baseUrl : old.baseUrl(),
                 old.source(),
@@ -204,7 +238,7 @@ public class UpdateProjectApiTool implements Tool {
                 old.tokenInjection(),
                 parameters != null ? parameters : old.parameters(),
                 confirmed != null ? confirmed : old.confirmed(),
-                riskAcknowledged != null ? riskAcknowledged : old.riskAcknowledged()
+                updatedRiskAcknowledged
         );
 
         List<ApiEndpoint> newList = new ArrayList<>(endpoints);
@@ -212,7 +246,7 @@ public class UpdateProjectApiTool implements Tool {
 
         ProjectApiConfig newConfig = config.withEndpoints(newList);
         if (!toolRegistry.updateProjectApiConfig(newConfig)) {
-            return error("Failed to save config to disk. Endpoint updated in memory only.");
+            return error("Failed to save config to disk. No changes were applied.");
         }
 
         log.info("[UpdateProjectApi] Updated endpoint: {} {} ({})", updated.method(), updated.path(), id);
@@ -238,13 +272,33 @@ public class UpdateProjectApiTool implements Tool {
         return String.format("ep_%04d", max + 1);
     }
 
-    private AuthMode parseAuthMode(String value, AuthMode fallback) {
-        if (value == null || value.isBlank()) return fallback;
+    private AuthMode parseAuthMode(String value) {
         try {
             return AuthMode.valueOf(value.trim().toUpperCase());
         } catch (IllegalArgumentException e) {
-            return fallback;
+            throw new ToolExecutionException(
+                    "update_project_api",
+                    "Invalid authMode '%s'. Use USER_PASSTHROUGH or BOT.".formatted(value));
         }
+    }
+
+    private ObjectNode stringProperty(String description) {
+        return mapper.createObjectNode()
+                .put("type", "string")
+                .put("description", description);
+    }
+
+    private ObjectNode booleanProperty(String description) {
+        return mapper.createObjectNode()
+                .put("type", "boolean")
+                .put("description", description);
+    }
+
+    private ObjectNode objectProperty(String description) {
+        return mapper.createObjectNode()
+                .put("type", "object")
+                .put("description", description)
+                .put("additionalProperties", true);
     }
 
     private String extractString(JsonNode args, String field) {

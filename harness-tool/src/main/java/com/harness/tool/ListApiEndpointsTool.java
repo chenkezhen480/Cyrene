@@ -42,18 +42,21 @@ public class ListApiEndpointsTool implements Tool {
     @Override
     public String execute(JsonNode arguments) {
         ProjectApiConfig config = configSupplier.get();
-        if (config == null || config.endpoints() == null || config.endpoints().isEmpty()) {
+        var endpoints = ProjectApiPolicy.callableEndpoints(config);
+        if (endpoints.isEmpty()) {
             ToolResult.setCurrentStatus(ToolResult.ResultStatus.EMPTY);
-            return "No API endpoints configured. Use the project discovery scan first.";
+            return "No confirmed API endpoints are available.";
         }
 
         ToolResult.setCurrentStatus(ToolResult.ResultStatus.SUCCESS);
         ArrayNode arr = mapper.createArrayNode();
-        for (ApiEndpoint ep : config.endpoints()) {
+        for (ApiEndpoint ep : endpoints) {
             ObjectNode node = mapper.createObjectNode();
             node.put("id", ep.id());
             node.put("name", ep.name());
             node.put("description", ep.description());
+            node.put("method", ep.method());
+            node.put("path", ep.path());
             arr.add(node);
         }
 

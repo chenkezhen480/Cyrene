@@ -1,7 +1,9 @@
 package com.harness.core.model;
 
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Context passed through the agent pipeline.
@@ -14,6 +16,8 @@ public record AgentContext(
     public static final String KEY_OUTPUT_MODE = "outputMode";
     public static final String KEY_ENABLE_THINKING = "enableThinking";
     public static final String KEY_CREDENTIALS = "credentials";
+    public static final String KEY_GRAPH_REQUEST_CONTEXT = "graphRequestContext";
+    public static final String KEY_NEEDS_GRAPH_KNOWLEDGE = "needsGraphKnowledge";
 
     // ==================== GapAnalysis 显式覆盖字段 ====================
     /** 是否检索知识库，null 时回退全局配置 */
@@ -71,6 +75,22 @@ public record AgentContext(
         if (val instanceof Boolean b) return b;
         if (val instanceof String s) return Boolean.parseBoolean(s);
         return null;
+    }
+
+    /**
+     * Parse the server-created graph scope used by the graph retrieval route.
+     */
+    public GraphRequestContext graphRequestContext() {
+        Object value = data.get(KEY_GRAPH_REQUEST_CONTEXT);
+        if (!(value instanceof Map<?, ?> graphData)) {
+            return null;
+        }
+        return new GraphRequestContext(
+                textValue(graphData.get("graphId")),
+                textValue(graphData.get("schemaId")),
+                stringSet(graphData.get("subjectIds")),
+                stringSet(graphData.get("allowedQueryIds"))
+        );
     }
 
     /**
@@ -145,6 +165,25 @@ public record AgentContext(
     public AgentContext withClearedCredentials() {
         Map<String, Object> copy = new HashMap<>(data);
         copy.put(KEY_CREDENTIALS, Map.of());
+        copy.remove(KEY_GRAPH_REQUEST_CONTEXT);
+        copy.remove(KEY_NEEDS_GRAPH_KNOWLEDGE);
         return new AgentContext(copy);
+    }
+
+    private static String textValue(Object value) {
+        return value == null ? null : value.toString();
+    }
+
+    private static Set<String> stringSet(Object value) {
+        if (!(value instanceof Iterable<?> values)) {
+            return Set.of();
+        }
+        Set<String> result = new LinkedHashSet<>();
+        for (Object item : values) {
+            if (item != null) {
+                result.add(item.toString());
+            }
+        }
+        return Set.copyOf(result);
     }
 }

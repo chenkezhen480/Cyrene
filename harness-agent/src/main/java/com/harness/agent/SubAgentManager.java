@@ -11,15 +11,16 @@ import com.harness.core.model.CancellationToken;
 import com.harness.core.model.RiskLevel;
 import com.harness.env.EnvConfig;
 import com.harness.env.EnvKey;
-import com.harness.tool.FilteredToolRegistry;
+import com.harness.tool.RunToolCatalog;
 import com.harness.tool.HttpApiTool;
 import com.harness.tool.ToolExecutor;
-import com.harness.tool.ToolRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.List;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -31,18 +32,23 @@ import java.util.concurrent.atomic.AtomicInteger;
  * Key design:
  * - Each request gets its own SubAgentRunScope (per-run isolation)
  * - Each task gets its own CancellationToken (per-task cancellation)
- * - Sub-agents cannot spawn sub-agents (FilteredToolRegistry)
+ * - Sub-agents receive an immutable allowlisted tool catalog
  * - Scope lifecycle: OPEN → OWNER_FINISHED → CLOSED
  * - On task completion, submits event to SessionInbox and triggers session resume
  */
 public class SubAgentManager {
 
     private static final Logger log = LoggerFactory.getLogger(SubAgentManager.class);
+    private static final Set<String> SUBAGENT_ORCHESTRATION_TOOLS = Set.of(
+            "spawn_subagent",
+            "await_subagents",
+            "get_subagents",
+            "cancel_subagents"
+    );
 
     private final ChatModelProvider chatModelProvider;
     private final VisionModelProvider visionModelProvider;
     private final VoiceModelProvider voiceModelProvider;
-    private final ToolRegistry toolRegistry;
     private final ToolExecutor toolExecutor;
     private final TraceStore traceStore;
 
@@ -71,7 +77,6 @@ public class SubAgentManager {
     public SubAgentManager(ChatModelProvider chatModelProvider,
                            VisionModelProvider visionModelProvider,
                            VoiceModelProvider voiceModelProvider,
-                           ToolRegistry toolRegistry,
                            ToolExecutor toolExecutor,
                            TraceStore traceStore,
                            SessionInbox sessionInbox,
@@ -79,7 +84,6 @@ public class SubAgentManager {
         this.chatModelProvider = chatModelProvider;
         this.visionModelProvider = visionModelProvider;
         this.voiceModelProvider = voiceModelProvider;
-        this.toolRegistry = toolRegistry;
         this.toolExecutor = toolExecutor;
         this.traceStore = traceStore;
         this.sessionInbox = sessionInbox;
@@ -248,13 +252,13 @@ public class SubAgentManager {
             log.debug("[SubAgentManager] Executing task: id={}, activeTasks={}", taskId, activeTasks.get());
 
             try {
-                // Build task-specific tool registry: whitelist if specified, no tools if not
-                ToolRegistry subAgentToolRegistry = record.task().tools().isEmpty()
-                        ? FilteredToolRegistry.forNoTools(toolRegistry)
-                        : FilteredToolRegistry.forTask(toolRegistry, record.task().tools());
+                Set<String> allowedTools = new HashSet<>(record.task().tools());
+                allowedTools.removeAll(SUBAGENT_ORCHESTRATION_TOOLS);
+                RunToolCatalog subAgentToolCatalog =
+                        runContext.toolCatalog().allowing(allowedTools);
 
                 // Each sub-agent gets its own ReActEngine with task-specific tools
-                ReActEngine engine = new ReActEngine(chatModelProvider, subAgentToolRegistry, toolExecutor,
+                ReActEngine engine = new ReActEngine(chatModelProvider, subAgentToolCatalog, toolExecutor,
                         visionModelProvider, voiceModelProvider);
 
                 // Build system prompt from LLM-generated persona + systemPrompt + context

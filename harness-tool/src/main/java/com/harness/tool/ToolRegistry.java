@@ -1,116 +1,180 @@
 package com.harness.tool;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.harness.core.model.ProjectApiConfig;
 import com.harness.core.model.ToolSpec;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.harness.env.EnvConfig;
 import com.harness.env.EnvKey;
 import com.harness.tool.discovery.UpdateProjectApiTool;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-import java.io.File;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * Central registry for all available tools.
- * Tools register themselves here; the ReAct engine queries available tools from here.
+ * Mutable application-level registry. Agent runs consume immutable snapshots
+ * created by {@link #snapshot()}.
  */
-public class ToolRegistry {
+public class ToolRegistry implements ToolCatalog {
 
     private static final Logger log = LoggerFactory.getLogger(ToolRegistry.class);
 
-    private final Map<String, Tool> tools = new ConcurrentHashMap<>();
-
-    /** In-memory project API config, shared by the three discovery meta-tools. */
+    private final AtomicReference<RegistryState> state =
+            new AtomicReference<>(new RegistryState(0, Map.of()));
     private final AtomicReference<ProjectApiConfig> configRef = new AtomicReference<>();
 
     /**
-     * Register a tool. Overwrites if name already exists.
+     * Register a new tool.
+     *
+     * @throws IllegalArgumentException when a tool with the same name already exists
      */
-    public void register(Tool tool) {
-        tools.put(tool.spec().name(), tool);
+    public synchronized void register(Tool tool) {
+        String name = requireToolName(tool);
+        RegistryState current = state.get();
+        if (current.tools().containsKey(name)) {
+            throw new IllegalArgumentException("Tool already registered: " + name);
+        }
+        replaceStateEntry(current, name, tool);
     }
 
     /**
-     * Get a tool by name.
+     * Explicitly replace a tool implementation. Existing run snapshots retain
+     * the previous implementation.
      */
+    public synchronized void replace(Tool tool) {
+        String name = requireToolName(tool);
+        replaceStateEntry(state.get(), name, tool);
+    }
+
+    @Override
     public Tool get(String name) {
-        return tools.get(name);
+        return state.get().tools().get(name);
     }
 
-    /**
-     * Get all registered tool specs (for LLM tool definitions).
-     */
+    @Override
     public List<ToolSpec> getAll() {
-        return tools.values().stream().map(Tool::spec).toList();
+        return state.get().tools().values().stream()
+                .map(Tool::spec)
+                .sorted(Comparator.comparing(ToolSpec::name))
+                .toList();
     }
 
-    /**
-     * Check if a tool is registered.
-     */
+    @Override
     public boolean contains(String name) {
-        return tools.containsKey(name);
+        return state.get().tools().containsKey(name);
     }
 
+    @Override
     public int size() {
-        return tools.size();
+        return state.get().tools().size();
     }
 
-    // ==================== Project API Discovery support ====================
+    @Override
+    public long version() {
+        return state.get().version();
+    }
 
     /**
-     * Load project API config and register the four discovery meta-tools.
-     * Stores config in memory for the tools to query.
-     * Thread-safe: can be called while ReAct loops are running.
+     * Freeze tool definitions and implementations for one agent run.
+     */
+    public RunToolCatalog snapshot() {
+        RegistryState current = state.get();
+        return new RunToolCatalog(current.version(), current.tools());
+    }
+
+    /**
+     * Atomically replace the project API meta-tools. Tools in an existing run
+     * continue using the configuration captured by that run.
      */
     public synchronized void loadFromConfig(ProjectApiConfig config) {
-        if (config == null) return;
+        if (config == null) {
+            return;
+        }
 
-        // Store config in memory (tools query via configRef)
+        RegistryState current = state.get();
+        Map<String, Tool> updatedTools = new HashMap<>(current.tools());
+        updatedTools.put("list_api_endpoints", new ListApiEndpointsTool(() -> config));
+        updatedTools.put("get_api_endpoint_detail", new GetApiEndpointDetailTool(() -> config));
+        updatedTools.put("call_discovered_api", new CallDiscoveredApiTool(() -> config));
+        updatedTools.put("update_project_api", new UpdateProjectApiTool(this));
+
         configRef.set(config);
+        state.set(new RegistryState(current.version() + 1, Map.copyOf(updatedTools)));
 
-        // Register meta-tools (idempotent — overwrite if exists)
-        tools.put("list_api_endpoints", new ListApiEndpointsTool(configRef::get));
-        tools.put("get_api_endpoint_detail", new GetApiEndpointDetailTool(configRef::get));
-        tools.put("call_discovered_api", new CallDiscoveredApiTool(configRef::get));
-        tools.put("update_project_api", new UpdateProjectApiTool(this));
-
-        log.info("[ToolRegistry] Loaded project API config: {} endpoints, 4 meta-tools registered",
-                config.endpoints() != null ? config.endpoints().size() : 0);
+        int total = config.endpoints() != null ? config.endpoints().size() : 0;
+        int callable = ProjectApiPolicy.callableEndpoints(config).size();
+        log.info("[ToolRegistry] Loaded project API config: {} total, {} callable, 4 meta-tools registered",
+                total, callable);
     }
 
     /**
-     * Update the in-memory project API config and persist to disk.
-     *
-     * @param newConfig the updated config
-     * @return true if both memory update and disk write succeeded
+     * Persist a project API configuration before publishing it to later runs.
      */
     public synchronized boolean updateProjectApiConfig(ProjectApiConfig newConfig) {
-        if (newConfig == null) return false;
-        configRef.set(newConfig);
-
-        // Persist to disk
+        if (newConfig == null) {
+            return false;
+        }
+        Path tempPath = null;
         try {
-            String configPath = EnvConfig.get().getString(EnvKey.PROJECT_APIS_CONFIG_FILE, "./project-apis.json");
+            String configPath = EnvConfig.get().getString(
+                    EnvKey.PROJECT_APIS_CONFIG_FILE, "./project-apis.json");
+            Path targetPath = Path.of(configPath).toAbsolutePath().normalize();
+            Path parentPath = targetPath.getParent();
+            if (parentPath == null || !Files.isDirectory(parentPath)) {
+                throw new IllegalStateException("Config directory does not exist: " + parentPath);
+            }
+
             ObjectMapper mapper = new ObjectMapper();
-            mapper.writerWithDefaultPrettyPrinter().writeValue(new File(configPath), newConfig);
-            log.info("[ToolRegistry] Config synced to disk: {} endpoints", newConfig.endpoints().size());
+            tempPath = Files.createTempFile(
+                    parentPath, targetPath.getFileName().toString() + ".", ".tmp");
+            mapper.writerWithDefaultPrettyPrinter().writeValue(tempPath.toFile(), newConfig);
+            Files.move(tempPath, targetPath,
+                    StandardCopyOption.ATOMIC_MOVE,
+                    StandardCopyOption.REPLACE_EXISTING);
+            loadFromConfig(newConfig);
+            log.info("[ToolRegistry] Config synced to disk: {} endpoints",
+                    newConfig.endpoints().size());
             return true;
         } catch (Exception e) {
             log.error("[ToolRegistry] Failed to write config to disk: {}", e.getMessage());
             return false;
+        } finally {
+            if (tempPath != null) {
+                try {
+                    Files.deleteIfExists(tempPath);
+                } catch (Exception e) {
+                    log.warn("[ToolRegistry] Failed to clean temporary config file {}: {}",
+                            tempPath, e.getMessage());
+                }
+            }
         }
     }
 
-    /**
-     * Get the current project API config (for external queries).
-     */
     public ProjectApiConfig getProjectApiConfig() {
         return configRef.get();
+    }
+
+    private static String requireToolName(Tool tool) {
+        if (tool == null || tool.spec() == null
+                || tool.spec().name() == null || tool.spec().name().isBlank()) {
+            throw new IllegalArgumentException("Tool name cannot be blank");
+        }
+        return tool.spec().name();
+    }
+
+    private void replaceStateEntry(RegistryState current, String name, Tool tool) {
+        Map<String, Tool> updatedTools = new HashMap<>(current.tools());
+        updatedTools.put(name, tool);
+        state.set(new RegistryState(current.version() + 1, Map.copyOf(updatedTools)));
+    }
+
+    private record RegistryState(long version, Map<String, Tool> tools) {
     }
 }

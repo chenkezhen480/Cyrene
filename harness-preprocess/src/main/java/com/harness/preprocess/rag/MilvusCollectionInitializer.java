@@ -2,7 +2,6 @@ package com.harness.preprocess.rag;
 
 import com.harness.env.EnvConfig;
 import com.harness.env.EnvKey;
-import com.harness.env.MilvusConnectionPool;
 import io.milvus.common.clientenum.FunctionType;
 import io.milvus.v2.client.MilvusClientV2;
 import io.milvus.v2.common.DataType;

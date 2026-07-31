@@ -11,7 +11,8 @@ import com.harness.env.EnvKey;
 import com.harness.tool.ArtifactProducingTool;
 import com.harness.tool.Tool;
 import com.harness.tool.ToolExecutor;
-import com.harness.tool.ToolRegistry;
+import com.harness.tool.ToolCatalog;
+import com.harness.tool.confirmation.ConfirmationExecutionContext;
 import dev.langchain4j.data.message.*;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.StreamingChatModel;
@@ -45,26 +46,26 @@ public class ReActEngine {
 
     private final ChatModel chatModel;
     private final StreamingChatModel streamingChatModel;
-    private final ToolRegistry toolRegistry;
+    private final ToolCatalog toolCatalog;
     private final ToolExecutor toolExecutor;
     private final Inspector inspector;
     private final AdaptiveReflector adaptiveReflector;
     private final int maxIterations;
     private final long llmTimeoutSeconds;
 
-    public ReActEngine(ChatModelProvider chatModelProvider, ToolRegistry toolRegistry, ToolExecutor toolExecutor) {
-        this(chatModelProvider, toolRegistry, toolExecutor, null, null);
+    public ReActEngine(ChatModelProvider chatModelProvider, ToolCatalog toolCatalog, ToolExecutor toolExecutor) {
+        this(chatModelProvider, toolCatalog, toolExecutor, null, null);
     }
 
-    public ReActEngine(ChatModelProvider chatModelProvider, ToolRegistry toolRegistry, ToolExecutor toolExecutor,
+    public ReActEngine(ChatModelProvider chatModelProvider, ToolCatalog toolCatalog, ToolExecutor toolExecutor,
                        VisionModelProvider visionProvider, VoiceModelProvider voiceProvider) {
-        this(chatModelProvider, toolRegistry, toolExecutor, visionProvider, voiceProvider, -1);
+        this(chatModelProvider, toolCatalog, toolExecutor, visionProvider, voiceProvider, -1);
     }
 
     /**
      * @param maxIterationsOverride if > 0, overrides the global HARNESS_REACT_MAX_ITERATIONS setting
      */
-    public ReActEngine(ChatModelProvider chatModelProvider, ToolRegistry toolRegistry, ToolExecutor toolExecutor,
+    public ReActEngine(ChatModelProvider chatModelProvider, ToolCatalog toolCatalog, ToolExecutor toolExecutor,
                        VisionModelProvider visionProvider, VoiceModelProvider voiceProvider,
                        int maxIterationsOverride) {
         ChatModel rawModel = chatModelProvider.chatModel();
@@ -74,7 +75,7 @@ public class ReActEngine {
             this.chatModel = rawModel;
         }
         this.streamingChatModel = chatModelProvider.streamingModel();
-        this.toolRegistry = toolRegistry;
+        this.toolCatalog = toolCatalog;
         this.toolExecutor = toolExecutor;
         this.inspector = new Inspector();
         EnvConfig cfg = EnvConfig.get();
@@ -107,16 +108,25 @@ public class ReActEngine {
                                AgentTrace.Builder traceBuilder, ReActListener listener,
                                com.harness.core.model.CancellationToken cancellationToken,
                                Boolean enableThinking) {
+        return execute(systemPrompt, userMessage, historyMessages, traceBuilder, listener,
+                cancellationToken, enableThinking, null);
+    }
+
+    public ReActResult execute(String systemPrompt, String userMessage, List<ChatMessage> historyMessages,
+                               AgentTrace.Builder traceBuilder, ReActListener listener,
+                               com.harness.core.model.CancellationToken cancellationToken,
+                               Boolean enableThinking,
+                               ConfirmationExecutionContext confirmationContext) {
         long loopStart = System.currentTimeMillis();
         log.debug("[L3-ReAct] Starting ReAct loop: maxIterations={}, historyMessages={}, tools={}, thinking={}",
-                maxIterations, historyMessages.size(), toolRegistry.size(), enableThinking);
+                maxIterations, historyMessages.size(), toolCatalog.size(), enableThinking);
 
         List<ChatMessage> messages = new ArrayList<>();
         messages.add(SystemMessage.from(systemPrompt));
         messages.addAll(historyMessages);
         messages.add(UserMessage.from(userMessage));
 
-        List<ToolSpecification> toolSpecs = toToolSpecifications(toolRegistry.getAll());
+        List<ToolSpecification> toolSpecs = toToolSpecifications(toolCatalog.getAll());
         List<ReActStep> allSteps = new ArrayList<>();
         List<Artifact> allArtifacts = new ArrayList<>();
         ChatRequestParameters thinkingParams = buildThinkingParams(enableThinking);
@@ -195,7 +205,8 @@ public class ReActEngine {
                     log.debug("[L3-ReAct] LLM reasoning: {}", truncate(aiMessage.text()));
                 }
 
-                ToolExecutionOutput toolOutput = executeToolCalls(toolReqs, messages, allArtifacts, listener, cancellationToken);
+                ToolExecutionOutput toolOutput = executeToolCalls(
+                        toolReqs, messages, allArtifacts, listener, cancellationToken, confirmationContext);
                 if (toolOutput.earlyReturn() != null) return toolOutput.earlyReturn();
 
                 // Post-tool processing: inspection, hints, adaptive reflection
@@ -209,7 +220,8 @@ public class ReActEngine {
                 if (outcome.action() == RoundAction.RETURN_RESULT) {
                     ReActResult r = outcome.result();
                     if (r.loopStats() == null) {
-                        ReActLoopStats stats = new ReActLoopStats("completed", i, totalToolCalls, reflectionChecks,
+                        String loopOutcome = confirmationOutcome(outcome.inspectionStatus());
+                        ReActLoopStats stats = new ReActLoopStats(loopOutcome, i, totalToolCalls, reflectionChecks,
                                 totalInputTokens, totalOutputTokens, llmCalls, toolRetries);
                         return new ReActResult(r.output(), r.steps(), r.artifacts(), stats);
                     }
@@ -244,21 +256,31 @@ public class ReActEngine {
                                       AgentTrace.Builder traceBuilder, ReActListener listener,
                                       com.harness.core.model.CancellationToken cancellationToken,
                                       Boolean enableThinking) {
+        return streamExecute(systemPrompt, userMessage, historyMessages, traceBuilder, listener,
+                cancellationToken, enableThinking, null);
+    }
+
+    public ReActResult streamExecute(String systemPrompt, String userMessage, List<ChatMessage> historyMessages,
+                                      AgentTrace.Builder traceBuilder, ReActListener listener,
+                                      com.harness.core.model.CancellationToken cancellationToken,
+                                      Boolean enableThinking,
+                                      ConfirmationExecutionContext confirmationContext) {
         if (streamingChatModel == null) {
             log.warn("[L3-ReAct] Falling back to blocking mode (streaming unavailable)");
-            return execute(systemPrompt, userMessage, historyMessages, traceBuilder, listener, cancellationToken, enableThinking);
+            return execute(systemPrompt, userMessage, historyMessages, traceBuilder, listener,
+                    cancellationToken, enableThinking, confirmationContext);
         }
 
         long loopStart = System.currentTimeMillis();
         log.debug("[L3-ReAct] Starting STREAMING ReAct loop: maxIterations={}, tools={}",
-                maxIterations, toolRegistry.size());
+                maxIterations, toolCatalog.size());
 
         List<ChatMessage> messages = new ArrayList<>();
         messages.add(SystemMessage.from(systemPrompt));
         messages.addAll(historyMessages);
         messages.add(UserMessage.from(userMessage));
 
-        List<ToolSpecification> toolSpecs = toToolSpecifications(toolRegistry.getAll());
+        List<ToolSpecification> toolSpecs = toToolSpecifications(toolCatalog.getAll());
         List<ReActStep> allSteps = new ArrayList<>();
         List<Artifact> allArtifacts = new ArrayList<>();
         ChatRequestParameters thinkingParams = buildThinkingParams(enableThinking);
@@ -360,7 +382,8 @@ public class ReActEngine {
                 totalToolCalls += toolReqs.size();
                 log.debug("[L3-ReAct] Streaming: LLM requested {} tool calls", toolReqs.size());
 
-                ToolExecutionOutput toolOutput = executeToolCalls(toolReqs, messages, allArtifacts, listener, cancellationToken);
+                ToolExecutionOutput toolOutput = executeToolCalls(
+                        toolReqs, messages, allArtifacts, listener, cancellationToken, confirmationContext);
                 if (toolOutput.earlyReturn() != null) return toolOutput.earlyReturn();
 
                 // Post-tool processing: inspection, hints, adaptive reflection
@@ -374,7 +397,8 @@ public class ReActEngine {
                 if (outcome.action() == RoundAction.RETURN_RESULT) {
                     ReActResult r = outcome.result();
                     if (r.loopStats() == null) {
-                        ReActLoopStats stats = new ReActLoopStats("completed", i, totalToolCalls, reflectionChecks,
+                        String loopOutcome = confirmationOutcome(outcome.inspectionStatus());
+                        ReActLoopStats stats = new ReActLoopStats(loopOutcome, i, totalToolCalls, reflectionChecks,
                                 totalInputTokens, totalOutputTokens, llmCalls, toolRetries);
                         return new ReActResult(r.output(), r.steps(), r.artifacts(), stats);
                     }
@@ -405,7 +429,8 @@ public class ReActEngine {
      * @return the tool result
      */
     private ToolResult executeWithRetry(ToolCall toolCall, ReActListener listener,
-                                        com.harness.core.model.CancellationToken cancellationToken) {
+                                        com.harness.core.model.CancellationToken cancellationToken,
+                                        ConfirmationExecutionContext confirmationContext) {
         if (cancellationToken != null && cancellationToken.isCancelled()) {
             return ToolResult.fail(toolCall.id(), toolCall.toolName(), "Cancelled", 0);
         }
@@ -414,15 +439,24 @@ public class ReActEngine {
         if (cancellationToken != null) cancellationToken.trackCurrentThread();
 
         // Register CancellableTool's cancel callback
-        com.harness.tool.CancellableTool cancellableTool = null;
-        Tool tool = toolRegistry.get(toolCall.toolName());
-        if (tool instanceof com.harness.tool.CancellableTool ct) {
-            cancellableTool = ct;
-            cancellationToken.addCancelCallback(ct::cancel);
+        Runnable cancelCallback = null;
+        Tool tool = toolCatalog.get(toolCall.toolName());
+        if (tool == null) {
+            log.warn("[L3-ReAct] Blocked unavailable tool call: {}", toolCall.toolName());
+            return ToolResult.fail(
+                    toolCall.id(),
+                    toolCall.toolName(),
+                    "Tool is unavailable for this agent run: " + toolCall.toolName(),
+                    0);
+        }
+        if (cancellationToken != null && tool instanceof com.harness.tool.CancellableTool ct) {
+            cancelCallback = ct::cancel;
+            cancellationToken.addCancelCallback(cancelCallback);
         }
 
         try {
-            ToolResult result = toolExecutor.execute(toolCall);
+            ToolResult result = toolExecutor.executeAuthorized(
+                    toolCall, tool, confirmationContext);
 
             if (result.success()) {
                 return result;
@@ -435,8 +469,8 @@ public class ReActEngine {
             if (cancellationToken != null) {
                 cancellationToken.untrackCurrentThread();
                 // Unregister CancellableTool's cancel callback
-                if (cancellableTool != null) {
-                    cancellationToken.removeCancelCallback(cancellableTool::cancel);
+                if (cancelCallback != null) {
+                    cancellationToken.removeCancelCallback(cancelCallback);
                 }
             }
         }
@@ -444,72 +478,13 @@ public class ReActEngine {
 
     private List<ToolSpecification> toToolSpecifications(List<ToolSpec> specs) {
         return specs.stream().map(s -> {
-            JsonObjectSchema params = buildJsonSchema(s.parameters());
+            JsonObjectSchema params = JsonSchemaConverter.toObjectSchema(s.parameters());
             return ToolSpecification.builder()
                     .name(s.name())
                     .description(s.description())
                     .parameters(params)
                     .build();
         }).toList();
-    }
-
-    /**
-     * Convert OpenAI-format JSON schema (JsonNode) to LangChain4j JsonObjectSchema.
-     */
-    private JsonObjectSchema buildJsonSchema(JsonNode schemaNode) {
-        if (schemaNode == null || schemaNode.isNull()) {
-            return null;
-        }
-        JsonObjectSchema.Builder builder = JsonObjectSchema.builder();
-
-        JsonNode properties = schemaNode.get("properties");
-        if (properties != null && properties.isObject()) {
-            properties.fields().forEachRemaining(entry -> {
-                String name = entry.getKey();
-                JsonNode prop = entry.getValue();
-                String type = prop.has("type") ? prop.get("type").asText() : "string";
-                String desc = prop.has("description") ? prop.get("description").asText() : null;
-
-                switch (type) {
-                    case "string" -> {
-                        if (prop.has("enum") && prop.get("enum").isArray()) {
-                            List<String> enumValues = new ArrayList<>();
-                            prop.get("enum").forEach(e -> enumValues.add(e.asText()));
-                            builder.addEnumProperty(name, enumValues, desc);
-                        } else if (desc != null) {
-                            builder.addStringProperty(name, desc);
-                        } else {
-                            builder.addStringProperty(name);
-                        }
-                    }
-                    case "integer" -> {
-                        if (desc != null) builder.addIntegerProperty(name, desc);
-                        else builder.addIntegerProperty(name);
-                    }
-                    case "number" -> {
-                        if (desc != null) builder.addNumberProperty(name, desc);
-                        else builder.addNumberProperty(name);
-                    }
-                    case "boolean" -> {
-                        if (desc != null) builder.addBooleanProperty(name, desc);
-                        else builder.addBooleanProperty(name);
-                    }
-                    default -> {
-                        if (desc != null) builder.addStringProperty(name, desc);
-                        else builder.addStringProperty(name);
-                    }
-                }
-            });
-        }
-
-        JsonNode required = schemaNode.get("required");
-        if (required != null && required.isArray()) {
-            List<String> reqList = new ArrayList<>();
-            required.forEach(r -> reqList.add(r.asText()));
-            builder.required(reqList);
-        }
-
-        return builder.build();
     }
 
     private JsonNode parseArgs(String arguments) {
@@ -568,6 +543,15 @@ public class ReActEngine {
         return s != null && s.length() > 200 ? s.substring(0, 200) + "..." : s;
     }
 
+    private String confirmationOutcome(ReActStep.InspectionResult.InspectionStatus status) {
+        return switch (status) {
+            case CONFIRMATION_REQUIRED -> "confirmation_required";
+            case CONFIRMATION_REJECTED -> "confirmation_rejected";
+            case CONFIRMATION_EXPIRED -> "confirmation_expired";
+            default -> "completed";
+        };
+    }
+
     // ── Shared helpers to deduplicate execute() / streamExecute() ──────────
 
     private enum RoundAction { CONTINUE, RETURN_RESULT }
@@ -598,7 +582,8 @@ public class ReActEngine {
                                                  List<ChatMessage> messages,
                                                  List<Artifact> allArtifacts,
                                                  ReActListener listener,
-                                                 com.harness.core.model.CancellationToken cancellationToken) {
+                                                 com.harness.core.model.CancellationToken cancellationToken,
+                                                 ConfirmationExecutionContext confirmationContext) {
         List<ToolCall> toolCalls = new ArrayList<>();
         List<ToolResult> toolResults = new ArrayList<>();
 
@@ -615,8 +600,8 @@ public class ReActEngine {
                 return new ToolExecutionOutput(toolCalls, toolResults, cancelledResult(null, allArtifacts));
             }
 
-            // Emit tool_call_start just before actual execution
-            if (listener != null) {
+            // Interactive execution emits this only after approval, immediately before tool.execute().
+            if (listener != null && confirmationContext == null) {
                 listener.onToolCallStart(toolReq.name(), toolReq.arguments());
             }
 
@@ -625,13 +610,11 @@ public class ReActEngine {
             toolCalls.add(tc);
 
             log.debug("[L3-ReAct] Executing tool: {}", tc.toolName());
-            long toolStart = System.currentTimeMillis();
-            ToolResult result = executeWithRetry(tc, listener, cancellationToken);
-            long toolDuration = System.currentTimeMillis() - toolStart;
+            ToolResult result = executeWithRetry(tc, listener, cancellationToken, confirmationContext);
             toolResults.add(result);
 
             if (listener != null) {
-                listener.onToolCallDone(tc.toolName(), result.success(), toolDuration);
+                listener.onToolCallDone(tc.toolName(), result.success(), result.durationMs());
             }
 
             // Check cancellation after long-running tool execution
@@ -641,7 +624,7 @@ public class ReActEngine {
             }
 
             if (result.success() && result.output() != null) {
-                Tool tool = toolRegistry.get(tc.toolName());
+                Tool tool = toolCatalog.get(tc.toolName());
                 if (tool instanceof ArtifactProducingTool) {
                     parseArtifacts(result.output(), allArtifacts, OBJECT_MAPPER, listener);
                 }
@@ -677,6 +660,16 @@ public class ReActEngine {
                 inspection);
         allSteps.add(step);
         if (listener != null) listener.onStep(step);
+
+        if (inspection.status() == ReActStep.InspectionResult.InspectionStatus.CONFIRMATION_REQUIRED
+                || inspection.status() == ReActStep.InspectionResult.InspectionStatus.CONFIRMATION_REJECTED
+                || inspection.status() == ReActStep.InspectionResult.InspectionStatus.CONFIRMATION_EXPIRED) {
+            return new RoundOutcome(
+                    RoundAction.RETURN_RESULT,
+                    new ReActResult(inspection.reason(), allSteps, allArtifacts),
+                    false,
+                    inspection.status());
+        }
 
         // Inspection hint injection (for non-PASS statuses)
         if (inspection.status() != ReActStep.InspectionResult.InspectionStatus.PASS) {

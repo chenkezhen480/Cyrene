@@ -24,6 +24,7 @@ import java.util.concurrent.TimeUnit;
  */
 public class WebSearchTool implements Tool {
 
+    public static final String TOOL_NAME = "web_search";
     private static final Logger log = LoggerFactory.getLogger(WebSearchTool.class);
 
     private final ObjectMapper mapper = new ObjectMapper();
@@ -44,7 +45,7 @@ public class WebSearchTool implements Tool {
     @Override
     public ToolSpec spec() {
         return new ToolSpec(
-                "web_search",
+                TOOL_NAME,
                 "Search the web for real-time information. Use this tool when: the user asks about current events, news, recent developments, today's weather/stock/price, or any question that requires up-to-date information not in your training data. Also use when the user explicitly asks to search or look up something online.",
                 mapper.createObjectNode()
                         .put("type", "object")
@@ -63,7 +64,7 @@ public class WebSearchTool implements Tool {
     public String execute(JsonNode arguments) {
         String query = arguments.has("query") ? arguments.get("query").asText() : null;
         if (query == null || query.isBlank()) {
-            throw new ToolExecutionException("web_search", "Missing required parameter: query");
+            throw new ToolExecutionException(TOOL_NAME, "Missing required parameter: query");
         }
 
         String encoded = URLEncoder.encode(query, StandardCharsets.UTF_8);

@@ -18,6 +18,8 @@ public record StreamEvent(
         TOOL_CALL_CREATED,
         TOOL_CALL_START,
         TOOL_CALL_DONE,
+        CONFIRMATION_REQUIRED,
+        CONFIRMATION_RESOLVED,
         COMPRESS,
         ARTIFACT,
         DONE,
@@ -61,6 +63,34 @@ public record StreamEvent(
         ));
     }
 
+    public static StreamEvent confirmationRequired(
+            String requestId,
+            String toolName,
+            Object arguments,
+            String argumentsHash,
+            String summary,
+            String riskLevel,
+            String expiresAt) {
+        Map<String, Object> metadata = new java.util.HashMap<>();
+        metadata.put("requestId", requestId);
+        metadata.put("toolName", toolName);
+        metadata.put("arguments", arguments);
+        metadata.put("argumentsHash", argumentsHash);
+        metadata.put("summary", summary != null ? summary : "");
+        metadata.put("riskLevel", riskLevel);
+        metadata.put("expiresAt", expiresAt);
+        return new StreamEvent(Type.CONFIRMATION_REQUIRED, "", metadata);
+    }
+
+    public static StreamEvent confirmationResolved(
+            String requestId, String toolName, String decision) {
+        return new StreamEvent(Type.CONFIRMATION_RESOLVED, "", Map.of(
+                "requestId", requestId,
+                "toolName", toolName,
+                "decision", decision
+        ));
+    }
+
     public static StreamEvent done(String output, String traceId, String sessionId, int steps) {
         return new StreamEvent(Type.DONE, output, Map.of(
                 "traceId", traceId,
@@ -70,10 +100,16 @@ public record StreamEvent(
     }
 
     public static StreamEvent done(String output, String traceId, String sessionId, int steps, java.util.List<Artifact> artifacts) {
+        return done(output, traceId, sessionId, steps, artifacts, false);
+    }
+
+    public static StreamEvent done(String output, String traceId, String sessionId, int steps,
+                                   java.util.List<Artifact> artifacts, boolean requiresConfirmation) {
         Map<String, Object> meta = new java.util.HashMap<>();
         meta.put("traceId", traceId);
         meta.put("sessionId", sessionId != null ? sessionId : "");
         meta.put("steps", steps);
+        meta.put("requiresConfirmation", requiresConfirmation);
         meta.put("artifacts", artifacts != null ? artifacts.stream().map(a -> Map.of(
                 "id", a.id(),
                 "name", a.name() != null ? a.name() : "",

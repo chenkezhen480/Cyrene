@@ -50,7 +50,7 @@ public class MysqlSessionStore implements SessionStore {
                 return Optional.of(mapSession(rs));
             }
         } catch (SQLException e) {
-            log.error("Failed to find session {}: {}", sessionId, e.getMessage(), e);
+            throw new MemoryStoreException("Failed to find active session " + sessionId, e);
         }
         return Optional.empty();
     }
@@ -186,7 +186,7 @@ public class MysqlSessionStore implements SessionStore {
                 return Optional.of(mapSession(rs));
             }
         } catch (SQLException e) {
-            log.error("Failed to find session by id {}: {}", sessionId, e.getMessage(), e);
+            throw new MemoryStoreException("Failed to find session " + sessionId, e);
         }
         return Optional.empty();
     }
@@ -210,7 +210,7 @@ public class MysqlSessionStore implements SessionStore {
             params.add(Timestamp.from(cursor));
         }
         sql.append(" ORDER BY last_active DESC LIMIT ?");
-        params.add(Math.min(limit, 100));
+        params.add(limit);
 
         List<Session> sessions = new ArrayList<>();
         try (Connection conn = MysqlConnectionPool.getConnection(); PreparedStatement ps = conn.prepareStatement(sql.toString())) {
@@ -225,7 +225,7 @@ public class MysqlSessionStore implements SessionStore {
                 sessions.add(mapSession(rs));
             }
         } catch (SQLException e) {
-            log.error("Failed to find sessions: {}", e.getMessage(), e);
+            throw new MemoryStoreException("Failed to list sessions", e);
         }
         return sessions;
     }

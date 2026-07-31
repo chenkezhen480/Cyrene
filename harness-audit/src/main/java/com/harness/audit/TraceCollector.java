@@ -74,6 +74,23 @@ public class TraceCollector {
                 risk, output != null ? output.length() : 0, userConfirmed);
     }
 
+    public synchronized void recordConfirmation(
+            String requestId, String toolName, String argumentsHash, String decision) {
+        java.util.Map<String, String> meta =
+                new java.util.HashMap<>(builder.build().metadata());
+        int confirmationCount = Integer.parseInt(
+                meta.getOrDefault("confirmation_count", "0")) + 1;
+        String prefix = "confirmation_" + confirmationCount + "_";
+        meta.put("confirmation_count", String.valueOf(confirmationCount));
+        meta.put(prefix + "request_id", requestId);
+        meta.put(prefix + "tool", toolName);
+        meta.put(prefix + "arguments_hash", argumentsHash);
+        meta.put(prefix + "decision", decision);
+        builder.metadata(meta);
+        log.debug("[L5-Trace] Confirmation recorded: requestId={}, tool={}, decision={}",
+                requestId, toolName, decision);
+    }
+
     // ==================== ReAct Loop Stats ====================
 
     /**

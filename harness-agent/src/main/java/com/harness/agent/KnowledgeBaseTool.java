@@ -37,6 +37,7 @@ import java.util.List;
  */
 public class KnowledgeBaseTool implements Tool {
 
+    public static final String TOOL_NAME = "knowledge_base_search";
     private static final Logger log = LoggerFactory.getLogger(KnowledgeBaseTool.class);
     private static final ObjectMapper mapper = new ObjectMapper();
 
@@ -69,7 +70,7 @@ public class KnowledgeBaseTool implements Tool {
     @Override
     public ToolSpec spec() {
         return new ToolSpec(
-                "knowledge_base_search",
+                TOOL_NAME,
                 "Search the knowledge base for relevant documents. " +
                         "Use this tool when the user's question may benefit from internal knowledge, documentation, or reference materials. " +
                         "The query MUST be a complete, standalone question that can be understood without any conversation context. " +
@@ -94,13 +95,13 @@ public class KnowledgeBaseTool implements Tool {
     public String execute(JsonNode arguments) {
         String query = arguments.has("query") ? arguments.get("query").asText() : null;
         if (query == null || query.isBlank()) {
-            throw new ToolExecutionException("knowledge_base_search", "Missing required parameter: query");
+            throw new ToolExecutionException(TOOL_NAME, "Missing required parameter: query");
         }
 
         // 读取 ReActStep 历史，判断是否需要升级为 rewrite 模式
         // 模型全程不知道有这个开关——由引擎根据上一次的 InspectionStatus 自动决定
         ReActStep.InspectionResult.InspectionStatus lastStatus =
-                ReActStep.getLastInspectionStatus("knowledge_base_search");
+                ReActStep.getLastInspectionStatus(TOOL_NAME);
         boolean forceRewrite = lastStatus == ReActStep.InspectionResult.InspectionStatus.INSUFFICIENT;
 
         log.info("[KnowledgeBaseTool] query=\"{}\", lastStatus={}, forceRewrite={}",

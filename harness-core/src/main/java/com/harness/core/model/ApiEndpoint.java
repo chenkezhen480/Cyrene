@@ -30,8 +30,6 @@ public record ApiEndpoint(
     public ApiEndpoint {
         if (id == null || id.isBlank()) id = "";
         if (method == null) method = "GET";
-        if (confirmed == false) confirmed = false; // default
-        if (riskAcknowledged == false) riskAcknowledged = false;
     }
 
     /**

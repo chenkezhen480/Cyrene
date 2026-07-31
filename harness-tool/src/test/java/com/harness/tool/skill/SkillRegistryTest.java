@@ -71,42 +71,6 @@ class SkillRegistryTest {
     }
 
     @Test
-    void clearSession_removesLoadedSkills() {
-        Skill skill = createSkill("loaded-skill", "desc");
-        registry.markLoaded("sess1", "loaded-skill", skill);
-
-        registry.clearSession("sess1");
-
-        assertThat(registry.getLoadedSkills("sess1")).isEmpty();
-    }
-
-    @Test
-    void markLoaded_thenGetLoadedSkills() {
-        Skill skill = createSkill("skill-x", "desc");
-        registry.markLoaded("sess1", "skill-x", skill);
-
-        List<Skill> loaded = registry.getLoadedSkills("sess1");
-        assertThat(loaded).hasSize(1);
-        assertThat(loaded.get(0).name()).isEqualTo("skill-x");
-    }
-
-    @Test
-    void markLoaded_nullSession_noOp() {
-        registry.markLoaded(null, "skill", createSkill("skill", "desc"));
-        assertThat(registry.getLoadedSkills(null)).isEmpty();
-    }
-
-    @Test
-    void getLoadedSkills_nullSession_returnsEmpty() {
-        assertThat(registry.getLoadedSkills(null)).isEmpty();
-    }
-
-    @Test
-    void getLoadedSkills_unknownSession_returnsEmpty() {
-        assertThat(registry.getLoadedSkills("unknown")).isEmpty();
-    }
-
-    @Test
     void listAll_empty_returnsEmpty() {
         assertThat(registry.listAll("sess1")).isEmpty();
     }

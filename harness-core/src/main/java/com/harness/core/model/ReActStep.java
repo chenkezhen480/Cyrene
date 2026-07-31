@@ -92,6 +92,9 @@ public record ReActStep(
             TOOL_ERROR,     // Tool execution failed
             WRONG_TOOL,     // Wrong tool was selected
             INSUFFICIENT,   // Result doesn't fully answer the question
+            CONFIRMATION_REQUIRED, // Tool was blocked pending explicit confirmation
+            CONFIRMATION_REJECTED, // User rejected the pending tool execution
+            CONFIRMATION_EXPIRED,  // User did not decide before expiry
             LOOP_DETECTED   // Repeated tool calls detected — force stop
         }
     }

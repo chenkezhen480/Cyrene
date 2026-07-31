@@ -23,6 +23,7 @@ services:
       - knowledge-uploads:/app/knowledge-uploads
       # 产物存储
       - artifacts:/app/artifacts
+      - ./neo4j/schemas:/app/graph-schemas
       # Docker socket（沙盒容器需要）
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
@@ -32,7 +33,10 @@ services:
       - HARNESS_AUDIT_DB_USER=root
       - HARNESS_AUDIT_DB_PASS=${HARNESS_AUDIT_DB_PASS:-cyrene123}
       - HARNESS_MEMORY_REDIS_URL=redis://redis:6379
+      - HARNESS_GRAPH_NEO4J_URI=bolt://neo4j:7687
+      - HARNESS_GRAPH_SCHEMA_DIR=/app/graph-schemas
       - HARNESS_TOOL_WEB_SEARCH_SEARXNG_URL=http://searxng:8080
+      - HARNESS_TOOL_BROWSER_WORKER_URL=http://browser-worker:8081
     depends_on:
       mysql:
         condition: service_healthy
@@ -42,6 +46,38 @@ services:
         condition: service_healthy
       searxng:
         condition: service_healthy
+      browser-worker:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - cyrene-net
+
+  # ============================================================
+  # Browser Worker - isolated Python + Playwright page control
+  # ============================================================
+  browser-worker:
+    build:
+      context: ./browser-worker
+      dockerfile: Dockerfile
+    container_name: cyrene-browser-worker
+    env_file:
+      - ../.env
+    user: pwuser
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=512m
+    shm_size: "1gb"
+    mem_limit: 1g
+    cpus: 1.0
+    environment:
+      - BROWSER_HEADLESS=true
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8081/health', timeout=2)"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
     restart: unless-stopped
     networks:
       - cyrene-net
@@ -101,6 +137,42 @@ services:
   # ============================================================
   # Redis 7 - 会话缓存（分布式）
   # ============================================================
+  # ============================================================
+  # Neo4j Community - optional structured knowledge graph
+  # Start with: docker compose --profile graph up -d
+  # ============================================================
+  neo4j:
+    image: neo4j:5.26.28
+    container_name: cyrene-neo4j
+    profiles:
+      - graph
+    ports:
+      - "127.0.0.1:${HARNESS_GRAPH_NEO4J_HTTP_PORT:-7474}:7474"
+      - "127.0.0.1:${HARNESS_GRAPH_NEO4J_BOLT_PORT:-7687}:7687"
+    environment:
+      # Empty password makes Neo4j fail explicitly only when the graph profile is started.
+      NEO4J_AUTH: neo4j/${HARNESS_GRAPH_NEO4J_PASSWORD:-}
+      HARNESS_GRAPH_NEO4J_PASSWORD: ${HARNESS_GRAPH_NEO4J_PASSWORD:-}
+      NEO4J_server_memory_heap_initial__size: ${HARNESS_GRAPH_NEO4J_HEAP_INITIAL:-512m}
+      NEO4J_server_memory_heap_max__size: ${HARNESS_GRAPH_NEO4J_HEAP_MAX:-1G}
+      NEO4J_server_memory_pagecache_size: ${HARNESS_GRAPH_NEO4J_PAGECACHE:-512m}
+    volumes:
+      - ./neo4j/data:/data
+      - ./neo4j/logs:/logs
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          cypher-shell -u neo4j -p "$${HARNESS_GRAPH_NEO4J_PASSWORD}"
+          "RETURN 1" >/dev/null 2>&1
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      - cyrene-net
+
   redis:
     image: redis:7-alpine
     container_name: cyrene-redis

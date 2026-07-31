@@ -192,8 +192,26 @@ public final class EnvKey {
     @Deprecated public static final String RAG_FULLTEXT_ENABLED        = "HARNESS_RAG_FULLTEXT_ENABLED";
     /** @deprecated 全文检索语言配置已内聚到 PgVectorStore */
     @Deprecated public static final String RAG_FULLTEXT_LANG           = "HARNESS_RAG_FULLTEXT_LANG";
-    /** 知识图谱检索（预留，暂未实现），默认 false */
-    public static final String RAG_KNOWLEDGE_GRAPH_ENABLED = "HARNESS_RAG_KNOWLEDGE_GRAPH_ENABLED";
+    /** @deprecated Use {@link #GRAPH_PROVIDER}; retained for migration diagnostics only. */
+    @Deprecated public static final String RAG_KNOWLEDGE_GRAPH_ENABLED = "HARNESS_RAG_KNOWLEDGE_GRAPH_ENABLED";
+
+    // ==================== Knowledge Graph ====================
+    /** 图存储 Provider：none | neo4j，默认 none */
+    public static final String GRAPH_PROVIDER = "HARNESS_GRAPH_PROVIDER";
+    public static final String GRAPH_NEO4J_URI = "HARNESS_GRAPH_NEO4J_URI";
+    public static final String GRAPH_NEO4J_USER = "HARNESS_GRAPH_NEO4J_USER";
+    public static final String GRAPH_NEO4J_PASSWORD = "HARNESS_GRAPH_NEO4J_PASSWORD";
+    public static final String GRAPH_NEO4J_DATABASE = "HARNESS_GRAPH_NEO4J_DATABASE";
+    public static final String GRAPH_CONNECT_TIMEOUT_SECONDS = "HARNESS_GRAPH_CONNECT_TIMEOUT_SECONDS";
+    public static final String GRAPH_QUERY_TIMEOUT_SECONDS = "HARNESS_GRAPH_QUERY_TIMEOUT_SECONDS";
+    public static final String GRAPH_MAX_CONNECTION_POOL_SIZE = "HARNESS_GRAPH_MAX_CONNECTION_POOL_SIZE";
+    public static final String GRAPH_QUERY_DEFAULT_LIMIT = "HARNESS_GRAPH_QUERY_DEFAULT_LIMIT";
+    public static final String GRAPH_QUERY_MAX_LIMIT = "HARNESS_GRAPH_QUERY_MAX_LIMIT";
+    public static final String GRAPH_QUERY_DEFAULT_MAX_DEPTH = "HARNESS_GRAPH_QUERY_DEFAULT_MAX_DEPTH";
+    public static final String GRAPH_QUERY_MAX_DEPTH = "HARNESS_GRAPH_QUERY_MAX_DEPTH";
+    public static final String GRAPH_CONTEXT_MAX_ITEMS = "HARNESS_GRAPH_CONTEXT_MAX_ITEMS";
+    public static final String GRAPH_CONTEXT_MAX_CHARS = "HARNESS_GRAPH_CONTEXT_MAX_CHARS";
+    public static final String GRAPH_SCHEMA_DIR = "HARNESS_GRAPH_SCHEMA_DIR";
 
     // ==================== MCP ====================
     public static final String MCP_CONNECT_TIMEOUT   = "HARNESS_MCP_CONNECT_TIMEOUT_MS";
@@ -204,6 +222,26 @@ public final class EnvKey {
     public static final String TOOL_WEB_SEARCH_ENABLED        = "HARNESS_TOOL_WEB_SEARCH_ENABLED";
     /** SearXNG 实例地址，默认 http://localhost:8888 */
     public static final String TOOL_WEB_SEARCH_SEARXNG_URL   = "HARNESS_TOOL_WEB_SEARCH_SEARXNG_URL";
+    public static final String TOOL_URL_READER_ENABLED       = "HARNESS_TOOL_URL_READER_ENABLED";
+    public static final String TOOL_URL_READER_MAX_BYTES     = "HARNESS_TOOL_URL_READER_MAX_BYTES";
+    public static final String TOOL_URL_READER_PAGE_CHARS    = "HARNESS_TOOL_URL_READER_PAGE_CHARS";
+    public static final String TOOL_URL_READER_MAX_PAGE_CHARS =
+            "HARNESS_TOOL_URL_READER_MAX_PAGE_CHARS";
+    public static final String TOOL_URL_READER_TIMEOUT_SECONDS =
+            "HARNESS_TOOL_URL_READER_TIMEOUT_SECONDS";
+    public static final String TOOL_URL_READER_ALLOW_PRIVATE_NETWORKS =
+            "HARNESS_TOOL_URL_READER_ALLOW_PRIVATE_NETWORKS";
+    public static final String TOOL_BROWSER_ENABLED          = "HARNESS_TOOL_BROWSER_ENABLED";
+    public static final String TOOL_BROWSER_WORKER_URL       = "HARNESS_TOOL_BROWSER_WORKER_URL";
+    public static final String TOOL_BROWSER_WORKER_TOKEN     = "HARNESS_TOOL_BROWSER_WORKER_TOKEN";
+    public static final String TOOL_BROWSER_TIMEOUT_SECONDS  =
+            "HARNESS_TOOL_BROWSER_TIMEOUT_SECONDS";
+    public static final String TOOL_BROWSER_ALLOW_PRIVATE_NETWORKS =
+            "HARNESS_TOOL_BROWSER_ALLOW_PRIVATE_NETWORKS";
+    public static final String TOOL_BROWSER_MAX_SESSIONS     =
+            "HARNESS_TOOL_BROWSER_MAX_SESSIONS";
+    public static final String TOOL_BROWSER_SESSION_TTL_SECONDS =
+            "HARNESS_TOOL_BROWSER_SESSION_TTL_SECONDS";
     public static final String TOOL_FFMPEG_ENABLED       = "HARNESS_TOOL_FFMPEG_ENABLED";
     public static final String TOOL_FFMPEG_PATH          = "HARNESS_TOOL_FFMPEG_PATH";
     /** 工具返回结果数量上限（code_glob/code_grep 等），默认 100 */
@@ -240,8 +278,9 @@ public final class EnvKey {
     public static final String AUDIT_RETENTION_DAYS  = "HARNESS_AUDIT_RETENTION_DAYS";
 
     // ==================== Risk ====================
-    public static final String RISK_AUTO_CONFIRM     = "HARNESS_RISK_AUTO_CONFIRM";
     public static final String RISK_CONFIRM_TOOLS    = "HARNESS_RISK_CONFIRM_TOOLS";
+    public static final String RISK_CONFIRMATION_TIMEOUT_SECONDS =
+            "HARNESS_RISK_CONFIRMATION_TIMEOUT_SECONDS";
     public static final String RISK_MAX_FILE_SIZE    = "HARNESS_RISK_MAX_FILE_SIZE_MB";
     public static final String RISK_BLOCKED_DOMAINS  = "HARNESS_RISK_BLOCKED_DOMAINS";
 

@@ -8,6 +8,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -73,11 +74,25 @@ class ToolRegistryTest {
     }
 
     @Test
-    void register_overwritesSameName() {
+    void register_duplicateName_isRejected() {
         Tool first = createTool("search", "first version");
         Tool second = createTool("search", "second version");
         registry.register(first);
-        registry.register(second);
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> registry.register(second))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("search");
+        assertThat(registry.get("search")).isSameAs(first);
+        assertThat(registry.size()).isEqualTo(1);
+    }
+
+    @Test
+    void replace_explicitlyReplacesExistingTool() {
+        Tool first = createTool("search", "first version");
+        Tool second = createTool("search", "second version");
+        registry.register(first);
+
+        registry.replace(second);
 
         assertThat(registry.get("search")).isSameAs(second);
         assertThat(registry.size()).isEqualTo(1);
@@ -90,11 +105,64 @@ class ToolRegistryTest {
 
         List<ToolSpec> specs = registry.getAll();
         assertThat(specs).hasSize(2);
-        assertThat(specs).extracting(ToolSpec::name).containsExactlyInAnyOrder("alpha", "beta");
+        assertThat(specs).extracting(ToolSpec::name).containsExactly("alpha", "beta");
     }
 
     @Test
     void getAll_empty_returnsEmptyList() {
         assertThat(registry.getAll()).isEmpty();
+    }
+
+    @Test
+    void runCatalog_excludesToolFromDefinitionsAndLookup() {
+        registry.register(createTool("allowed", "Allowed tool"));
+        registry.register(createTool("blocked", "Blocked tool"));
+        RunToolCatalog filtered = registry.snapshot().excluding(Set.of("blocked"));
+
+        assertThat(filtered.getAll())
+                .extracting(ToolSpec::name)
+                .containsExactly("allowed");
+        assertThat(filtered.get("blocked")).isNull();
+        assertThat(filtered.contains("blocked")).isFalse();
+        assertThat(filtered.size()).isEqualTo(1);
+    }
+
+    @Test
+    void runCatalog_isUnaffectedByLaterRegistrationAndReplacement() {
+        Tool original = createTool("search", "original");
+        registry.register(original);
+        RunToolCatalog snapshot = registry.snapshot();
+
+        registry.register(createTool("late", "registered later"));
+        registry.replace(createTool("search", "replacement"));
+
+        assertThat(snapshot.getAll())
+                .extracting(ToolSpec::name)
+                .containsExactly("search");
+        assertThat(snapshot.get("search")).isSameAs(original);
+        assertThat(snapshot.get("late")).isNull();
+    }
+
+    @Test
+    void allowlist_doesNotAdmitToolsRegisteredAfterSnapshot() {
+        registry.register(createTool("allowed", "Allowed tool"));
+        RunToolCatalog allowed = registry.snapshot().allowing(Set.of("allowed", "late"));
+
+        registry.register(createTool("late", "Late tool"));
+
+        assertThat(allowed.getAll())
+                .extracting(ToolSpec::name)
+                .containsExactly("allowed");
+        assertThat(allowed.get("late")).isNull();
+    }
+
+    @Test
+    void emptyAllowlist_remainsEmptyAfterRegistryChanges() {
+        RunToolCatalog noTools = registry.snapshot().allowing(Set.of());
+
+        registry.register(createTool("late", "Late tool"));
+
+        assertThat(noTools.getAll()).isEmpty();
+        assertThat(noTools.get("late")).isNull();
     }
 }

@@ -91,6 +91,22 @@ class TraceCollectorTest {
     }
 
     @Test
+    void recordConfirmation_appendsAuditableDecisions() {
+        collector.recordConfirmation("request-1", "update_api", "hash-1", "APPROVED");
+        collector.recordConfirmation("request-2", "delete_api", "hash-2", "REJECTED");
+
+        AgentTrace trace = collector.builder().build();
+        assertThat(trace.metadata())
+                .containsEntry("confirmation_count", "2")
+                .containsEntry("confirmation_1_request_id", "request-1")
+                .containsEntry("confirmation_1_tool", "update_api")
+                .containsEntry("confirmation_1_arguments_hash", "hash-1")
+                .containsEntry("confirmation_1_decision", "APPROVED")
+                .containsEntry("confirmation_2_request_id", "request-2")
+                .containsEntry("confirmation_2_decision", "REJECTED");
+    }
+
+    @Test
     void finish_savesTrace() {
         collector.recordInput("user1", "test", List.of());
         collector.recordOutput("result", RiskLevel.LOW, false);

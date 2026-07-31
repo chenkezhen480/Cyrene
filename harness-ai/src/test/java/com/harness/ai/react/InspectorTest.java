@@ -50,6 +50,42 @@ class InspectorTest {
     }
 
     @Test
+    void inspect_confirmationRequired_returnsConfirmationStatus() {
+        ToolResult result = ToolResult.confirmationRequired(
+                "id1", "dangerous", "Confirmation required");
+
+        var inspection = inspector.inspect(
+                List.of(toolCall("dangerous")), List.of(result));
+
+        assertThat(inspection.status()).isEqualTo(InspectionStatus.CONFIRMATION_REQUIRED);
+        assertThat(inspection.reason()).contains("Confirmation required");
+    }
+
+    @Test
+    void inspect_confirmationRejected_returnsTerminalStatus() {
+        ToolResult result = ToolResult.confirmationRejected(
+                "id1", "dangerous", "User rejected the tool execution");
+
+        var inspection = inspector.inspect(
+                List.of(toolCall("dangerous")), List.of(result));
+
+        assertThat(inspection.status()).isEqualTo(InspectionStatus.CONFIRMATION_REJECTED);
+        assertThat(inspection.reason()).contains("rejected");
+    }
+
+    @Test
+    void inspect_confirmationExpired_returnsTerminalStatus() {
+        ToolResult result = ToolResult.confirmationExpired(
+                "id1", "dangerous", "Tool confirmation request expired");
+
+        var inspection = inspector.inspect(
+                List.of(toolCall("dangerous")), List.of(result));
+
+        assertThat(inspection.status()).isEqualTo(InspectionStatus.CONFIRMATION_EXPIRED);
+        assertThat(inspection.reason()).contains("expired");
+    }
+
+    @Test
     void inspect_exceptionTrace_returnsPass() {
         ToolCall call = toolCall("search");
         ToolResult result = ToolResult.ok("id1", "search",

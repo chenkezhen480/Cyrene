@@ -2,6 +2,8 @@ package com.harness.core.model;
 
 import org.junit.jupiter.api.Test;
 
+import java.util.Map;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 class StreamEventTest {
@@ -50,5 +52,23 @@ class StreamEventTest {
         assertThat(event.type()).isEqualTo(StreamEvent.Type.ERROR);
         assertThat(event.data()).isEqualTo("something went wrong");
         assertThat(event.metadata()).isEmpty();
+    }
+
+    @Test
+    void confirmationRequired_containsApprovalPayload() {
+        var event = StreamEvent.confirmationRequired(
+                "request-1",
+                "delete_file",
+                Map.of("path", "/tmp/a.txt"),
+                "hash",
+                "Delete a file",
+                "HIGH",
+                "2026-07-27T10:00:00Z");
+
+        assertThat(event.type()).isEqualTo(StreamEvent.Type.CONFIRMATION_REQUIRED);
+        assertThat(event.metadata())
+                .containsEntry("requestId", "request-1")
+                .containsEntry("toolName", "delete_file")
+                .containsEntry("riskLevel", "HIGH");
     }
 }

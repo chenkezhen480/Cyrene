@@ -1,5 +1,7 @@
 # Build
 target/
+__pycache__/
+*.py[cod]
 *.class
 *.jar
 *.war
@@ -39,3 +41,14 @@ jacoco.exec
 
 # Knowledge uploads (runtime data)
 knowledge-uploads/
+
+# Legacy user-managed graph Schema location
+graph-schemas/
+
+# Knowledge graph runtime data
+docker/neo4j/data/*
+!docker/neo4j/data/.gitkeep
+docker/neo4j/logs/*
+!docker/neo4j/logs/.gitkeep
+docker/neo4j/schemas/*
+!docker/neo4j/schemas/.gitkeep

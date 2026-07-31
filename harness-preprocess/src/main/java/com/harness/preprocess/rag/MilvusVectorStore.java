@@ -3,7 +3,6 @@ package com.harness.preprocess.rag;
 import com.harness.ai.model.EmbeddingModelProvider;
 import com.harness.env.EnvConfig;
 import com.harness.env.EnvKey;
-import com.harness.env.MilvusConnectionPool;
 import com.google.gson.JsonObject;
 import dev.langchain4j.data.embedding.Embedding;
 import io.milvus.v2.client.MilvusClientV2;

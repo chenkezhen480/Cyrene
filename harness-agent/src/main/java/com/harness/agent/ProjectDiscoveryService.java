@@ -7,6 +7,7 @@ import com.harness.ai.react.ReActEngine;
 import com.harness.core.model.*;
 import com.harness.tool.ToolExecutor;
 import com.harness.tool.ToolRegistry;
+import com.harness.tool.confirmation.ConfirmationManager;
 import com.harness.tool.discovery.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -35,9 +36,12 @@ public class ProjectDiscoveryService {
     private static final Logger log = LoggerFactory.getLogger(ProjectDiscoveryService.class);
 
     private final ChatModelProvider chatModelProvider;
+    private final ConfirmationManager confirmationManager;
 
-    public ProjectDiscoveryService(ChatModelProvider chatModelProvider) {
+    public ProjectDiscoveryService(ChatModelProvider chatModelProvider,
+                                   ConfirmationManager confirmationManager) {
         this.chatModelProvider = chatModelProvider;
+        this.confirmationManager = confirmationManager;
     }
 
     /**
@@ -87,11 +91,11 @@ public class ProjectDiscoveryService {
         discoveryRegistry.register(new CodeGlobTool(sourceRoot, excludes));
         discoveryRegistry.register(new CodeGrepTool(sourceRoot, excludes));
         discoveryRegistry.register(new ReadClassHierarchyTool(sourceRoot));
-        ToolExecutor discoveryExecutor = new ToolExecutor(discoveryRegistry);
+        ToolExecutor discoveryExecutor = new ToolExecutor(confirmationManager);
 
         // Create ReActEngine with discovery tools
         ReActEngine engine = new ReActEngine(
-                chatModelProvider, discoveryRegistry, discoveryExecutor, null, null);
+                chatModelProvider, discoveryRegistry.snapshot(), discoveryExecutor, null, null);
 
         String systemPrompt = buildDiscoveryPrompt(sourceRoot);
         String userMessage = "请扫描此项目，发现所有 REST API 接口并构建完整的参数 JSON Schema。";

@@ -1,6 +1,7 @@
 package com.harness.preprocess.rag;
 
 import com.harness.ai.model.EmbeddingModelProvider;
+import com.harness.core.concurrent.BlockingTaskExecutor;
 import com.harness.env.EnvConfig;
 import com.harness.env.EnvKey;
 import com.harness.env.PgConnectionPool;
@@ -260,9 +261,9 @@ public class PgVectorStore implements VectorStore {
         double vectorWeight = 1.0 - bm25Weight;
 
         CompletableFuture<List<Document>> vectorFuture = CompletableFuture.supplyAsync(() ->
-                searchVector(collection, embedding, topK * 2));
+                searchVector(collection, embedding, topK * 2), BlockingTaskExecutor.shared());
         CompletableFuture<List<Document>> keywordFuture = CompletableFuture.supplyAsync(() ->
-                searchKeyword(collection, query, topK * 2));
+                searchKeyword(collection, query, topK * 2), BlockingTaskExecutor.shared());
 
         CompletableFuture.allOf(vectorFuture, keywordFuture).join();
 

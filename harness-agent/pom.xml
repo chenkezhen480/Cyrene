@@ -44,6 +44,10 @@
             <artifactId>harness-audit</artifactId>
         </dependency>
         <dependency>
+            <groupId>com.harness</groupId>
+            <artifactId>harness-graph</artifactId>
+        </dependency>
+        <dependency>
             <groupId>dev.langchain4j</groupId>
             <artifactId>langchain4j</artifactId>
         </dependency>

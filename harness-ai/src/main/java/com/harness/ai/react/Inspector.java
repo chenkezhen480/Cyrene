@@ -70,6 +70,21 @@ public class Inspector {
             return new InspectionResult(InspectionStatus.PASS, "no tool results to inspect");
         }
 
+        for (ToolResult result : toolResults) {
+            if (result.status() == ToolResult.ResultStatus.CONFIRMATION_REQUIRED) {
+                String detail = result.error() != null ? result.error() : "explicit confirmation is required";
+                return new InspectionResult(InspectionStatus.CONFIRMATION_REQUIRED, detail);
+            }
+            if (result.status() == ToolResult.ResultStatus.CONFIRMATION_REJECTED) {
+                String detail = result.error() != null ? result.error() : "tool execution was rejected";
+                return new InspectionResult(InspectionStatus.CONFIRMATION_REJECTED, detail);
+            }
+            if (result.status() == ToolResult.ResultStatus.CONFIRMATION_EXPIRED) {
+                String detail = result.error() != null ? result.error() : "tool confirmation expired";
+                return new InspectionResult(InspectionStatus.CONFIRMATION_EXPIRED, detail);
+            }
+        }
+
         // Check for tool errors first (TOOL_ERROR)
         for (ToolResult result : toolResults) {
             if (!result.success()) {
@@ -110,6 +125,18 @@ public class Inspector {
                                     + "Try a different tool, rephrase your query, or output the final answer with available information.");
                     case SUCCESS -> new InspectionResult(InspectionStatus.PASS,
                             "Tool '" + result.toolName() + "' explicitly reported success");
+                    case CONFIRMATION_REQUIRED -> new InspectionResult(
+                            InspectionStatus.CONFIRMATION_REQUIRED,
+                            "Tool '" + result.toolName() + "' requires explicit confirmation");
+                    case CONFIRMATION_REJECTED -> new InspectionResult(
+                            InspectionStatus.CONFIRMATION_REJECTED,
+                            "Tool '" + result.toolName() + "' was rejected by the user");
+                    case CONFIRMATION_EXPIRED -> new InspectionResult(
+                            InspectionStatus.CONFIRMATION_EXPIRED,
+                            "Tool '" + result.toolName() + "' confirmation expired");
+                    case CONFIRMATION_CANCELLED -> new InspectionResult(
+                            InspectionStatus.CONFIRMATION_REJECTED,
+                            "Tool '" + result.toolName() + "' confirmation was cancelled");
                 };
             }
         }
@@ -156,6 +183,12 @@ public class Inspector {
             case INSUFFICIENT -> "[Inspection] Insufficient result: " + result.reason();
             case LOOP_DETECTED -> "[Inspection] Loop detected: " + result.reason()
                     + ". You MUST output the final answer now based on available information.";
+            case CONFIRMATION_REQUIRED -> "[Inspection] Confirmation required: " + result.reason()
+                    + ". Stop and wait for explicit user confirmation.";
+            case CONFIRMATION_REJECTED -> "[Inspection] Tool execution rejected: " + result.reason()
+                    + ". Do not retry this operation.";
+            case CONFIRMATION_EXPIRED -> "[Inspection] Tool confirmation expired: " + result.reason()
+                    + ". Do not retry this operation without a new user request.";
             case PASS -> null;
         };
     }

@@ -3,6 +3,8 @@ package com.harness.server;
 import com.harness.env.EnvConfig;
 import com.harness.env.EnvKey;
 import com.harness.input.auth.JwtUtil;
+import com.harness.server.api.ApiErrorCode;
+import com.harness.server.api.ApiResponses;
 import io.javalin.http.Context;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -43,11 +45,12 @@ public class AuthHandler {
 
             if ((req.userId() == null || req.userId().isBlank())
                     && (req.username() == null || req.username().isBlank())) {
-                ctx.status(400).json(Map.of("error", "userId or username is required"));
+                ApiResponses.error(ctx, 400, ApiErrorCode.INVALID_REQUEST,
+                        "userId or username is required");
                 return;
             }
             if (req.password() == null || req.password().isBlank()) {
-                ctx.status(400).json(Map.of("error", "password is required"));
+                ApiResponses.error(ctx, 400, ApiErrorCode.INVALID_REQUEST, "password is required");
                 return;
             }
 
@@ -59,7 +62,7 @@ public class AuthHandler {
             String userId = verifyCredentials(identifier, req.password());
             if (userId == null) {
                 log.warn("[Server] Auth failed for identifier={}", identifier);
-                ctx.status(401).json(Map.of("error", "Invalid credentials"));
+                ApiResponses.error(ctx, 401, ApiErrorCode.UNAUTHORIZED, "Invalid credentials");
                 return;
             }
 
@@ -77,7 +80,7 @@ public class AuthHandler {
         } catch (Exception e) {
             long duration = System.currentTimeMillis() - start;
             log.error("[Server] Auth error after {}ms: {}", duration, e.getMessage(), e);
-            ctx.status(500).json(Map.of("error", e.getMessage()));
+            ApiResponses.error(ctx, 500, ApiErrorCode.INTERNAL_ERROR, e.getMessage());
         }
     }
 

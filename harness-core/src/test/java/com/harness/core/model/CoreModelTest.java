@@ -117,6 +117,9 @@ class CoreModelTest {
                 ReActStep.InspectionResult.InspectionStatus.TOOL_ERROR,
                 ReActStep.InspectionResult.InspectionStatus.WRONG_TOOL,
                 ReActStep.InspectionResult.InspectionStatus.INSUFFICIENT,
+                ReActStep.InspectionResult.InspectionStatus.CONFIRMATION_REQUIRED,
+                ReActStep.InspectionResult.InspectionStatus.CONFIRMATION_REJECTED,
+                ReActStep.InspectionResult.InspectionStatus.CONFIRMATION_EXPIRED,
                 ReActStep.InspectionResult.InspectionStatus.LOOP_DETECTED);
     }
 

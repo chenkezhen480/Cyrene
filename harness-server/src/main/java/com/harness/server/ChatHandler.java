@@ -8,6 +8,8 @@ import com.harness.env.EnvConfig;
 import com.harness.env.EnvKey;
 import com.harness.input.auth.JwtUtil;
 import com.harness.input.multimodal.MultimodalParser;
+import com.harness.server.api.ApiErrorCode;
+import com.harness.server.api.ApiResponses;
 import com.harness.tool.HttpApiTool;
 import io.javalin.http.Context;
 import io.jsonwebtoken.Claims;
@@ -19,8 +21,10 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class ChatHandler {
@@ -64,7 +68,8 @@ public class ChatHandler {
                 String authHeader = ctx.header("Authorization");
                 if (authHeader == null || !authHeader.startsWith("Bearer ")) {
                     log.warn("[Server] Missing or invalid Authorization header");
-                    ctx.status(401).json(Map.of("error", "Missing Bearer token"));
+                    ApiResponses.error(
+                            ctx, 401, ApiErrorCode.UNAUTHORIZED, "Missing Bearer token");
                     return;
                 }
                 rawToken = authHeader.substring(7);
@@ -81,7 +86,8 @@ public class ChatHandler {
                     }
                 } catch (Exception e) {
                     log.warn("[Server] JWT verification failed: {}", e.getMessage());
-                    ctx.status(401).json(Map.of("error", "Invalid token: " + e.getMessage()));
+                    ApiResponses.error(ctx, 401, ApiErrorCode.UNAUTHORIZED,
+                            "Invalid token: " + e.getMessage());
                     return;
                 }
             }
@@ -111,7 +117,7 @@ public class ChatHandler {
             final java.util.concurrent.atomic.AtomicBoolean completedNormally =
                     new java.util.concurrent.atomic.AtomicBoolean(false);
 
-            AgentContext agentContext = AgentContext.of(req.context());
+            AgentContext agentContext = toAgentContext(req);
             Boolean enableThinking = agentContext.enableThinking();
             String contextUserId = agentContext.userId();
 
@@ -160,6 +166,14 @@ public class ChatHandler {
                                                         "toolName", event.metadata().get("toolName"),
                                                         "success", event.metadata().get("success"),
                                                         "durationMs", event.metadata().get("durationMs"))));
+                                        case CONFIRMATION_REQUIRED -> writeSseEvent(
+                                                out,
+                                                "confirmation_required",
+                                                mapper.writeValueAsString(event.metadata()));
+                                        case CONFIRMATION_RESOLVED -> writeSseEvent(
+                                                out,
+                                                "confirmation_resolved",
+                                                mapper.writeValueAsString(event.metadata()));
                                         case STEP -> {
                                             // ReActStep is serialized by Jackson, extract inspection from the map
                                             Object stepObj = event.metadata().get("step");
@@ -196,6 +210,7 @@ public class ChatHandler {
                                     }
                                 } catch (IOException e) {
                                     log.debug("[Server] Failed to write SSE event: {}", e.getMessage());
+                                    cancellationToken.cancel();
                                 }
                             }, enableThinking, contextUserId, agentContext);
                 } else {
@@ -226,6 +241,7 @@ public class ChatHandler {
                     Map<String, Object> doneData = new java.util.HashMap<>();
                     doneData.put("output", result.output() != null ? result.output() : "");
                     doneData.put("riskLevel", result.riskLevel().name());
+                    doneData.put("requiresConfirmation", result.requiresConfirmation());
                     doneData.put("traceId", result.trace().traceId());
                     doneData.put("steps", result.steps().size());
                     doneData.put("sessionId", resolvedSessionId);
@@ -273,7 +289,7 @@ public class ChatHandler {
         } catch (Exception e) {
             long duration = System.currentTimeMillis() - start;
             log.error("[Server] Chat setup error after {}ms: {}", duration, e.getMessage(), e);
-            ctx.status(500).json(Map.of("error", e.getMessage()));
+            ApiResponses.error(ctx, 500, ApiErrorCode.INTERNAL_ERROR, e.getMessage());
         }
     }
 
@@ -283,9 +299,32 @@ public class ChatHandler {
         out.flush();
     }
 
+    static AgentContext toAgentContext(ChatRequest request) {
+        Map<String, Object> contextData = new HashMap<>(
+                request.context() != null ? request.context() : Map.of());
+        contextData.remove(AgentContext.KEY_GRAPH_REQUEST_CONTEXT);
+        contextData.remove(AgentContext.KEY_NEEDS_GRAPH_KNOWLEDGE);
+
+        if (request.graphScope() != null) {
+            Map<String, Object> internalGraphContext = new HashMap<>();
+            internalGraphContext.put("graphId", request.graphScope().graphId());
+            internalGraphContext.put("schemaId", request.graphScope().schemaId());
+            internalGraphContext.put("subjectIds", request.graphScope().subjectIds());
+            contextData.put(AgentContext.KEY_GRAPH_REQUEST_CONTEXT, internalGraphContext);
+        }
+        return AgentContext.of(contextData);
+    }
+
     public record ChatRequest(String text,
             List<MultimodalParser.RawAttachment> attachments,
             String systemPrompt,
-            java.util.Map<String, Object> context) {
+            Map<String, Object> context,
+            GraphScopeRequest graphScope) {
+    }
+
+    public record GraphScopeRequest(
+            String graphId,
+            String schemaId,
+            Set<String> subjectIds) {
     }
 }

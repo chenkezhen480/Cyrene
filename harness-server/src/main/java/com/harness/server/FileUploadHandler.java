@@ -1,5 +1,7 @@
 package com.harness.server;
 
+import com.harness.server.api.ApiErrorCode;
+import com.harness.server.api.ApiResponses;
 import io.javalin.http.Context;
 import io.javalin.http.UploadedFile;
 import org.slf4j.Logger;
@@ -46,7 +48,7 @@ public class FileUploadHandler {
     public void handle(Context ctx) {
         UploadedFile file = ctx.uploadedFile("file");
         if (file == null) {
-            ctx.status(400).json(Map.of("error", "No file uploaded"));
+            ApiResponses.error(ctx, 400, ApiErrorCode.INVALID_REQUEST, "No file uploaded");
             return;
         }
 
@@ -60,7 +62,8 @@ public class FileUploadHandler {
 
             // Validate file extension against whitelist
             if (!ext.isEmpty() && !ALLOWED_EXTENSIONS.contains(ext)) {
-                ctx.status(400).json(Map.of("error", "File type not allowed: ." + ext));
+                ApiResponses.error(ctx, 400, ApiErrorCode.INVALID_REQUEST,
+                        "File type not allowed: ." + ext);
                 return;
             }
 
@@ -82,7 +85,8 @@ public class FileUploadHandler {
 
         } catch (IOException e) {
             log.error("[FileUpload] Failed to store file: {}", e.getMessage(), e);
-            ctx.status(500).json(Map.of("error", "Failed to store file: " + e.getMessage()));
+            ApiResponses.error(ctx, 500, ApiErrorCode.INTERNAL_ERROR,
+                    "Failed to store file: " + e.getMessage());
         }
     }
 

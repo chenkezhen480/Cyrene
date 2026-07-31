@@ -33,7 +33,7 @@ public class MysqlMessageStore implements MessageStore {
             ps.setBoolean(4, isSummary);
             ps.executeUpdate();
         } catch (SQLException e) {
-            log.error("Failed to save message for session {}: {}", sessionId, e.getMessage(), e);
+            throw new MemoryStoreException("Failed to save message for session " + sessionId, e);
         }
     }
 
@@ -71,7 +71,7 @@ public class MysqlMessageStore implements MessageStore {
                 }
             }
         } catch (SQLException e) {
-            log.error("Failed to load messages for session {}: {}", sessionId, e.getMessage(), e);
+            throw new MemoryStoreException("Failed to load messages for session " + sessionId, e);
         }
         return messages;
     }
@@ -204,7 +204,7 @@ public class MysqlMessageStore implements MessageStore {
                 messages.add(mapMessage(rs));
             }
         } catch (SQLException e) {
-            log.error("Failed to load message page for session {}: {}", sessionId, e.getMessage(), e);
+            throw new MemoryStoreException("Failed to load message page for session " + sessionId, e);
         }
         // Return in chronological order (asc) regardless of query direction
         if (!ascending) {

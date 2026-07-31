@@ -8,7 +8,7 @@ import com.harness.core.model.SkillIndex;
 import com.harness.core.model.ToolResult;
 import com.harness.core.model.ToolSpec;
 import com.harness.tool.Tool;
-import com.harness.tool.ToolRegistry;
+import com.harness.tool.ToolCatalog;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -35,11 +35,11 @@ public class LoadSkillTool implements Tool {
     private static final ThreadLocal<String> CURRENT_SESSION_ID = new ThreadLocal<>();
 
     private final SkillRegistry skillRegistry;
-    private final ToolRegistry toolRegistry;
+    private final ToolCatalog toolCatalog;
 
-    public LoadSkillTool(SkillRegistry skillRegistry, ToolRegistry toolRegistry) {
+    public LoadSkillTool(SkillRegistry skillRegistry, ToolCatalog toolCatalog) {
         this.skillRegistry = skillRegistry;
-        this.toolRegistry = toolRegistry;
+        this.toolCatalog = toolCatalog;
     }
 
     public static void setCurrentSession(String sessionId) {
@@ -105,9 +105,6 @@ public class LoadSkillTool implements Tool {
             return "Error: failed to load skill '" + skillName + "'";
         }
 
-        // Track loaded skill for re-injection after major compression
-        skillRegistry.markLoaded(sessionId, skillName, skill);
-
         // Search mode: return matching sections
         if (query != null && !query.isBlank()) {
             String searchResult = executeSearch(skill, query);
@@ -129,7 +126,7 @@ public class LoadSkillTool implements Tool {
         List<String> warnings = new ArrayList<>();
         if (skill.tools() != null && !skill.tools().isEmpty()) {
             for (String toolName : skill.tools()) {
-                if (!toolRegistry.contains(toolName)) {
+                if (!toolCatalog.contains(toolName)) {
                     warnings.add("[WARNING: tool '" + toolName + "' not registered in ToolRegistry]");
                 }
             }

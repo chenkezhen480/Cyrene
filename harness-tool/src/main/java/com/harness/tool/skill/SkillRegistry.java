@@ -15,10 +15,9 @@ import java.util.concurrent.ConcurrentHashMap;
  * Manages skill indexes with two layers:
  * - persistentIndex: loaded from HARNESS_SKILL_DIR at startup (shared across all sessions)
  * - temporarySkills: registered from user file uploads (session-scoped, isolated by sessionId)
- * - loadedSkills: tracks which skills have been loaded via load_skill (for re-injection after compression)
  *
  * Session-scoped data follows session lifecycle:
- * - Created when user uploads .md file or loads a skill
+ * - Created when user uploads a temporary .md skill
  * - Persists across requests within the same session
  * - Cleared when session expires (idle TTL) or explicitly closed
  */
@@ -30,9 +29,6 @@ public class SkillRegistry {
 
     // Session-scoped temporary skills: sessionId → (skillName → Skill)
     private final Map<String, Map<String, Skill>> temporarySkills = new ConcurrentHashMap<>();
-
-    // Track which skills have been loaded via load_skill per session: sessionId → (skillName → Skill)
-    private final Map<String, Map<String, Skill>> loadedSkills = new ConcurrentHashMap<>();
 
     // Last access time per session (for TTL expiration)
     private final Map<String, Long> lastAccess = new ConcurrentHashMap<>();
@@ -71,21 +67,18 @@ public class SkillRegistry {
     }
 
     /**
-     * Clear all session-scoped data (temporary skills + loaded skills cache).
+     * Clear all session-scoped temporary skills.
      * Called when session is explicitly closed or expires.
      */
     public void clearSession(String sessionId) {
         if (sessionId != null) {
             Map<String, Skill> removedTemp = temporarySkills.remove(sessionId);
-            Map<String, Skill> removedLoaded = loadedSkills.remove(sessionId);
             lastAccess.remove(sessionId);
 
-            int removedCount = (removedTemp != null ? removedTemp.size() : 0)
-                    + (removedLoaded != null ? removedLoaded.size() : 0);
+            int removedCount = removedTemp != null ? removedTemp.size() : 0;
             if (removedCount > 0) {
-                log.debug("Cleared session skills: {} temporary + {} loaded for session {}",
-                        removedTemp != null ? removedTemp.size() : 0,
-                        removedLoaded != null ? removedLoaded.size() : 0,
+                log.debug("Cleared {} temporary skills for session {}",
+                        removedTemp.size(),
                         sessionId);
             }
         }
@@ -136,7 +129,7 @@ public class SkillRegistry {
     }
 
     /**
-     * Get full Skill object. Lookup order: loadedSkills cache → temporary skills → persistent (disk).
+     * Get full Skill object. Lookup order: temporary skills, then persistent disk index.
      * Automatically evicts expired session data.
      */
     public Skill getFull(String name, String sessionId) {
@@ -145,11 +138,6 @@ public class SkillRegistry {
                 clearSession(sessionId);
             } else {
                 touchSession(sessionId);
-                // Check loaded skills cache first (already loaded in this session)
-                Map<String, Skill> sessionLoaded = loadedSkills.get(sessionId);
-                if (sessionLoaded != null && sessionLoaded.containsKey(name)) {
-                    return sessionLoaded.get(name);
-                }
                 // Check temporary skills
                 Map<String, Skill> sessionSkills = temporarySkills.get(sessionId);
                 if (sessionSkills != null && sessionSkills.containsKey(name)) {
@@ -163,27 +151,6 @@ public class SkillRegistry {
             return SkillLoader.loadFull(idx);
         }
         return null;
-    }
-
-    /**
-     * Record that a skill has been loaded for a session (called by LoadSkillTool).
-     */
-    public void markLoaded(String sessionId, String skillName, Skill skill) {
-        if (sessionId != null && skill != null) {
-            loadedSkills.computeIfAbsent(sessionId, k -> new ConcurrentHashMap<>())
-                    .put(skillName, skill);
-            touchSession(sessionId);
-        }
-    }
-
-    /**
-     * Get all loaded skills for a session (for re-injection after major compression).
-     */
-    public List<Skill> getLoadedSkills(String sessionId) {
-        if (sessionId == null) return List.of();
-        Map<String, Skill> sessionLoaded = loadedSkills.get(sessionId);
-        if (sessionLoaded == null) return List.of();
-        return new ArrayList<>(sessionLoaded.values());
     }
 
     /**

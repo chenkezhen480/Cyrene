@@ -33,6 +33,7 @@
     <logger name="org.eclipse.jetty" level="WARN"/>
     <logger name="okhttp3" level="WARN"/>
     <logger name="dev.langchain4j" level="INFO"/>
+    <logger name="org.neo4j.driver" level="WARN"/>
     <logger name="io.milvus" level="WARN"/>
     <logger name="com.fasterxml.jackson" level="WARN"/>
 

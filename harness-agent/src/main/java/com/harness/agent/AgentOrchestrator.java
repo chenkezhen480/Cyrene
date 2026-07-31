@@ -6,11 +6,19 @@ import com.harness.audit.ReplyAuditor;
 import com.harness.audit.TraceCollector;
 import com.harness.audit.store.TraceStore;
 import com.harness.audit.store.TraceStoreFactory;
+import com.harness.core.concurrent.BlockingTaskExecutor;
 import com.harness.core.model.*;
 import com.harness.env.EnvConfig;
 import com.harness.env.EnvKey;
 import com.harness.env.MysqlConnectionPool;
 import com.harness.env.RedisConnectionPool;
+import com.harness.graph.config.GraphSettings;
+import com.harness.graph.config.KnowledgeGraphStoreFactory;
+import com.harness.graph.retrieval.AnchoredNeighborhoodGraphRetriever;
+import com.harness.graph.retrieval.GraphKnowledgeRetriever;
+import com.harness.graph.schema.GraphSchemaManagementService;
+import com.harness.graph.schema.GraphSchemaRegistry;
+import com.harness.graph.store.KnowledgeGraphStore;
 import com.harness.input.InputProcessor;
 import com.harness.input.multimodal.MultimodalParser;
 import com.harness.input.multimodal.TextChunker;
@@ -25,6 +33,7 @@ import com.harness.preprocess.gap.GapClassifier;
 import com.harness.preprocess.gap.GapRuleEngine;
 import com.harness.preprocess.memory.*;
 import com.harness.tool.HttpApiTool;
+import com.harness.tool.RunToolCatalog;
 import com.harness.tool.ToolExecutor;
 import com.harness.tool.ToolRegistry;
 import com.harness.tool.builtin.FfmpegTool;
@@ -36,6 +45,12 @@ import com.harness.tool.builtin.WebSearchTool;
 import com.harness.tool.discovery.CodeGlobTool;
 import com.harness.tool.discovery.CodeGrepTool;
 import com.harness.tool.discovery.ReadClassHierarchyTool;
+import com.harness.tool.confirmation.ConfirmationDecision;
+import com.harness.tool.confirmation.ConfirmationExecutionContext;
+import com.harness.tool.confirmation.ConfirmationManager;
+import com.harness.tool.web.BrowserControlTool;
+import com.harness.tool.web.AuthorizedUrlContext;
+import com.harness.tool.web.ReadUrlContentTool;
 import com.harness.tool.mcp.McpServerConfig;
 import com.harness.tool.mcp.McpToolDiscovery;
 import com.harness.tool.skill.LoadSkillTool;
@@ -53,13 +68,16 @@ import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.UserMessage;
 
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicReference;
 
 import com.harness.core.model.StreamCallback;
 import com.harness.core.model.StreamEvent;
@@ -91,11 +109,16 @@ public class AgentOrchestrator {
     private final InputProcessor inputProcessor;
     private final ContextBuilder contextBuilder;
     private final ToolRegistry toolRegistry;
+    private final ConfirmationManager confirmationManager;
     private final ToolExecutor toolExecutor;
-    private final ReActEngine reactEngine;
     private final TraceStore traceStore;
     private final ReplyAuditor replyAuditor;
     private final GapAnalyzer gapAnalyzer;
+    private final GraphSettings graphSettings;
+    private final GraphSchemaRegistry graphSchemaRegistry;
+    private final GraphSchemaManagementService graphSchemaManagementService;
+    private final KnowledgeGraphStore knowledgeGraphStore;
+    private final GraphKnowledgeRetriever graphKnowledgeRetriever;
 
     // Sub-agent subsystem
     private final SubAgentManager subAgentManager;
@@ -140,6 +163,18 @@ public class AgentOrchestrator {
         this.realtimeModelProvider = ModelProviderFactory.createRealtime();
         this.classifierModelProvider = ModelProviderFactory.createClassifier();
 
+        // Independent structured knowledge graph route
+        this.graphSettings = GraphSettings.fromEnvironment();
+        this.graphSchemaRegistry = GraphSchemaRegistry.fromServiceLoader();
+        this.graphSchemaManagementService = GraphSchemaManagementService.open(
+                java.nio.file.Path.of(EnvConfig.get().getString(
+                        EnvKey.GRAPH_SCHEMA_DIR, "./docker/neo4j/schemas")),
+                graphSchemaRegistry
+        );
+        this.knowledgeGraphStore = KnowledgeGraphStoreFactory.create(graphSchemaRegistry);
+        this.graphKnowledgeRetriever = new AnchoredNeighborhoodGraphRetriever(
+                knowledgeGraphStore, graphSchemaRegistry, graphSettings);
+
         // Layer 1: Input
         this.inputProcessor = new InputProcessor(chatModelProvider, visionModelProvider, voiceModelProvider);
 
@@ -150,7 +185,11 @@ public class AgentOrchestrator {
         this.toolRegistry = new ToolRegistry();
         registerBuiltinTools();
         registerMcpTools();
-        this.toolExecutor = new ToolExecutor(toolRegistry);
+        int confirmationTimeoutSeconds = EnvConfig.get().getInt(
+                EnvKey.RISK_CONFIRMATION_TIMEOUT_SECONDS, 300);
+        this.confirmationManager = new ConfirmationManager(
+                Duration.ofSeconds(confirmationTimeoutSeconds));
+        this.toolExecutor = new ToolExecutor(confirmationManager);
 
         // Skill subsystem (load index, register load_skill tool)
         this.skillRegistry = new SkillRegistry();
@@ -169,17 +208,13 @@ public class AgentOrchestrator {
 
         // Sub-agent manager (initialized before ReActEngine so spawn_subagent is available)
         this.subAgentManager = new SubAgentManager(
-                chatModelProvider, visionModelProvider, voiceModelProvider, toolRegistry, toolExecutor,
+                chatModelProvider, visionModelProvider, voiceModelProvider, toolExecutor,
                 traceStore, sessionInbox, resumeDispatcher);
         // Register sub-agent tools
         toolRegistry.register(new SpawnSubAgentTool(subAgentManager));
         toolRegistry.register(new AwaitSubAgentsTool(subAgentManager));
         toolRegistry.register(new GetSubAgentsTool(subAgentManager));
         toolRegistry.register(new CancelSubAgentsTool(subAgentManager));
-
-        // ReAct Engine (LangChain4j ChatLanguageModel + tools + multimodal fallback)
-        this.reactEngine = new ReActEngine(chatModelProvider, toolRegistry, toolExecutor,
-                visionModelProvider, voiceModelProvider);
 
         // GapAnalyzer (动态路由)
         this.gapAnalyzer = new GapAnalyzer(new GapRuleEngine(), new GapClassifier(classifierModelProvider));
@@ -294,164 +329,27 @@ public class AgentOrchestrator {
         String runId = null;  // For sub-agent scope cleanup in finally
 
         try {
-            // Layer 1: Input
-            InputProcessor.InputResult input = inputProcessor.process(token, text, attachments, contextUserId);
-            trace.recordInput(input.userId(), text,
-                    input.message().attachments().stream().map(AgentMessage.Attachment::name).toList());
-
-            // Build enhanced text: user text + extracted file contents
-            String enhancedText = text;
-            if (!input.parsedContents().isEmpty()) {
-                StringBuilder sb = new StringBuilder(text);
-                for (ParsedContent pc : input.parsedContents()) {
-                    if (pc == null) continue; // null placeholder for non-text attachments (images, etc.)
-                    sb.append("\n\n[File: ").append(pc.metadata().get("file_name")).append("]\n");
-                    sb.append(pc.text());
-                }
-                enhancedText = sb.toString();
-            }
-
-            // Inject File content from context: resolve path, read disk, extract text for documents
-            if (agentContext != null && agentContext.data() != null) {
-                Object fileObj = agentContext.data().get("File");
-                if (fileObj != null) {
-                    List<String> filePaths = new ArrayList<>();
-                    if (fileObj instanceof String s) filePaths.add(s);
-                    else if (fileObj instanceof List<?> list) {
-                        for (Object item : list) {
-                            if (item instanceof String url) filePaths.add(url);
-                        }
-                    }
-
-                    StringBuilder sb = new StringBuilder(enhancedText);
-                    boolean hasContent = false;
-                    for (String filePath : filePaths) {
-                        String extracted = extractContextFileContent(filePath);
-                        if (extracted != null) {
-                            if (!hasContent) {
-                                sb.append("\n\n[参考文件 / Reference Files]");
-                                hasContent = true;
-                            }
-                            String name = filePath.substring(filePath.lastIndexOf('/') + 1);
-                            sb.append("\n\n[File: ").append(name).append("]\n");
-                            sb.append(extracted);
-                            log.debug("[Orchestrator] Extracted content from context.File: {}", filePath);
-                        }
-                    }
-                    enhancedText = sb.toString();
-                }
-            }
-
-            // GapAnalyzer: 动态路由判定
-            AgentContext actx = agentContext != null ? agentContext : AgentContext.empty();
-            GapAnalysis gapAnalysis = gapAnalyzer.analyze(enhancedText, actx);
-            trace.builder().metadata(gapMetadata(gapAnalysis, trace.builder().build().metadata()));
-
-            // ===== Layer 1.5: Session lifecycle =====
-            List<MemoryMessage> shorttermMessages = List.of();
-            List<Preference> longtermPrefs = List.of();
-
-            final String userId = input.userId();
-            if (MemoryStoreFactory.isEnabled() && userId != null) {
-                SessionLifecycleManager.LifecycleResult lifecycle = sessionLifecycle.process(input.userId(), requestedSessionId);
-                sessionId = lifecycle.session().id();
-                activeSessionId = sessionId;
-                final String sid = sessionId;
-                log.debug("[Memory] Session resolved: id={}, isNew={}, timedOut={}",
-                        sessionId, lifecycle.isNewSession(), lifecycle.timedOutSessionIds().size());
-                trace.builder().sessionId(sessionId);
-                Map<String, String> meta = new HashMap<>(trace.builder().build().metadata());
-                meta.put("session_id", sessionId);
-                meta.put("session_new", String.valueOf(lifecycle.isNewSession()));
-                if (!lifecycle.timedOutSessionIds().isEmpty()) {
-                    meta.put("sessions_timed_out", String.join(",", lifecycle.timedOutSessionIds()));
-                }
-                trace.builder().metadata(meta);
-
-                // Set session title from user's first message
-                if (lifecycle.isNewSession()) {
-                    String title = text.length() > 100 ? text.substring(0, 100) : text;
-                    sessionStore.updateTitle(sessionId, title);
-                }
-
-                // Async: check refinement worthiness for timed-out sessions
-                for (String timedOutId : lifecycle.timedOutSessionIds()) {
-                    final String tid = timedOutId;
-                    CompletableFuture.runAsync(() -> {
-                        if (sessionLifecycle.isWorthyOfRefinement(tid)) {
-                            refinementWorker.submit(tid, userId);
-                        }
-                    });
-                }
-
-                // Load short-term memory and long-term prefs in parallel
-                CompletableFuture<List<MemoryMessage>> shorttermFuture = CompletableFuture.supplyAsync(() -> {
-                    List<MemoryMessage> cached = messageCache.getIfPresent(sid);
-                    if (cached != null) {
-                        log.debug("Cache hit for session: {}", sid);
-                        return cached;
-                    }
-                    List<MemoryMessage> loaded = messageStore.loadForContext(sid);
-                    messageCache.put(sid, userId, loaded);
-                    return loaded;
-                });
-                CompletableFuture<List<Preference>> longtermFuture = CompletableFuture.supplyAsync(() -> {
-                    List<Preference> prefs = preferenceStore.loadByUser(userId);
-                    log.debug("[Memory] Loaded {} long-term preferences for user {}", prefs.size(), userId);
-                    return prefs;
-                });
-
-                CompletableFuture.allOf(shorttermFuture, longtermFuture).join();
-                shorttermMessages = shorttermFuture.join();
-                longtermPrefs = longtermFuture.join();
-            } else {
-                sessionId = requestedSessionId != null ? requestedSessionId : java.util.UUID.randomUUID().toString();
-            }
-
-            // Set ThreadLocal for skill tools session-scoped lookup
-            final String finalSessionId = sessionId;
-            LoadSkillTool.setCurrentSession(finalSessionId);
-            UpdateMemoryTool.setCurrentUserId(userId);
-            UpdateMemoryTool.setCurrentSessionId(finalSessionId);
-
-            // ===== Layer 2: Preprocess =====
-            // RAG 现在由 KnowledgeBaseTool 在 ReAct 循环中按需调用，不再预取
-            String systemPrompt = buildSystemPrompt(longtermPrefs, systemPromptOverride, sessionId,
-                    Boolean.TRUE.equals(gapAnalysis.needsKnowledgeBase()),
-                    Boolean.TRUE.equals(gapAnalysis.needsWebSearch()));
-            log.debug("[Orchestrator] System prompt: {} chars, longterm={}, needsKB={}, needsWebSearch={}",
-                    systemPrompt.length(), !longtermPrefs.isEmpty(), gapAnalysis.needsKnowledgeBase(), gapAnalysis.needsWebSearch());
-
-            String finalUserMessage = enhancedText;
-            trace.recordLlmMeta(chatModelProvider.modelName(), "v1");
-
-            // 压缩检查
-            if (sessionId != null && userId != null) {
-                var outcome = applyCompression(sessionId, userId, shorttermMessages, finalUserMessage, systemPrompt);
-                shorttermMessages = outcome.finalMessages();
-
-                if (outcome.hasMajor()) {
-                    Map<String, String> meta = new HashMap<>(trace.builder().build().metadata());
-                    meta.put("compression_type", outcome.majorResult().type().name());
-                    meta.put("messages_before", String.valueOf(outcome.majorResult().messagesBefore()));
-                    meta.put("messages_after", String.valueOf(outcome.majorResult().messagesAfter()));
-                    trace.builder().metadata(meta);
-                }
-                // 用户消息：异步写DB + 同步更新缓存
-                List<MessageBlock> userBlocks = List.of(new MessageBlock(MessageBlock.BlockType.TEXT, enhancedText, null));
-                messageWriteWorker.submit(sessionId, "user", userBlocks, false);
-                messageCache.append(sessionId, userId, new MemoryMessage(0, sessionId, "user", userBlocks, false, null));
-                sessionStore.updateLastActive(sessionId);
-            }
+            PreparedRun prepared = prepareRun(new RunPreparationRequest(
+                    token,
+                    text,
+                    attachments,
+                    requestedSessionId,
+                    systemPromptOverride,
+                    contextUserId,
+                    agentContext,
+                    true
+            ), trace);
+            sessionId = prepared.sessionId();
+            final String userId = prepared.userId();
+            List<MemoryMessage> shorttermMessages = prepared.shorttermMessages();
+            String systemPrompt = prepared.systemPrompt();
+            String finalUserMessage = prepared.enhancedText();
+            Set<String> unavailableTools = prepared.unavailableTools();
+            RunToolCatalog runToolCatalog = createRunToolCatalog(unavailableTools);
 
             // ===== Layer 3+4: ReAct loop（AI决策 + 工具执行 + 小压缩去除工具块） =====
-            // Create run context for sub-agent isolation
-            runId = java.util.UUID.randomUUID().toString();
-            String parentTraceId = trace.builder().build().traceId();
-            AgentRunContext runContext = new AgentRunContext(runId, sessionId, cancellationToken, parentTraceId);
-            SubAgentRunScope runScope = subAgentManager.openScope(runId);
-            SpawnSubAgentTool.setCurrentRunContext(runContext);
-            log.debug("[Orchestrator] Sub-agent scope opened: runId={}", runId);
+            runId = openRunScope(
+                    sessionId, cancellationToken, runToolCatalog, trace.builder());
 
             List<ChatMessage> historyChatMessages = convertToChatMessages(shorttermMessages);
 
@@ -486,79 +384,45 @@ public class AgentOrchestrator {
                         textAccumulator.setLength(0);
                     }
                     for (Artifact a : artifacts) {
-                        Map<String, Object> meta = new HashMap<>();
-                        meta.put("type", a.type().name());
-                        if (a.mimeType() != null) meta.put("mimeType", a.mimeType());
-                        if (a.name() != null) meta.put("name", a.name());
-                        meta.put("previewUrl", a.previewUrl());
-                        meta.put("downloadUrl", a.downloadUrl());
-                        blockAccumulator.add(new MessageBlock(MessageBlock.BlockType.ARTIFACT, null, a.id(), meta));
+                        blockAccumulator.add(toArtifactBlock(a));
                     }
                 }
             };
 
             // thinking 优先级：显式 enableThinking > GapAnalysis.needsThinking > 环境变量
-            Boolean effectiveThinking = enableThinking != null ? enableThinking : gapAnalysis.needsThinking();
-            ReActEngine.ReActResult result = reactEngine.execute(systemPrompt, finalUserMessage, historyChatMessages, trace.builder(), blockListener, cancellationToken, effectiveThinking);
+            Boolean effectiveThinking = enableThinking != null
+                    ? enableThinking
+                    : prepared.gapAnalysis().needsThinking();
+            ReActEngine requestReactEngine = createRequestReactEngine(runToolCatalog);
+            ReActEngine.ReActResult result = requestReactEngine.execute(
+                    systemPrompt, finalUserMessage, historyChatMessages, trace.builder(),
+                    blockListener, cancellationToken, effectiveThinking);
             result.steps().forEach(trace::addStep);
 
-            // Record ReAct loop quality signals into trace metadata
-            if (result.loopStats() != null) {
-                ReActEngine.ReActLoopStats stats = result.loopStats();
-                trace.recordReactStats(stats.outcome(), stats.rounds(), stats.toolCalls(),
-                        stats.reflectionChecks(), stats.inputTokens(), stats.outputTokens(),
-                        stats.llmCalls(), stats.toolRetries());
-            }
+            recordReactStats(trace, result);
 
-            // Flush remaining text after loop
-            if (textAccumulator.length() > 0) {
-                blockAccumulator.add(new MessageBlock(MessageBlock.BlockType.TEXT, textAccumulator.toString(), null));
-            }
-
-            // Accumulated blocks are authoritative — onStep/onArtifact always fire before execute() returns
-            List<MessageBlock> asstBlocks = blockAccumulator.isEmpty()
-                    ? List.of(new MessageBlock(MessageBlock.BlockType.TEXT, result.output() != null ? result.output() : "", null))
-                    : blockAccumulator;
+            List<MessageBlock> asstBlocks =
+                    finishAssistantBlocks(blockAccumulator, textAccumulator, result.output());
 
             // Tool 消息进缓存（不落 DB），供下一轮 preprocess 小压缩
             cacheToolMessages(result, sessionId, userId);
 
+            boolean confirmationRequired = requiresConfirmation(result);
             RiskLevel risk = determineRisk(result);
-            trace.recordOutput(result.output(), risk, true);
+            trace.recordOutput(result.output(), risk, !confirmationRequired);
 
-            // ===== Reply audit (async, non-blocking) =====
-            final String replyText = result.output();
-            CompletableFuture.runAsync(() -> {
-                try {
-                    ReplyAuditor.ReplyAuditResult auditResult = replyAuditor.audit(replyText);
-                    if (!auditResult.passed()) {
-                        log.warn("[ReplyAuditor] Audit failed: score={}, reason={}", auditResult.score(), auditResult.reason());
-                    } else {
-                        log.debug("[ReplyAuditor] Audit passed: score={}", auditResult.score());
-                    }
-                    // Store in trace metadata (best-effort, trace may already be finishing)
-                    Map<String, String> auditMeta = new HashMap<>(trace.builder().build().metadata());
-                    auditMeta.put("reply_audit_passed", String.valueOf(auditResult.passed()));
-                    auditMeta.put("reply_audit_score", String.valueOf(auditResult.score()));
-                    auditMeta.put("reply_audit_reason", auditResult.reason());
-                    trace.builder().metadata(auditMeta);
-                } catch (Exception e) {
-                    log.debug("[ReplyAuditor] Async audit failed: {}", e.getMessage());
-                }
-            });
-
-            // Save AI message (async via worker)
-            if (sessionId != null && userId != null) {
-                messageWriteWorker.submit(sessionId, "assistant", asstBlocks, false);
-                messageCache.append(sessionId, userId, new MemoryMessage(0, sessionId, "assistant", asstBlocks, false, null));
-                sessionStore.updateLastActive(sessionId);
-            }
+            scheduleReplyAudit(trace, result.output(), true);
+            persistAssistantMessage(sessionId, userId, asstBlocks, true);
 
             AgentTrace agentTrace = trace.finish();
             long duration = System.currentTimeMillis() - runStart;
             log.info("[Orchestrator] Run complete: outputLen={}, risk={}, steps={}, artifacts={}, duration={}ms",
                     result.output() != null ? result.output().length() : 0, risk, result.steps().size(),
                     result.artifacts().size(), duration);
+            if (confirmationRequired) {
+                return AgentResult.needConfirmation(
+                        result.output(), risk, agentTrace, result.steps(), result.artifacts());
+            }
             return AgentResult.success(result.output(), agentTrace, result.steps(), result.artifacts());
 
         } catch (Exception e) {
@@ -568,13 +432,7 @@ public class AgentOrchestrator {
             trace.finish();
             throw e;
         } finally {
-            // Mark scope as owner-finished (tasks may continue running)
-            if (runId != null) {
-                SpawnSubAgentTool.clearCurrentRunContext();
-                subAgentManager.finishRun(runId);
-                log.debug("[Orchestrator] Sub-agent scope finished: runId={}", runId);
-            }
-            LoadSkillTool.clearCurrentSession();
+            closeRunScope(runId);
         }
     }
 
@@ -618,162 +476,51 @@ public class AgentOrchestrator {
         String runId = null;  // For sub-agent scope cleanup in finally
 
         try {
-            // Layer 1: Input
-            InputProcessor.InputResult input = inputProcessor.process(token, text, attachments, contextUserId);
-            trace.recordInput(input.userId(), text,
-                    input.message().attachments().stream().map(AgentMessage.Attachment::name).toList());
-
-            // Build enhanced text: user text + extracted file contents
-            String enhancedText = text;
-            if (!input.parsedContents().isEmpty()) {
-                StringBuilder sb = new StringBuilder(text);
-                for (ParsedContent pc : input.parsedContents()) {
-                    if (pc == null) continue; // null placeholder for non-text attachments (images, etc.)
-                    sb.append("\n\n[File: ").append(pc.metadata().get("file_name")).append("]\n");
-                    sb.append(pc.text());
-                }
-                enhancedText = sb.toString();
+            PreparedRun prepared = prepareRun(new RunPreparationRequest(
+                    token,
+                    text,
+                    attachments,
+                    requestedSessionId,
+                    systemPromptOverride,
+                    contextUserId,
+                    agentContext,
+                    false
+            ), trace);
+            sessionId = prepared.sessionId();
+            final String userId = prepared.userId();
+            final String finalSessionId = prepared.sessionId();
+            List<MemoryMessage> shorttermMessages = prepared.shorttermMessages();
+            String systemPrompt = prepared.systemPrompt();
+            String finalUserMessage = prepared.enhancedText();
+            Set<String> unavailableTools = prepared.unavailableTools();
+            RunToolCatalog runToolCatalog = createRunToolCatalog(unavailableTools);
+            CompressionOutcome outcome = prepared.compressionOutcome();
+            if (outcome.hasMinor()) {
+                callback.onEvent(StreamEvent.compress(
+                        "minor", outcome.minorStripped() + " 条工具消息已清理"));
             }
-
-            // Inject File content from context: resolve path, read disk, extract text for documents
-            if (agentContext != null && agentContext.data() != null) {
-                Object fileObj = agentContext.data().get("File");
-                if (fileObj != null) {
-                    List<String> filePaths = new ArrayList<>();
-                    if (fileObj instanceof String s) filePaths.add(s);
-                    else if (fileObj instanceof List<?> list) {
-                        for (Object item : list) {
-                            if (item instanceof String url) filePaths.add(url);
-                        }
-                    }
-
-                    StringBuilder sb = new StringBuilder(enhancedText);
-                    boolean hasContent = false;
-                    for (String filePath : filePaths) {
-                        String extracted = extractContextFileContent(filePath);
-                        if (extracted != null) {
-                            if (!hasContent) {
-                                sb.append("\n\n[参考文件 / Reference Files]");
-                                hasContent = true;
-                            }
-                            String name = filePath.substring(filePath.lastIndexOf('/') + 1);
-                            sb.append("\n\n[File: ").append(name).append("]\n");
-                            sb.append(extracted);
-                            log.debug("[Orchestrator] Extracted content from context.File: {}", filePath);
-                        }
-                    }
-                    enhancedText = sb.toString();
-                }
-            }
-
-            // GapAnalyzer: 动态路由判定
-            AgentContext actx = agentContext != null ? agentContext : AgentContext.empty();
-            GapAnalysis gapAnalysis = gapAnalyzer.analyze(enhancedText, actx);
-            trace.builder().metadata(gapMetadata(gapAnalysis, trace.builder().build().metadata()));
-
-            // Layer 1.5: Session lifecycle
-            List<MemoryMessage> shorttermMessages = List.of();
-            List<Preference> longtermPrefs = List.of();
-
-            final String userId = input.userId();
-            if (MemoryStoreFactory.isEnabled() && userId != null) {
-                SessionLifecycleManager.LifecycleResult lifecycle = sessionLifecycle.process(input.userId(), requestedSessionId);
-                sessionId = lifecycle.session().id();
-                activeSessionId = sessionId;
-                final String sid = sessionId;
-                log.debug("[Memory] Session resolved: id={}, isNew={}, timedOut={}",
-                        sessionId, lifecycle.isNewSession(), lifecycle.timedOutSessionIds().size());
-                trace.builder().sessionId(sessionId);
-                Map<String, String> meta = new HashMap<>(trace.builder().build().metadata());
-                meta.put("session_id", sessionId);
-                meta.put("session_new", String.valueOf(lifecycle.isNewSession()));
-                if (!lifecycle.timedOutSessionIds().isEmpty()) {
-                    meta.put("sessions_timed_out", String.join(",", lifecycle.timedOutSessionIds()));
-                }
-                trace.builder().metadata(meta);
-
-                // Set session title from user's first message
-                if (lifecycle.isNewSession()) {
-                    String title = text.length() > 100 ? text.substring(0, 100) : text;
-                    sessionStore.updateTitle(sessionId, title);
-                }
-
-                // Async: check refinement worthiness for timed-out sessions
-                for (String timedOutId : lifecycle.timedOutSessionIds()) {
-                    final String tid = timedOutId;
-                    CompletableFuture.runAsync(() -> {
-                        if (sessionLifecycle.isWorthyOfRefinement(tid)) {
-                            refinementWorker.submit(tid, userId);
-                        }
-                    });
-                }
-
-                // Load short-term memory and long-term prefs in parallel
-                CompletableFuture<List<MemoryMessage>> shorttermFuture = CompletableFuture.supplyAsync(() -> {
-                    List<MemoryMessage> cached = messageCache.getIfPresent(sid);
-                    if (cached != null) return cached;
-                    List<MemoryMessage> loaded = messageStore.loadForContext(sid);
-                    messageCache.put(sid, userId, loaded);
-                    return loaded;
-                });
-                CompletableFuture<List<Preference>> longtermFuture = CompletableFuture.supplyAsync(() ->
-                        preferenceStore.loadByUser(userId));
-
-                CompletableFuture.allOf(shorttermFuture, longtermFuture).join();
-                shorttermMessages = shorttermFuture.join();
-                longtermPrefs = longtermFuture.join();
-            } else {
-                sessionId = requestedSessionId != null ? requestedSessionId : java.util.UUID.randomUUID().toString();
-            }
-
-            final String finalSessionId = sessionId;
-            LoadSkillTool.setCurrentSession(finalSessionId);
-            UpdateMemoryTool.setCurrentUserId(userId);
-            UpdateMemoryTool.setCurrentSessionId(finalSessionId);
-
-            // Layer 2: Preprocess
-            // RAG 现在由 KnowledgeBaseTool 在 ReAct 循环中按需调用，不再预取
-            String systemPrompt = buildSystemPrompt(longtermPrefs, systemPromptOverride, sessionId,
-                    Boolean.TRUE.equals(gapAnalysis.needsKnowledgeBase()),
-                    Boolean.TRUE.equals(gapAnalysis.needsWebSearch()));
-            trace.recordLlmMeta(chatModelProvider.modelName(), "v1");
-
-            String finalUserMessage = enhancedText;
-
-            // 压缩检查
-            if (sessionId != null && userId != null) {
-                var outcome = applyCompression(sessionId, userId, shorttermMessages, finalUserMessage, systemPrompt);
-                shorttermMessages = outcome.finalMessages();
-
-                if (outcome.hasMinor()) {
-                    callback.onEvent(StreamEvent.compress("minor", outcome.minorStripped() + " 条工具消息已清理"));
-                }
-                if (outcome.hasMajor()) {
-                    callback.onEvent(StreamEvent.compress("major",
-                            outcome.majorResult().messagesBefore() + " → " + outcome.majorResult().messagesAfter() + " 条消息已压缩"));
-                }
-
-                List<MessageBlock> userBlocks = List.of(new MessageBlock(MessageBlock.BlockType.TEXT, enhancedText, null));
-                messageWriteWorker.submit(sessionId, "user", userBlocks, false);
-                messageCache.append(sessionId, userId, new MemoryMessage(0, sessionId, "user", userBlocks, false, null));
+            if (outcome.hasMajor()) {
+                callback.onEvent(StreamEvent.compress(
+                        "major",
+                        outcome.majorResult().messagesBefore()
+                                + " → "
+                                + outcome.majorResult().messagesAfter()
+                                + " 条消息已压缩"));
             }
 
             // Emit start event with sessionId (first event for client)
             callback.onEvent(StreamEvent.start(finalSessionId));
 
             // Layer 3+4: Streaming ReAct loop
-            // Create run context for sub-agent isolation
-            runId = java.util.UUID.randomUUID().toString();
-            String parentTraceId = trace.builder().build().traceId();
-            AgentRunContext runContext = new AgentRunContext(runId, sessionId, cancellationToken, parentTraceId);
-            SubAgentRunScope runScope = subAgentManager.openScope(runId);
-            SpawnSubAgentTool.setCurrentRunContext(runContext);
-            log.debug("[Orchestrator] Sub-agent scope opened: runId={}", runId);
+            runId = openRunScope(
+                    sessionId, cancellationToken, runToolCatalog, trace.builder());
 
             List<ChatMessage> historyChatMessages = convertToChatMessages(shorttermMessages);
             // Accumulate message blocks during ReAct loop via listener
             List<MessageBlock> blockAccumulator = new ArrayList<>();
             StringBuilder textAccumulator = new StringBuilder();
+            AtomicReference<ConfirmationDecision> confirmationDecision =
+                    new AtomicReference<>();
 
             ReActListener listener = new ReActListener() {
                 @Override
@@ -803,6 +550,33 @@ public class AgentOrchestrator {
                 }
 
                 @Override
+                public void onConfirmationRequired(
+                        com.harness.tool.confirmation.ConfirmationRequest request) {
+                    callback.onEvent(StreamEvent.confirmationRequired(
+                            request.requestId(),
+                            request.toolName(),
+                            request.arguments(),
+                            request.argumentsHash(),
+                            request.summary(),
+                            request.riskLevel().name(),
+                            request.expiresAt().toString()));
+                }
+
+                @Override
+                public void onConfirmationResolved(
+                        com.harness.tool.confirmation.ConfirmationRequest request,
+                        ConfirmationDecision decision) {
+                    confirmationDecision.set(decision);
+                    trace.recordConfirmation(
+                            request.requestId(),
+                            request.toolName(),
+                            request.argumentsHash(),
+                            decision.name());
+                    callback.onEvent(StreamEvent.confirmationResolved(
+                            request.requestId(), request.toolName(), decision.name()));
+                }
+
+                @Override
                 public void onArtifact(java.util.List<Artifact> artifacts) {
                     // Flush accumulated text as a TEXT block before inserting artifact
                     if (textAccumulator.length() > 0) {
@@ -810,84 +584,52 @@ public class AgentOrchestrator {
                         textAccumulator.setLength(0);
                     }
                     for (Artifact a : artifacts) {
-                        Map<String, Object> meta = new HashMap<>();
-                        meta.put("type", a.type().name());
-                        if (a.mimeType() != null) meta.put("mimeType", a.mimeType());
-                        if (a.name() != null) meta.put("name", a.name());
-                        meta.put("previewUrl", a.previewUrl());
-                        meta.put("downloadUrl", a.downloadUrl());
-                        blockAccumulator.add(new MessageBlock(MessageBlock.BlockType.ARTIFACT, null, a.id(), meta));
+                        blockAccumulator.add(toArtifactBlock(a));
                         callback.onEvent(StreamEvent.artifact(a));
                     }
                 }
             };
 
             // thinking 优先级：显式 enableThinking > GapAnalysis.needsThinking > 环境变量
-            Boolean effectiveThinking = enableThinking != null ? enableThinking : gapAnalysis.needsThinking();
-            ReActEngine.ReActResult result = reactEngine.streamExecute(
-                    systemPrompt, finalUserMessage, historyChatMessages, trace.builder(), listener, cancellationToken, effectiveThinking);
+            Boolean effectiveThinking = enableThinking != null
+                    ? enableThinking
+                    : prepared.gapAnalysis().needsThinking();
+            ConfirmationExecutionContext confirmationContext = new ConfirmationExecutionContext(
+                    userId,
+                    finalSessionId,
+                    cancellationToken,
+                    listener::onConfirmationRequired,
+                    listener::onConfirmationResolved,
+                    (toolName, arguments) -> listener.onToolCallStart(
+                            toolName, arguments != null ? arguments.toString() : "null"));
+            ReActEngine requestReactEngine = createRequestReactEngine(runToolCatalog);
+            ReActEngine.ReActResult result = requestReactEngine.streamExecute(
+                    systemPrompt, finalUserMessage, historyChatMessages, trace.builder(), listener,
+                    cancellationToken, effectiveThinking, confirmationContext);
             result.steps().forEach(trace::addStep);
 
-            // Record ReAct loop quality signals into trace metadata
-            if (result.loopStats() != null) {
-                ReActEngine.ReActLoopStats stats = result.loopStats();
-                trace.recordReactStats(stats.outcome(), stats.rounds(), stats.toolCalls(),
-                        stats.reflectionChecks(), stats.inputTokens(), stats.outputTokens(),
-                        stats.llmCalls(), stats.toolRetries());
-            }
+            recordReactStats(trace, result);
 
-            // Flush remaining text after loop
-            if (textAccumulator.length() > 0) {
-                blockAccumulator.add(new MessageBlock(MessageBlock.BlockType.TEXT, textAccumulator.toString(), null));
-            }
-
-            // Accumulated blocks are authoritative — onToken/onArtifact always fire before streamExecute() returns
-            List<MessageBlock> asstBlocks = blockAccumulator.isEmpty()
-                    ? List.of(new MessageBlock(MessageBlock.BlockType.TEXT, result.output() != null ? result.output() : "", null))
-                    : blockAccumulator;
+            List<MessageBlock> asstBlocks =
+                    finishAssistantBlocks(blockAccumulator, textAccumulator, result.output());
 
             // Tool 消息进缓存（不落 DB），供下一轮 preprocess 小压缩
             cacheToolMessages(result, finalSessionId, userId);
 
-            RiskLevel risk = determineRisk(result);
-            trace.recordOutput(result.output(), risk, true);
+            boolean confirmationRequired = requiresConfirmation(result);
+            ConfirmationDecision resolvedDecision = confirmationDecision.get();
+            RiskLevel risk = resolvedDecision != null
+                    ? RiskLevel.HIGH
+                    : determineRisk(result);
+            boolean userConfirmed = resolvedDecision != null
+                    ? resolvedDecision == ConfirmationDecision.APPROVED
+                    : !confirmationRequired;
+            trace.recordOutput(result.output(), risk, userConfirmed);
 
-            // Reply audit (async)
-            final String replyText = result.output();
-            CompletableFuture.runAsync(() -> {
-                try {
-                    ReplyAuditor.ReplyAuditResult auditResult = replyAuditor.audit(replyText);
-                    if (!auditResult.passed()) {
-                        log.warn("[ReplyAuditor] Audit failed: score={}, reason={}", auditResult.score(), auditResult.reason());
-                    }
-                } catch (Exception e) {
-                    log.debug("[ReplyAuditor] Async audit failed: {}", e.getMessage());
-                }
-            });
-
-            // Save AI message (async via worker)
-            if (finalSessionId != null && userId != null) {
-                messageWriteWorker.submit(finalSessionId, "assistant", asstBlocks, false);
-                messageCache.append(finalSessionId, userId, new MemoryMessage(0, finalSessionId, "assistant", asstBlocks, false, null));
-            }
-
-            // Async: trace.finish() and sessionStore.updateLastActive()
-            CompletableFuture.runAsync(() -> {
-                try {
-                    trace.finish();
-                } catch (Exception e) {
-                    log.error("[Orchestrator] Async trace.finish() failed: {}", e.getMessage());
-                }
-            });
-            if (finalSessionId != null) {
-                CompletableFuture.runAsync(() -> {
-                    try {
-                        sessionStore.updateLastActive(finalSessionId);
-                    } catch (Exception e) {
-                        log.error("[Orchestrator] Async updateLastActive failed: {}", e.getMessage());
-                    }
-                });
-            }
+            scheduleReplyAudit(trace, result.output(), false);
+            persistAssistantMessage(finalSessionId, userId, asstBlocks, false);
+            finishTraceAsync(trace);
+            updateSessionActivityAsync(finalSessionId);
 
             long duration = System.currentTimeMillis() - runStart;
             log.info("[Orchestrator] Stream run complete: outputLen={}, steps={}, duration={}ms",
@@ -898,36 +640,487 @@ public class AgentOrchestrator {
                     trace.builder().build().traceId(),
                     finalSessionId,
                     result.steps().size(),
-                    result.artifacts()));
+                    result.artifacts(),
+                    confirmationRequired));
 
         } catch (CancellationException e) {
             long duration = System.currentTimeMillis() - runStart;
             log.info("[Orchestrator] Stream run cancelled after {}ms", duration);
-            CompletableFuture.runAsync(() -> {
-                try { trace.finish(); } catch (Exception ignored) {}
-            });
+            finishTraceAsync(trace);
             callback.onEvent(StreamEvent.cancelled());
         } catch (Exception e) {
             long duration = System.currentTimeMillis() - runStart;
             log.error("[Orchestrator] Stream run failed after {}ms: {}", duration, e.getMessage(), e);
             trace.recordOutput("Error: " + e.getMessage(), RiskLevel.HIGH, false);
-            CompletableFuture.runAsync(() -> {
-                try { trace.finish(); } catch (Exception ignored) {}
-            });
+            finishTraceAsync(trace);
             callback.onEvent(StreamEvent.error(friendlyErrorMessage(e)));
         } finally {
-            // Mark scope as owner-finished (tasks may continue running)
-            if (runId != null) {
-                SpawnSubAgentTool.clearCurrentRunContext();
-                subAgentManager.finishRun(runId);
-                log.debug("[Orchestrator] Sub-agent scope finished: runId={}", runId);
-            }
-            LoadSkillTool.clearCurrentSession();
+            closeRunScope(runId);
         }
     }
 
+    private PreparedRun prepareRun(
+            RunPreparationRequest request,
+            TraceCollector trace
+    ) {
+        InputProcessor.InputResult input = inputProcessor.process(
+                request.token(),
+                request.text(),
+                request.attachments(),
+                request.contextUserId());
+        AuthorizedUrlContext.setFromUserText(request.text());
+        trace.recordInput(
+                input.userId(),
+                request.text(),
+                input.message().attachments().stream()
+                        .map(AgentMessage.Attachment::name)
+                        .toList());
+
+        String enhancedText = buildEnhancedText(
+                request.text(), input.parsedContents(), request.agentContext());
+        AgentContext agentContext = request.agentContext() != null
+                ? request.agentContext()
+                : AgentContext.empty();
+        GapAnalysis gapAnalysis = gapAnalyzer.analyze(enhancedText, agentContext);
+        GraphRequestContext graphRequestContext = agentContext.graphRequestContext();
+        boolean graphContextAvailable = graphRequestContext != null
+                && !"none".equals(knowledgeGraphStore.providerName());
+        KnowledgeGraphTool.setCurrentContext(
+                graphContextAvailable ? graphRequestContext : null);
+        Set<String> unavailableTools = unavailableTools(agentContext, graphContextAvailable);
+        trace.builder().metadata(
+                gapMetadata(gapAnalysis, trace.builder().build().metadata()));
+
+        MemoryContext memoryContext = resolveMemoryContext(
+                input.userId(), request.requestedSessionId(), request.text(), trace);
+        activateToolContext(memoryContext.userId(), memoryContext.sessionId());
+
+        String systemPrompt = buildSystemPrompt(
+                memoryContext.longtermPreferences(),
+                request.systemPromptOverride(),
+                memoryContext.sessionId(),
+                Boolean.TRUE.equals(gapAnalysis.needsKnowledgeBase()),
+                graphContextAvailable,
+                Boolean.TRUE.equals(gapAnalysis.needsWebSearch()));
+        trace.recordLlmMeta(chatModelProvider.modelName(), "v1");
+        log.debug(
+                "[Orchestrator] System prompt: {} chars, longterm={}, needsKB={}, needsWebSearch={}",
+                systemPrompt.length(),
+                !memoryContext.longtermPreferences().isEmpty(),
+                gapAnalysis.needsKnowledgeBase(),
+                gapAnalysis.needsWebSearch());
+
+        CompressionOutcome compressionOutcome = new CompressionOutcome(
+                0, null, memoryContext.shorttermMessages());
+        if (memoryContext.sessionId() != null && memoryContext.userId() != null) {
+            compressionOutcome = applyCompression(
+                    memoryContext.sessionId(),
+                    memoryContext.userId(),
+                    memoryContext.shorttermMessages(),
+                    enhancedText,
+                    systemPrompt);
+            recordCompressionMetadata(trace, compressionOutcome);
+            persistUserMessage(
+                    memoryContext.sessionId(),
+                    memoryContext.userId(),
+                    enhancedText,
+                    request.updateActivityAfterUserMessage());
+        }
+
+        return new PreparedRun(
+                memoryContext.sessionId(),
+                memoryContext.userId(),
+                enhancedText,
+                systemPrompt,
+                compressionOutcome.finalMessages(),
+                gapAnalysis,
+                unavailableTools,
+                compressionOutcome);
+    }
+
+    private String buildEnhancedText(
+            String text,
+            List<ParsedContent> parsedContents,
+            AgentContext agentContext
+    ) {
+        StringBuilder enhancedText = new StringBuilder(text == null ? "" : text);
+        for (ParsedContent parsedContent : parsedContents) {
+            if (parsedContent == null) {
+                continue;
+            }
+            enhancedText.append("\n\n[File: ")
+                    .append(parsedContent.metadata().get("file_name"))
+                    .append("]\n")
+                    .append(parsedContent.text());
+        }
+
+        List<String> contextFilePaths = contextFilePaths(agentContext);
+        boolean hasReferenceHeader = false;
+        for (String filePath : contextFilePaths) {
+            String extracted = extractContextFileContent(filePath);
+            if (extracted == null) {
+                continue;
+            }
+            if (!hasReferenceHeader) {
+                enhancedText.append("\n\n[参考文件 / Reference Files]");
+                hasReferenceHeader = true;
+            }
+            String name = filePath.substring(filePath.lastIndexOf('/') + 1);
+            enhancedText.append("\n\n[File: ")
+                    .append(name)
+                    .append("]\n")
+                    .append(extracted);
+            log.debug("[Orchestrator] Extracted content from context.File: {}", filePath);
+        }
+        return enhancedText.toString();
+    }
+
+    private static List<String> contextFilePaths(AgentContext agentContext) {
+        if (agentContext == null || agentContext.data() == null) {
+            return List.of();
+        }
+        Object fileValue = agentContext.data().get("File");
+        if (fileValue instanceof String path) {
+            return List.of(path);
+        }
+        if (!(fileValue instanceof List<?> values)) {
+            return List.of();
+        }
+        return values.stream()
+                .filter(String.class::isInstance)
+                .map(String.class::cast)
+                .toList();
+    }
+
+    private MemoryContext resolveMemoryContext(
+            String userId,
+            String requestedSessionId,
+            String text,
+            TraceCollector trace
+    ) {
+        if (!MemoryStoreFactory.isEnabled() || userId == null) {
+            String sessionId = requestedSessionId != null
+                    ? requestedSessionId
+                    : java.util.UUID.randomUUID().toString();
+            return new MemoryContext(sessionId, userId, List.of(), List.of());
+        }
+
+        SessionLifecycleManager.LifecycleResult lifecycle =
+                sessionLifecycle.process(userId, requestedSessionId);
+        String sessionId = lifecycle.session().id();
+        activeSessionId = sessionId;
+        trace.builder().sessionId(sessionId);
+        Map<String, String> metadata = new HashMap<>(trace.builder().build().metadata());
+        metadata.put("session_id", sessionId);
+        metadata.put("session_new", String.valueOf(lifecycle.isNewSession()));
+        if (!lifecycle.timedOutSessionIds().isEmpty()) {
+            metadata.put("sessions_timed_out", String.join(",", lifecycle.timedOutSessionIds()));
+        }
+        trace.builder().metadata(metadata);
+        log.debug(
+                "[Memory] Session resolved: id={}, isNew={}, timedOut={}",
+                sessionId,
+                lifecycle.isNewSession(),
+                lifecycle.timedOutSessionIds().size());
+
+        if (lifecycle.isNewSession()) {
+            String safeText = text == null ? "" : text;
+            String title = safeText.length() > 100 ? safeText.substring(0, 100) : safeText;
+            sessionStore.updateTitle(sessionId, title);
+        }
+        scheduleRefinement(lifecycle.timedOutSessionIds(), userId);
+
+        CompletableFuture<List<MemoryMessage>> shorttermFuture =
+                CompletableFuture.supplyAsync(
+                        () -> loadShorttermMessages(sessionId, userId),
+                        BlockingTaskExecutor.shared());
+        CompletableFuture<List<Preference>> longtermFuture =
+                CompletableFuture.supplyAsync(
+                        () -> loadLongtermPreferences(userId),
+                        BlockingTaskExecutor.shared());
+        CompletableFuture.allOf(shorttermFuture, longtermFuture).join();
+        return new MemoryContext(
+                sessionId,
+                userId,
+                shorttermFuture.join(),
+                longtermFuture.join());
+    }
+
+    private void scheduleRefinement(List<String> timedOutSessionIds, String userId) {
+        for (String timedOutSessionId : timedOutSessionIds) {
+            CompletableFuture.runAsync(() -> {
+                if (sessionLifecycle.isWorthyOfRefinement(timedOutSessionId)) {
+                    refinementWorker.submit(timedOutSessionId, userId);
+                }
+            }, BlockingTaskExecutor.shared());
+        }
+    }
+
+    private List<MemoryMessage> loadShorttermMessages(String sessionId, String userId) {
+        List<MemoryMessage> cached = messageCache.getIfPresent(sessionId);
+        if (cached != null) {
+            log.debug("[Memory] Cache hit for session: {}", sessionId);
+            return cached;
+        }
+        List<MemoryMessage> loaded = messageStore.loadForContext(sessionId);
+        messageCache.put(sessionId, userId, loaded);
+        return loaded;
+    }
+
+    private List<Preference> loadLongtermPreferences(String userId) {
+        List<Preference> preferences = preferenceStore.loadByUser(userId);
+        log.debug(
+                "[Memory] Loaded {} long-term preferences for user {}",
+                preferences.size(),
+                userId);
+        return preferences;
+    }
+
+    private static void activateToolContext(String userId, String sessionId) {
+        LoadSkillTool.setCurrentSession(sessionId);
+        UpdateMemoryTool.setCurrentUserId(userId);
+        UpdateMemoryTool.setCurrentSessionId(sessionId);
+    }
+
+    private void recordCompressionMetadata(
+            TraceCollector trace,
+            CompressionOutcome compressionOutcome
+    ) {
+        if (!compressionOutcome.hasMajor()) {
+            return;
+        }
+        Map<String, String> metadata =
+                new HashMap<>(trace.builder().build().metadata());
+        metadata.put("compression_type", compressionOutcome.majorResult().type().name());
+        metadata.put(
+                "messages_before",
+                String.valueOf(compressionOutcome.majorResult().messagesBefore()));
+        metadata.put(
+                "messages_after",
+                String.valueOf(compressionOutcome.majorResult().messagesAfter()));
+        trace.builder().metadata(metadata);
+    }
+
+    private void persistUserMessage(
+            String sessionId,
+            String userId,
+            String enhancedText,
+            boolean updateActivity
+    ) {
+        List<MessageBlock> userBlocks = List.of(
+                new MessageBlock(MessageBlock.BlockType.TEXT, enhancedText, null));
+        messageWriteWorker.submit(sessionId, "user", userBlocks, false);
+        messageCache.append(
+                sessionId,
+                userId,
+                new MemoryMessage(0, sessionId, "user", userBlocks, false, null));
+        if (updateActivity) {
+            sessionStore.updateLastActive(sessionId);
+        }
+    }
+
+    private void persistAssistantMessage(
+            String sessionId,
+            String userId,
+            List<MessageBlock> assistantBlocks,
+            boolean updateActivity
+    ) {
+        if (sessionId == null || userId == null) {
+            return;
+        }
+        messageWriteWorker.submit(sessionId, "assistant", assistantBlocks, false);
+        messageCache.append(
+                sessionId,
+                userId,
+                new MemoryMessage(
+                        0, sessionId, "assistant", assistantBlocks, false, null));
+        if (updateActivity) {
+            sessionStore.updateLastActive(sessionId);
+        }
+    }
+
+    private void scheduleReplyAudit(
+            TraceCollector trace,
+            String replyText,
+            boolean recordMetadata
+    ) {
+        CompletableFuture.runAsync(() -> {
+            try {
+                ReplyAuditor.ReplyAuditResult auditResult = replyAuditor.audit(replyText);
+                if (!auditResult.passed()) {
+                    log.warn(
+                            "[ReplyAuditor] Audit failed: score={}, reason={}",
+                            auditResult.score(),
+                            auditResult.reason());
+                } else {
+                    log.debug("[ReplyAuditor] Audit passed: score={}", auditResult.score());
+                }
+                if (recordMetadata) {
+                    Map<String, String> metadata =
+                            new HashMap<>(trace.builder().build().metadata());
+                    metadata.put(
+                            "reply_audit_passed",
+                            String.valueOf(auditResult.passed()));
+                    metadata.put(
+                            "reply_audit_score",
+                            String.valueOf(auditResult.score()));
+                    metadata.put("reply_audit_reason", auditResult.reason());
+                    trace.builder().metadata(metadata);
+                }
+            } catch (Exception e) {
+                log.debug("[ReplyAuditor] Async audit failed: {}", e.getMessage());
+            }
+        }, BlockingTaskExecutor.shared());
+    }
+
+    private void finishTraceAsync(TraceCollector trace) {
+        CompletableFuture.runAsync(() -> {
+            try {
+                trace.finish();
+            } catch (Exception e) {
+                log.error("[Orchestrator] Async trace.finish() failed: {}", e.getMessage());
+            }
+        }, BlockingTaskExecutor.shared());
+    }
+
+    private void updateSessionActivityAsync(String sessionId) {
+        if (sessionId == null || sessionStore == null) {
+            return;
+        }
+        CompletableFuture.runAsync(() -> {
+            try {
+                sessionStore.updateLastActive(sessionId);
+            } catch (Exception e) {
+                log.error("[Orchestrator] Async updateLastActive failed: {}", e.getMessage());
+            }
+        }, BlockingTaskExecutor.shared());
+    }
+
+    private String openRunScope(
+            String sessionId,
+            CancellationToken cancellationToken,
+            RunToolCatalog runToolCatalog,
+            AgentTrace.Builder traceBuilder
+    ) {
+        String runId = java.util.UUID.randomUUID().toString();
+        AgentRunContext runContext = new AgentRunContext(
+                runId,
+                sessionId,
+                cancellationToken,
+                traceBuilder.build().traceId(),
+                runToolCatalog);
+        subAgentManager.openScope(runId);
+        SpawnSubAgentTool.setCurrentRunContext(runContext);
+        Map<String, String> metadata = new HashMap<>(traceBuilder.build().metadata());
+        metadata.put("tool_catalog_version", String.valueOf(runToolCatalog.version()));
+        metadata.put("tool_count", String.valueOf(runToolCatalog.size()));
+        metadata.put("authorized_tools", runToolCatalog.getAll().stream()
+                .map(ToolSpec::name)
+                .collect(java.util.stream.Collectors.joining(",")));
+        traceBuilder.metadata(metadata);
+        log.debug("[Orchestrator] Sub-agent scope opened: runId={}", runId);
+        return runId;
+    }
+
+    private static void recordReactStats(
+            TraceCollector trace,
+            ReActEngine.ReActResult result
+    ) {
+        if (result.loopStats() == null) {
+            return;
+        }
+        ReActEngine.ReActLoopStats stats = result.loopStats();
+        trace.recordReactStats(
+                stats.outcome(),
+                stats.rounds(),
+                stats.toolCalls(),
+                stats.reflectionChecks(),
+                stats.inputTokens(),
+                stats.outputTokens(),
+                stats.llmCalls(),
+                stats.toolRetries());
+    }
+
+    private static MessageBlock toArtifactBlock(Artifact artifact) {
+        Map<String, Object> metadata = new HashMap<>();
+        metadata.put("type", artifact.type().name());
+        if (artifact.mimeType() != null) {
+            metadata.put("mimeType", artifact.mimeType());
+        }
+        if (artifact.name() != null) {
+            metadata.put("name", artifact.name());
+        }
+        metadata.put("previewUrl", artifact.previewUrl());
+        metadata.put("downloadUrl", artifact.downloadUrl());
+        return new MessageBlock(
+                MessageBlock.BlockType.ARTIFACT, null, artifact.id(), metadata);
+    }
+
+    private static List<MessageBlock> finishAssistantBlocks(
+            List<MessageBlock> blockAccumulator,
+            StringBuilder textAccumulator,
+            String fallbackOutput
+    ) {
+        if (textAccumulator.length() > 0) {
+            blockAccumulator.add(new MessageBlock(
+                    MessageBlock.BlockType.TEXT, textAccumulator.toString(), null));
+        }
+        if (!blockAccumulator.isEmpty()) {
+            return List.copyOf(blockAccumulator);
+        }
+        return List.of(new MessageBlock(
+                MessageBlock.BlockType.TEXT,
+                fallbackOutput != null ? fallbackOutput : "",
+                null));
+    }
+
+    private void closeRunScope(String runId) {
+        SpawnSubAgentTool.clearCurrentRunContext();
+        if (runId != null) {
+            subAgentManager.finishRun(runId);
+            log.debug("[Orchestrator] Sub-agent scope finished: runId={}", runId);
+        }
+        LoadSkillTool.clearCurrentSession();
+        UpdateMemoryTool.clearContext();
+        KnowledgeGraphTool.clearCurrentContext();
+        AuthorizedUrlContext.clear();
+    }
+
+    private record RunPreparationRequest(
+            String token,
+            String text,
+            List<MultimodalParser.RawAttachment> attachments,
+            String requestedSessionId,
+            String systemPromptOverride,
+            String contextUserId,
+            AgentContext agentContext,
+            boolean updateActivityAfterUserMessage
+    ) {
+    }
+
+    private record MemoryContext(
+            String sessionId,
+            String userId,
+            List<MemoryMessage> shorttermMessages,
+            List<Preference> longtermPreferences
+    ) {
+    }
+
+    private record PreparedRun(
+            String sessionId,
+            String userId,
+            String enhancedText,
+            String systemPrompt,
+            List<MemoryMessage> shorttermMessages,
+            GapAnalysis gapAnalysis,
+            Set<String> unavailableTools,
+            CompressionOutcome compressionOutcome
+    ) {
+    }
+
     private String buildSystemPrompt(List<Preference> longtermPrefs, String systemPromptOverride, String sessionId,
-                                      boolean needsKnowledgeBase, boolean needsWebSearch) {
+                                      boolean needsKnowledgeBase, boolean graphContextAvailable,
+                                      boolean needsWebSearch) {
         StringBuilder sb = new StringBuilder();
         String basePrompt = (systemPromptOverride != null && !systemPromptOverride.isBlank())
                 ? systemPromptOverride
@@ -937,11 +1130,22 @@ public class AgentOrchestrator {
         sb.append("IMPORTANT: After image/video generation tools succeed, do NOT include download links, file paths, image markdown syntax (![name](url)), or descriptive repetitions of the image in your text reply. The frontend automatically renders generated content as inline cards. Your text reply should only contain natural language commentary (e.g. style notes, asking if adjustments are needed).\n\n");
 
         if (needsKnowledgeBase) {
-            sb.append("CRITICAL: This query may benefit from internal knowledge base. You MUST call the knowledge_base_search tool FIRST before composing your answer. The query MUST be a complete, standalone question with no pronouns or context-dependent references.\n\n");
+            sb.append("Internal knowledge-base search is available and route analysis indicates it may help. "
+                    + "Use knowledge_base_search when retrieved internal documents would improve the answer. "
+                    + "Its query must be a complete, standalone question without context-dependent references.\n\n");
+        }
+
+        if (graphContextAvailable) {
+            sb.append("A server-authorized structured graph context is available. "
+                    + "Call knowledge_graph_search when the question requires facts or relationships about "
+                    + "the scoped subjects. "
+                    + "Treat graph nodes, relations, and paths as structured records; do not describe them as document chunks. "
+                    + "Do not guess graph, schema, subject IDs, or Cypher.\n\n");
         }
 
         if (needsWebSearch) {
-            sb.append("CRITICAL: This query requires up-to-date information. You MUST call the web_search tool FIRST before composing your answer. Do NOT answer from memory alone.\n\n");
+            sb.append("Route analysis indicates that current information may be important. "
+                    + "Use web_search to verify time-sensitive claims when the answer depends on fresh information.\n\n");
         }
 
         // Inject skill index — name + when-to-use description
@@ -993,6 +1197,33 @@ public class AgentOrchestrator {
         meta.put("gap_needsWebSearch", String.valueOf(gap.needsWebSearch()));
         meta.put("gap_source", String.valueOf(gap.source()));
         return meta;
+    }
+
+    private Set<String> unavailableTools(AgentContext context, boolean graphContextAvailable) {
+        Set<String> unavailable = new HashSet<>();
+        if (!graphContextAvailable) {
+            unavailable.add(KnowledgeGraphTool.TOOL_NAME);
+        }
+        if (Boolean.FALSE.equals(context.needsKnowledgeBase())) {
+            unavailable.add(KnowledgeBaseTool.TOOL_NAME);
+        }
+        if (Boolean.FALSE.equals(context.needsWebSearch())) {
+            unavailable.add(WebSearchTool.TOOL_NAME);
+        }
+        return Set.copyOf(unavailable);
+    }
+
+    private RunToolCatalog createRunToolCatalog(Set<String> unavailableTools) {
+        return toolRegistry.snapshot().excluding(unavailableTools);
+    }
+
+    private ReActEngine createRequestReactEngine(RunToolCatalog runToolCatalog) {
+        return new ReActEngine(
+                chatModelProvider,
+                runToolCatalog,
+                toolExecutor,
+                visionModelProvider,
+                voiceModelProvider);
     }
 
     /**
@@ -1075,16 +1306,32 @@ public class AgentOrchestrator {
     }
 
     private RiskLevel determineRisk(ReActEngine.ReActResult result) {
+        if (requiresConfirmation(result)) {
+            return RiskLevel.HIGH;
+        }
         boolean hasToolErrors = result.steps().stream()
                 .flatMap(s -> s.toolResults().stream())
                 .anyMatch(r -> !r.success());
         return hasToolErrors ? RiskLevel.MEDIUM : RiskLevel.LOW;
     }
 
+    private boolean requiresConfirmation(ReActEngine.ReActResult result) {
+        return result.steps().stream()
+                .flatMap(step -> step.toolResults().stream())
+                .anyMatch(toolResult ->
+                        toolResult.status() == ToolResult.ResultStatus.CONFIRMATION_REQUIRED);
+    }
+
     private void registerBuiltinTools() {
         EnvConfig cfg = EnvConfig.get();
         if (cfg.getBool(EnvKey.TOOL_WEB_SEARCH_ENABLED, true)) {
             toolRegistry.register(new WebSearchTool());
+        }
+        if (cfg.getBool(EnvKey.TOOL_URL_READER_ENABLED, true)) {
+            toolRegistry.register(new ReadUrlContentTool());
+        }
+        if (cfg.getBool(EnvKey.TOOL_BROWSER_ENABLED, false)) {
+            toolRegistry.register(new BrowserControlTool());
         }
         // Knowledge base search tool — registered when RAG provider is configured
         String ragProvider = cfg.getString(EnvKey.RAG_PROVIDER, "pgvector");
@@ -1093,6 +1340,16 @@ public class AgentOrchestrator {
         } else {
             log.info("[Orchestrator] Knowledge base tool disabled (ragProvider={}, embedding={})",
                     ragProvider, embeddingModelProvider != null && embeddingModelProvider.isAvailable());
+        }
+        if (!"none".equals(knowledgeGraphStore.providerName())) {
+            toolRegistry.register(new KnowledgeGraphTool(
+                    graphKnowledgeRetriever,
+                    graphSchemaRegistry,
+                    graphSettings,
+                    new ObjectMapper()
+            ));
+        } else {
+            log.info("[Orchestrator] Knowledge graph tool disabled (provider=none)");
         }
         if (cfg.getBool(EnvKey.TOOL_FFMPEG_ENABLED, false)) {
             toolRegistry.register(new FfmpegTool());
@@ -1172,7 +1429,7 @@ public class AgentOrchestrator {
         CompletableFuture.runAsync(() -> {
             McpToolDiscovery discovery = new McpToolDiscovery();
             discovery.discoverAndRegister(servers, toolRegistry);
-        });
+        }, BlockingTaskExecutor.shared());
     }
 
     private void initSkills() {
@@ -1213,9 +1470,9 @@ public class AgentOrchestrator {
             if (config.projectRoot() != null && !config.projectRoot().isBlank()) {
                 Path projectRoot = Path.of(config.projectRoot()).toAbsolutePath().normalize();
                 Set<String> excludes = Set.of();
-                toolRegistry.register(new CodeGlobTool(projectRoot, excludes));
-                toolRegistry.register(new CodeGrepTool(projectRoot, excludes));
-                toolRegistry.register(new ReadClassHierarchyTool(projectRoot));
+                toolRegistry.replace(new CodeGlobTool(projectRoot, excludes));
+                toolRegistry.replace(new CodeGrepTool(projectRoot, excludes));
+                toolRegistry.replace(new ReadClassHierarchyTool(projectRoot));
                 log.info("[Discovery] Re-registered discovery tools with projectRoot={}", projectRoot);
             }
 
@@ -1224,34 +1481,6 @@ public class AgentOrchestrator {
         } catch (Exception e) {
             log.error("[Discovery] Failed to load project-apis.json: {}", e.getMessage());
         }
-    }
-
-    /**
-     * Build skill content string for re-injection after major compression.
-     * Formats skill as a system message that preserves the full skill instructions.
-     */
-    private String buildSkillContentForReinjection(com.harness.core.model.Skill skill) {
-        StringBuilder sb = new StringBuilder();
-        sb.append("[Skill: ").append(skill.name()).append("]\n");
-        sb.append("[Description: ").append(skill.description()).append("]\n");
-        if (skill.version() != null) {
-            sb.append("[Version: ").append(skill.version()).append("]\n");
-        }
-        sb.append("\n[Instructions]\n");
-        sb.append(skill.systemPrompt()).append("\n");
-        if (skill.tools() != null && !skill.tools().isEmpty()) {
-            sb.append("\n[Bound Tools: ").append(String.join(", ", skill.tools())).append("]\n");
-        }
-        if (skill.parameters() != null && !skill.parameters().isEmpty()) {
-            sb.append("[Parameters: ");
-            List<String> paramPairs = new ArrayList<>();
-            for (Map.Entry<String, Object> entry : skill.parameters().entrySet()) {
-                paramPairs.add(entry.getKey() + "=" + entry.getValue());
-            }
-            sb.append(String.join(", ", paramPairs));
-            sb.append("]\n");
-        }
-        return sb.toString();
     }
 
     // Expose model providers for external use (e.g., direct vision/voice calls)
@@ -1273,7 +1502,12 @@ public class AgentOrchestrator {
     public MessageWriteWorker messageWriteWorker() { return messageWriteWorker; }
     public SkillRegistry skillRegistry() { return skillRegistry; }
     public TraceStore traceStore() { return traceStore; }
+    public ConfirmationManager confirmationManager() { return confirmationManager; }
     public com.harness.preprocess.rag.VectorStore vectorStore() { return contextBuilder.vectorStore(); }
+    public KnowledgeGraphStore knowledgeGraphStore() { return knowledgeGraphStore; }
+    public GraphSchemaRegistry graphSchemaRegistry() { return graphSchemaRegistry; }
+    public GraphSchemaManagementService graphSchemaManagementService() { return graphSchemaManagementService; }
+    public GraphSettings graphSettings() { return graphSettings; }
 
     // Expose artifact subsystem
     public ArtifactStore artifactStore() { return artifactStore; }
@@ -1283,7 +1517,6 @@ public class AgentOrchestrator {
     /**
      * Convert MemoryMessage list to LangChain4j ChatMessage list for ReAct history injection.
      * Summary rows are converted to AiMessage to preserve compressed context.
-     * Skill content (system messages starting with "[Skill:") is preserved as AiMessage.
      */
     private List<ChatMessage> convertToChatMessages(List<MemoryMessage> memoryMessages) {
         List<ChatMessage> chatMessages = new ArrayList<>();
@@ -1297,9 +1530,7 @@ public class AgentOrchestrator {
                 case "user" -> chatMessages.add(UserMessage.from(text));
                 case "assistant" -> chatMessages.add(AiMessage.from(text));
                 case "system" -> {
-                    if (text != null && text.startsWith("[Skill:")) {
-                        chatMessages.add(AiMessage.from(text));
-                    }
+                    // Summary rows are handled above; other system rows are not replayed.
                 }
             }
         }
@@ -1384,24 +1615,13 @@ public class AgentOrchestrator {
                     sessionId, shorttermMessages, shorttermTokens, totalUsed, totalBudget);
         }
 
-        // 大压缩后重建缓存 + 重新注入 skill
+        // 大压缩后从持久化摘要重建缓存
         if (majorResult.type() != MemoryCompressor.CompressionResult.CompressionType.NONE) {
             log.info("[Memory] Compression triggered: type={}, before={}, after={}",
                     majorResult.type(), majorResult.messagesBefore(), majorResult.messagesAfter());
             shorttermMessages = messageStore.loadForContext(sessionId);
             messageCache.put(sessionId, userId, shorttermMessages);
 
-            List<com.harness.core.model.Skill> loadedSkills = skillRegistry.getLoadedSkills(sessionId);
-            if (!loadedSkills.isEmpty()) {
-                log.debug("[Memory] Re-injecting {} loaded skills after major compression", loadedSkills.size());
-                List<MemoryMessage> skillMessages = new ArrayList<>(shorttermMessages);
-                for (com.harness.core.model.Skill skill : loadedSkills) {
-                    String skillContent = buildSkillContentForReinjection(skill);
-                    skillMessages.add(new MemoryMessage(0, sessionId, "system", List.of(new MessageBlock(MessageBlock.BlockType.TEXT, skillContent, null)), false, null));
-                }
-                shorttermMessages = skillMessages;
-                messageCache.put(sessionId, userId, shorttermMessages);
-            }
         }
 
         return new CompressionOutcome(minorStripped, majorResult, shorttermMessages);
@@ -1459,6 +1679,12 @@ public class AgentOrchestrator {
                     }
                 }
             }
+            if (shorttermMessages == null) {
+                shorttermMessages = messageStore.loadForContext(sessionId);
+                if (userId != null) {
+                    messageCache.put(sessionId, userId, shorttermMessages);
+                }
+            }
 
             // Build runtime event message
             StringBuilder eventMessage = new StringBuilder();
@@ -1480,28 +1706,35 @@ public class AgentOrchestrator {
 
             eventMessage.append("请结合当前会话历史和该结果，继续处理用户的请求。");
 
-            // Create a CancellationToken for this resume run
             CancellationToken cancellationToken = new CancellationToken();
-
-            // Set up sub-agent infrastructure so the resumed session can spawn sub-agents
-            String resumeRunId = java.util.UUID.randomUUID().toString();
-            AgentRunContext resumeContext = new AgentRunContext(resumeRunId, sessionId, cancellationToken);
-            subAgentManager.openScope(resumeRunId);
-            SpawnSubAgentTool.setCurrentRunContext(resumeContext);
+            AgentContext resumeAgentContext = AgentContext.empty();
+            Set<String> unavailableTools = unavailableTools(resumeAgentContext, false);
+            RunToolCatalog runToolCatalog = createRunToolCatalog(unavailableTools);
+            AgentTrace.Builder traceBuilder = AgentTrace.builder();
+            String resumeRunId = null;
 
             try {
+                AuthorizedUrlContext.clear();
+                KnowledgeGraphTool.setCurrentContext(null);
+                activateToolContext(userId, sessionId);
+                resumeRunId = openRunScope(
+                        sessionId,
+                        cancellationToken,
+                        runToolCatalog,
+                        traceBuilder);
+
                 // Build system prompt
-                GapAnalysis gapAnalysis = gapAnalyzer.analyze(eventMessage.toString(), AgentContext.empty());
+                GapAnalysis gapAnalysis = gapAnalyzer.analyze(eventMessage.toString(), resumeAgentContext);
                 String systemPrompt = buildSystemPrompt(longtermPrefs, null, sessionId,
-                        gapAnalysis.needsKnowledgeBase(), gapAnalysis.needsWebSearch());
+                        gapAnalysis.needsKnowledgeBase(), false, gapAnalysis.needsWebSearch());
 
                 // Convert messages and add runtime event
                 List<ChatMessage> historyChatMessages = convertToChatMessages(shorttermMessages);
                 historyChatMessages.add(UserMessage.from(eventMessage.toString()));
 
                 // Execute ReAct loop
-                AgentTrace.Builder traceBuilder = AgentTrace.builder();
-                ReActEngine.ReActResult result = reactEngine.execute(systemPrompt, eventMessage.toString(),
+                ReActEngine requestReactEngine = createRequestReactEngine(runToolCatalog);
+                ReActEngine.ReActResult result = requestReactEngine.execute(systemPrompt, eventMessage.toString(),
                         historyChatMessages, traceBuilder, null, cancellationToken, null);
 
                 // Save assistant message
@@ -1516,8 +1749,7 @@ public class AgentOrchestrator {
                 log.info("[Orchestrator] Session {} resumed successfully, outputLen={}", sessionId,
                         result.output() != null ? result.output().length() : 0);
             } finally {
-                SpawnSubAgentTool.clearCurrentRunContext();
-                subAgentManager.finishRun(resumeRunId);
+                closeRunScope(resumeRunId);
             }
 
         } catch (Exception e) {
@@ -1534,6 +1766,7 @@ public class AgentOrchestrator {
         messageCache.evictExpired();
         skillRegistry.evictExpired();
         traceStore.close();
+        knowledgeGraphStore.close();
         com.harness.env.PgConnectionPool.shutdown();
         com.harness.env.MysqlConnectionPool.shutdown();
         com.harness.env.RedisConnectionPool.shutdown();

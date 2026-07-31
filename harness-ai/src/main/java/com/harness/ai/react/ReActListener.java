@@ -2,6 +2,8 @@ package com.harness.ai.react;
 
 import com.harness.core.model.Artifact;
 import com.harness.core.model.ReActStep;
+import com.harness.tool.confirmation.ConfirmationDecision;
+import com.harness.tool.confirmation.ConfirmationRequest;
 
 import java.util.List;
 
@@ -45,6 +47,16 @@ public interface ReActListener {
      * @param durationMs execution time in milliseconds
      */
     default void onToolCallDone(String toolName, boolean success, long durationMs) {}
+
+    /**
+     * Called when execution is paused for explicit user approval.
+     */
+    default void onConfirmationRequired(ConfirmationRequest request) {}
+
+    /**
+     * Called after a pending confirmation reaches a terminal decision.
+     */
+    default void onConfirmationResolved(ConfirmationRequest request, ConfirmationDecision decision) {}
 
     /**
      * Called when an artifact-producing tool generates downloadable files.
