@@ -94,7 +94,8 @@ public class Main {
         Runtime.getRuntime().addShutdownHook(new Thread(agent::shutdown));
 
         // Knowledge base upload service — reuse agent's instances
-        KnowledgeIngestService ingestService = new KnowledgeIngestService(agent.embeddingModel(), agent.vectorStore());
+        KnowledgeIngestService ingestService = new KnowledgeIngestService(
+                agent.embeddingModel(), agent.vectorStore(), agent.visionModel());
         TraceStore traceStore = agent.traceStore();
 
         // Shared cancellation token registry for in-flight chat requests
@@ -154,6 +155,13 @@ public class Main {
         String knowledgeUploadDir = EnvConfig.get().getString(EnvKey.KNOWLEDGE_UPLOAD_DIR, "./knowledge-uploads");
         FileUploadHandler fileUploadHandler = new FileUploadHandler(knowledgeUploadDir);
         app.post("/api/files/upload", fileUploadHandler::handle);
+
+        AudioTranscriptionHandler audioTranscriptionHandler =
+                new AudioTranscriptionHandler(agent.voiceModel());
+        AudioCapabilityHandler audioCapabilityHandler =
+                new AudioCapabilityHandler(agent.voiceModel());
+        app.post("/api/audio/transcriptions", audioTranscriptionHandler::handle);
+        app.get("/api/audio/capabilities", audioCapabilityHandler::handle);
 
         // Knowledge base management endpoints
         KnowledgeManagementHandler knowledgeMgmtHandler = new KnowledgeManagementHandler(agent.vectorStore());

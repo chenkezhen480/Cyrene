@@ -28,6 +28,15 @@ class AgentContextTest {
     }
 
     @Test
+    void of_audioMode_isStreamingVoiceOutput() {
+        var ctx = AgentContext.of(Map.of("outputMode", "audio"));
+
+        assertThat(ctx.isStreaming()).isTrue();
+        assertThat(ctx.isVoiceOutput()).isTrue();
+        assertThat(ctx.outputMode()).isEqualTo("audio");
+    }
+
+    @Test
     void of_nullData_createsEmptyContext() {
         var ctx = AgentContext.of(null);
         assertThat(ctx.data()).isEmpty();

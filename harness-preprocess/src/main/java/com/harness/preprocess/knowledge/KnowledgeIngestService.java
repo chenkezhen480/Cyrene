@@ -1,6 +1,8 @@
 package com.harness.preprocess.knowledge;
 
 import com.harness.ai.model.EmbeddingModelProvider;
+import com.harness.ai.model.VisionModelProvider;
+import com.harness.ai.model.impl.NoOpVisionModelProvider;
 import com.harness.env.EnvConfig;
 import com.harness.env.EnvKey;
 import com.harness.input.multimodal.TextChunker;
@@ -23,13 +25,23 @@ public class KnowledgeIngestService {
     private final EmbeddingModelProvider embeddingProvider;
     private final VectorStore vectorStore;
     private final FileStorageService fileStorage;
+    private final KnowledgeDocumentTextResolver documentTextResolver;
     private final String defaultCollection;
     private final long maxFileSizeMb;
 
     public KnowledgeIngestService(EmbeddingModelProvider embeddingProvider, VectorStore vectorStore) {
+        this(embeddingProvider, vectorStore, new NoOpVisionModelProvider());
+    }
+
+    public KnowledgeIngestService(
+            EmbeddingModelProvider embeddingProvider,
+            VectorStore vectorStore,
+            VisionModelProvider visionModelProvider
+    ) {
         this.embeddingProvider = embeddingProvider;
         this.vectorStore = vectorStore;
         this.fileStorage = new FileStorageService();
+        this.documentTextResolver = new KnowledgeDocumentTextResolver(visionModelProvider);
 
         EnvConfig cfg = EnvConfig.get();
         this.defaultCollection = cfg.getString(EnvKey.RAG_COLLECTION, "default");
@@ -46,15 +58,21 @@ public class KnowledgeIngestService {
         }
 
         // Validate file size
-        long sizeMb = fileData.length / (1024 * 1024);
-        if (sizeMb > maxFileSizeMb) {
-            throw new IllegalArgumentException("File size " + sizeMb + "MB exceeds limit " + maxFileSizeMb + "MB");
+        long maxFileBytes = Math.multiplyExact(maxFileSizeMb, 1024L * 1024L);
+        if (fileData.length > maxFileBytes) {
+            throw new IllegalArgumentException(
+                    "File size exceeds limit " + maxFileSizeMb + "MB");
         }
+
+        String effectiveMimeType = effectiveMimeType(fileName, mimeType);
+        validateDocumentTypeEnabled(effectiveMimeType);
 
         log.debug("Starting ingest: file={}, size={}KB, mimeType={}, collection={}", fileName, fileData.length / 1024, mimeType, coll);
 
         // Step 1: Extract text from file
-        String rawText = TextExtractorRegistry.extract(fileData, fileName, mimeType);
+        ResolvedDocumentText resolvedDocument = documentTextResolver.resolve(
+                fileData, fileName, effectiveMimeType);
+        String rawText = resolvedDocument.text();
         if (rawText == null || rawText.isBlank()) {
             throw new IllegalArgumentException("No text content extracted from file: " + fileName);
         }
@@ -91,6 +109,10 @@ public class KnowledgeIngestService {
             metadata.put("file_name", fileName);
             metadata.put("chunk_index", i);
             metadata.put("total_chunks", chunks.size());
+            metadata.put("repaired_block_count", resolvedDocument.repairedBlockCount());
+            if (!resolvedDocument.repairModel().isBlank()) {
+                metadata.put("repair_model", resolvedDocument.repairModel());
+            }
 
             docs.add(new VectorStore.Document(
                     null,
@@ -120,8 +142,37 @@ public class KnowledgeIngestService {
                 chunks.size(),
                 embeddingProvider.dimension(),
                 storedPath,
-                duration
+                duration,
+                resolvedDocument.repairedBlockCount(),
+                resolvedDocument.repairModel()
         );
+    }
+
+    private static String effectiveMimeType(String fileName, String mimeType) {
+        if (mimeType != null && !mimeType.isBlank()
+                && !"application/octet-stream".equalsIgnoreCase(mimeType)) {
+            return mimeType.toLowerCase();
+        }
+        String guessed = TextExtractorRegistry.guessMimeType(fileName);
+        return guessed != null ? guessed : "application/octet-stream";
+    }
+
+    private static void validateDocumentTypeEnabled(String mimeType) {
+        EnvConfig config = EnvConfig.get();
+        boolean enabled = switch (mimeType) {
+            case "application/pdf" -> config.getBool(EnvKey.KNOWLEDGE_PDF_ENABLED, true);
+            case "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                 "application/msword" -> config.getBool(EnvKey.KNOWLEDGE_DOCX_ENABLED, true);
+            case "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                 "application/vnd.ms-excel" -> config.getBool(EnvKey.KNOWLEDGE_XLSX_ENABLED, true);
+            case "application/vnd.openxmlformats-officedocument.presentationml.presentation" ->
+                    config.getBool(EnvKey.KNOWLEDGE_PPTX_ENABLED, true);
+            default -> true;
+        };
+        if (!enabled) {
+            throw new IllegalArgumentException(
+                    "Knowledge ingestion is disabled for MIME type: " + mimeType);
+        }
     }
 
     public String getDefaultCollection() {

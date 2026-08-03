@@ -51,6 +51,7 @@ public class TextExtractorRegistry {
         if (lower.endsWith(".doc")) return "application/msword";
         if (lower.endsWith(".xlsx")) return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
         if (lower.endsWith(".xls")) return "application/vnd.ms-excel";
+        if (lower.endsWith(".pptx")) return "application/vnd.openxmlformats-officedocument.presentationml.presentation";
         if (lower.endsWith(".txt")) return "text/plain";
         if (lower.endsWith(".md")) return "text/markdown";
         if (lower.endsWith(".csv")) return "text/csv";

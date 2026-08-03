@@ -6,5 +6,7 @@ public record IngestResult(
         int chunkCount,
         int embeddingDimension,
         String storedFilePath,
-        long ingestDurationMs
+        long ingestDurationMs,
+        int repairedBlockCount,
+        String repairModel
 ) {}

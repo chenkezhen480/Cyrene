@@ -14,6 +14,8 @@ import com.harness.env.EnvConfig;
 import com.harness.env.EnvKey;
 import com.harness.env.MysqlConnectionPool;
 import com.harness.env.RedisConnectionPool;
+import com.harness.agent.voice.VoiceOutputCoordinator;
+import com.harness.agent.voice.VoiceOutputSettings;
 import com.harness.graph.config.GraphSettings;
 import com.harness.graph.config.KnowledgeGraphStoreFactory;
 import com.harness.graph.retrieval.AnchoredNeighborhoodGraphRetriever;
@@ -495,6 +497,7 @@ public class AgentOrchestrator {
             sessionId = prepared.sessionId();
             final String userId = prepared.userId();
             final String finalSessionId = prepared.sessionId();
+            final boolean voiceOutput = agentContext != null && agentContext.isVoiceOutput();
             List<MemoryMessage> shorttermMessages = prepared.shorttermMessages();
             String systemPrompt = prepared.systemPrompt();
             String finalUserMessage = prepared.enhancedText();
@@ -517,6 +520,14 @@ public class AgentOrchestrator {
             // Emit start event with sessionId (first event for client)
             callback.onEvent(StreamEvent.start(finalSessionId));
 
+            final VoiceOutputCoordinator voiceOutputCoordinator = voiceOutput
+                    ? new VoiceOutputCoordinator(
+                            voiceModelProvider,
+                            callback,
+                            cancellationToken,
+                            VoiceOutputSettings.fromEnvironment())
+                    : null;
+
             // Layer 3+4: Streaming ReAct loop
             runId = openRunScope(
                     sessionId, cancellationToken, runToolCatalog, trace.builder());
@@ -538,6 +549,9 @@ public class AgentOrchestrator {
                 public void onToken(String tokenText) {
                     textAccumulator.append(tokenText);
                     callback.onEvent(StreamEvent.token(tokenText));
+                    if (voiceOutputCoordinator != null) {
+                        voiceOutputCoordinator.accept(tokenText);
+                    }
                 }
 
                 @Override
@@ -611,8 +625,14 @@ public class AgentOrchestrator {
             ReActEngine requestReactEngine = createRequestReactEngine(runToolCatalog);
             ReActEngine.ReActResult result = requestReactEngine.streamExecute(
                     systemPrompt, finalUserMessage, historyChatMessages, trace.builder(), listener,
-                    cancellationToken, effectiveThinking, confirmationContext);
+                    cancellationToken, effectiveThinking, confirmationContext, voiceOutput);
             result.steps().forEach(trace::addStep);
+
+            if (voiceOutputCoordinator != null) {
+                int voiceTimeoutSeconds = EnvConfig.get().getInt(
+                        EnvKey.MODEL_VOICE_TIMEOUT_SECONDS, 120);
+                voiceOutputCoordinator.finishAndAwait(Duration.ofSeconds(voiceTimeoutSeconds));
+            }
 
             recordReactStats(trace, result);
 

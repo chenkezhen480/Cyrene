@@ -40,6 +40,7 @@ const Icons = {
   send: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>`,
   upload: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>`,
   mic: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>`,
+  volume: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M19 5a10 10 0 0 1 0 14"/></svg>`,
   plus: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>`,
   trash: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>`,
   edit: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>`,
@@ -340,9 +341,240 @@ const ChatPage = {
     const pendingConfirmation = ref(null);
     const confirmationAcknowledged = ref(false);
     const confirmationSubmitting = ref(false);
+    const voiceReplyEnabled = ref(localStorage.getItem('cyrene.voiceReplyEnabled') === 'true');
+    const voiceInputPending = ref(false);
+    const isRecording = ref(false);
+    const isTranscribing = ref(false);
+    const voiceCapabilities = ref({
+      asrAvailable: false,
+      ttsAvailable: false,
+      ttsStreamingAvailable: false,
+      acceptedInputMimeTypes: [],
+      outputFormats: [],
+    });
+
+    let mediaRecorder = null;
+    let microphoneStream = null;
+    let recordingChunks = [];
+    let audioContext = null;
+    let audioGeneration = 0;
+    let nextAudioSequence = 1;
+    let nextAudioStartTime = 0;
+    const encodedAudioBySequence = new Map();
+    const decodedAudioBySequence = new Map();
+    const activeAudioSources = new Set();
 
     // Known file extensions for URL auto-detection on paste (office docs, images, video, audio)
     const FILE_URL_REGEX = /https?:\/\/[^\s<>"'`]+?\.(?:pdf|docx?|xlsx?|pptx?|csv|json|rtf|odt|ods|txt|md|png|jpe?g|gif|webp|svg|bmp|tiff?|mp[34]|wav|ogg|webm|avi|mov|mkv|flv|wmv)(?:\?[^\s]*)?/gi;
+
+    async function loadVoiceCapabilities() {
+      try {
+        const capabilities = await CyreneAPI.getAudioCapabilities();
+        if (!capabilities
+          || typeof capabilities.asrAvailable !== 'boolean'
+          || typeof capabilities.ttsAvailable !== 'boolean'
+          || typeof capabilities.ttsStreamingAvailable !== 'boolean'
+          || !Array.isArray(capabilities.acceptedInputMimeTypes)
+          || !Array.isArray(capabilities.outputFormats)) {
+          throw new Error(t('voiceCapabilityUnavailable'));
+        }
+        voiceCapabilities.value = capabilities;
+        if (!capabilities.ttsStreamingAvailable) {
+          voiceReplyEnabled.value = false;
+          localStorage.setItem('cyrene.voiceReplyEnabled', 'false');
+        }
+      } catch (e) {
+        console.warn('[Voice] Failed to load capabilities:', e.message);
+      }
+    }
+
+    async function toggleVoiceReply() {
+      if (!voiceReplyEnabled.value && !voiceCapabilities.value.ttsStreamingAvailable) {
+        showToast(t('voiceCapabilityUnavailable'), 'error');
+        return;
+      }
+      if (voiceReplyEnabled.value) {
+        voiceReplyEnabled.value = false;
+        localStorage.setItem('cyrene.voiceReplyEnabled', 'false');
+        stopAudioPlayback();
+        showToast(t('voiceReplyDisabled'), 'success');
+        return;
+      }
+      try {
+        await ensureAudioContext();
+        voiceReplyEnabled.value = true;
+        localStorage.setItem('cyrene.voiceReplyEnabled', 'true');
+        showToast(t('voiceReplyEnabled'), 'success');
+      } catch (e) {
+        console.warn('[Voice] Failed to enable audio playback:', e.message);
+        showToast(e.message || t('audioPlaybackFailed'), 'error');
+      }
+    }
+
+    function preferredRecordingMimeType() {
+      const candidates = [
+        'audio/webm;codecs=opus',
+        'audio/webm',
+        'audio/ogg;codecs=opus',
+      ];
+      return candidates.find(type => MediaRecorder.isTypeSupported(type)) || '';
+    }
+
+    async function toggleVoiceInput() {
+      if (isTranscribing.value || isStreaming.value) return;
+      if (isRecording.value) {
+        mediaRecorder?.stop();
+        return;
+      }
+      if (!voiceCapabilities.value.asrAvailable) {
+        showToast(t('voiceCapabilityUnavailable'), 'error');
+        return;
+      }
+      if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+        showToast(t('microphoneUnavailable'), 'error');
+        return;
+      }
+
+      try {
+        microphoneStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        recordingChunks = [];
+        const mimeType = preferredRecordingMimeType();
+        mediaRecorder = mimeType
+          ? new MediaRecorder(microphoneStream, { mimeType })
+          : new MediaRecorder(microphoneStream);
+        mediaRecorder.addEventListener('dataavailable', event => {
+          if (event.data?.size > 0) recordingChunks.push(event.data);
+        });
+        mediaRecorder.addEventListener('stop', transcribeRecording, { once: true });
+        mediaRecorder.start();
+        isRecording.value = true;
+      } catch (e) {
+        releaseMicrophone();
+        showToast(`${t('microphoneDenied')}: ${e.message}`, 'error');
+      }
+    }
+
+    async function transcribeRecording() {
+      const recordedType = mediaRecorder?.mimeType || 'audio/webm';
+      const audioBlob = new Blob(recordingChunks, { type: recordedType });
+      isRecording.value = false;
+      isTranscribing.value = true;
+      releaseMicrophone();
+      try {
+        const extension = recordedType.includes('ogg') ? 'ogg' : 'webm';
+        const audioFile = new File([audioBlob], `voice-input.${extension}`, { type: recordedType });
+        const result = await CyreneAPI.transcribeAudio(audioFile);
+        if (!result || typeof result.text !== 'string') {
+          throw new Error(t('invalidTranscriptionResponse'));
+        }
+        inputText.value = result.text.trim();
+        await ensureAudioContext();
+        voiceInputPending.value = true;
+      } catch (e) {
+        voiceInputPending.value = false;
+        showToast(e.message, 'error');
+      } finally {
+        recordingChunks = [];
+        mediaRecorder = null;
+        isTranscribing.value = false;
+      }
+    }
+
+    function releaseMicrophone() {
+      microphoneStream?.getTracks().forEach(track => track.stop());
+      microphoneStream = null;
+    }
+
+    function clearVoiceInputFlag() {
+      voiceInputPending.value = false;
+    }
+
+    async function ensureAudioContext() {
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContextClass) {
+        throw new Error(t('audioPlaybackFailed'));
+      }
+      if (!audioContext || audioContext.state === 'closed') {
+        audioContext = new AudioContextClass();
+      }
+      if (audioContext.state === 'suspended') {
+        await audioContext.resume();
+      }
+      return audioContext;
+    }
+
+    async function prepareAudioPlayback() {
+      stopAudioPlayback();
+      await ensureAudioContext();
+    }
+
+    function stopAudioPlayback() {
+      audioGeneration++;
+      activeAudioSources.forEach(source => {
+        try { source.stop(); } catch (_) { /* already stopped */ }
+      });
+      activeAudioSources.clear();
+      encodedAudioBySequence.clear();
+      decodedAudioBySequence.clear();
+      nextAudioSequence = 1;
+      nextAudioStartTime = 0;
+    }
+
+    function appendAudioDelta(payload) {
+      const sequence = Number(payload.sequence);
+      if (!Number.isSafeInteger(sequence) || sequence < 1 || typeof payload.data !== 'string') return;
+      const binary = atob(payload.data);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      const current = encodedAudioBySequence.get(sequence) || {
+        mimeType: payload.mimeType || 'audio/mpeg',
+        chunks: [],
+      };
+      current.chunks.push(bytes);
+      encodedAudioBySequence.set(sequence, current);
+    }
+
+    async function completeAudioChunk(payload) {
+      const sequence = Number(payload.sequence);
+      const encoded = encodedAudioBySequence.get(sequence);
+      if (!encoded || encoded.chunks.length === 0) return;
+      const generation = audioGeneration;
+      encodedAudioBySequence.delete(sequence);
+      const size = encoded.chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0);
+      const merged = new Uint8Array(size);
+      let offset = 0;
+      encoded.chunks.forEach(chunk => {
+        merged.set(chunk, offset);
+        offset += chunk.byteLength;
+      });
+      try {
+        const context = await ensureAudioContext();
+        const decoded = await context.decodeAudioData(merged.buffer.slice(0));
+        if (generation !== audioGeneration) return;
+        decodedAudioBySequence.set(sequence, decoded);
+        scheduleDecodedAudio();
+      } catch (e) {
+        stopAudioPlayback();
+        showToast(`${t('audioPlaybackFailed')}: ${e.message}`, 'error');
+      }
+    }
+
+    function scheduleDecodedAudio() {
+      if (!audioContext) return;
+      while (decodedAudioBySequence.has(nextAudioSequence)) {
+        const audioBuffer = decodedAudioBySequence.get(nextAudioSequence);
+        decodedAudioBySequence.delete(nextAudioSequence);
+        const source = audioContext.createBufferSource();
+        source.buffer = audioBuffer;
+        source.connect(audioContext.destination);
+        const startsAt = Math.max(audioContext.currentTime + 0.02, nextAudioStartTime);
+        source.start(startsAt);
+        nextAudioStartTime = startsAt + audioBuffer.duration;
+        nextAudioSequence++;
+        activeAudioSources.add(source);
+        source.addEventListener('ended', () => activeAudioSources.delete(source), { once: true });
+      }
+    }
 
     function triggerFileUpload() {
       chatFileInput.value?.click();
@@ -458,6 +690,7 @@ const ChatPage = {
     }
 
     async function selectSession(sid) {
+      stopAudioPlayback();
       currentSessionId.value = sid;
       try {
         const page = requirePageResponse(
@@ -474,6 +707,7 @@ const ChatPage = {
     }
 
     async function newSession() {
+      stopAudioPlayback();
       currentSessionId.value = null;
       messages.value = [];
     }
@@ -494,6 +728,7 @@ const ChatPage = {
     }
 
     async function cancelOutput() {
+      stopAudioPlayback();
       if (!currentSessionId.value) return;
       try {
         await CyreneAPI.cancelChat(currentSessionId.value);
@@ -547,6 +782,22 @@ const ChatPage = {
         return;
       }
 
+      const shouldVoiceReply = voiceReplyEnabled.value || voiceInputPending.value;
+      if (shouldVoiceReply) {
+        if (!voiceCapabilities.value.ttsStreamingAvailable) {
+          showToast(t('voiceCapabilityUnavailable'), 'error');
+          return;
+        }
+        try {
+          await prepareAudioPlayback();
+        } catch (e) {
+          showToast(e.message, 'error');
+          return;
+        }
+      } else {
+        stopAudioPlayback();
+      }
+
       // 获取已上传的文件 URL
       const files = [...attachedFiles.value];
       attachedFiles.value = [];
@@ -578,6 +829,7 @@ const ChatPage = {
       }
       messages.value.push({ role: 'user', content: displayContent });
       inputText.value = '';
+      voiceInputPending.value = false;
       scrollToBottom();
 
       isStreaming.value = true;
@@ -588,7 +840,7 @@ const ChatPage = {
         // Build context with file URLs
         const context = {
           userId: userId.value,
-          outputMode: 'streaming',
+          outputMode: shouldVoiceReply ? 'audio' : 'streaming',
         };
         // If there are uploaded files, add them to context.File (backend will resolve and extract)
         if (fileUrls.length > 0) {
@@ -699,6 +951,30 @@ const ChatPage = {
                       }
                     }
                     break;
+                  case 'audio_start':
+                    {
+                      const sequence = Number(parsed.sequence);
+                      if (Number.isSafeInteger(sequence) && sequence > 0
+                          && !encodedAudioBySequence.has(sequence)) {
+                        encodedAudioBySequence.set(sequence, {
+                          mimeType: parsed.mimeType || 'audio/mpeg',
+                          chunks: [],
+                        });
+                      }
+                    }
+                    break;
+                  case 'audio_delta':
+                    appendAudioDelta(parsed);
+                    break;
+                  case 'audio_chunk_done':
+                    void completeAudioChunk(parsed);
+                    break;
+                  case 'audio_done':
+                    break;
+                  case 'audio_error':
+                    stopAudioPlayback();
+                    showToast(parsed.message || t('audioPlaybackFailed'), 'error');
+                    break;
                   case 'done':
                     // Don't replace streamed content — tool call blocks + tokens already in place
                     if (parsed.sessionId) {
@@ -733,6 +1009,7 @@ const ChatPage = {
         // Reload sessions list
         loadSessions();
       } catch (e) {
+        stopAudioPlayback();
         messages.value[msgIdx].content = `⚠️ Error: ${e.message}`;
         pendingConfirmation.value = null;
         confirmationAcknowledged.value = false;
@@ -763,6 +1040,18 @@ const ChatPage = {
 
     onMounted(() => {
       if (userId.value) loadSessions();
+      loadVoiceCapabilities();
+    });
+
+    onUnmounted(() => {
+      if (isRecording.value) {
+        try { mediaRecorder?.stop(); } catch (_) { /* recorder already stopped */ }
+      }
+      releaseMicrophone();
+      stopAudioPlayback();
+      if (audioContext && audioContext.state !== 'closed') {
+        void audioContext.close();
+      }
     });
 
     // Artifact helpers
@@ -779,9 +1068,11 @@ const ChatPage = {
       Icons, t, sessions, currentSessionId, messages, inputText, isStreaming,
       messagesEl, userId, renderMarkdown, stripArtifactLinks,
       pendingConfirmation, confirmationAcknowledged, confirmationSubmitting,
+      voiceReplyEnabled, voiceInputPending, isRecording, isTranscribing, voiceCapabilities,
       attachedFiles, chatFileInput, triggerFileUpload, handleFileSelect, handlePaste, removeFile,
       loadSessions, selectSession, newSession, sendMessage,
       deleteSession, cancelOutput, handleKeydown,
+      toggleVoiceReply, toggleVoiceInput, clearVoiceInputFlag,
       approvePendingConfirmation, rejectPendingConfirmation, formatConfirmationArguments,
       getArtifactUrl, getArtifactPreviewUrl, formatSize,
     };
@@ -888,6 +1179,12 @@ const ChatPage = {
             </div>
             <input type="file" ref="chatFileInput" multiple style="display:none"
                    @change="handleFileSelect" />
+            <div v-if="voiceInputPending || isRecording || isTranscribing" class="voice-input-status">
+              <span v-if="isRecording" class="voice-recording-dot"></span>
+              <span>{{ isRecording ? t('recordingVoice') : (isTranscribing ? t('transcribingVoice') : t('voiceInputActive')) }}</span>
+              <button v-if="voiceInputPending && !isRecording && !isTranscribing"
+                      class="voice-input-clear" @click="clearVoiceInputFlag" :title="t('cancel')">×</button>
+            </div>
             <div class="chat-input-wrapper">
               <textarea class="chat-input" v-model="inputText"
                         :placeholder="t('chatPlaceholder')"
@@ -898,7 +1195,14 @@ const ChatPage = {
                 <button class="chat-action-btn" :title="t('uploadFile')" @click="triggerFileUpload">
                   <span v-html="Icons.upload" style="width:18px;height:18px;"></span>
                 </button>
-                <button class="chat-action-btn" :title="t('voiceInput')">
+                <button :class="['voice-reply-toggle', voiceReplyEnabled ? 'active' : '']"
+                        :title="t('voiceReply')" @click="toggleVoiceReply">
+                  <span v-html="Icons.volume" class="voice-reply-icon"></span>
+                  <span class="voice-reply-label">{{ t('voiceReply') }}</span>
+                </button>
+                <button :class="['chat-action-btn', isRecording ? 'recording' : '']"
+                        :title="isRecording ? t('recordingVoice') : t('voiceInput')"
+                        @click="toggleVoiceInput" :disabled="isTranscribing || isStreaming">
                   <span v-html="Icons.mic" style="width:18px;height:18px;"></span>
                 </button>
                 <button v-if="isStreaming" class="chat-cancel-btn" @click="cancelOutput" :title="t('cancelOutput')">
@@ -907,7 +1211,7 @@ const ChatPage = {
                   </svg>
                 </button>
                 <button v-else class="chat-send-btn" @click="sendMessage"
-                        :disabled="!inputText.trim() && attachedFiles.length === 0" :title="t('send')">
+                        :disabled="isRecording || isTranscribing || (!inputText.trim() && attachedFiles.length === 0)" :title="t('send')">
                   <span v-html="Icons.send" style="width:16px;height:16px;"></span>
                 </button>
               </div>

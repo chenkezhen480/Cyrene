@@ -90,6 +90,24 @@ const CyreneAPI = (() => {
     return (await requireOkResponse(resp)).json(); // { url, name, size }
   }
 
+  async function transcribeAudio(file) {
+    const formData = new FormData();
+    formData.append('file', file);
+    const headers = {};
+    if (_token) headers['Authorization'] = `Bearer ${_token}`;
+
+    const resp = await fetch('/api/audio/transcriptions', {
+      method: 'POST',
+      headers,
+      body: formData,
+    });
+    return (await requireOkResponse(resp)).json();
+  }
+
+  function getAudioCapabilities() {
+    return request('GET', '/api/audio/capabilities');
+  }
+
   function cancelChat(sessionId) {
     return request('DELETE', `/api/chat/${sessionId}`);
   }
@@ -359,6 +377,7 @@ const CyreneAPI = (() => {
     setToken, getToken, onTokenRefresh,
     login,
     chat, cancelChat, approveConfirmation, rejectConfirmation, uploadFile,
+    transcribeAudio, getAudioCapabilities,
     createSession, listSessions, getSession, getMessages, getSessionStats, closeSession,
     listCollections, uploadKnowledge, listKnowledge, getDocument, updateDocument, deleteCollection, deleteDocument,
     getGraphStatus, listGraphSchemas, getGraphSchema,

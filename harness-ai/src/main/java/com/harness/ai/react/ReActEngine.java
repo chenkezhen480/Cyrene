@@ -41,6 +41,20 @@ import java.util.concurrent.TimeoutException;
  */
 public class ReActEngine {
 
+    private static final String FINAL_STREAM_PLANNING_INSTRUCTION = """
+            <voice_reply_tool_phase>
+            This request requires a separately streamed final answer. While tools are available,
+            do not compose the user-facing final answer. Call the tools still required, or respond
+            with only READY_FOR_FINAL when no more tools are needed.
+            </voice_reply_tool_phase>
+            """;
+    private static final String FINAL_STREAM_ANSWER_INSTRUCTION = """
+            <voice_reply_final_phase>
+            Tool use is now disabled. Produce the complete user-facing final answer now.
+            Do not mention READY_FOR_FINAL or the phase transition.
+            </voice_reply_final_phase>
+            """;
+
     private static final Logger log = LoggerFactory.getLogger(ReActEngine.class);
     private static final com.fasterxml.jackson.databind.ObjectMapper OBJECT_MAPPER = new com.fasterxml.jackson.databind.ObjectMapper();
 
@@ -265,6 +279,16 @@ public class ReActEngine {
                                       com.harness.core.model.CancellationToken cancellationToken,
                                       Boolean enableThinking,
                                       ConfirmationExecutionContext confirmationContext) {
+        return streamExecute(systemPrompt, userMessage, historyMessages, traceBuilder, listener,
+                cancellationToken, enableThinking, confirmationContext, false);
+    }
+
+    public ReActResult streamExecute(String systemPrompt, String userMessage, List<ChatMessage> historyMessages,
+                                      AgentTrace.Builder traceBuilder, ReActListener listener,
+                                      com.harness.core.model.CancellationToken cancellationToken,
+                                      Boolean enableThinking,
+                                      ConfirmationExecutionContext confirmationContext,
+                                      boolean finalAnswerOnlyStreaming) {
         if (streamingChatModel == null) {
             log.warn("[L3-ReAct] Falling back to blocking mode (streaming unavailable)");
             return execute(systemPrompt, userMessage, historyMessages, traceBuilder, listener,
@@ -275,12 +299,15 @@ public class ReActEngine {
         log.debug("[L3-ReAct] Starting STREAMING ReAct loop: maxIterations={}, tools={}",
                 maxIterations, toolCatalog.size());
 
+        List<ToolSpecification> toolSpecs = toToolSpecifications(toolCatalog.getAll());
+        boolean guardedFinalStreaming = finalAnswerOnlyStreaming && !toolSpecs.isEmpty();
         List<ChatMessage> messages = new ArrayList<>();
-        messages.add(SystemMessage.from(systemPrompt));
+        messages.add(SystemMessage.from(guardedFinalStreaming
+                ? systemPrompt + "\n\n" + FINAL_STREAM_PLANNING_INSTRUCTION
+                : systemPrompt));
         messages.addAll(historyMessages);
         messages.add(UserMessage.from(userMessage));
 
-        List<ToolSpecification> toolSpecs = toToolSpecifications(toolCatalog.getAll());
         List<ReActStep> allSteps = new ArrayList<>();
         List<Artifact> allArtifacts = new ArrayList<>();
         ChatRequestParameters thinkingParams = buildThinkingParams(enableThinking);
@@ -316,7 +343,7 @@ public class ReActEngine {
                 streamingChatModel.chat(reqBuilder.build(), new StreamingChatResponseHandler() {
                     @Override
                     public void onPartialResponse(String text) {
-                        if (listener != null) {
+                        if (!guardedFinalStreaming && listener != null) {
                             listener.onToken(text);
                         }
                     }
@@ -367,6 +394,19 @@ public class ReActEngine {
 
                 // Final answer (no tool calls)
                 if (aiMessage.toolExecutionRequests() == null || aiMessage.toolExecutionRequests().isEmpty()) {
+                    if (guardedFinalStreaming) {
+                        long finalLlmStart = System.currentTimeMillis();
+                        response = streamFinalAnswer(
+                                messages, systemPrompt, thinkingParams, listener, cancellationToken);
+                        aiMessage = response.aiMessage();
+                        llmCalls++;
+                        TokenUsage finalUsage = logTokenUsage(
+                                response, traceBuilder, System.currentTimeMillis() - finalLlmStart);
+                        if (finalUsage != null) {
+                            totalInputTokens += finalUsage.inputTokenCount();
+                            totalOutputTokens += finalUsage.outputTokenCount();
+                        }
+                    }
                     String answer = aiMessage.text();
                     long totalMs = System.currentTimeMillis() - loopStart;
                     log.info("[L3-ReAct] Finished in {}ms, steps={}", totalMs, allSteps.size());
@@ -416,6 +456,70 @@ public class ReActEngine {
             return new ReActResult(lastOutput, allSteps, allArtifacts, stats);
         } finally {
             ReActStep.clearCurrentSteps();
+        }
+    }
+
+    private ChatResponse streamFinalAnswer(
+            List<ChatMessage> messages,
+            String systemPrompt,
+            ChatRequestParameters thinkingParams,
+            ReActListener listener,
+            com.harness.core.model.CancellationToken cancellationToken
+    ) {
+        if (cancellationToken != null && cancellationToken.isCancelled()) {
+            throw new java.util.concurrent.CancellationException("Final answer generation cancelled");
+        }
+
+        List<ChatMessage> finalMessages = new ArrayList<>(messages);
+        finalMessages.set(0, SystemMessage.from(
+                systemPrompt + "\n\n" + FINAL_STREAM_ANSWER_INSTRUCTION));
+        ChatRequest.Builder requestBuilder = ChatRequest.builder().messages(finalMessages);
+        if (thinkingParams != null) {
+            requestBuilder.parameters(thinkingParams);
+        }
+
+        CompletableFuture<ChatResponse> responseFuture = new CompletableFuture<>();
+        streamingChatModel.chat(requestBuilder.build(), new StreamingChatResponseHandler() {
+            @Override
+            public void onPartialResponse(String text) {
+                if (listener != null) {
+                    listener.onToken(text);
+                }
+            }
+
+            @Override
+            public void onCompleteResponse(ChatResponse response) {
+                responseFuture.complete(response);
+            }
+
+            @Override
+            public void onError(Throwable error) {
+                responseFuture.completeExceptionally(error);
+            }
+        });
+
+        if (cancellationToken != null) {
+            cancellationToken.trackCurrentThread();
+        }
+        try {
+            return responseFuture.get(llmTimeoutSeconds, TimeUnit.SECONDS);
+        } catch (TimeoutException e) {
+            throw new RuntimeException(
+                    "Final answer streaming call timed out after " + llmTimeoutSeconds + "s", e);
+        } catch (Exception e) {
+            if (cancellationToken != null && cancellationToken.isCancelled()) {
+                throw new java.util.concurrent.CancellationException("Final answer generation cancelled");
+            }
+            Throwable cause = e instanceof java.util.concurrent.CompletionException && e.getCause() != null
+                    ? e.getCause()
+                    : e;
+            throw cause instanceof RuntimeException runtimeException
+                    ? runtimeException
+                    : new RuntimeException(cause);
+        } finally {
+            if (cancellationToken != null) {
+                cancellationToken.untrackCurrentThread();
+            }
         }
     }
 

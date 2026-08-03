@@ -51,7 +51,11 @@ public final class ModelProviderFactory {
     public static VisionModelProvider createVision() {
         String provider = EnvConfig.get().getString(EnvKey.MODEL_VISION_PROVIDER, "");
         if (provider.isBlank()) {
-            return new NoOpVisionModelProvider();
+            provider = EnvConfig.get().getString(EnvKey.MODEL_CHAT_PROVIDER, "");
+            if (provider.isBlank()) {
+                return new NoOpVisionModelProvider();
+            }
+            log.info("Vision provider not set; reusing multimodal chat provider: {}", provider);
         }
         log.info("Creating vision model provider: {}", provider);
         return switch (provider.toLowerCase()) {

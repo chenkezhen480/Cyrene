@@ -197,6 +197,28 @@ public class ChatHandler {
                                                         "detail", event.data())));
                                         case ARTIFACT -> writeSseEvent(out, "artifact",
                                                 mapper.writeValueAsString(event.metadata()));
+                                        case AUDIO_START -> writeSseEvent(out, "audio_start",
+                                                mapper.writeValueAsString(event.metadata()));
+                                        case AUDIO_DELTA -> {
+                                            Map<String, Object> audioPayload =
+                                                    new HashMap<>(event.metadata());
+                                            audioPayload.put("data", event.data());
+                                            writeSseEvent(out, "audio_delta",
+                                                    mapper.writeValueAsString(audioPayload));
+                                        }
+                                        case AUDIO_CHUNK_DONE -> writeSseEvent(
+                                                out,
+                                                "audio_chunk_done",
+                                                mapper.writeValueAsString(event.metadata()));
+                                        case AUDIO_DONE -> writeSseEvent(
+                                                out, "audio_done", "{}");
+                                        case AUDIO_ERROR -> {
+                                            Map<String, Object> audioError =
+                                                    new HashMap<>(event.metadata());
+                                            audioError.put("message", event.data());
+                                            writeSseEvent(out, "audio_error",
+                                                    mapper.writeValueAsString(audioError));
+                                        }
                                         case DONE -> {
                                             Map<String, Object> donePayload = new java.util.HashMap<>(event.metadata());
                                             donePayload.put("output", event.data() != null ? event.data() : "");
@@ -294,9 +316,11 @@ public class ChatHandler {
     }
 
     private void writeSseEvent(OutputStream out, String eventType, String data) throws IOException {
-        out.write(("event: " + eventType + "\n").getBytes(StandardCharsets.UTF_8));
-        out.write(("data: " + data + "\n\n").getBytes(StandardCharsets.UTF_8));
-        out.flush();
+        synchronized (out) {
+            out.write(("event: " + eventType + "\n").getBytes(StandardCharsets.UTF_8));
+            out.write(("data: " + data + "\n\n").getBytes(StandardCharsets.UTF_8));
+            out.flush();
+        }
     }
 
     static AgentContext toAgentContext(ChatRequest request) {

@@ -22,6 +22,11 @@ public record StreamEvent(
         CONFIRMATION_RESOLVED,
         COMPRESS,
         ARTIFACT,
+        AUDIO_START,
+        AUDIO_DELTA,
+        AUDIO_CHUNK_DONE,
+        AUDIO_DONE,
+        AUDIO_ERROR,
         DONE,
         CANCELLED,
         ERROR
@@ -143,6 +148,34 @@ public record StreamEvent(
                 "sizeBytes", artifact.sizeBytes(),
                 "downloadUrl", artifact.downloadUrl(),
                 "previewUrl", artifact.previewUrl()
+        ));
+    }
+
+    public static StreamEvent audioStart(long sequence, String mimeType) {
+        return new StreamEvent(Type.AUDIO_START, "", Map.of(
+                "sequence", sequence,
+                "mimeType", mimeType != null ? mimeType : "application/octet-stream"
+        ));
+    }
+
+    public static StreamEvent audioDelta(long sequence, String mimeType, String base64Data) {
+        return new StreamEvent(Type.AUDIO_DELTA, base64Data != null ? base64Data : "", Map.of(
+                "sequence", sequence,
+                "mimeType", mimeType != null ? mimeType : "application/octet-stream"
+        ));
+    }
+
+    public static StreamEvent audioChunkDone(long sequence) {
+        return new StreamEvent(Type.AUDIO_CHUNK_DONE, "", Map.of("sequence", sequence));
+    }
+
+    public static StreamEvent audioDone() {
+        return new StreamEvent(Type.AUDIO_DONE, "", Map.of());
+    }
+
+    public static StreamEvent audioError(String code, String message) {
+        return new StreamEvent(Type.AUDIO_ERROR, message != null ? message : "Voice output failed", Map.of(
+                "code", code != null ? code : "VOICE_OUTPUT_FAILED"
         ));
     }
 }

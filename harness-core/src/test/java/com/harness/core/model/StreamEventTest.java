@@ -71,4 +71,15 @@ class StreamEventTest {
                 .containsEntry("toolName", "delete_file")
                 .containsEntry("riskLevel", "HIGH");
     }
+
+    @Test
+    void audioDelta_containsOrderedAudioPayload() {
+        var event = StreamEvent.audioDelta(2, "audio/mpeg", "AQID");
+
+        assertThat(event.type()).isEqualTo(StreamEvent.Type.AUDIO_DELTA);
+        assertThat(event.data()).isEqualTo("AQID");
+        assertThat(event.metadata())
+                .containsEntry("sequence", 2L)
+                .containsEntry("mimeType", "audio/mpeg");
+    }
 }

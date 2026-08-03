@@ -48,6 +48,9 @@ public final class EnvKey {
     public static final String MODEL_VOICE_BASE_URL   = "HARNESS_MODEL_VOICE_BASE_URL";
     public static final String MODEL_VOICE_ASR_MODEL  = "HARNESS_MODEL_VOICE_ASR_MODEL";
     public static final String MODEL_VOICE_TTS_MODEL  = "HARNESS_MODEL_VOICE_TTS_MODEL";
+    public static final String MODEL_VOICE_TIMEOUT_SECONDS = "HARNESS_MODEL_VOICE_TIMEOUT_SECONDS";
+    public static final String MODEL_VOICE_ASR_MAX_SIZE_MB = "HARNESS_MODEL_VOICE_ASR_MAX_SIZE_MB";
+    public static final String MODEL_VOICE_TTS_DEFAULT_VOICE = "HARNESS_MODEL_VOICE_TTS_DEFAULT_VOICE";
 
     // ==================== 4. Embedding Model (多模态向量化) ====================
     public static final String MODEL_EMBEDDING_PROVIDER = "HARNESS_MODEL_EMBEDDING_PROVIDER";
@@ -370,6 +373,12 @@ public final class EnvKey {
     public static final String KNOWLEDGE_PDF_ENABLED         = "HARNESS_KNOWLEDGE_PDF_ENABLED";
     public static final String KNOWLEDGE_DOCX_ENABLED        = "HARNESS_KNOWLEDGE_DOCX_ENABLED";
     public static final String KNOWLEDGE_XLSX_ENABLED        = "HARNESS_KNOWLEDGE_XLSX_ENABLED";
+    public static final String KNOWLEDGE_PPTX_ENABLED        = "HARNESS_KNOWLEDGE_PPTX_ENABLED";
+    public static final String KNOWLEDGE_CORRUPTION_THRESHOLD = "HARNESS_KNOWLEDGE_CORRUPTION_THRESHOLD";
+    public static final String KNOWLEDGE_VISUAL_RENDER_DPI   = "HARNESS_KNOWLEDGE_VISUAL_RENDER_DPI";
+    public static final String KNOWLEDGE_VISUAL_PPT_SCALE    = "HARNESS_KNOWLEDGE_VISUAL_PPT_SCALE";
+    public static final String KNOWLEDGE_VISUAL_REPAIR_CACHE_MAX_ENTRIES =
+            "HARNESS_KNOWLEDGE_VISUAL_REPAIR_CACHE_MAX_ENTRIES";
 
     // ==================== Artifact (文件生成产物) ====================
     /** 产物存储目录，默认 ./artifacts */

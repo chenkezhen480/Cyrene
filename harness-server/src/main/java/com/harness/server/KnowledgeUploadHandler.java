@@ -23,7 +23,7 @@ public class KnowledgeUploadHandler {
 
     // Only allow document types that TextExtractorRegistry can actually parse
     private static final Set<String> ALLOWED_EXTENSIONS = Set.of(
-            "pdf", "doc", "docx", "xls", "xlsx", "csv", "json", "xml",
+            "pdf", "doc", "docx", "xls", "xlsx", "pptx", "csv", "json", "xml",
             "rtf", "odt", "ods", "txt", "md"
     );
 
@@ -82,6 +82,10 @@ public class KnowledgeUploadHandler {
                 meta.put("chunk_count", String.valueOf(result.chunkCount()));
                 meta.put("embedding_dim", String.valueOf(result.embeddingDimension()));
                 meta.put("stored_path", result.storedFilePath());
+                meta.put("repaired_block_count", String.valueOf(result.repairedBlockCount()));
+                if (!result.repairModel().isBlank()) {
+                    meta.put("repair_model", result.repairModel());
+                }
 
                 AgentTrace trace = AgentTrace.builder()
                         .inputText("knowledge upload: " + fileName)
@@ -100,6 +104,8 @@ public class KnowledgeUploadHandler {
                     "collection", result.collection(),
                     "chunkCount", result.chunkCount(),
                     "embeddingDimension", result.embeddingDimension(),
+                    "repairedBlockCount", result.repairedBlockCount(),
+                    "repairModel", result.repairModel(),
                     "storedPath", result.storedFilePath(),
                     "ingestDurationMs", result.ingestDurationMs()
             ));
