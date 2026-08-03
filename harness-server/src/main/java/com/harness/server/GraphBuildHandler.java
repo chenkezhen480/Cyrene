@@ -39,4 +39,11 @@ public final class GraphBuildHandler {
             context.json(buildService.build(request));
         });
     }
+
+    public void preview(Context context) {
+        requestExecutor.execute(context, () -> {
+            GraphBuildRequest request = context.bodyAsClass(GraphBuildRequest.class);
+            context.json(buildService.preview(request));
+        });
+    }
 }

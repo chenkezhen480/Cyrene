@@ -3,7 +3,7 @@ package com.harness.core.model;
 import java.util.Set;
 
 /**
- * Server-controlled scope for an individual knowledge graph retrieval.
+ * Server-controlled graph-space scope with optional subject-node restriction.
  */
 public record GraphRequestContext(
         String graphId,
@@ -14,10 +14,7 @@ public record GraphRequestContext(
     public GraphRequestContext {
         graphId = requireText(graphId, "graphId");
         schemaId = requireText(schemaId, "schemaId");
-        if (subjectIds == null || subjectIds.isEmpty()) {
-            throw new IllegalArgumentException("subjectIds must contain at least one value");
-        }
-        subjectIds = Set.copyOf(subjectIds);
+        subjectIds = subjectIds == null ? Set.of() : Set.copyOf(subjectIds);
         subjectIds.forEach(subjectId -> requireText(subjectId, "subjectId"));
         allowedQueryIds = allowedQueryIds == null || allowedQueryIds.isEmpty()
                 ? Set.of("anchored-neighborhood")
@@ -29,6 +26,10 @@ public record GraphRequestContext(
         if (!allowedQueryIds.contains(queryId)) {
             throw new SecurityException("Graph query is not allowed by the request context: " + queryId);
         }
+    }
+
+    public boolean hasSubjectScope() {
+        return !subjectIds.isEmpty();
     }
 
     private static String requireText(String value, String fieldName) {

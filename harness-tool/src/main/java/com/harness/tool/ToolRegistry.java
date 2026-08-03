@@ -162,11 +162,12 @@ public class ToolRegistry implements ToolCatalog {
     }
 
     private static String requireToolName(Tool tool) {
-        if (tool == null || tool.spec() == null
-                || tool.spec().name() == null || tool.spec().name().isBlank()) {
+        ToolSpec specification = tool == null ? null : tool.spec();
+        if (specification == null
+                || specification.name() == null || specification.name().isBlank()) {
             throw new IllegalArgumentException("Tool name cannot be blank");
         }
-        return tool.spec().name();
+        return specification.name();
     }
 
     private void replaceStateEntry(RegistryState current, String name, Tool tool) {

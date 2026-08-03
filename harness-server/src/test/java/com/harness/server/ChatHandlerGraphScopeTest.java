@@ -18,14 +18,18 @@ class ChatHandlerGraphScopeTest {
                 "query",
                 List.of(),
                 null,
-                Map.of(AgentContext.KEY_USER_ID, "user-a"),
+                Map.of(
+                        AgentContext.KEY_USER_ID, "user-a",
+                        AgentContext.KEY_TENANT_ID, "tenant-a"
+                ),
                 new ChatHandler.GraphScopeRequest(
                         "graph-a", "capability-v1", Set.of("subject-1"))
         );
 
-        GraphRequestContext graphContext = ChatHandler.toAgentContext(request)
-                .graphRequestContext();
+        AgentContext agentContext = ChatHandler.toAgentContext(request);
+        GraphRequestContext graphContext = agentContext.graphRequestContext();
 
+        assertThat(agentContext.tenantId()).isEqualTo("tenant-a");
         assertThat(graphContext.graphId()).isEqualTo("graph-a");
         assertThat(graphContext.schemaId()).isEqualTo("capability-v1");
         assertThat(graphContext.subjectIds()).containsExactly("subject-1");
@@ -55,5 +59,25 @@ class ChatHandlerGraphScopeTest {
 
         assertThat(context.graphRequestContext()).isNull();
         assertThat(context.data()).doesNotContainKey(AgentContext.KEY_NEEDS_GRAPH_KNOWLEDGE);
+    }
+
+    @Test
+    void convertsGraphSpaceScopeWithoutSubjectIds() {
+        ChatHandler.ChatRequest request = new ChatHandler.ChatRequest(
+                "query",
+                List.of(),
+                null,
+                Map.of(AgentContext.KEY_TENANT_ID, "tenant-a"),
+                new ChatHandler.GraphScopeRequest(
+                        "graph-a", "capability-v1", Set.of())
+        );
+
+        GraphRequestContext graphContext = ChatHandler.toAgentContext(request)
+                .graphRequestContext();
+
+        assertThat(graphContext.graphId()).isEqualTo("graph-a");
+        assertThat(graphContext.schemaId()).isEqualTo("capability-v1");
+        assertThat(graphContext.subjectIds()).isEmpty();
+        assertThat(graphContext.hasSubjectScope()).isFalse();
     }
 }

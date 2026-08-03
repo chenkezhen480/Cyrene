@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -125,6 +126,42 @@ class ToolRegistryTest {
         assertThat(filtered.get("blocked")).isNull();
         assertThat(filtered.contains("blocked")).isFalse();
         assertThat(filtered.size()).isEqualTo(1);
+    }
+
+    @Test
+    void runCatalog_filteringReusesSnapshotSpecifications() {
+        AtomicInteger specificationCalls = new AtomicInteger();
+        Tool counted = new Tool() {
+            @Override
+            public ToolSpec spec() {
+                specificationCalls.incrementAndGet();
+                return createTool("counted", "Counted tool").spec();
+            }
+
+            @Override
+            public String execute(JsonNode arguments) {
+                return "ok";
+            }
+        };
+        registry.register(counted);
+        registry.register(createTool("blocked", "Blocked tool"));
+        RunToolCatalog snapshot = registry.snapshot();
+        int callsAfterSnapshot = specificationCalls.get();
+
+        RunToolCatalog filtered = snapshot.excluding(Set.of("blocked"));
+
+        assertThat(specificationCalls).hasValue(callsAfterSnapshot);
+        assertThat(filtered.getAll())
+                .extracting(ToolSpec::name)
+                .containsExactly("counted");
+    }
+
+    @Test
+    void runCatalog_emptyExclusionReturnsOriginalSnapshot() {
+        registry.register(createTool("allowed", "Allowed tool"));
+        RunToolCatalog snapshot = registry.snapshot();
+
+        assertThat(snapshot.excluding(Set.of())).isSameAs(snapshot);
     }
 
     @Test

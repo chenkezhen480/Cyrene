@@ -1,12 +1,15 @@
 package com.harness.server;
 
+import com.harness.agent.graph.GraphSpaceAccessService;
 import com.harness.core.model.PageInfo;
 import com.harness.core.model.PageResponse;
 import com.harness.graph.config.GraphSettings;
 import com.harness.graph.model.GraphNode;
+import com.harness.graph.model.GraphDeleteResult;
 import com.harness.graph.model.GraphNodePageRequest;
 import com.harness.graph.model.GraphSpacePageRequest;
 import com.harness.graph.model.GraphSpaceSummary;
+import com.harness.graph.model.GraphSpaceKey;
 import com.harness.graph.schema.GraphSchemaRegistry;
 import com.harness.graph.store.KnowledgeGraphStore;
 import io.javalin.http.Context;
@@ -89,5 +92,34 @@ class GraphManagementHandlerTest {
         assertThat(requestCaptor.getValue())
                 .isEqualTo(new GraphSpacePageRequest(10, "opaque-cursor"));
         verify(context).json(page);
+    }
+
+    @Test
+    void deletesWholeGraphSpaceAndItsAccessBindings() {
+        KnowledgeGraphStore graphStore = mock(KnowledgeGraphStore.class);
+        GraphSchemaRegistry schemaRegistry = mock(GraphSchemaRegistry.class);
+        GraphSettings settings = mock(GraphSettings.class);
+        GraphSpaceAccessService accessService = mock(GraphSpaceAccessService.class);
+        GraphRequestAuthenticator authenticator = mock(GraphRequestAuthenticator.class);
+        Context context = mock(Context.class);
+
+        when(context.queryParam("graphId")).thenReturn("students");
+        when(context.queryParam("schemaId")).thenReturn("student-v1");
+        when(context.json(any())).thenReturn(context);
+        when(graphStore.deleteGraphSpace(new GraphSpaceKey("students", "student-v1")))
+                .thenReturn(new GraphDeleteResult(3, 2));
+        when(accessService.deleteBindings("students", "student-v1")).thenReturn(1);
+
+        GraphManagementHandler handler = new GraphManagementHandler(
+                graphStore, schemaRegistry, settings, accessService, authenticator);
+        handler.deleteGraphSpace(context);
+
+        verify(graphStore).deleteGraphSpace(new GraphSpaceKey("students", "student-v1"));
+        verify(accessService).deleteBindings("students", "student-v1");
+        ArgumentCaptor<Object> responseCaptor = ArgumentCaptor.forClass(Object.class);
+        verify(context).json(responseCaptor.capture());
+        assertThat(responseCaptor.getValue()).isEqualTo(
+                new GraphManagementHandler.GraphSpaceDeleteResponse(
+                        "students", "student-v1", 3, 2, 1));
     }
 }

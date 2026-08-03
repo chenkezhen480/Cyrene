@@ -227,6 +227,8 @@ public class SubAgentManager {
     private void executeTask(AgentRunContext runContext, SubAgentTaskRecord record) {
         // Capture credentials from parent thread
         final Map<String, String> parentCredentials = HttpApiTool.getCurrentCredentialsSnapshot();
+        final KnowledgeGraphTool.ContextSnapshot graphContext =
+                KnowledgeGraphTool.captureCurrentContext();
 
         CompletableFuture<SubAgentResult> future = CompletableFuture.supplyAsync(() -> {
             Thread currentThread = Thread.currentThread();
@@ -237,6 +239,7 @@ public class SubAgentManager {
 
             // Propagate credentials to sub-agent thread
             HttpApiTool.setCurrentCredentials(parentCredentials);
+            KnowledgeGraphTool.restoreCurrentContext(graphContext);
 
             long start = System.currentTimeMillis();
             String taskId = record.taskId();
@@ -296,6 +299,7 @@ public class SubAgentManager {
 
             } finally {
                 HttpApiTool.clearCurrentCredentials();
+                KnowledgeGraphTool.clearCurrentContext();
                 taskToken.untrackThread(currentThread);
                 activeTasks.decrementAndGet();
 

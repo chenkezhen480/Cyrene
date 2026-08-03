@@ -6,6 +6,7 @@ import com.harness.graph.config.GraphSettings;
 import com.harness.graph.model.GraphDeleteMode;
 import com.harness.graph.model.GraphDeleteRequest;
 import com.harness.graph.model.GraphDeleteTarget;
+import com.harness.graph.model.GraphChangeSet;
 import com.harness.graph.model.GraphMutationBatch;
 import com.harness.graph.model.GraphNeighborhoodRequest;
 import com.harness.graph.model.GraphNode;
@@ -14,6 +15,7 @@ import com.harness.graph.model.GraphNodePageRequest;
 import com.harness.graph.model.GraphRelation;
 import com.harness.graph.model.GraphRelationPageRequest;
 import com.harness.graph.model.GraphSpacePageRequest;
+import com.harness.graph.model.GraphSpaceKey;
 import com.harness.graph.schema.GraphNodeTypeDefinition;
 import com.harness.graph.schema.GraphPropertyDefinition;
 import com.harness.graph.schema.GraphPropertyType;
@@ -39,6 +41,48 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class Neo4jKnowledgeGraphStoreIntegrationTest {
+
+    @Test
+    void shouldApplyJsonStyleUpdatesAndDeletionsInOneTransaction() {
+        String uri = System.getProperty("graph.it.uri", "");
+        Assumptions.assumeFalse(uri.isBlank(), "Set -Dgraph.it.uri to run Neo4j integration tests");
+        String user = System.getProperty("graph.it.user", "neo4j");
+        String password = System.getProperty("graph.it.password", "test-password");
+        waitUntilReady(uri, user, password);
+
+        GraphSchemaRegistry registry = registry();
+        String graphId = "graph-change-" + UUID.randomUUID();
+        Driver driver = GraphDatabase.driver(uri, AuthTokens.basic(user, password));
+        Neo4jKnowledgeGraphStore store = new Neo4jKnowledgeGraphStore(
+                driver, settings(uri, user, password), registry, new ObjectMapper());
+        try {
+            store.upsertBatch(mutation(graphId));
+
+            store.applyChanges(new GraphChangeSet(
+                    "json-change-1",
+                    graphId,
+                    "project-graph",
+                    List.of(new GraphNode(
+                            "person-1", Set.of("Person"), Map.of("name", "Updated Alex"))),
+                    List.of(),
+                    Set.of("project-2"),
+                    Set.of("relation-2")
+            ));
+
+            assertThat(store.getNode(new GraphNodeKey(
+                    graphId, "project-graph", "person-1")).properties())
+                    .containsEntry("name", "Updated Alex");
+            assertThat(store.getNode(new GraphNodeKey(
+                    graphId, "project-graph", "project-2"))).isNull();
+            assertThat(store.listRelations(new GraphRelationPageRequest(
+                    graphId, "project-graph", "", 10, "")).items())
+                    .extracting(GraphRelation::relationId)
+                    .containsExactly("relation-1");
+        } finally {
+            cleanupGraph(driver, graphId);
+            store.close();
+        }
+    }
 
     @Test
     void shouldKeepMutationsTransactionalAndQueriesGraphScoped() {
@@ -231,6 +275,14 @@ class Neo4jKnowledgeGraphStoreIntegrationTest {
                     GraphDeleteMode.REJECT_IF_REFERENCED
             ));
             assertThat(nodeDelete.deletedNodes()).isEqualTo(1);
+
+            assertThat(store.hasGraphSpacesForSchema("project-graph")).isTrue();
+            var graphSpaceDelete = store.deleteGraphSpace(
+                    new GraphSpaceKey(graphId, "project-graph"));
+            assertThat(graphSpaceDelete.deletedNodes()).isEqualTo(2);
+            assertThat(graphSpaceDelete.deletedRelations()).isZero();
+            assertThat(store.deleteGraphSpace(new GraphSpaceKey(graphId, "project-graph")))
+                    .isEqualTo(new com.harness.graph.model.GraphDeleteResult(0, 0));
 
             cleanupGraph(driver, graphId);
         }

@@ -1265,9 +1265,14 @@ const GraphBuildPage = {
     const selectedExistingGraphId = ref('');
     const graphId = ref('');
     const requestId = ref('');
+    const buildSourceMode = ref('structured');
     const buildEditorView = ref('visual');
+    const naturalLanguageText = ref('');
+    const naturalLanguageDraftReady = ref(false);
     const sourceText = ref('{\n  "nodes": [],\n  "relations": []\n}');
     const sourceDirty = ref(false);
+    const pendingDeletedNodeIds = ref(new Set());
+    const pendingDeletedRelationIds = ref(new Set());
     const dataDesignerModel = ref(createEmptyGraphDataDesigner());
     const focusMode = ref(false);
     const buildResult = ref(null);
@@ -1278,6 +1283,7 @@ const GraphBuildPage = {
     const loadingMoreExistingGraphData = ref(false);
     const existingDataOperationPending = ref(false);
     const submitting = ref(false);
+    const parsingNaturalLanguage = ref(false);
     const error = ref('');
     let existingGraphQueryVersion = 0;
 
@@ -1292,15 +1298,31 @@ const GraphBuildPage = {
     const selectedExistingGraphSpace = computed(() => compatibleGraphSpaces.value.find(
       space => space.graphId === selectedExistingGraphId.value
     ) || null);
+    const visibleExistingGraphNodes = computed(() => existingGraphNodes.value.filter(
+      node => !pendingDeletedNodeIds.value.has(node.nodeId)
+    ));
+    const visibleExistingGraphRelations = computed(() => existingGraphRelations.value.filter(
+      relation => !pendingDeletedRelationIds.value.has(relation.relationId)
+        && !pendingDeletedNodeIds.value.has(relation.sourceNodeId)
+        && !pendingDeletedNodeIds.value.has(relation.targetNodeId)
+    ));
+    const hasPendingGraphDeletions = computed(() =>
+      pendingDeletedNodeIds.value.size > 0 || pendingDeletedRelationIds.value.size > 0
+    );
     const dataDesignerIssues = computed(() => selectedSchema.value
-      ? collectGraphDataDesignerIssues(dataDesignerModel.value, selectedSchema.value, t)
+      ? collectGraphDataDesignerIssues(
+          dataDesignerModel.value,
+          selectedSchema.value,
+          t,
+          visibleExistingGraphRelations.value
+        )
       : []);
     const canvasSourceText = computed(() => JSON.stringify(
       graphDataDesignerToCanvasSource(
         dataDesignerModel.value,
         selectedSchema.value,
-        existingGraphNodes.value,
-        existingGraphRelations.value
+        visibleExistingGraphNodes.value,
+        visibleExistingGraphRelations.value
       ),
       null,
       2
@@ -1315,8 +1337,23 @@ const GraphBuildPage = {
       && Boolean(requestId.value.trim())
       && (buildEditorView.value === 'source' && sourceDirty.value
         ? Boolean(sourceText.value.trim())
-        : dataDesignerIssues.value.length === 0)
+        : (dataDesignerIssues.value.length === 0
+          || (hasPendingGraphDeletions.value
+            && dataDesignerIssues.value.every(issue => issue === t('graphDataContentRequired')))))
+      && (buildSourceMode.value !== 'natural' || naturalLanguageDraftReady.value)
       && !existingDataOperationPending.value
+      && !submitting.value
+    );
+    const canParseNaturalLanguage = computed(() =>
+      status.value.enabled
+      && Boolean(selectedSchemaId.value)
+      && Boolean(graphId.value.trim())
+      && Boolean(requestId.value.trim())
+      && Boolean(naturalLanguageText.value.trim())
+      && !loadingExistingGraphData.value
+      && !loadingMoreExistingGraphData.value
+      && !existingDataOperationPending.value
+      && !parsingNaturalLanguage.value
       && !submitting.value
     );
 
@@ -1465,6 +1502,7 @@ const GraphBuildPage = {
 
     function selectGraphSpaceMode(mode) {
       graphSpaceMode.value = mode;
+      resetDataDesigner();
       if (mode === 'new') {
         selectedExistingGraphId.value = '';
         graphId.value = '';
@@ -1477,6 +1515,7 @@ const GraphBuildPage = {
 
     function useExistingGraphSpace() {
       graphId.value = selectedExistingGraphId.value;
+      resetDataDesigner();
       refreshExistingGraphData();
     }
 
@@ -1485,6 +1524,9 @@ const GraphBuildPage = {
       dataDesignerModel.value = createEmptyGraphDataDesigner();
       sourceText.value = '{\n  "nodes": [],\n  "relations": []\n}';
       sourceDirty.value = false;
+      pendingDeletedNodeIds.value = new Set();
+      pendingDeletedRelationIds.value = new Set();
+      naturalLanguageDraftReady.value = false;
     }
 
     function resetDataDesigner() {
@@ -1506,10 +1548,17 @@ const GraphBuildPage = {
             existingGraphNodes.value,
             t
           );
-          dataDesignerModel.value = markPersistedGraphDrafts(
-            graphSourceToDataDesigner(source, selectedSchema.value, t),
+          const deletionState = graphJsonDeletionState(
+            source,
             existingGraphNodes.value,
             existingGraphRelations.value
+          );
+          pendingDeletedNodeIds.value = deletionState.nodeIds;
+          pendingDeletedRelationIds.value = deletionState.relationIds;
+          dataDesignerModel.value = markPersistedGraphDrafts(
+            graphSourceToDataDesigner(source, selectedSchema.value, t),
+            visibleExistingGraphNodes.value,
+            visibleExistingGraphRelations.value
           );
           sourceDirty.value = false;
         }
@@ -1524,6 +1573,14 @@ const GraphBuildPage = {
     function updateSourceText(value) {
       sourceText.value = value;
       sourceDirty.value = true;
+    }
+
+    function setBuildSourceMode(mode) {
+      if (mode === 'natural' && buildSourceMode.value !== 'natural') {
+        naturalLanguageDraftReady.value = false;
+      }
+      buildSourceMode.value = mode;
+      error.value = '';
     }
 
     async function refreshGraph() {
@@ -1653,6 +1710,48 @@ const GraphBuildPage = {
       }
     }
 
+    async function parseNaturalLanguage() {
+      if (!canParseNaturalLanguage.value) return;
+      parsingNaturalLanguage.value = true;
+      error.value = '';
+      buildResult.value = null;
+      try {
+        const preview = await CyreneAPI.previewNaturalLanguageGraph({
+          requestId: requestId.value.trim(),
+          graphId: graphId.value.trim(),
+          schemaId: selectedSchemaId.value,
+          sourceType: 'natural-language',
+          converterId: 'llm-schema',
+          source: naturalLanguageText.value.trim(),
+        });
+        if (!preview
+            || preview.requestId !== requestId.value.trim()
+            || preview.graphId !== graphId.value.trim()
+            || preview.schemaId !== selectedSchemaId.value
+            || preview.sourceType !== 'natural-language'
+            || preview.converterId !== 'llm-schema'
+            || !Array.isArray(preview.nodes)
+            || !Array.isArray(preview.relations)) {
+          throw new Error(t('graphNaturalLanguageInvalidResponse'));
+        }
+        const source = { nodes: preview.nodes, relations: preview.relations };
+        dataDesignerModel.value = markPersistedGraphDrafts(
+          graphSourceToDataDesigner(source, selectedSchema.value, t),
+          existingGraphNodes.value,
+          existingGraphRelations.value
+        );
+        sourceText.value = JSON.stringify(source, null, 2);
+        sourceDirty.value = false;
+        naturalLanguageDraftReady.value = true;
+        buildEditorView.value = 'visual';
+        showToast(t('graphNaturalLanguageParsed'), 'success');
+      } catch (e) {
+        error.value = e.message;
+      } finally {
+        parsingNaturalLanguage.value = false;
+      }
+    }
+
     async function submitGraph() {
       if (!canSubmit.value) return;
       submitting.value = true;
@@ -1660,14 +1759,26 @@ const GraphBuildPage = {
       buildResult.value = null;
       try {
         let source;
+        let deleteNodeIds = new Set(pendingDeletedNodeIds.value);
+        let deleteRelationIds = new Set(pendingDeletedRelationIds.value);
         if (buildEditorView.value === 'visual' || !sourceDirty.value) {
-          if (dataDesignerIssues.value.length) {
-            throw new Error(dataDesignerIssues.value[0]);
+          const blockingIssues = dataDesignerIssues.value.filter(
+            issue => issue !== t('graphDataContentRequired') || !hasPendingGraphDeletions.value
+          );
+          if (blockingIssues.length) {
+            throw new Error(blockingIssues[0]);
           }
           source = graphDataDesignerToSource(dataDesignerModel.value, selectedSchema.value);
           sourceText.value = JSON.stringify(source, null, 2);
         } else {
           source = JSON.parse(sourceText.value);
+          const deletionState = graphJsonDeletionState(
+            source,
+            existingGraphNodes.value,
+            existingGraphRelations.value
+          );
+          deleteNodeIds = deletionState.nodeIds;
+          deleteRelationIds = deletionState.relationIds;
         }
         if (!source || Array.isArray(source) || typeof source !== 'object') {
           throw new Error(t('graphSourceObjectRequired'));
@@ -1690,12 +1801,15 @@ const GraphBuildPage = {
           sourceType: 'structured',
           converterId: 'canonical-json',
           source,
+          deleteNodeIds: Array.from(deleteNodeIds),
+          deleteRelationIds: Array.from(deleteRelationIds),
         });
         await loadGraphSpaces();
         if (graphSpaceMode.value === 'existing') {
           await refreshExistingGraphData();
         }
         clearDataDraft();
+        naturalLanguageText.value = '';
         showToast(t('graphBuildSuccess'), 'success');
         newRequestId();
       } catch (e) {
@@ -1716,25 +1830,33 @@ const GraphBuildPage = {
         refreshExistingGraphData();
       }
     });
+    watch(naturalLanguageText, () => {
+      if (buildSourceMode.value === 'natural') {
+        naturalLanguageDraftReady.value = false;
+      }
+    });
     onMounted(refreshGraph);
 
     return {
       Icons, t, status, schemas, schemaPageInfo, graphSpaces, graphSpacePageInfo,
       existingGraphNodes, existingNodePageInfo,
       existingGraphRelations, existingRelationPageInfo,
+      visibleExistingGraphNodes, visibleExistingGraphRelations,
       selectedSchemaId, selectedSchema, graphSpaceMode, selectedExistingGraphId,
       compatibleGraphSpaces, selectedExistingGraphSpace,
       nodeTypeNames, relationTypeNames, graphId, requestId,
+      buildSourceMode, naturalLanguageText, naturalLanguageDraftReady,
       displayedSourceText, buildResult, focusMode,
       buildEditorView, dataDesignerModel, dataDesignerIssues,
       loading, loadingMore, loadingMoreSpaces, loadingExistingGraphData,
       loadingMoreExistingGraphData, existingDataOperationPending,
-      submitting, error, canSubmit,
+      submitting, parsingNaturalLanguage, error, canSubmit, canParseNaturalLanguage,
       newRequestId, refreshGraph, loadMoreSchemas, loadMoreGraphSpaces,
       loadMoreExistingGraphData,
       deleteExistingNode, deleteExistingRelation,
       selectGraphSpaceMode, useExistingGraphSpace,
-      setBuildEditorView, updateSourceText, submitGraph,
+      setBuildSourceMode, setBuildEditorView, updateSourceText,
+      parseNaturalLanguage, submitGraph,
     };
   },
   template: `
@@ -1822,11 +1944,29 @@ const GraphBuildPage = {
         <div class="card">
           <div class="card-header graph-card-header">
             <div>
-              <div class="card-title">{{ t('graphStructuredBuild') }}</div>
-              <div class="text-xs text-ash mt-2">{{ t('graphCanonicalHint') }}</div>
+              <div class="card-title">
+                {{ buildSourceMode === 'natural' ? t('graphNaturalLanguageBuild') : t('graphStructuredBuild') }}
+              </div>
+              <div class="text-xs text-ash mt-2">
+                {{ buildSourceMode === 'natural' ? t('graphNaturalLanguageHint') : t('graphCanonicalHint') }}
+              </div>
             </div>
             <div class="graph-schema-header-actions">
-              <span class="tag tag-iris">canonical-json</span>
+              <div class="graph-schema-view-switch" role="group" :aria-label="t('graphBuildInputMode')">
+                <button :class="['graph-schema-view-button', { active: buildSourceMode === 'structured' }]"
+                        type="button"
+                        @click="setBuildSourceMode('structured')">
+                  {{ t('graphStructuredInput') }}
+                </button>
+                <button :class="['graph-schema-view-button', { active: buildSourceMode === 'natural' }]"
+                        type="button"
+                        @click="setBuildSourceMode('natural')">
+                  {{ t('graphNaturalLanguageInput') }}
+                </button>
+              </div>
+              <span class="tag tag-iris">
+                {{ buildSourceMode === 'natural' ? 'llm-schema' : 'canonical-json' }}
+              </span>
               <button class="btn btn-ghost btn-sm" @click="focusMode = !focusMode">
                 {{ focusMode ? t('graphShowSchemaList') : t('graphFocusEditor') }}
               </button>
@@ -1895,11 +2035,34 @@ const GraphBuildPage = {
               </div>
             </div>
 
+            <div v-if="buildSourceMode === 'natural'" class="graph-natural-language-panel mt-4">
+              <div>
+                <label class="input-label">{{ t('graphNaturalLanguageSource') }}</label>
+                <div class="text-xs text-ash">{{ t('graphNaturalLanguageSourceHint') }}</div>
+              </div>
+              <textarea class="input graph-natural-language-input"
+                        v-model="naturalLanguageText"
+                        :placeholder="t('graphNaturalLanguagePlaceholder')"></textarea>
+              <div class="graph-natural-language-actions">
+                <span class="text-xs text-ash">{{ t('graphNaturalLanguageReviewHint') }}</span>
+                <button type="button"
+                        class="btn btn-primary"
+                        :disabled="!canParseNaturalLanguage"
+                        @click="parseNaturalLanguage">
+                  {{ parsingNaturalLanguage ? t('graphNaturalLanguageParsing') : t('graphNaturalLanguageParse') }}
+                </button>
+              </div>
+            </div>
+
             <div class="graph-data-editor-shell mt-4">
               <div class="graph-data-editor-header">
                 <div>
-                  <label class="input-label">{{ t('graphSourceData') }}</label>
-                  <div class="text-xs text-ash">{{ t('graphSourceHint') }}</div>
+                  <label class="input-label">
+                    {{ buildSourceMode === 'natural' ? t('graphNaturalLanguageDraft') : t('graphSourceData') }}
+                  </label>
+                  <div class="text-xs text-ash">
+                    {{ buildSourceMode === 'natural' ? t('graphNaturalLanguageDraftHint') : t('graphSourceHint') }}
+                  </div>
                 </div>
                 <div class="graph-schema-view-switch" role="tablist">
                   <button :class="['graph-schema-view-button', { active: buildEditorView === 'visual' }]"
@@ -1930,8 +2093,8 @@ const GraphBuildPage = {
                   v-if="selectedSchema"
                   v-model="dataDesignerModel"
                   :schema="selectedSchema"
-                  :existing-nodes="existingGraphNodes"
-                  :existing-relations="existingGraphRelations"
+                  :existing-nodes="visibleExistingGraphNodes"
+                  :existing-relations="visibleExistingGraphRelations"
                   :existing-data-loading="loadingExistingGraphData || loadingMoreExistingGraphData"
                   :existing-data-has-more="existingNodePageInfo.hasMore || existingRelationPageInfo.hasMore"
                   :existing-operation-pending="existingDataOperationPending"
@@ -2053,6 +2216,24 @@ const GraphTopology = {
       if (!graph || graph.elements().empty()) return;
       graph.resize();
       graph.fit(graph.elements(), 48);
+    }
+
+    function arrangeGraph() {
+      if (!graph || graph.elements().empty()) return;
+      graph.layout({
+        name: props.relations.length > 0 ? 'cose' : 'grid',
+        animate: true,
+        animationDuration: 320,
+        fit: true,
+        padding: 56,
+        nodeRepulsion: 15000,
+        nodeOverlap: 34,
+        idealEdgeLength: 145,
+        edgeElasticity: 70,
+        componentSpacing: 120,
+        gravity: 0.18,
+        numIter: 1800,
+      }).run();
     }
 
     function resizeGraph() {
@@ -2322,6 +2503,20 @@ const GraphTopology = {
                 'width': 2,
               },
             },
+            {
+              selector: '.graph-muted',
+              style: {
+                'opacity': 0.14,
+                'text-opacity': 0.08,
+              },
+            },
+            {
+              selector: '.graph-neighborhood-focus',
+              style: {
+                'opacity': 1,
+                'text-opacity': 1,
+              },
+            },
           ],
         });
         graph.on('tap', 'node', event => {
@@ -2336,6 +2531,16 @@ const GraphTopology = {
         graph.on('tapstart', 'node', startConnectionGesture);
         graph.on('tapdrag', updateConnectionGesture);
         graph.on('tapend', finishConnectionGesture);
+        graph.on('mouseover', 'node', event => {
+          if (props.connectionMode) return;
+          graph.elements().addClass('graph-muted');
+          event.target.closedNeighborhood()
+            .removeClass('graph-muted')
+            .addClass('graph-neighborhood-focus');
+        });
+        graph.on('mouseout', 'node', () => {
+          graph.elements().removeClass('graph-muted graph-neighborhood-focus');
+        });
       }
 
       const elements = topologyElements();
@@ -2377,10 +2582,14 @@ const GraphTopology = {
           name: props.relations.length > 0 ? 'cose' : 'grid',
           animate: false,
           fit: true,
-          padding: 48,
-          nodeRepulsion: 9000,
-          idealEdgeLength: 110,
-          edgeElasticity: 80,
+          padding: 56,
+          nodeRepulsion: 15000,
+          nodeOverlap: 34,
+          idealEdgeLength: 145,
+          edgeElasticity: 70,
+          componentSpacing: 120,
+          gravity: 0.18,
+          numIter: 1800,
         }).run();
       } else {
         positionNewNodes(newNodes, retainedNodes);
@@ -2418,7 +2627,7 @@ const GraphTopology = {
       graph = null;
     });
 
-    return { t, canvas, available, fitGraph };
+    return { t, canvas, available, fitGraph, arrangeGraph };
   },
   template: `
     <div class="graph-topology">
@@ -2433,11 +2642,14 @@ const GraphTopology = {
       <div v-else-if="nodes.length === 0" class="graph-topology-overlay">
         {{ t('graphTopologyEmpty') }}
       </div>
-      <button v-if="available && nodes.length > 0"
-              class="btn btn-ghost btn-sm graph-fit-button"
-              @click="fitGraph">
-        {{ t('graphFitView') }}
-      </button>
+      <div v-if="available && nodes.length > 0" class="graph-topology-controls">
+        <button class="btn btn-ghost btn-sm" @click="arrangeGraph">
+          {{ t('graphArrangeLayout') }}
+        </button>
+        <button class="btn btn-ghost btn-sm" @click="fitGraph">
+          {{ t('graphFitView') }}
+        </button>
+      </div>
     </div>
   `,
 };
@@ -2560,7 +2772,7 @@ function validateGraphDataProperties(definitions, propertyValues, ownerName, t, 
   });
 }
 
-function collectGraphDataDesignerIssues(model, schema, t) {
+function collectGraphDataDesignerIssues(model, schema, t, existingRelations = []) {
   const issues = [];
   if (!model.nodes.length && !model.relations.length) {
     issues.push(t('graphDataContentRequired'));
@@ -2593,6 +2805,14 @@ function collectGraphDataDesignerIssues(model, schema, t) {
   });
 
   const relationIds = new Set();
+  const pendingRelationIds = new Set(model.relations.map(relation => relation.relationId.trim()));
+  const relationKeys = new Set(existingRelations
+    .filter(relation => !pendingRelationIds.has(relation.relationId))
+    .map(relation => [
+      relation.relationType,
+      relation.sourceNodeId,
+      relation.targetNodeId,
+    ].join('\u001f')));
   model.relations.forEach(relation => {
     const relationId = relation.relationId.trim();
     if (!relationId) {
@@ -2611,6 +2831,19 @@ function collectGraphDataDesignerIssues(model, schema, t) {
     }
     if (!relation.targetNodeId.trim()) {
       issues.push(`${t('graphDataTargetNodeRequired')}: ${relationId || '-'}`);
+    }
+    const relationKey = [
+      relation.relationType,
+      relation.sourceNodeId.trim(),
+      relation.targetNodeId.trim(),
+    ].join('\u001f');
+    if (relation.relationType && relation.sourceNodeId.trim()
+        && relation.targetNodeId.trim()) {
+      if (relationKeys.has(relationKey)) {
+        issues.push(`${t('graphDataDuplicateRelation')}: ${relationId || '-'}`);
+      } else {
+        relationKeys.add(relationKey);
+      }
     }
 
     const sourceNode = nodeByBusinessId.get(relation.sourceNodeId.trim());
@@ -2702,6 +2935,29 @@ function graphDataDesignerToCanvasSource(
   return {
     nodes,
     relations,
+  };
+}
+
+function graphJsonDeletionState(source, existingNodes, existingRelations) {
+  const sourceNodeIds = new Set(
+    (source.nodes || [])
+      .map(node => typeof node?.nodeId === 'string' ? node.nodeId.trim() : '')
+      .filter(Boolean)
+  );
+  const sourceRelationIds = new Set(
+    (source.relations || [])
+      .map(relation => typeof relation?.relationId === 'string'
+        ? relation.relationId.trim()
+        : '')
+      .filter(Boolean)
+  );
+  return {
+    nodeIds: new Set(existingNodes
+      .map(node => node.nodeId)
+      .filter(nodeId => !sourceNodeIds.has(nodeId))),
+    relationIds: new Set(existingRelations
+      .map(relation => relation.relationId)
+      .filter(relationId => !sourceRelationIds.has(relationId))),
   };
 }
 
@@ -3152,7 +3408,19 @@ const GraphDataDesigner = {
 
     function firstCompatibleTarget(model, relationType, sourceNodeId) {
       const targets = compatibleEndpoints(model, relationType, 'target');
-      return targets.find(node => node.nodeId !== sourceNodeId) || targets[0] || null;
+      return targets.find(node => node.nodeId !== sourceNodeId
+          && !matchingRelationExists(model, relationType, sourceNodeId, node.nodeId))
+        || targets.find(node =>
+          !matchingRelationExists(model, relationType, sourceNodeId, node.nodeId))
+        || null;
+    }
+
+    function matchingRelationExists(model, relationType, sourceNodeId, targetNodeId) {
+      return [...model.relations, ...props.existingRelations].some(relation =>
+        relation.relationType === relationType
+          && relation.sourceNodeId === sourceNodeId
+          && relation.targetNodeId === targetNodeId
+      );
     }
 
     function appendRelation(model, relationType, sourceNodeId, targetNodeId) {
@@ -3188,22 +3456,31 @@ const GraphDataDesigner = {
         : [];
       if (!sourceNode || !targetNode || !relationTypes.length) {
         connectionError.value = t('graphDataNoCompatibleRelation');
-        pendingSourceId.value = '';
+        return;
+      }
+      const availableRelationType = relationTypes.find(relationType =>
+        !matchingRelationExists(
+          props.modelValue,
+          relationType,
+          sourceNode.nodeId,
+          targetNode.nodeId
+        ));
+      if (!availableRelationType) {
+        connectionError.value = t('graphDataDuplicateRelation');
         return;
       }
       let createdId = '';
       commit(model => {
         createdId = appendRelation(
           model,
-          relationTypes[0],
+          availableRelationType,
           sourceNode.nodeId,
           targetNode.nodeId
         );
       });
       selectedKind.value = 'relation';
       selectedId.value = createdId;
-      connectMode.value = false;
-      pendingSourceId.value = '';
+      pendingSourceId.value = sourceNode.nodeId;
       connectionError.value = '';
     }
 
@@ -3239,44 +3516,39 @@ const GraphDataDesigner = {
         props.modelValue,
         preferredSourceNodeId
       );
-      const preferredRelationType = preferredSourceNode
-        ? relationTypeNames.value.find(type => {
-            const definition = props.schema.relationTypes?.[type];
-            return definition
-              && nodeMatchesAllowedLabels(preferredSourceNode, definition.sourceLabels)
-              && firstCompatibleTarget(
-                props.modelValue,
-                type,
-                preferredSourceNode.nodeId
-              );
-          })
-        : '';
-      if (preferredSourceNode && !preferredRelationType) {
-        connectionError.value = t('graphDataSelectedNodeCannotBeSource');
+      const sourceCandidates = preferredSourceNode
+        ? [preferredSourceNode]
+        : availableNodes(props.modelValue);
+      let relationChoice = null;
+      for (const sourceNode of sourceCandidates) {
+        for (const relationType of relationTypeNames.value) {
+          const definition = props.schema.relationTypes?.[relationType];
+          if (!definition
+              || !nodeMatchesAllowedLabels(sourceNode, definition.sourceLabels)) continue;
+          const targetNode = firstCompatibleTarget(
+            props.modelValue,
+            relationType,
+            sourceNode.nodeId
+          );
+          if (targetNode) {
+            relationChoice = { relationType, sourceNode, targetNode };
+            break;
+          }
+        }
+        if (relationChoice) break;
+      }
+      if (!relationChoice) {
+        connectionError.value = preferredSourceNode
+          ? t('graphDataNoUnconnectedTarget')
+          : t('graphDataNoCompatibleRelation');
         return;
       }
       commit(model => {
-        const relationType = preferredRelationType
-          || relationTypeNames.value.find(type =>
-            compatibleEndpoint(model, type, 'source')
-            && compatibleEndpoint(model, type, 'target'))
-          || relationTypeNames.value[0]
-          || '';
-        const definition = props.schema.relationTypes?.[relationType];
-        const sourceNode = preferredSourceNode && definition
-            && nodeMatchesAllowedLabels(preferredSourceNode, definition.sourceLabels)
-          ? preferredSourceNode
-          : compatibleEndpoint(model, relationType, 'source');
-        const targetNode = firstCompatibleTarget(
-          model,
-          relationType,
-          sourceNode?.nodeId || ''
-        );
         createdId = appendRelation(
           model,
-          relationType,
-          sourceNode?.nodeId || '',
-          targetNode?.nodeId || ''
+          relationChoice.relationType,
+          relationChoice.sourceNode.nodeId,
+          relationChoice.targetNode.nodeId
         );
       });
       connectionError.value = '';
@@ -4010,6 +4282,7 @@ const GraphBrowsePage = {
     const selectedElement = ref(null);
     const loading = ref(false);
     const loadingMore = ref(false);
+    const deletingGraphSpace = ref(false);
     const querying = ref(false);
     const renderingTopology = ref(false);
     const expandingNodeId = ref('');
@@ -4052,6 +4325,7 @@ const GraphBrowsePage = {
     const canQuery = computed(() =>
       status.value.enabled
       && Boolean(selectedGraphSpace.value)
+      && !deletingGraphSpace.value
       && !querying.value
       && !renderingTopology.value
       && !expandingNodeId.value
@@ -4102,8 +4376,13 @@ const GraphBrowsePage = {
 
     async function ensureSchema(schemaId) {
       if (schemas.value.some(schema => schema.schemaId === schemaId)) return;
-      const schema = await CyreneAPI.getGraphSchema(schemaId);
-      schemas.value = [...schemas.value, schema];
+      try {
+        const schema = await CyreneAPI.getGraphSchema(schemaId);
+        schemas.value = [...schemas.value, schema];
+      } catch (e) {
+        console.warn(`[Graph] Schema "${schemaId}" not found in registry, skipping.`);
+        return null;
+      }
     }
 
     async function loadGraphSpaces({ append = false, cursor = '' } = {}) {
@@ -4145,7 +4424,11 @@ const GraphBrowsePage = {
       graphLoadProgress.value = createGraphLoadProgress();
       if (!selectedGraphSpace.value) return;
       try {
-        await ensureSchema(selectedGraphSpace.value.schemaId);
+        const schema = await ensureSchema(selectedGraphSpace.value.schemaId);
+        if (schema === null) {
+          error.value = `${t('graphSchemaNotFound') || 'Schema not found'}: ${selectedGraphSpace.value.schemaId}`;
+          return;
+        }
         queryDepth.value = selectedSchema.value?.defaultMaxDepth || 1;
       } catch (e) {
         error.value = e.message;
@@ -4184,6 +4467,37 @@ const GraphBrowsePage = {
         error.value = e.message;
       } finally {
         loadingMore.value = false;
+      }
+    }
+
+    async function deleteSelectedGraphSpace() {
+      const space = selectedGraphSpace.value;
+      if (!space || deletingGraphSpace.value) return;
+      const confirmed = window.confirm(
+        `${t('graphDeleteSpaceConfirm')}\n${space.graphId} · ${space.schemaId}`
+      );
+      if (!confirmed) return;
+
+      deletingGraphSpace.value = true;
+      error.value = '';
+      queryNotice.value = '';
+      try {
+        const result = await CyreneAPI.deleteGraphSpace({
+          graphId: space.graphId,
+          schemaId: space.schemaId,
+        });
+        selectedGraphSpaceKey.value = '';
+        await loadGraphSpaces();
+        await prepareSelectedGraphSpace();
+        showToast(
+          `${t('graphSpaceDeleted')}: ${result.deletedNodes} ${t('graphNodes')} · `
+            + `${result.deletedRelations} ${t('graphRelations')}`,
+          'success'
+        );
+      } catch (e) {
+        error.value = e.message;
+      } finally {
+        deletingGraphSpace.value = false;
       }
     }
 
@@ -4419,11 +4733,11 @@ const GraphBrowsePage = {
       selectedGraphSpace, relationTypeNames, selectedRelationTypes, subjectIdsText,
       nodeNameText,
       queryDepth, queryLimit, availableDepths, topologyNodes, topologyRelations,
-      selectedElement, loading, loadingMore, querying,
+      selectedElement, loading, loadingMore, deletingGraphSpace, querying,
       renderingTopology, generatingGraph, expandingNodeId, error, queryNotice,
       queryButtonText, graphProgressPercent, graphProgressText,
       canQuery, graphSpaceKey, formatProperties, prepareSelectedGraphSpace,
-      refreshGraphSpaces, loadMoreGraphSpaces, queryGraphData,
+      refreshGraphSpaces, loadMoreGraphSpaces, deleteSelectedGraphSpace, queryGraphData,
       expandNode, finishTopologyRender,
     };
   },
@@ -4497,6 +4811,13 @@ const GraphBrowsePage = {
                 <strong>{{ selectedGraphSpace.relationCount }}</strong>
               </div>
             </div>
+
+            <button v-if="selectedGraphSpace"
+                    class="btn btn-danger w-full mt-4"
+                    :disabled="deletingGraphSpace || querying || renderingTopology"
+                    @click="deleteSelectedGraphSpace">
+              {{ deletingGraphSpace ? t('graphDeletingSpace') : t('graphDeleteSpace') }}
+            </button>
 
             <div class="input-group mt-4">
               <label class="input-label">{{ t('graphSubjectIds') }}</label>

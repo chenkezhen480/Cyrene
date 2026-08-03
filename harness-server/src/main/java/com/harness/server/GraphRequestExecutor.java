@@ -1,6 +1,7 @@
 package com.harness.server;
 
 import com.harness.core.exception.AgentException;
+import com.harness.graph.build.GraphDataConversionException;
 import com.harness.graph.schema.GraphSchemaPersistenceException;
 import com.harness.graph.store.GraphStoreException;
 import com.harness.server.api.ApiErrorCode;
@@ -32,6 +33,9 @@ final class GraphRequestExecutor {
             ApiResponses.error(context, 403, ApiErrorCode.FORBIDDEN, e.getMessage());
         } catch (AgentException e) {
             ApiResponses.error(context, 401, ApiErrorCode.UNAUTHORIZED, e.getMessage());
+        } catch (GraphDataConversionException e) {
+            log.warn("[GraphAPI] Natural-language graph parsing failed: {}", e.getMessage());
+            ApiResponses.error(context, 422, ApiErrorCode.GRAPH_PARSE_FAILED, e.getMessage());
         } catch (IllegalArgumentException e) {
             ApiResponses.error(context, 400, ApiErrorCode.INVALID_REQUEST, e.getMessage());
         } catch (IllegalStateException e) {

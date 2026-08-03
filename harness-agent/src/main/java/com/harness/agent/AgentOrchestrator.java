@@ -1,5 +1,7 @@
 package com.harness.agent;
 
+import com.harness.agent.graph.GraphSpaceAccessService;
+import com.harness.agent.graph.GraphSpaceAccessServiceFactory;
 import com.harness.ai.model.*;
 import com.harness.ai.react.ReActEngine;
 import com.harness.audit.ReplyAuditor;
@@ -119,6 +121,8 @@ public class AgentOrchestrator {
     private final GraphSchemaManagementService graphSchemaManagementService;
     private final KnowledgeGraphStore knowledgeGraphStore;
     private final GraphKnowledgeRetriever graphKnowledgeRetriever;
+    private final GraphSpaceAccessService graphSpaceAccessService;
+    private final boolean knowledgeGraphToolEnabled;
 
     // Sub-agent subsystem
     private final SubAgentManager subAgentManager;
@@ -172,8 +176,10 @@ public class AgentOrchestrator {
                 graphSchemaRegistry
         );
         this.knowledgeGraphStore = KnowledgeGraphStoreFactory.create(graphSchemaRegistry);
+        this.knowledgeGraphToolEnabled = !"none".equals(knowledgeGraphStore.providerName());
         this.graphKnowledgeRetriever = new AnchoredNeighborhoodGraphRetriever(
                 knowledgeGraphStore, graphSchemaRegistry, graphSettings);
+        this.graphSpaceAccessService = GraphSpaceAccessServiceFactory.create(knowledgeGraphStore);
 
         // Layer 1: Input
         this.inputProcessor = new InputProcessor(chatModelProvider, visionModelProvider, voiceModelProvider);
@@ -683,16 +689,17 @@ public class AgentOrchestrator {
                 : AgentContext.empty();
         GapAnalysis gapAnalysis = gapAnalyzer.analyze(enhancedText, agentContext);
         GraphRequestContext graphRequestContext = agentContext.graphRequestContext();
-        boolean graphContextAvailable = graphRequestContext != null
-                && !"none".equals(knowledgeGraphStore.providerName());
-        KnowledgeGraphTool.setCurrentContext(
-                graphContextAvailable ? graphRequestContext : null);
-        Set<String> unavailableTools = unavailableTools(agentContext, graphContextAvailable);
+        Set<String> unavailableTools = requestUnavailableTools(agentContext);
         trace.builder().metadata(
                 gapMetadata(gapAnalysis, trace.builder().build().metadata()));
 
         MemoryContext memoryContext = resolveMemoryContext(
                 input.userId(), request.requestedSessionId(), request.text(), trace);
+        if (knowledgeGraphToolEnabled) {
+            KnowledgeGraphTool.setCurrentContext(agentContext.tenantId(), graphRequestContext);
+        } else {
+            KnowledgeGraphTool.clearCurrentContext();
+        }
         activateToolContext(memoryContext.userId(), memoryContext.sessionId());
 
         String systemPrompt = buildSystemPrompt(
@@ -700,7 +707,8 @@ public class AgentOrchestrator {
                 request.systemPromptOverride(),
                 memoryContext.sessionId(),
                 Boolean.TRUE.equals(gapAnalysis.needsKnowledgeBase()),
-                graphContextAvailable,
+                knowledgeGraphToolEnabled,
+                graphRequestContext,
                 Boolean.TRUE.equals(gapAnalysis.needsWebSearch()));
         trace.recordLlmMeta(chatModelProvider.modelName(), "v1");
         log.debug(
@@ -1119,7 +1127,8 @@ public class AgentOrchestrator {
     }
 
     private String buildSystemPrompt(List<Preference> longtermPrefs, String systemPromptOverride, String sessionId,
-                                      boolean needsKnowledgeBase, boolean graphContextAvailable,
+                                      boolean needsKnowledgeBase, boolean knowledgeGraphToolEnabled,
+                                      GraphRequestContext graphRequestContext,
                                       boolean needsWebSearch) {
         StringBuilder sb = new StringBuilder();
         String basePrompt = (systemPromptOverride != null && !systemPromptOverride.isBlank())
@@ -1135,12 +1144,25 @@ public class AgentOrchestrator {
                     + "Its query must be a complete, standalone question without context-dependent references.\n\n");
         }
 
-        if (graphContextAvailable) {
-            sb.append("A server-authorized structured graph context is available. "
-                    + "Call knowledge_graph_search when the question requires facts or relationships about "
-                    + "the scoped subjects. "
-                    + "Treat graph nodes, relations, and paths as structured records; do not describe them as document chunks. "
-                    + "Do not guess graph, schema, subject IDs, or Cypher.\n\n");
+        if (knowledgeGraphToolEnabled) {
+            sb.append("Structured knowledge-graph search is available. "
+                    + "Call knowledge_graph_search when the question requires concrete entities or relationships. ");
+            if (graphRequestContext != null && graphRequestContext.hasSubjectScope()) {
+                sb.append("The server has already supplied and authorized the graph space and subject nodes for this "
+                        + "request. Call knowledge_graph_search at most once with findNeighborhood; do not call "
+                        + "listGraphSpaces or findNodes and do not provide graphId, schemaId, or subjectIds. ");
+            } else if (graphRequestContext != null) {
+                sb.append("The server has already supplied and authorized the graph space for this request. Call "
+                        + "findNodes once for the named entity, then call findNeighborhood once with the returned "
+                        + "subjectIds. Do not call listGraphSpaces and do not provide graphId or schemaId. ");
+            } else {
+                sb.append("Use the shortest retrieval sequence: discover graph spaces once, choose the closest "
+                        + "description, find the named entity once, and retrieve its neighborhood once. ");
+            }
+            sb.append("Do not repeat a failed call with identical arguments; use the error to correct the graph space "
+                    + "or stop graph retrieval. Treat graph nodes, relations, and paths as structured records; do not "
+                    + "describe them as document chunks. Use only identifiers returned by the tool and never generate "
+                    + "Cypher.\n\n");
         }
 
         if (needsWebSearch) {
@@ -1199,17 +1221,20 @@ public class AgentOrchestrator {
         return meta;
     }
 
-    private Set<String> unavailableTools(AgentContext context, boolean graphContextAvailable) {
+    private Set<String> requestUnavailableTools(AgentContext context) {
         Set<String> unavailable = new HashSet<>();
-        if (!graphContextAvailable) {
-            unavailable.add(KnowledgeGraphTool.TOOL_NAME);
-        }
         if (Boolean.FALSE.equals(context.needsKnowledgeBase())) {
             unavailable.add(KnowledgeBaseTool.TOOL_NAME);
         }
         if (Boolean.FALSE.equals(context.needsWebSearch())) {
             unavailable.add(WebSearchTool.TOOL_NAME);
         }
+        return Set.copyOf(unavailable);
+    }
+
+    private Set<String> detachedResumeUnavailableTools(AgentContext context) {
+        Set<String> unavailable = new HashSet<>(requestUnavailableTools(context));
+        unavailable.add(KnowledgeGraphTool.TOOL_NAME);
         return Set.copyOf(unavailable);
     }
 
@@ -1341,9 +1366,11 @@ public class AgentOrchestrator {
             log.info("[Orchestrator] Knowledge base tool disabled (ragProvider={}, embedding={})",
                     ragProvider, embeddingModelProvider != null && embeddingModelProvider.isAvailable());
         }
-        if (!"none".equals(knowledgeGraphStore.providerName())) {
+        if (knowledgeGraphToolEnabled) {
             toolRegistry.register(new KnowledgeGraphTool(
                     graphKnowledgeRetriever,
+                    knowledgeGraphStore,
+                    graphSpaceAccessService,
                     graphSchemaRegistry,
                     graphSettings,
                     new ObjectMapper()
@@ -1505,6 +1532,7 @@ public class AgentOrchestrator {
     public ConfirmationManager confirmationManager() { return confirmationManager; }
     public com.harness.preprocess.rag.VectorStore vectorStore() { return contextBuilder.vectorStore(); }
     public KnowledgeGraphStore knowledgeGraphStore() { return knowledgeGraphStore; }
+    public GraphSpaceAccessService graphSpaceAccessService() { return graphSpaceAccessService; }
     public GraphSchemaRegistry graphSchemaRegistry() { return graphSchemaRegistry; }
     public GraphSchemaManagementService graphSchemaManagementService() { return graphSchemaManagementService; }
     public GraphSettings graphSettings() { return graphSettings; }
@@ -1708,14 +1736,17 @@ public class AgentOrchestrator {
 
             CancellationToken cancellationToken = new CancellationToken();
             AgentContext resumeAgentContext = AgentContext.empty();
-            Set<String> unavailableTools = unavailableTools(resumeAgentContext, false);
+            // Detached resume events currently persist the user/session identity but not the
+            // trusted caller's tenantId. Keep graph retrieval unavailable here instead of
+            // silently falling back to the standalone tenant and crossing graph-space scopes.
+            Set<String> unavailableTools = detachedResumeUnavailableTools(resumeAgentContext);
             RunToolCatalog runToolCatalog = createRunToolCatalog(unavailableTools);
             AgentTrace.Builder traceBuilder = AgentTrace.builder();
             String resumeRunId = null;
 
             try {
                 AuthorizedUrlContext.clear();
-                KnowledgeGraphTool.setCurrentContext(null);
+                KnowledgeGraphTool.clearCurrentContext();
                 activateToolContext(userId, sessionId);
                 resumeRunId = openRunScope(
                         sessionId,
@@ -1726,7 +1757,8 @@ public class AgentOrchestrator {
                 // Build system prompt
                 GapAnalysis gapAnalysis = gapAnalyzer.analyze(eventMessage.toString(), resumeAgentContext);
                 String systemPrompt = buildSystemPrompt(longtermPrefs, null, sessionId,
-                        gapAnalysis.needsKnowledgeBase(), false, gapAnalysis.needsWebSearch());
+                        gapAnalysis.needsKnowledgeBase(), false, null,
+                        gapAnalysis.needsWebSearch());
 
                 // Convert messages and add runtime event
                 List<ChatMessage> historyChatMessages = convertToChatMessages(shorttermMessages);

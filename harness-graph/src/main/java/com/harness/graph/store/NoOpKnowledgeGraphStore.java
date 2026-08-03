@@ -14,6 +14,7 @@ import com.harness.graph.model.GraphRelation;
 import com.harness.graph.model.GraphRelationPageRequest;
 import com.harness.graph.model.GraphRouteResult;
 import com.harness.graph.model.GraphSpacePageRequest;
+import com.harness.graph.model.GraphSpaceKey;
 import com.harness.graph.model.GraphSpaceSummary;
 
 import java.util.List;
@@ -43,6 +44,16 @@ public final class NoOpKnowledgeGraphStore implements KnowledgeGraphStore {
     @Override
     public PageResponse<GraphSpaceSummary> listGraphSpaces(GraphSpacePageRequest request) {
         return new PageResponse<>(List.of(), new PageInfo(request.limit(), "", false));
+    }
+
+    @Override
+    public boolean hasGraphSpacesForSchema(String schemaId) {
+        return false;
+    }
+
+    @Override
+    public GraphDeleteResult deleteGraphSpace(GraphSpaceKey graphSpaceKey) {
+        throw new GraphStoreException("Knowledge graph provider is disabled");
     }
 
     @Override

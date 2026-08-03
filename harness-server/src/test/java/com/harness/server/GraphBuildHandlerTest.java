@@ -2,18 +2,24 @@ package com.harness.server;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.harness.graph.build.CanonicalJsonGraphDataConverter;
+import com.harness.graph.build.GraphBuildPreviewResult;
 import com.harness.graph.build.GraphBuildRequest;
 import com.harness.graph.build.GraphBuildResult;
 import com.harness.graph.build.GraphBuildService;
 import com.harness.graph.build.GraphBuildSourceType;
+import com.harness.graph.build.GraphDataConverter;
 import com.harness.graph.build.GraphDataConverterRegistry;
+import com.harness.graph.build.GraphMutationDraft;
 import com.harness.graph.model.GraphMutationResult;
+import com.harness.graph.model.GraphNode;
 import com.harness.graph.store.KnowledgeGraphStore;
-import com.harness.server.api.ApiError;
-import com.harness.server.api.ApiErrorCode;
 import io.javalin.http.Context;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -47,7 +53,7 @@ class GraphBuildHandlerTest {
                             {
                               "nodeId": "student-1",
                               "labels": ["Student"],
-                              "properties": {"name": "小明"}
+                              "properties": {"name": "Xiaoming"}
                             }
                           ]
                         }
@@ -66,10 +72,18 @@ class GraphBuildHandlerTest {
     }
 
     @Test
-    void returnsBadRequestWhenNaturalLanguageConverterIsNotRegistered() {
+    void authenticatesAndPreviewsNaturalLanguageWithoutWriting() {
         KnowledgeGraphStore graphStore = mock(KnowledgeGraphStore.class);
+        GraphDataConverter converter = mock(GraphDataConverter.class);
+        when(converter.sourceType()).thenReturn(GraphBuildSourceType.NATURAL_LANGUAGE);
+        when(converter.converterId()).thenReturn("llm-schema");
+        when(converter.convert(any())).thenReturn(new GraphMutationDraft(
+                List.of(new GraphNode(
+                        "student-1", Set.of("Student"), Map.of("name", "Xiaoming"))),
+                List.of()
+        ));
         GraphBuildService buildService = new GraphBuildService(
-                graphStore, GraphDataConverterRegistry.withDefaults(objectMapper));
+                graphStore, new GraphDataConverterRegistry(List.of(converter)));
         GraphRequestAuthenticator authenticator = mock(GraphRequestAuthenticator.class);
         GraphBuildHandler handler = new GraphBuildHandler(buildService, authenticator);
         Context context = mock(Context.class);
@@ -78,20 +92,20 @@ class GraphBuildHandlerTest {
                 "graph-1",
                 "student-capability-v1",
                 GraphBuildSourceType.NATURAL_LANGUAGE,
-                "llm-extraction",
-                objectMapper.getNodeFactory().textNode("小明正在练习表达需求")
+                "llm-schema",
+                objectMapper.getNodeFactory().textNode("Student Xiaoming")
         );
         when(context.bodyAsClass(GraphBuildRequest.class)).thenReturn(request);
-        when(context.status(400)).thenReturn(context);
         when(context.json(any())).thenReturn(context);
 
-        handler.build(context);
+        handler.preview(context);
 
-        verify(context).status(400);
+        verify(authenticator).authenticate(context);
         ArgumentCaptor<Object> responseCaptor = ArgumentCaptor.forClass(Object.class);
         verify(context).json(responseCaptor.capture());
-        assertThat(responseCaptor.getValue()).isEqualTo(ApiError.of(
-                ApiErrorCode.INVALID_REQUEST,
-                "No graph data converter registered for natural-language/llm-extraction"));
+        assertThat(responseCaptor.getValue()).isInstanceOf(GraphBuildPreviewResult.class);
+        assertThat(((GraphBuildPreviewResult) responseCaptor.getValue()).nodes())
+                .extracting(GraphNode::nodeId)
+                .containsExactly("student-1");
     }
 }

@@ -1,5 +1,7 @@
 package com.harness.server;
 
+import com.harness.agent.graph.GraphSpaceAccessService;
+import com.harness.agent.graph.OpenGraphSpaceAccessService;
 import com.harness.core.model.PageResponse;
 import com.harness.graph.config.GraphSettings;
 import com.harness.graph.model.GraphDeleteMode;
@@ -13,6 +15,7 @@ import com.harness.graph.model.GraphNodePageRequest;
 import com.harness.graph.model.GraphRelation;
 import com.harness.graph.model.GraphRelationPageRequest;
 import com.harness.graph.model.GraphSpacePageRequest;
+import com.harness.graph.model.GraphSpaceKey;
 import com.harness.graph.schema.GraphSchemaDefinition;
 import com.harness.graph.schema.GraphSchemaRegistry;
 import com.harness.graph.store.KnowledgeGraphStore;
@@ -32,6 +35,7 @@ public final class GraphManagementHandler {
     private final KnowledgeGraphStore graphStore;
     private final GraphSchemaRegistry schemaRegistry;
     private final GraphSettings settings;
+    private final GraphSpaceAccessService graphSpaceAccessService;
     private final GraphRequestExecutor requestExecutor;
 
     public GraphManagementHandler(
@@ -39,7 +43,7 @@ public final class GraphManagementHandler {
             GraphSchemaRegistry schemaRegistry,
             GraphSettings settings
     ) {
-        this(graphStore, schemaRegistry, settings,
+        this(graphStore, schemaRegistry, settings, new OpenGraphSpaceAccessService(graphStore),
                 new GraphRequestExecutor(new GraphRequestAuthenticator()));
     }
 
@@ -49,18 +53,35 @@ public final class GraphManagementHandler {
             GraphSettings settings,
             GraphRequestAuthenticator requestAuthenticator
     ) {
-        this(graphStore, schemaRegistry, settings, new GraphRequestExecutor(requestAuthenticator));
+        this(graphStore, schemaRegistry, settings, new OpenGraphSpaceAccessService(graphStore),
+                new GraphRequestExecutor(requestAuthenticator));
     }
 
     GraphManagementHandler(
             KnowledgeGraphStore graphStore,
             GraphSchemaRegistry schemaRegistry,
             GraphSettings settings,
+            GraphSpaceAccessService graphSpaceAccessService,
+            GraphRequestAuthenticator requestAuthenticator
+    ) {
+        this(graphStore, schemaRegistry, settings, graphSpaceAccessService,
+                new GraphRequestExecutor(requestAuthenticator));
+    }
+
+    GraphManagementHandler(
+            KnowledgeGraphStore graphStore,
+            GraphSchemaRegistry schemaRegistry,
+            GraphSettings settings,
+            GraphSpaceAccessService graphSpaceAccessService,
             GraphRequestExecutor requestExecutor
     ) {
         this.graphStore = Objects.requireNonNull(graphStore, "graphStore");
         this.schemaRegistry = Objects.requireNonNull(schemaRegistry, "schemaRegistry");
         this.settings = Objects.requireNonNull(settings, "settings");
+        this.graphSpaceAccessService = Objects.requireNonNull(
+                graphSpaceAccessService,
+                "graphSpaceAccessService"
+        );
         this.requestExecutor = Objects.requireNonNull(requestExecutor, "requestExecutor");
     }
 
@@ -160,6 +181,25 @@ public final class GraphManagementHandler {
         });
     }
 
+    public void deleteGraphSpace(Context context) {
+        execute(context, () -> {
+            GraphSpaceKey graphSpaceKey = new GraphSpaceKey(
+                    requiredQuery(context, "graphId"),
+                    requiredQuery(context, "schemaId")
+            );
+            var deleted = graphStore.deleteGraphSpace(graphSpaceKey);
+            int deletedBindings = graphSpaceAccessService.deleteBindings(
+                    graphSpaceKey.graphId(), graphSpaceKey.schemaId());
+            context.json(new GraphSpaceDeleteResponse(
+                    graphSpaceKey.graphId(),
+                    graphSpaceKey.schemaId(),
+                    deleted.deletedNodes(),
+                    deleted.deletedRelations(),
+                    deletedBindings
+            ));
+        });
+    }
+
     public void query(Context context) {
         execute(context, () -> {
             GraphQueryRequest request = context.bodyAsClass(GraphQueryRequest.class);
@@ -249,6 +289,15 @@ public final class GraphManagementHandler {
             Set<String> relationTypes,
             int maxDepth,
             int limit
+    ) {
+    }
+
+    public record GraphSpaceDeleteResponse(
+            String graphId,
+            String schemaId,
+            int deletedNodes,
+            int deletedRelations,
+            int deletedBindings
     ) {
     }
 }

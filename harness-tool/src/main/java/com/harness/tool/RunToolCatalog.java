@@ -32,30 +32,52 @@ public final class RunToolCatalog implements ToolCatalog {
                 .toList();
     }
 
+    private RunToolCatalog(
+            long version,
+            Map<String, Tool> tools,
+            List<ToolSpec> specifications
+    ) {
+        this.version = version;
+        this.tools = Map.copyOf(tools);
+        this.specifications = List.copyOf(specifications);
+    }
+
     public RunToolCatalog excluding(Collection<String> excludedToolNames) {
         Set<String> excluded = excludedToolNames == null
                 ? Set.of()
                 : Set.copyOf(excludedToolNames);
+        if (excluded.isEmpty() || tools.keySet().stream().noneMatch(excluded::contains)) {
+            return this;
+        }
         LinkedHashMap<String, Tool> filtered = new LinkedHashMap<>();
         tools.forEach((name, tool) -> {
             if (!excluded.contains(name)) {
                 filtered.put(name, tool);
             }
         });
-        return new RunToolCatalog(version, filtered);
+        List<ToolSpec> filteredSpecifications = specifications.stream()
+                .filter(specification -> !excluded.contains(specification.name()))
+                .toList();
+        return new RunToolCatalog(version, filtered, filteredSpecifications);
     }
 
     public RunToolCatalog allowing(Collection<String> allowedToolNames) {
         Set<String> allowed = allowedToolNames == null
                 ? Set.of()
                 : Set.copyOf(allowedToolNames);
+        if (allowed.containsAll(tools.keySet())) {
+            return this;
+        }
         LinkedHashMap<String, Tool> filtered = new LinkedHashMap<>();
         tools.forEach((name, tool) -> {
             if (allowed.contains(name)) {
                 filtered.put(name, tool);
             }
         });
-        return new RunToolCatalog(version, filtered);
+        List<ToolSpec> filteredSpecifications = specifications.stream()
+                .filter(specification -> allowed.contains(specification.name()))
+                .toList();
+        return new RunToolCatalog(version, filtered, filteredSpecifications);
     }
 
     @Override

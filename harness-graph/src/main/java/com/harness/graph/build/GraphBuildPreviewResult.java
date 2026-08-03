@@ -5,16 +5,17 @@ import com.harness.graph.model.GraphRelation;
 
 import java.util.List;
 
-public record GraphMutationDraft(
+public record GraphBuildPreviewResult(
+        String requestId,
+        String graphId,
+        String schemaId,
+        GraphBuildSourceType sourceType,
+        String converterId,
         List<GraphNode> nodes,
         List<GraphRelation> relations
 ) {
-    public GraphMutationDraft {
+    public GraphBuildPreviewResult {
         nodes = nodes == null ? List.of() : List.copyOf(nodes);
         relations = relations == null ? List.of() : List.copyOf(relations);
-    }
-
-    public boolean isEmpty() {
-        return nodes.isEmpty() && relations.isEmpty();
     }
 }

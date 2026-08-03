@@ -6,6 +6,7 @@ public enum ApiErrorCode {
     FORBIDDEN,
     NOT_FOUND,
     CONFLICT,
+    GRAPH_PARSE_FAILED,
     GRAPH_OPERATION_FAILED,
     INTERNAL_ERROR;
 

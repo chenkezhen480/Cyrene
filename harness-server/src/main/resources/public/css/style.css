@@ -2231,11 +2231,16 @@ tr.status-dusk td {
   pointer-events: none;
 }
 
-.graph-fit-button {
+.graph-topology-controls {
   position: absolute;
   right: var(--space-3);
   bottom: var(--space-3);
   z-index: 2;
+  display: flex;
+  gap: var(--space-2);
+}
+
+.graph-topology-controls .btn {
   backdrop-filter: blur(10px);
 }
 
@@ -2377,6 +2382,35 @@ tr.status-dusk td {
 
 .graph-space-load-more {
   align-self: flex-start;
+}
+
+.graph-natural-language-panel {
+  display: flex;
+  padding: var(--space-4);
+  flex-direction: column;
+  gap: var(--space-3);
+  background: linear-gradient(135deg, rgba(139, 126, 200, 0.09), rgba(232, 160, 191, 0.04));
+  border: 1px solid rgba(139, 126, 200, 0.18);
+  border-radius: var(--radius-md);
+}
+
+.graph-natural-language-input {
+  width: 100%;
+  min-height: 150px;
+  resize: vertical;
+  line-height: 1.65;
+}
+
+.graph-natural-language-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.graph-natural-language-actions > span {
+  max-width: 760px;
+  line-height: 1.6;
 }
 
 .graph-source-editor {
@@ -2577,6 +2611,15 @@ tr.status-dusk td {
   }
 
   .graph-data-editor-header .graph-schema-view-switch {
+    width: 100%;
+  }
+
+  .graph-natural-language-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .graph-natural-language-actions .btn {
     width: 100%;
   }
 

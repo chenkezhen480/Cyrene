@@ -234,6 +234,11 @@ const CyreneAPI = (() => {
     return request('GET', `/api/graph/graphs?${params}`);
   }
 
+  function deleteGraphSpace({ graphId, schemaId }) {
+    const params = new URLSearchParams({ graphId, schemaId });
+    return request('DELETE', `/api/graph/graphs?${params}`);
+  }
+
   function listGraphNodes({ graphId, schemaId, label, name, limit = 50, cursor } = {}) {
     const params = new URLSearchParams();
     params.set('graphId', graphId);
@@ -284,6 +289,10 @@ const CyreneAPI = (() => {
 
   function buildGraph(payload) {
     return request('POST', '/api/graph/build', payload);
+  }
+
+  function previewNaturalLanguageGraph(payload) {
+    return request('POST', '/api/graph/build/preview', payload);
   }
 
   // ── Artifacts ──
@@ -355,8 +364,8 @@ const CyreneAPI = (() => {
     getGraphStatus, listGraphSchemas, getGraphSchema,
     listGraphSchemaConfigs, getGraphSchemaConfig, createGraphSchemaConfig, updateGraphSchemaConfig,
     enableGraphSchemaConfig, disableGraphSchemaConfig, deleteGraphSchemaConfig,
-    listGraphSpaces, listGraphNodes, listGraphRelations,
-    deleteGraphNode, deleteGraphRelation, queryGraph, buildGraph,
+    listGraphSpaces, deleteGraphSpace, listGraphNodes, listGraphRelations,
+    deleteGraphNode, deleteGraphRelation, queryGraph, buildGraph, previewNaturalLanguageGraph,
     getArtifactUrl, getArtifactPreviewUrl, listSessionArtifacts,
     getTrace, listTraces, getTraceStats, cleanupTraces, deleteTrace,
     scanProject, generateConfig, getConfig, updateConfig, reloadConfig,

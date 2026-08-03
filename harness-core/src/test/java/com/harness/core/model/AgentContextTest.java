@@ -16,6 +16,7 @@ class AgentContextTest {
         assertThat(ctx.outputMode()).isEqualTo("blocking");
         assertThat(ctx.isStreaming()).isFalse();
         assertThat(ctx.userId()).isNull();
+        assertThat(ctx.tenantId()).isEqualTo(AgentContext.DEFAULT_TENANT_ID);
         assertThat(ctx.enableThinking()).isNull();
     }
 
@@ -76,6 +77,22 @@ class AgentContextTest {
     }
 
     @Test
+    void tenantId_usesCallerValueWhenPresent() {
+        var ctx = AgentContext.of(Map.of("tenantId", " enterprise-001 "));
+
+        assertThat(ctx.tenantId()).isEqualTo("enterprise-001");
+    }
+
+    @Test
+    void tenantId_rejectsOversizedValue() {
+        var ctx = AgentContext.of(Map.of("tenantId", "t".repeat(129)));
+
+        assertThatThrownBy(ctx::tenantId)
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("128");
+    }
+
+    @Test
     void graphRequestContext_usesExplicitGraphSpace() {
         AgentContext context = AgentContext.of(Map.of(
                 "graphRequestContext", Map.of(
@@ -91,6 +108,23 @@ class AgentContextTest {
         assertThat(graphContext.graphId()).isEqualTo("graph-1");
         assertThat(graphContext.schemaId()).isEqualTo("project-graph");
         assertThat(graphContext.subjectIds()).containsExactly("project-1");
+    }
+
+    @Test
+    void graphRequestContext_allowsGraphSpaceWithoutSubjectScope() {
+        AgentContext context = AgentContext.of(Map.of(
+                "graphRequestContext", Map.of(
+                        "graphId", "graph-1",
+                        "schemaId", "project-graph"
+                )
+        ));
+
+        GraphRequestContext graphContext = context.graphRequestContext();
+
+        assertThat(graphContext.graphId()).isEqualTo("graph-1");
+        assertThat(graphContext.schemaId()).isEqualTo("project-graph");
+        assertThat(graphContext.subjectIds()).isEmpty();
+        assertThat(graphContext.hasSubjectScope()).isFalse();
     }
 
     @Test

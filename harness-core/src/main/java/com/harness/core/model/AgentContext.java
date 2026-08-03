@@ -13,6 +13,8 @@ public record AgentContext(
         Map<String, Object> data
 ) {
     public static final String KEY_USER_ID = "userId";
+    public static final String KEY_TENANT_ID = "tenantId";
+    public static final String DEFAULT_TENANT_ID = "000000";
     public static final String KEY_OUTPUT_MODE = "outputMode";
     public static final String KEY_ENABLE_THINKING = "enableThinking";
     public static final String KEY_CREDENTIALS = "credentials";
@@ -49,6 +51,22 @@ public record AgentContext(
     public String userId() {
         Object id = data.get(KEY_USER_ID);
         return id != null ? id.toString() : null;
+    }
+
+    /**
+     * Optional tenant identifier supplied by the trusted backend caller.
+     * Standalone integrations share the fixed default tenant.
+     */
+    public String tenantId() {
+        Object value = data.get(KEY_TENANT_ID);
+        if (value == null || value.toString().isBlank()) {
+            return DEFAULT_TENANT_ID;
+        }
+        String tenantId = value.toString().trim();
+        if (tenantId.length() > 128) {
+            throw new IllegalArgumentException("tenantId must not exceed 128 characters");
+        }
+        return tenantId;
     }
 
     public Boolean enableThinking() {

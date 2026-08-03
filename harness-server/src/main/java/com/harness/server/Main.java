@@ -10,6 +10,7 @@ import com.harness.core.model.CancellationToken;
 import com.harness.env.EnvConfig;
 import com.harness.env.EnvKey;
 import com.harness.graph.build.GraphBuildService;
+import com.harness.agent.graph.LlmGraphDataConverter;
 import com.harness.graph.build.GraphDataConverterRegistry;
 import com.harness.preprocess.knowledge.KnowledgeIngestService;
 import com.harness.server.api.ApiErrorCode;
@@ -174,21 +175,31 @@ public class Main {
                 agent.knowledgeGraphStore(),
                 agent.graphSchemaRegistry(),
                 agent.graphSettings(),
+                agent.graphSpaceAccessService(),
                 graphRequestExecutor
         );
-        GraphBuildService graphBuildService = new GraphBuildService(
+        GraphDataConverterRegistry graphDataConverterRegistry =
+                GraphDataConverterRegistry.withDefaults(mapper);
+        graphDataConverterRegistry.register(new LlmGraphDataConverter(
+                agent.chatModel(),
                 agent.knowledgeGraphStore(),
-                GraphDataConverterRegistry.withDefaults(mapper)
-        );
+                agent.graphSchemaRegistry(),
+                agent.graphSettings(),
+                mapper
+        ));
+        GraphBuildService graphBuildService = new GraphBuildService(
+                agent.knowledgeGraphStore(), graphDataConverterRegistry);
         GraphBuildHandler graphBuildHandler =
                 new GraphBuildHandler(graphBuildService, graphRequestExecutor);
         GraphSchemaManagementHandler graphSchemaHandler = new GraphSchemaManagementHandler(
                 agent.graphSchemaManagementService(),
+                agent.knowledgeGraphStore(),
                 agent.graphSettings(),
                 graphRequestExecutor
         );
         app.get("/api/graph/status", graphHandler::status);
         app.get("/api/graph/graphs", graphHandler::listGraphSpaces);
+        app.delete("/api/graph/graphs", graphHandler::deleteGraphSpace);
         app.get("/api/graph/schemas", graphHandler::listSchemas);
         app.get("/api/graph/schemas/{schemaId}", graphHandler::getSchema);
         app.get("/api/graph/schema-configs", graphSchemaHandler::list);
@@ -198,6 +209,7 @@ public class Main {
         app.post("/api/graph/schema-configs/{schemaId}/enable", graphSchemaHandler::enable);
         app.post("/api/graph/schema-configs/{schemaId}/disable", graphSchemaHandler::disable);
         app.delete("/api/graph/schema-configs/{schemaId}", graphSchemaHandler::delete);
+        app.post("/api/graph/build/preview", graphBuildHandler::preview);
         app.post("/api/graph/build", graphBuildHandler::build);
         app.post("/api/graph/mutations", graphHandler::mutate);
         app.post("/api/graph/nodes/batch", graphHandler::upsertNodes);

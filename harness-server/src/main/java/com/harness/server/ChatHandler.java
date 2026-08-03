@@ -309,7 +309,10 @@ public class ChatHandler {
             Map<String, Object> internalGraphContext = new HashMap<>();
             internalGraphContext.put("graphId", request.graphScope().graphId());
             internalGraphContext.put("schemaId", request.graphScope().schemaId());
-            internalGraphContext.put("subjectIds", request.graphScope().subjectIds());
+            if (request.graphScope().subjectIds() != null
+                    && !request.graphScope().subjectIds().isEmpty()) {
+                internalGraphContext.put("subjectIds", request.graphScope().subjectIds());
+            }
             contextData.put(AgentContext.KEY_GRAPH_REQUEST_CONTEXT, internalGraphContext);
         }
         return AgentContext.of(contextData);
