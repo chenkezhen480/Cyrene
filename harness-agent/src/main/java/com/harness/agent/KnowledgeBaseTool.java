@@ -10,8 +10,6 @@ import com.harness.core.model.ReActStep;
 import com.harness.core.model.ToolResult;
 import com.harness.core.model.ToolSpec;
 import com.harness.preprocess.ContextBuilder;
-import com.harness.env.EnvConfig;
-import com.harness.env.EnvKey;
 import com.harness.tool.Tool;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.chat.ChatModel;
@@ -26,24 +24,21 @@ import java.util.List;
  * 内部知识库检索工具，将 RAG 检索流程暴露给 ReAct 引擎。
  * <p>
  * 模型只看到一个参数 {@code query}，感知不到 rewrite 开关的存在。
- * rewrite 决策完全由工具执行层根据 ReActStep 历史驱动：
+ * rewrite 决策完全由工具执行层根据检索分数和 ReActStep 历史驱动：
  * <ul>
  *   <li>第 1 次调用 → fast path：单 query 直接检索</li>
- *   <li>第 2 次及以后 → 自动升级为 rewrite 全套流水线（5 个 query）</li>
+ *   <li>硬阈值以下但达到候选下限 → 下一次调用隐式升级为 rewrite 流水线</li>
+ *   <li>完全无关或已经升级过 → 不再触发 rewrite</li>
  * </ul>
  * <p>
  * rewrite 全套流水线：一次 LLM 调用生成 multi-query(3) + step-back(1) + hyde(1) = 5 个查询，
- * 每个查询检索 top 3 片段，合并去重后 rerank 返回最终结果。
+ * 每个查询按配置的 topK 检索，合并去重后 rerank 返回最终结果。
  */
 public class KnowledgeBaseTool implements Tool {
 
     public static final String TOOL_NAME = "knowledge_base_search";
     private static final Logger log = LoggerFactory.getLogger(KnowledgeBaseTool.class);
     private static final ObjectMapper mapper = new ObjectMapper();
-
-    /** Relevance score threshold below which results are considered LOW_RELEVANCE. */
-    private static final double RELEVANCE_THRESHOLD =
-            EnvConfig.get().getDouble(EnvKey.RAG_SCORE_THRESHOLD, 0.7);
 
     private static final String COMBINED_REWRITE_PROMPT = """
             请为以下检索问题生成 5 个不同的查询版本，帮助从知识库中检索到最全面的相关文档。
@@ -58,12 +53,14 @@ public class KnowledgeBaseTool implements Tool {
 
     private final ContextBuilder contextBuilder;
     private final ChatModel chatModel;
+    private final RetrievalEscalationPolicy escalationPolicy;
 
     public KnowledgeBaseTool(EmbeddingModelProvider embeddingProvider,
                              RerankModelProvider rerankModelProvider,
                              ChatModelProvider chatModelProvider) {
-        this.contextBuilder = new ContextBuilder(rerankModelProvider, embeddingProvider, chatModelProvider);
+        this.contextBuilder = new ContextBuilder(rerankModelProvider, embeddingProvider);
         this.chatModel = chatModelProvider != null ? chatModelProvider.chatModel() : null;
+        this.escalationPolicy = RetrievalEscalationPolicy.fromEnvironment();
         log.info("[KnowledgeBaseTool] initialized");
     }
 
@@ -98,53 +95,42 @@ public class KnowledgeBaseTool implements Tool {
             throw new ToolExecutionException(TOOL_NAME, "Missing required parameter: query");
         }
 
-        // 读取 ReActStep 历史，判断是否需要升级为 rewrite 模式
-        // 模型全程不知道有这个开关——由引擎根据上一次的 InspectionStatus 自动决定
-        ReActStep.InspectionResult.InspectionStatus lastStatus =
-                ReActStep.getLastInspectionStatus(TOOL_NAME);
-        boolean forceRewrite = lastStatus == ReActStep.InspectionResult.InspectionStatus.INSUFFICIENT;
+        ToolResult.ResultStatus lastResultStatus = ReActStep.getLastToolResultStatus(TOOL_NAME);
+        boolean forceRewrite = lastResultStatus == ToolResult.ResultStatus.ESCALATING;
+        boolean escalationAlreadyUsed = ReActStep.hasToolResultStatus(
+                TOOL_NAME, ToolResult.ResultStatus.ESCALATING);
 
-        log.info("[KnowledgeBaseTool] query=\"{}\", lastStatus={}, forceRewrite={}",
-                truncate(query), lastStatus, forceRewrite);
+        log.info("[KnowledgeBaseTool] query=\"{}\", lastResultStatus={}, forceRewrite={}",
+                truncate(query), lastResultStatus, forceRewrite);
 
         try {
             ContextBuilder.ContextResult result;
             if (forceRewrite && chatModel != null) {
                 result = executeWithRewrite(query);
             } else {
-                result = contextBuilder.buildRagForTool(query, false);
+                result = contextBuilder.buildRagForTool(query);
             }
 
+            ToolResult.ResultStatus resultStatus = escalationPolicy.evaluate(
+                    result, forceRewrite, escalationAlreadyUsed);
+            ToolResult.setCurrentStatus(resultStatus);
+
             if (!result.hasContext()) {
-                if (forceRewrite) {
-                    // Rewrite 全套流水线已经用过但仍然无结果 — 工具的升级手段用尽
-                    ToolResult.setCurrentStatus(ToolResult.ResultStatus.EMPTY);
-                } else {
-                    // Fast path 无结果 — 还有 rewrite 升级手段可以用
-                    ToolResult.setCurrentStatus(ToolResult.ResultStatus.ESCALATING);
-                }
+                log.info("[KnowledgeBaseTool] No accepted results: bestObservedScore={}, status={}",
+                        String.format("%.4f", result.bestObservedScore()), resultStatus);
                 return "No results found in knowledge base for: " + query;
             }
 
-            // 检查 rerank 最高分，低于阈值视为"查到了但不相关"
             double topScore = result.topScore();
-            if (topScore > 0 && topScore < RELEVANCE_THRESHOLD) {
-                log.info("[KnowledgeBaseTool] topScore={} < threshold={}, marking LOW_RELEVANCE",
-                        String.format("%.4f", topScore), RELEVANCE_THRESHOLD);
-                if (forceRewrite) {
-                    // Rewrite 后仍然低相关 — 已无更多升级手段
-                    ToolResult.setCurrentStatus(ToolResult.ResultStatus.LOW_RELEVANCE);
-                } else {
-                    // Fast path 低相关 — 下一轮会触发 rewrite
-                    ToolResult.setCurrentStatus(ToolResult.ResultStatus.ESCALATING);
-                }
+            if (resultStatus != ToolResult.ResultStatus.SUCCESS) {
+                log.info("[KnowledgeBaseTool] Result quality requires attention: topScore={}, status={}",
+                        String.format("%.4f", topScore), resultStatus);
                 return result.contextBlock();
             }
 
             log.info("[KnowledgeBaseTool] Found {} RAG hits, context={} chars, topScore={}, rewrite={}",
                     result.ragHitIds().size(), result.contextBlock().length(),
                     String.format("%.4f", topScore), forceRewrite);
-            ToolResult.setCurrentStatus(ToolResult.ResultStatus.SUCCESS);
             return result.contextBlock();
         } catch (ToolExecutionException e) {
             throw e;
@@ -164,7 +150,7 @@ public class KnowledgeBaseTool implements Tool {
         List<String> queries = generateRewrittenQueries(originalQuery);
         if (queries.isEmpty()) {
             log.warn("[KnowledgeBaseTool] Rewrite produced no queries, falling back to original");
-            return contextBuilder.buildRagForTool(originalQuery, false);
+            return contextBuilder.buildRagForTool(originalQuery);
         }
 
         log.info("[KnowledgeBaseTool] Rewrite generated {} queries", queries.size());

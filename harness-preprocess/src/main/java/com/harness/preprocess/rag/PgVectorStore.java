@@ -165,44 +165,68 @@ public class PgVectorStore implements VectorStore {
 
     @Override
     public List<Document> searchVector(String collection, float[] embedding, int topK) {
+        return searchVectorWithEvidence(collection, embedding, topK).documents();
+    }
+
+    private SearchResult searchVectorWithEvidence(String collection, float[] embedding, int topK) {
         if (embedding == null || embedding.length == 0) {
             log.warn("Empty embedding, skipping pgvector search");
-            return Collections.emptyList();
+            return SearchResult.empty();
         }
 
         String vectorLiteral = toVectorLiteral(embedding);
         String sql = String.format("""
-                SELECT id, content, source,
-                       1 - (embedding <=> '%s'::vector) AS score
-                FROM %s
-                WHERE collection = ?
-                  AND 1 - (embedding <=> '%s'::vector) >= ?
-                ORDER BY embedding <=> '%s'::vector
-                LIMIT ?
-                """, vectorLiteral, table, vectorLiteral, vectorLiteral);
+                WITH candidates AS (
+                    SELECT id, content, source,
+                           1 - (embedding <=> '%s'::vector) AS score
+                    FROM %s
+                    WHERE collection = ?
+                    ORDER BY embedding <=> '%s'::vector
+                    LIMIT ?
+                ), candidate_stats AS (
+                    SELECT COALESCE(MAX(score), 0.0) AS best_observed_score,
+                           COUNT(*) AS observed_candidate_count
+                    FROM candidates
+                )
+                SELECT candidates.id, candidates.content, candidates.source, candidates.score,
+                       candidate_stats.best_observed_score,
+                       candidate_stats.observed_candidate_count
+                FROM candidate_stats
+                LEFT JOIN candidates ON candidates.score >= ?
+                ORDER BY candidates.score DESC NULLS LAST
+                """, vectorLiteral, table, vectorLiteral);
 
         List<Document> results = new ArrayList<>();
+        double bestObservedScore = 0.0;
+        int observedCandidateCount = 0;
         try (Connection conn = PgConnectionPool.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, collection);
-            ps.setDouble(2, scoreThreshold);
-            ps.setInt(3, topK);
+            ps.setInt(2, topK);
+            ps.setDouble(3, scoreThreshold);
 
             ResultSet rs = ps.executeQuery();
             while (rs.next()) {
-                results.add(new Document(
-                        rs.getString("id"),
-                        rs.getString("content"),
-                        rs.getString("source"),
-                        rs.getDouble("score"),
-                        null
-                ));
+                bestObservedScore = rs.getDouble("best_observed_score");
+                observedCandidateCount = rs.getInt("observed_candidate_count");
+                if (rs.getObject("id") != null) {
+                    results.add(new Document(
+                            rs.getString("id"),
+                            rs.getString("content"),
+                            rs.getString("source"),
+                            rs.getDouble("score"),
+                            null
+                    ));
+                }
             }
-            log.debug("pgvector search returned {} documents (collection={}, topK={})", results.size(), collection, topK);
+            log.debug("pgvector search returned {} accepted documents from {} candidates "
+                            + "(collection={}, topK={}, bestObservedScore={})",
+                    results.size(), observedCandidateCount, collection, topK, bestObservedScore);
         } catch (SQLException e) {
             log.error("pgvector search failed: {}", e.getMessage(), e);
+            return SearchResult.empty();
         }
-        return results;
+        return new SearchResult(results, bestObservedScore, observedCandidateCount);
     }
 
     @Override
@@ -341,16 +365,21 @@ public class PgVectorStore implements VectorStore {
 
     @Override
     public List<Document> searchText(String collection, String query, int topK) {
+        return searchTextWithEvidence(collection, query, topK).documents();
+    }
+
+    @Override
+    public SearchResult searchTextWithEvidence(String collection, String query, int topK) {
         if (embeddingProvider == null || !embeddingProvider.isAvailable()) {
             log.warn("searchText() requires an embedding provider. Set HARNESS_MODEL_EMBEDDING_PROVIDER.");
-            return Collections.emptyList();
+            return SearchResult.empty();
         }
         try {
             Embedding embedding = embeddingProvider.embed(query);
-            return searchVector(collection, embedding.vector(), topK);
+            return searchVectorWithEvidence(collection, embedding.vector(), topK);
         } catch (Exception e) {
             log.error("Failed to embed query for RAG retrieval: {}", e.getMessage(), e);
-            return Collections.emptyList();
+            return SearchResult.empty();
         }
     }
 

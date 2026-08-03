@@ -183,9 +183,13 @@ public class MilvusVectorStore implements VectorStore {
 
     @Override
     public List<Document> searchVector(String collection, float[] embedding, int topK) {
+        return searchVectorWithEvidence(collection, embedding, topK).documents();
+    }
+
+    private SearchResult searchVectorWithEvidence(String collection, float[] embedding, int topK) {
         if (embedding == null || embedding.length == 0) {
             log.warn("Empty embedding, skipping Milvus vector search");
-            return List.of();
+            return SearchResult.empty();
         }
         try {
             SearchResp resp = client.search(SearchReq.builder()
@@ -196,10 +200,10 @@ public class MilvusVectorStore implements VectorStore {
                     .metricType(IndexParam.MetricType.COSINE)
                     .outputFields(List.of("content", "source"))
                     .build());
-            return extractResults(resp);
+            return extractSearchResult(resp);
         } catch (Exception e) {
             log.error("[Milvus] Vector search failed: {}", e.getMessage(), e);
-            return List.of();
+            return SearchResult.empty();
         }
     }
 
@@ -258,16 +262,21 @@ public class MilvusVectorStore implements VectorStore {
 
     @Override
     public List<Document> searchText(String collection, String query, int topK) {
+        return searchTextWithEvidence(collection, query, topK).documents();
+    }
+
+    @Override
+    public SearchResult searchTextWithEvidence(String collection, String query, int topK) {
         if (embeddingProvider == null || !embeddingProvider.isAvailable()) {
             log.warn("searchText() requires an embedding provider. Set {}.", EnvKey.MODEL_EMBEDDING_PROVIDER);
-            return List.of();
+            return SearchResult.empty();
         }
         try {
             Embedding embedding = embeddingProvider.embed(query);
-            return searchVector(collection, embedding.vector(), topK);
+            return searchVectorWithEvidence(collection, embedding.vector(), topK);
         } catch (Exception e) {
             log.error("Failed to embed query for Milvus search: {}", e.getMessage(), e);
-            return List.of();
+            return SearchResult.empty();
         }
     }
 
@@ -326,11 +335,22 @@ public class MilvusVectorStore implements VectorStore {
     // ==================== 内部工具 ====================
 
     private List<Document> extractResults(SearchResp resp) {
-        List<Document> docs = new ArrayList<>();
-        if (resp.getSearchResults() == null || resp.getSearchResults().isEmpty()) return docs;
+        return extractSearchResult(resp).documents();
+    }
 
-        for (SearchResp.SearchResult result : resp.getSearchResults().get(0)) {
+    private SearchResult extractSearchResult(SearchResp resp) {
+        List<Document> docs = new ArrayList<>();
+        if (resp.getSearchResults() == null || resp.getSearchResults().isEmpty()) {
+            return SearchResult.empty();
+        }
+
+        List<SearchResp.SearchResult> candidates = resp.getSearchResults().get(0);
+        double bestObservedScore = 0.0;
+        for (SearchResp.SearchResult result : candidates) {
             Float score = result.getScore();
+            if (score != null) {
+                bestObservedScore = Math.max(bestObservedScore, score);
+            }
             if (score != null && score < scoreThreshold) continue;
 
             Map<String, Object> entity = result.getEntity();
@@ -341,8 +361,10 @@ public class MilvusVectorStore implements VectorStore {
                     score != null ? score : 0.0,
                     null));
         }
-        log.debug("[Milvus] Search on '{}' returned {} documents", collectionName, docs.size());
-        return docs;
+        log.debug("[Milvus] Search on '{}' returned {} accepted documents from {} candidates "
+                        + "(bestObservedScore={})",
+                collectionName, docs.size(), candidates.size(), bestObservedScore);
+        return new SearchResult(docs, bestObservedScore, candidates.size());
     }
 
     private String escapeExpr(String value) {

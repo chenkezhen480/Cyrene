@@ -185,7 +185,7 @@ public class AgentOrchestrator {
         this.inputProcessor = new InputProcessor(chatModelProvider, visionModelProvider, voiceModelProvider);
 
         // Layer 2: Preprocess
-        this.contextBuilder = new ContextBuilder(rerankModelProvider, embeddingModelProvider, chatModelProvider);
+        this.contextBuilder = new ContextBuilder(rerankModelProvider, embeddingModelProvider);
 
         // Layer 3: Tools
         this.toolRegistry = new ToolRegistry();

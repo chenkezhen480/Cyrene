@@ -73,6 +73,15 @@ public interface VectorStore {
         return List.of();
     }
 
+    /**
+     * 文本检索，同时返回硬阈值过滤前的候选分数证据。
+     * 低于硬阈值的文档不得出现在 {@link SearchResult#documents()} 中；
+     * {@code bestObservedScore} 仅用于判断是否值得进行一次隐式查询改写。
+     */
+    default SearchResult searchTextWithEvidence(String collection, String query, int topK) {
+        return SearchResult.fromAccepted(searchText(collection, query, topK));
+    }
+
     // ==================== 4. Chunk 链表能力（语义回溯） ====================
 
     /**
@@ -95,6 +104,32 @@ public interface VectorStore {
     // ==================== 5. Provider 名称 ====================
 
     String providerName();
+
+    /**
+     * 检索结果及过滤前的有限统计证据。不会携带被硬阈值拒绝的文档正文。
+     */
+    record SearchResult(
+            List<Document> documents,
+            double bestObservedScore,
+            int observedCandidateCount
+    ) {
+        public SearchResult {
+            documents = documents != null ? List.copyOf(documents) : List.of();
+            if (observedCandidateCount < documents.size()) {
+                throw new IllegalArgumentException("observedCandidateCount cannot be smaller than accepted documents");
+            }
+        }
+
+        public static SearchResult fromAccepted(List<Document> documents) {
+            List<Document> accepted = documents != null ? List.copyOf(documents) : List.of();
+            double bestScore = accepted.stream().mapToDouble(Document::score).max().orElse(0.0);
+            return new SearchResult(accepted, bestScore, accepted.size());
+        }
+
+        public static SearchResult empty() {
+            return new SearchResult(List.of(), 0.0, 0);
+        }
+    }
 
     /**
      * 通用文档记录。

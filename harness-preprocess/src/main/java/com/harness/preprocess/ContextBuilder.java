@@ -1,25 +1,19 @@
 package com.harness.preprocess;
 
-import com.harness.ai.model.ChatModelProvider;
 import com.harness.ai.model.EmbeddingModelProvider;
 import com.harness.ai.model.RerankModelProvider;
 import com.harness.env.EnvConfig;
 import com.harness.env.EnvKey;
 import com.harness.preprocess.rag.*;
-import com.harness.preprocess.gap.GapAnalysis;
-import com.harness.preprocess.rag.rewrite.*;
 import com.harness.preprocess.rerank.Reranker;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.*;
-import java.util.function.Function;
-import java.util.stream.Collectors;
 
 /**
  * Layer 2: Preprocessing.
  * Orchestrates RAG retrieval + semantic enhancement + reranking to build context for the AI layer.
- * Supports optional query rewriting (HyDE, Multi-Query, Step-Back) before retrieval.
  */
 public class ContextBuilder {
 
@@ -28,57 +22,16 @@ public class ContextBuilder {
     private final VectorStore vectorStore;
     private final Reranker reranker;
     private final SemanticContextRetriever semanticRetriever;
-    private final QueryRewriter queryRewriter;
 
     public ContextBuilder(RerankModelProvider rerankModelProvider,
-                          EmbeddingModelProvider embeddingModelProvider,
-                          ChatModelProvider chatModelProvider) {
-        this.vectorStore = VectorStoreFactory.create(embeddingModelProvider);
+                          EmbeddingModelProvider embeddingModelProvider) {
+        this(VectorStoreFactory.create(embeddingModelProvider), new Reranker(rerankModelProvider));
+    }
+
+    ContextBuilder(VectorStore vectorStore, Reranker reranker) {
+        this.vectorStore = vectorStore;
         this.semanticRetriever = vectorStore != null ? new SemanticContextRetriever(vectorStore) : null;
-        this.reranker = new Reranker(rerankModelProvider);
-        this.queryRewriter = QueryRewriterFactory.create(chatModelProvider);
-    }
-
-    /**
-     * Build enriched context from user input.
-     *
-     * @param userText the raw user input text
-     * @return context result with RAG hits and formatted context string
-     */
-    public ContextResult build(String userText) {
-        return build(userText, GapAnalysis.defaults());
-    }
-
-    /**
-     * Build enriched context from user input, with GapAnalysis controlling behavior.
-     *
-     * @param userText    the raw user input text
-     * @param gapAnalysis 动态路由分析结果，控制是否检索
-     * @return context result with RAG hits and formatted context string
-     */
-    public ContextResult build(String userText, GapAnalysis gapAnalysis) {
-        log.debug("[L3-RAG] Building context for text ({} chars)", userText != null ? userText.length() : 0);
-
-        // GapAnalysis: 显式禁用检索时直接返回空结果
-        if (Boolean.FALSE.equals(gapAnalysis.needsKnowledgeBase())) {
-            log.debug("[L3-RAG] Skipped: needsKnowledgeBase=false (explicit)");
-            return ContextResult.empty();
-        }
-
-        // RAG provider 未配置时提前返回，避免查询改写白跑 LLM 调用
-        if (vectorStore == null) {
-            log.warn("[L3-RAG] GapAnalyzer decided needsKnowledgeBase=true but RAG provider is none, skipping");
-            return ContextResult.empty();
-        }
-
-        // Step 0: Query rewriting（使用构造时的默认 rewriter）
-        List<String> queries = queryRewriter.rewrite(userText);
-        if (queries.size() > 1) {
-            log.debug("[L3-RAG] Query rewrite [{}]: {} queries", queryRewriter.strategyName(), queries.size());
-        }
-
-        // Step 1-4: retrieve → enhance → rerank → format
-        return executeRetrieval(queries, userText);
+        this.reranker = Objects.requireNonNull(reranker, "reranker");
     }
 
     /**
@@ -86,10 +39,9 @@ public class ContextBuilder {
      * 跳过 GapAnalysis 路由，直接执行检索流程。
      *
      * @param query   用户查询（已由 LLM 保证完整独立）
-     * @param rewrite 是否进行查询改写（由工具层调用 LLM 生成多查询后调用 buildRagWithQueries）
      * @return context result
      */
-    public ContextResult buildRagForTool(String query, boolean rewrite) {
+    public ContextResult buildRagForTool(String query) {
         if (vectorStore == null) {
             log.warn("[L3-RAG] RAG provider is none, skipping tool-based retrieval");
             return ContextResult.empty();
@@ -125,7 +77,8 @@ public class ContextBuilder {
      */
     private ContextResult executeRetrieval(List<String> queries, String rerankText) {
         // Step 1: RAG retrieval (support multi-query with dedup)
-        List<RagRetriever.RagDocument> ragDocs = doMultiRetrieve(queries);
+        RetrievalBatch retrievalBatch = doMultiRetrieve(queries);
+        List<RagRetriever.RagDocument> ragDocs = retrievalBatch.documents();
         log.debug("[L3-RAG] Retrieved {} docs from {} queries", ragDocs.size(), queries.size());
 
         // Step 2: Semantic enhancement (lookback for truncated chunks)
@@ -164,6 +117,8 @@ public class ContextBuilder {
         metadata.put("rag_doc_count", String.valueOf(ragDocs.size()));
         metadata.put("reranked_doc_count", String.valueOf(reranked.size()));
         metadata.put("top_score", String.valueOf(rerankResult.topScore()));
+        metadata.put("best_observed_score", String.valueOf(retrievalBatch.bestObservedScore()));
+        metadata.put("observed_candidate_count", String.valueOf(retrievalBatch.observedCandidateCount()));
         metadata.put("lookback_count", String.valueOf(totalLookback));
         metadata.put("query_count", String.valueOf(queries.size()));
         metadata.put("provider", vectorStore != null ? vectorStore.providerName() : "none");
@@ -182,31 +137,53 @@ public class ContextBuilder {
      * 多查询检索并合并去重。
      * 每个查询独立检索，结果按 document ID 去重，保留最高分。
      */
-    private List<RagRetriever.RagDocument> doMultiRetrieve(List<String> queries) {
+    private RetrievalBatch doMultiRetrieve(List<String> queries) {
         if (queries.size() == 1) {
             return doRetrieve(queries.get(0));
         }
-        return queries.stream()
-                .map(this::doRetrieve)
-                .flatMap(List::stream)
-                .collect(Collectors.toMap(
-                        RagRetriever.RagDocument::id,
-                        Function.identity(),
-                        (a, b) -> a.score() >= b.score() ? a : b))
-                .values().stream()
+
+        Map<String, RagRetriever.RagDocument> documentsById = new HashMap<>();
+        double bestObservedScore = 0.0;
+        int observedCandidateCount = 0;
+        for (String query : queries) {
+            RetrievalBatch batch = doRetrieve(query);
+            bestObservedScore = Math.max(bestObservedScore, batch.bestObservedScore());
+            observedCandidateCount += batch.observedCandidateCount();
+            for (RagRetriever.RagDocument document : batch.documents()) {
+                documentsById.merge(document.id(), document,
+                        (existing, candidate) -> existing.score() >= candidate.score() ? existing : candidate);
+            }
+        }
+
+        List<RagRetriever.RagDocument> documents = documentsById.values().stream()
                 .sorted(Comparator.comparingDouble(RagRetriever.RagDocument::score).reversed())
                 .toList();
+        return new RetrievalBatch(documents, bestObservedScore, observedCandidateCount);
     }
 
-    private List<RagRetriever.RagDocument> doRetrieve(String query) {
-        if (vectorStore == null) return List.of();
+    private RetrievalBatch doRetrieve(String query) {
+        if (vectorStore == null) return RetrievalBatch.empty();
         EnvConfig cfg = EnvConfig.get();
         String collection = cfg.getString(EnvKey.RAG_COLLECTION, "default");
         int topK = cfg.getInt(EnvKey.RAG_TOP_K, 5);
-        List<VectorStore.Document> docs = vectorStore.searchText(collection, query, topK);
-        return docs.stream()
+        VectorStore.SearchResult searchResult = vectorStore.searchTextWithEvidence(collection, query, topK);
+        List<RagRetriever.RagDocument> documents = searchResult.documents().stream()
                 .map(d -> new RagRetriever.RagDocument(d.id(), d.content(), d.source(), d.score()))
                 .toList();
+        return new RetrievalBatch(
+                documents,
+                searchResult.bestObservedScore(),
+                searchResult.observedCandidateCount());
+    }
+
+    private record RetrievalBatch(
+            List<RagRetriever.RagDocument> documents,
+            double bestObservedScore,
+            int observedCandidateCount
+    ) {
+        private static RetrievalBatch empty() {
+            return new RetrievalBatch(List.of(), 0.0, 0);
+        }
     }
 
     private String formatContext(List<RagRetriever.RagDocument> docs) {
@@ -240,9 +217,29 @@ public class ContextBuilder {
          * Top rerank relevance score. 0.0 if not available.
          */
         public double topScore() {
-            if (metadata == null || !metadata.containsKey("top_score")) return 0.0;
+            return doubleMetadata("top_score");
+        }
+
+        /**
+         * Highest candidate score observed before the provider applied the hard acceptance threshold.
+         */
+        public double bestObservedScore() {
+            return doubleMetadata("best_observed_score");
+        }
+
+        public int observedCandidateCount() {
+            if (metadata == null || !metadata.containsKey("observed_candidate_count")) return 0;
             try {
-                return Double.parseDouble(metadata.get("top_score"));
+                return Integer.parseInt(metadata.get("observed_candidate_count"));
+            } catch (NumberFormatException e) {
+                return 0;
+            }
+        }
+
+        private double doubleMetadata(String key) {
+            if (metadata == null || !metadata.containsKey(key)) return 0.0;
+            try {
+                return Double.parseDouble(metadata.get(key));
             } catch (NumberFormatException e) {
                 return 0.0;
             }

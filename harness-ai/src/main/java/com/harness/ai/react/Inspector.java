@@ -112,11 +112,11 @@ public class Inspector {
                 return switch (result.status()) {
                     case ESCALATING -> new InspectionResult(
                             InspectionStatus.INSUFFICIENT,
-                            "Tool '" + result.toolName() + "' found no results but has auto-escalated its retrieval strategy. "
+                            "Tool '" + result.toolName() + "' found a near-miss result and made one implicit retrieval escalation eligible. "
                                     + "Wait for the next iteration to see if the escalated strategy produces results.");
                     case EMPTY -> new InspectionResult(
                             InspectionStatus.INSUFFICIENT,
-                            "Tool '" + result.toolName() + "' exhausted all retrieval strategies with no results. "
+                            "Tool '" + result.toolName() + "' found no eligible results and no implicit escalation is available. "
                                     + "Try a different tool, adjust your approach, or output the final answer with available information.");
                     case LOW_RELEVANCE -> new InspectionResult(
                             InspectionStatus.INSUFFICIENT,

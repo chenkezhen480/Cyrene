@@ -25,7 +25,7 @@ public record ToolResult(
         EMPTY,
         /** Tool found results but they are irrelevant to the query (e.g. low rerank scores). */
         LOW_RELEVANCE,
-        /** Tool found no results but has auto-escalated its strategy (e.g. rewrite → multi-query).
+        /** Tool found a near-miss result and made one implicit strategy escalation eligible.
          *  Reflector should NOT count this as failure — the tool is still actively trying. */
         ESCALATING,
         /** Tool execution was blocked until an explicit confirmation policy allows it. */

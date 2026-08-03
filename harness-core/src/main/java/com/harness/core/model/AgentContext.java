@@ -24,8 +24,6 @@ public record AgentContext(
     // ==================== GapAnalysis 显式覆盖字段 ====================
     /** 是否检索知识库，null 时回退全局配置 */
     public static final String KEY_NEEDS_KNOWLEDGE_BASE = "needsKnowledgeBase";
-    /** 查询改写策略：NONE | HYDE | MULTI_QUERY | STEP_BACK，null 时回退全局配置 */
-    public static final String KEY_REWRITE_STRATEGY = "rewriteStrategy";
     /** 是否联网搜索，null 时回退全局配置 */
     public static final String KEY_NEEDS_WEB_SEARCH = "needsWebSearch";
     public static final String VALUE_MODE_BLOCKING = "blocking";
@@ -112,27 +110,6 @@ public record AgentContext(
     }
 
     /**
-     * 查询改写策略。
-     * <ul>
-     *   <li>{@code null} — 未指定，回退到环境变量 HARNESS_RAG_QUERY_REWRITE</li>
-     *   <li>{@code "NONE"} — 显式不改写（但仍可检索）</li>
-     *   <li>{@code "HYDE" / "MULTI_QUERY" / "STEP_BACK"} — 显式指定改写策略</li>
-     * </ul>
-     * context JSON: {"rewriteStrategy": "HYDE"}
-     */
-    public String rewriteStrategy() {
-        Object val = data.get(KEY_REWRITE_STRATEGY);
-        if (val != null) {
-            String s = val.toString().toUpperCase();
-            return switch (s) {
-                case "NONE", "HYDE", "MULTI_QUERY", "STEP_BACK" -> s;
-                default -> null;
-            };
-        }
-        return null;
-    }
-
-    /**
      * 是否联网搜索。
      * <ul>
      *   <li>{@code null} — 未指定，回退到环境变量或 GapAnalyzer 判定</li>
@@ -146,16 +123,6 @@ public record AgentContext(
         if (val instanceof Boolean b) return b;
         if (val instanceof String s) return Boolean.parseBoolean(s);
         return null;
-    }
-
-    /**
-     * Per-request reflection interval override.
-     * context JSON: {"reflectionInterval": 5} 覆盖 env 默认值
-     */
-    public Integer reflectionInterval() {
-        Object val = data.get("reflectionInterval");
-        if (val instanceof Number n) return n.intValue();
-        return null;  // use env default
     }
 
     /**

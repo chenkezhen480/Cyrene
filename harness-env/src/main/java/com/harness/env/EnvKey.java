@@ -19,7 +19,7 @@ public final class EnvKey {
     /**
      * 功能总开关，默认 true。关闭后所有字段回退全局静态配置。
      * <p>三级判定漏斗：Tier 0 显式覆盖 → Tier 1 规则引擎（&lt;1ms）→ Tier 2 LLM 分类。
-     * 四个独立字段：needsThinking / needsKnowledgeBase / rewriteStrategy / needsWebSearch。
+     * 三个独立字段：needsThinking / needsKnowledgeBase / needsWebSearch。
      * 判定结果写入 trace metadata（gap_source = explicit/rule/llm/default）。
      */
     public static final String GAP_ANALYSIS_ENABLED = "HARNESS_GAP_ANALYSIS_ENABLED";
@@ -135,6 +135,8 @@ public final class EnvKey {
     public static final String RAG_TOP_K             = "HARNESS_RAG_TOP_K";
     /** 最低相似度阈值，默认 0.7 */
     public static final String RAG_SCORE_THRESHOLD   = "HARNESS_RAG_SCORE_THRESHOLD";
+    /** 允许触发一次隐式查询改写的最低候选分，默认 0.3 */
+    public static final String RAG_REWRITE_MIN_SCORE = "HARNESS_RAG_REWRITE_MIN_SCORE";
     /** 数据库用户名（PG 用，Milvus 不需要） */
     public static final String RAG_USER              = "HARNESS_RAG_USER";
     /** 数据库密码（PG 用，Milvus 不需要） */
@@ -177,13 +179,9 @@ public final class EnvKey {
     /** Milvus 距离度量类型：COSINE | L2 | IP，默认 COSINE */
     public static final String RAG_MILVUS_METRIC_TYPE = "HARNESS_RAG_MILVUS_METRIC_TYPE";
 
-    // ==================== RAG (语义回溯 + 查询改写) ====================
+    // ==================== RAG (语义回溯) ====================
     /** 截断 chunk 时最多向前查找的 chunk 数，默认 2 */
     public static final String RAG_CONTEXT_LOOKBACK_MAX    = "HARNESS_RAG_CONTEXT_LOOKBACK_MAX";
-    /** 查询改写策略：none | hyde | multi-query | step-back，默认 none */
-    public static final String RAG_QUERY_REWRITE           = "HARNESS_RAG_QUERY_REWRITE";
-    /** multi-query 策略的备选查询数（不含原始查询），默认 3 */
-    public static final String RAG_QUERY_REWRITE_COUNT     = "HARNESS_RAG_QUERY_REWRITE_COUNT";
 
     // ==================== RAG (多路召回 — 已废弃，检索策略由 Provider 内聚) ====================
     /** @deprecated 多路召回已废弃，全文检索和混合检索现在由 VectorStore provider 内部处理 */

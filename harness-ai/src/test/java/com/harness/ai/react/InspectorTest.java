@@ -128,7 +128,7 @@ class InspectorTest {
         var inspection = inspector.inspect(List.of(call), List.of(result));
 
         assertThat(inspection.status()).isEqualTo(InspectionStatus.INSUFFICIENT);
-        assertThat(inspection.reason()).contains("exhausted all retrieval strategies");
+        assertThat(inspection.reason()).contains("no implicit escalation is available");
     }
 
     @Test
@@ -140,7 +140,7 @@ class InspectorTest {
         var inspection = inspector.inspect(List.of(call), List.of(result));
 
         assertThat(inspection.status()).isEqualTo(InspectionStatus.INSUFFICIENT);
-        assertThat(inspection.reason()).contains("auto-escalated");
+        assertThat(inspection.reason()).contains("near-miss");
         assertThat(inspection.reason()).doesNotContain("Do NOT retry");
     }
 

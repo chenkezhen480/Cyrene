@@ -63,22 +63,43 @@ public record ReActStep(
     }
 
     /**
-     * 获取指定工具在上一次调用时的 InspectionStatus。
-     * 若该工具从未被调用过，返回 null。
+     * 获取指定工具最近一次调用声明的结构化结果状态。
      */
-    public static ReActStep.InspectionResult.InspectionStatus getLastInspectionStatus(String toolName) {
+    public static ToolResult.ResultStatus getLastToolResultStatus(String toolName) {
         List<ReActStep> steps = getCurrentSteps();
         for (int i = steps.size() - 1; i >= 0; i--) {
             ReActStep step = steps.get(i);
-            if (step.toolCalls() != null && step.inspection() != null) {
-                for (ToolCall tc : step.toolCalls()) {
-                    if (toolName.equals(tc.toolName())) {
-                        return step.inspection().status();
-                    }
+            if (step.toolResults() == null) {
+                continue;
+            }
+            for (int j = step.toolResults().size() - 1; j >= 0; j--) {
+                ToolResult result = step.toolResults().get(j);
+                if (toolName.equals(result.toolName())) {
+                    return result.status();
                 }
             }
         }
         return null;
+    }
+
+    /**
+     * 判断指定工具在当前 ReAct 运行中是否曾声明过目标结果状态。
+     */
+    public static boolean hasToolResultStatus(String toolName, ToolResult.ResultStatus status) {
+        if (status == null) {
+            return false;
+        }
+        for (ReActStep step : getCurrentSteps()) {
+            if (step.toolResults() == null) {
+                continue;
+            }
+            for (ToolResult result : step.toolResults()) {
+                if (toolName.equals(result.toolName()) && status == result.status()) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     // ── Record 本体 ──
