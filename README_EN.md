@@ -1,191 +1,197 @@
 <p align="right"><a href="./README.md">中文</a></p>
 
-# Cyrene Agent — Out-of-the-Box AI Application Framework
+# Cyrene Agent — A Dedicated Agent Framework for Existing Systems
 
-> **In one sentence: Point it at your project directory, and Cyrene Agent automatically scans REST APIs, generates tool schemas, and plugs them into the conversation — your AI Agent can now interact with your system, no hand-written integration code needed.**
+> Add an autonomous ReAct Agent to an existing business system, its domain knowledge, and its authorization model instead of building an isolated AI application from scratch.
 
-A Java AI Agent framework built on the **Harness orchestration architecture**. No manual API wiring required — includes automatic project API discovery, 7 model types, RAG knowledge base, session memory, and autonomous decision routing, so developers focus on business logic rather than plumbing.
+Cyrene Agent is an enterprise Agent development framework built with Java 21. It is designed for vertical-domain developers who need to give an existing system a natural-language interface, project API control, enterprise knowledge retrieval, relational-data retrieval, sub-agent collaboration, and end-to-end tracing.
 
-## Key Feature: One-Click Project API Integration
+## Why Cyrene Agent
 
-Traditional AI Agent integration with existing systems requires manually writing API call code for each endpoint. Cyrene Agent automates this entirely:
+Most Agent products target end users in daily life and office work: organizing documents, writing code, and searching public information. They primarily serve office workers and individual developers.
 
+Cyrene Agent addresses a different question: **how do you build a dedicated Agent for an existing system?**
+
+| General-purpose Agent | Cyrene Agent |
+|---|---|
+| Built for end users | Built for domain developers and system integrators |
+| Focused on office tasks and public information | Focused on existing APIs, private knowledge, and domain data |
+| Tools are commonly integrated one by one | Project APIs are discovered and converted into tool configuration |
+| Authorization is left to model behavior | Existing user tokens and authorization boundaries are preserved |
+| Relational data is often flattened into text | Documents use vector retrieval; relationships use a knowledge graph |
+
+**None of the information or data will be uploaded to the cloud**
+
+![Chat interface](docs/assets/chat.png)
+
+## Core Runtime Model
+
+The architecture converges on **Provider → Input → ReAct Loop → Trace**, with Tool acting as the capability boundary between the loop and business systems.
+
+```mermaid
+flowchart LR
+    P["Provider<br/>LLM · ASR/TTS · Embedding · Rerank · Generation"]
+    I["Input<br/>Auth · Multimodal · Memory · Context · JSON Context"]
+    R["ReAct Loop<br/>Model → Tool → Inspect/Reflect → Model"]
+    T["Trace<br/>Steps · Results · Latency · Tokens · Parent/Child"]
+    X["Existing System<br/>REST API · Knowledge Base · Knowledge Graph"]
+    P --> I --> R --> T
+    R <--> X
 ```
-Specify project directory → Auto-scan Controllers → Parse DTO/VO inheritance → Generate project-apis.json → Tools auto-registered to Agent
+
+### Provider
+
+Provider is the composition boundary for model capabilities. It centers on the main LLM and tool-calling model while supporting independent Vision, ASR/TTS, Embedding, Rerank, Classifier, and Realtime capabilities. Image and video generation are connected through provider-configured generation tools. Each capability can use a different vendor, model, endpoint, and concurrency policy so enterprises can balance quality, cost, and data boundaries.
+
+### Input
+
+Input covers more than user text. It handles authentication, multimodal parsing, short- and long-term memory injection, context construction, and extensible request-level JSON Context. Integrators can provide trusted fields such as `userId`, `tenantId`, output mode, graph scope, and user credentials, allowing the Agent to inherit the identity, tenancy, and business scope of the host system.
+
+### ReAct Loop
+
+The ReAct Loop performs “model decision → tool call → tool-result inspection → next model decision or output.” Inspector and adaptive reflection use tool errors, empty results, low relevance, and repeated calls to guide the next action.
+
+Tools can also expose structured result states that evolve later calls. For example, knowledge-base retrieval starts with a low-cost original query. If the result falls into a recoverable relevance range, the next round implicitly upgrades to query rewriting, multi-query, Step-back, and HyDE retrieval. Completely unrelated results, or a request that has already escalated, do not repeatedly pay the rewriting cost.
+
+### Trace
+
+Trace observes the complete run: input, model rounds, tool calls and results, inspection and reflection status, latency, token consumption, confirmation decisions, and final output. A sub-agent owns an independent trace linked to its parent through `parent_trace_id`, making the full task tree reconstructable.
+
+![Trace interface](docs/assets/trace.png)
+
+## Four Defining Capabilities
+
+### 1. One-Click Integration with Existing Project APIs
+
+![Project API discovery](docs/assets/scan-result.png)
+
+On first launch, the management console guides the developer to select a local project directory and business service URL. Cyrene Agent first looks for an OpenAPI/Swagger specification. If none exists, a dedicated discovery Agent scans the source through restricted environment tools:
+
+```text
+OpenAPI/Swagger
+       └─ absent → code_glob → code_grep → read_class_hierarchy (up to 2 parent levels)
+                                      ↓
+                              project-apis.json
+                                      ↓
+                              hot-loaded into ToolRegistry
 ```
 
-**Result:** Start the service → specify the project directory in Web UI → scan completes → Agent can now call your project's APIs. Zero integration code written.
+Discovery consolidates HTTP methods, paths, parameter JSON Schemas, return types, authentication modes, and token-injection rules. Developers review the result before it is written to `project-apis.json` and hot-loaded, avoiding one manually implemented Tool per endpoint.
 
-```
-User: "Help me query all in-use devices from the asset management system"
-Agent: [auto-calls the discovered GET /api/assets?status=in_use endpoint]
-Agent: "Found 156 devices currently in use, here's the list..."
-```
+Business API calls use user-token passthrough. The trusted caller supplies the current credentials through `context.credentials`, and the framework injects them into headers, query parameters, or another configured location. The existing system still performs authorization under the original user identity; the Agent does not become a permission-bypassing superuser.
 
-## Autonomous Decision Routing
+![Project API configuration](docs/assets/api-detail.png)
 
-Each request automatically determines which capabilities are needed, avoiding unnecessary costs:
+### 2. Converged Core Abstractions
 
-| Scenario | Thinking | Knowledge Base | Web Search | Query Rewrite |
-|----------|----------|----------------|------------|---------------|
-| "Hello" | ✗ | ✗ | ✗ | ✗ |
-| "What's our reimbursement policy?" | ✗ | ✓ | ✗ | auto-upgrade |
-| "What's the weather in Shanghai today?" | ✗ | ✗ | ✓ (SearXNG) | ✗ |
-| "Analyze the feasibility of this requirement" | ✓ | ✓ | ✗ | ✗ |
+The project is centered on a request-scoped ReAct Loop rather than a fixed node workflow. Provider, Input, Tool, ReAct, and Trace each own one responsibility. The Agent module composes the runtime, session policy, sub-agents, and request scope. Developers can replace a model, store, or tool implementation without rebuilding the execution chain.
 
-**Three-tier funnel (priority descending):**
+### 3. Separate Retrieval for Documents and Relational Data
 
-| Tier | Mechanism | Latency | Description |
-|------|-----------|---------|-------------|
-| Tier 0 | Explicit override | 0ms | Parameters specified in request context |
-| Tier 1 | Rule engine | <1ms | Regex/keyword matching (greeting intercept, time-sensitive web search, etc.) |
-| Tier 2 | LLM classification | ~200ms | Lightweight Classifier model analyzes remaining fields |
+Enterprise documents and relational business data require different retrieval strategies:
 
-Enabled via `HARNESS_GAP_ANALYSIS_ENABLED=true`.
+- `knowledge_base_search` targets policies, manuals, contracts, and technical documents. It supports Milvus or pgvector and uses collections as knowledge-set boundaries. Chunking prioritizes paragraph and semantic integrity before embedding, hybrid retrieval, and optional reranking.
+![Knowledge-base interface](docs/assets/knowledge.png)
 
-## Built-In Capabilities
+- `knowledge_graph_search` targets entities, relationships, and paths. Neo4j stores graph data, and graph results are not disguised as document chunks that distract the model.
+![Knowledge-graph interface](docs/assets/graph.png)
 
-### 7 Independent Model Types
+- The graph tenant scope comes from the trusted `tenantId` in Context. In multi-tenant mode, tenant-to-Graph-Space authorization is persisted in the MySQL `graph_space_bindings` table. Request context can narrow the graph scope; the model cannot expand the tenant, schema, or subject scope.
 
-Each model can be independently configured with its own provider, API key, and endpoint — mix and match freely:
+Milvus, pgvector, Neo4j, MySQL, and Redis can all run through local Docker Compose so private knowledge and business data remain within the local deployment boundary by default. Vector tenancy can be organized by the integrating system at the collection or deployment layer; request-level hard isolation currently focuses on knowledge-graph tenant and Graph Space authorization.
 
-| Type | Purpose | Providers |
-|------|---------|-----------|
-| Chat | Conversation + tool calling | OpenAI, Anthropic, Ollama, DashScope, etc. |
-| Vision | Image/video understanding | OpenAI, Anthropic |
-| Voice | Speech recognition + synthesis | OpenAI |
-| Embedding | Vectorization | OpenAI, Ollama |
-| Rerank | Search result reranking | OpenAI-compatible APIs |
-| Classifier | Intent classification | OpenAI-compatible APIs |
-| Realtime | Real-time multimodal (reserved) | — |
+### 4. Hot-Reloadable Tools and Request-Scoped Tool Snapshots
 
-### RAG Knowledge Base
+The runtime does not expose every capability to every model call:
 
-Upload documents (PDF, DOCX, XLSX, TXT, Markdown, etc.) → automatic extraction, chunking, embedding, and storage. Defaults to Milvus vector database; also supports PostgreSQL pgvector, switchable via `HARNESS_RAG_PROVIDER`.
+1. At startup, enabled built-in tools, MCP tools, Skills, and project API tools are registered according to `HARNESS_*` environment variables.
+2. Updating project API configuration atomically replaces the corresponding tools in ToolRegistry.
+3. Each request creates an immutable `RunToolCatalog` snapshot and filters unauthorized or unnecessary tools using request Context.
+4. A ReAct Loop keeps the same snapshot throughout the run and is unaffected by later registry changes.
+5. A sub-agent inherits request permissions and then applies a narrower allowlist matching its persona and task.
 
-RAG retrieval is exposed to the ReAct engine as a tool (`knowledge_base_search`). The model calls it on demand. First call uses a fast path (single query); if results are insufficient, it auto-upgrades to combined rewriting (5 queries: 3 multi-query + 1 step-back + 1 hyde) — fully transparent to the model. Includes semantic context enhancement and optional Rerank. Large files automatically use a "split → merge → parallel summarize" strategy — a 1MB file requires only 5-8 LLM calls.
+This reduces model distraction, unnecessary tool cost, and privilege exposure at the same time.
 
-### Session Memory
+## Module Layout
 
-- **Short-term**: Per-session LRU cache with optional Redis distributed cache
-- **Long-term**: AI-extracted user preferences from completed sessions, auto-injected into System Prompt
-- **Smart compression**: Minor compression strips tool call blocks (zero cost); major compression AI-distills old messages with time-decay weighting
+| Module | Responsibility |
+|---|---|
+| `harness-core` | Shared models, environment configuration, request context, pagination, and RunTrace contracts |
+| `harness-provider` | Model providers and LangChain4j adapters |
+| `harness-input` | Authentication, multimodal input, gap analysis, memory stores, and compression |
+| `harness-tool` | Tool registration/execution, project APIs, MCP, Skills, RAG, and knowledge graph |
+| `harness-react` | ReAct Loop, Inspector, and adaptive reflection |
+| `harness-trace` | Trace collection, persistence, and cleanup |
+| `harness-agent` | Runtime composition, context preparation, sub-agents, and tool assembly |
+| `harness-server` | HTTP/SSE APIs, management endpoints, and Web console |
 
 ## Quick Start
 
-### Prerequisites
+### Requirements
 
 - Java 21+
 - Maven 3.8+
-- Docker + Docker Compose (recommended, one-click deploy all dependencies)
-- Or manual install: Milvus 2.5+ (vector database, default), MySQL 8+ (session/memory/audit), Redis 7+ (distributed cache), SearXNG (web search)
+- Docker and Docker Compose
 
-### Docker Compose One-Click Deploy (Recommended)
-
-```bash
-cp .env.example .env   # edit .env, fill in LLM API key
-cd docker && docker compose up -d
-```
-
-Auto-pulls and starts 5 services: `cyrene` (app), `mysql`, `milvus`, `redis`, `searxng`. MySQL auto-runs schema scripts on first start; Milvus collections are auto-created by the application.
-
-### Manual Build & Run
+### Docker Compose
 
 ```bash
-# Build
-mvn clean package -DskipTests
-
-# Configure
 cp .env.example .env
-# Edit .env, configure at minimum:
-#   HARNESS_MODEL_CHAT_API_KEY
-#   HARNESS_MODEL_CHAT_PROVIDER
-#   HARNESS_MODEL_CHAT_BASE_URL
-#   HARNESS_MODEL_CHAT_MODEL
-
-# Start (default port 8080)
-java -jar harness-server/target/harness-server-${revision}.jar
+# Edit .env and configure at least the main Chat Model
+docker compose -f docker/docker-compose.yml up -d --build
 ```
 
-After startup, visit the Web UI — it will guide you through the project API scan on first launch.
+The knowledge graph is optional:
 
-### Environment Variable Tiers
+```bash
+docker compose -f docker/docker-compose.yml --profile graph up -d neo4j
+```
 
-| Level | Variable | Description |
-|-------|----------|-------------|
-| **Required** | `HARNESS_MODEL_CHAT_API_KEY` | Chat model API key |
-| **Required** | `HARNESS_MODEL_CHAT_BASE_URL` | API endpoint (required for non-OpenAI providers) |
-| **Required** | `HARNESS_MODEL_CHAT_MODEL` | Model name (defaults to gpt-4o) |
-| Feature-required | `HARNESS_SERVER_ENABLED` / `HARNESS_CLI_ENABLED` | At least one must be enabled |
-| Feature-required | `HARNESS_AUTH_TOKEN` | Required when auth_mode=token |
-| Feature-required | `HARNESS_RAG_*` | Required for RAG knowledge base |
-| Feature-required | `HARNESS_AUDIT_DB_*` | Required for audit persistence |
-| Feature-required | `HARNESS_MODEL_EMBEDDING_*` | Required for knowledge base upload/retrieval |
-| Optional | All other variables | Have reasonable defaults or can be disabled |
+### Local Build
 
-See [.env.example](.env.example) for the complete list.
+```bash
+mvn clean package -pl harness-server -am -DskipTests
+java -jar harness-server/target/harness-server-0.5.8.jar
+```
 
-## API Endpoints
+The service listens on `8080` by default. Open the Web console to discover project APIs, upload knowledge, manage graph data, and talk to the Agent.
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/api/chat` | Send message (SSE stream) |
-| `DELETE` | `/api/chat/{sessionId}` | Cancel in-progress request |
-| `POST` | `/api/sessions` | Create session |
-| `GET` | `/api/sessions` | List sessions (cursor pagination) |
-| `GET` | `/api/sessions/{sessionId}/messages` | Message history |
-| `POST` | `/api/knowledge/upload` | Upload document to knowledge base |
-| `POST` | `/api/project-discovery/scan` | Trigger project API scan |
-| `GET` | `/api/project-discovery/config` | Get API configuration |
-| `PUT` | `/api/project-discovery/config` | Update API configuration |
-| `POST` | `/api/project-discovery/reload` | Hot-reload API configuration |
-| `GET` | `/api/health` | Health check |
+See [.env.example](./.env.example) for the complete configuration surface.
 
-### Chat Request Example
+## Chat API Example
 
 ```json
 {
-  "text": "Help me query all in-use devices",
+  "text": "Query my pending approvals and explain the next step using our company policy",
   "context": {
     "outputMode": "streaming",
     "userId": "user-001",
-    "enableThinking": true
+    "tenantId": "tenant-a",
+    "credentials": {
+      "businessToken": "<current-user-token>"
+    }
   }
 }
 ```
 
-## Module Architecture
+Credential keys are not hard-coded by the framework. In this example, `businessToken` must match the endpoint's `credentialKey` in `project-apis.json`.
 
-```
-harness-env        ← Environment variables + connection pools
-harness-core       ← Core models (AgentMessage, AgentTrace, ReActStep, ToolSpec, etc.)
-├── harness-input       ← Auth + multimodal parsing + large file processing
-├── harness-preprocess  ← RAG + query rewriting + semantic context + memory management
-├── harness-tool        ← Tool interface + MCP adapter + Skill loading + code discovery tools
-├── harness-audit       ← Trace collection and storage
-└── harness-ai          ← LangChain4j + 7 model types + ReAct engine
-harness-agent      ← Orchestrator + sub-agents + project API discovery
-harness-server     ← HTTP API + Web UI
-```
+Common endpoints:
 
-## Extension Guide
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/api/chat` | Blocking or SSE-streaming Agent request |
+| `DELETE` | `/api/chat/{sessionId}` | Cancel an active request |
+| `GET` | `/api/sessions` | Cursor-paginated session query |
+| `POST` | `/api/knowledge/upload` | Upload enterprise knowledge documents |
+| `POST` | `/api/project-discovery/scan` | Discover APIs in an existing project |
+| `POST` | `/api/project-discovery/reload` | Hot-reload project API tools |
+| `GET` | `/api/health` | Health check |
 
-### Adding an LLM Provider
+## Contact
 
-1. Implement the corresponding provider interface in `com.harness.ai.model.impl`
-2. Register in `ModelProviderFactory`
-3. Add environment variable keys in `EnvKey.java`
-
-### Adding a Tool
-
-1. Implement `com.harness.tool.Tool` (`spec()` + `execute()`)
-2. Register in `AgentOrchestrator.registerBuiltinTools()`, or use MCP auto-discovery
-
-### Adding a Vector Store Backend
-
-1. Implement `VectorStore` (`retrieve()` + `insertBatch()` + `deleteByFile()`)
-2. Register in `VectorStoreFactory`
-3. Set `HARNESS_RAG_PROVIDER=your-backend`
+Email 1: 1768576157@qq.com<br>
+Email 2: cken48153@gmail.com
 
 ## License
 

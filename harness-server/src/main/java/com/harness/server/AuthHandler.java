@@ -1,7 +1,7 @@
 package com.harness.server;
 
-import com.harness.env.EnvConfig;
-import com.harness.env.EnvKey;
+import com.harness.core.env.EnvConfig;
+import com.harness.core.env.EnvKey;
 import com.harness.input.auth.JwtUtil;
 import com.harness.server.api.ApiErrorCode;
 import com.harness.server.api.ApiResponses;

@@ -2,8 +2,8 @@ package com.harness.tool.mcp;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.harness.env.EnvConfig;
-import com.harness.env.EnvKey;
+import com.harness.core.env.EnvConfig;
+import com.harness.core.env.EnvKey;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

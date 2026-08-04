@@ -2,9 +2,12 @@ package com.harness.agent;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.harness.ai.model.ChatModelProvider;
-import com.harness.ai.react.ReActEngine;
+import com.harness.react.ReActLoop;
+import com.harness.react.ReActLoopFactory;
+import com.harness.react.ReActRequest;
+import com.harness.react.ReActResult;
 import com.harness.core.model.*;
+import com.harness.core.runtime.RunTrace;
 import com.harness.tool.ToolExecutor;
 import com.harness.tool.ToolRegistry;
 import com.harness.tool.confirmation.ConfirmationManager;
@@ -35,12 +38,13 @@ public class ProjectDiscoveryService {
 
     private static final Logger log = LoggerFactory.getLogger(ProjectDiscoveryService.class);
 
-    private final ChatModelProvider chatModelProvider;
+    private final ReActLoopFactory reActLoopFactory;
     private final ConfirmationManager confirmationManager;
 
-    public ProjectDiscoveryService(ChatModelProvider chatModelProvider,
+    public ProjectDiscoveryService(ReActLoopFactory reActLoopFactory,
                                    ConfirmationManager confirmationManager) {
-        this.chatModelProvider = chatModelProvider;
+        this.reActLoopFactory = java.util.Objects.requireNonNull(
+                reActLoopFactory, "reActLoopFactory");
         this.confirmationManager = confirmationManager;
     }
 
@@ -93,20 +97,24 @@ public class ProjectDiscoveryService {
         discoveryRegistry.register(new ReadClassHierarchyTool(sourceRoot));
         ToolExecutor discoveryExecutor = new ToolExecutor(confirmationManager);
 
-        // Create ReActEngine with discovery tools
-        ReActEngine engine = new ReActEngine(
-                chatModelProvider, discoveryRegistry.snapshot(), discoveryExecutor, null, null);
+        ReActLoop reActLoop = reActLoopFactory.create(
+                discoveryRegistry.snapshot(), discoveryExecutor);
 
         String systemPrompt = buildDiscoveryPrompt(sourceRoot);
         String userMessage = "请扫描此项目，发现所有 REST API 接口并构建完整的参数 JSON Schema。";
 
-        AgentTrace.Builder traceBuilder = AgentTrace.builder();
         CancellationToken cancellationToken = new CancellationToken();
 
         try {
-            ReActEngine.ReActResult result = engine.execute(
-                    systemPrompt, userMessage, List.of(),
-                    traceBuilder, null, cancellationToken, null);
+            ReActResult result = reActLoop.execute(new ReActRequest(
+                    systemPrompt,
+                    userMessage,
+                    List.of(),
+                    RunTrace.noop(),
+                    null,
+                    cancellationToken,
+                    null,
+                    null));
 
             List<ApiEndpoint> endpoints = parseEndpointsFromOutput(result.output(), sourceRoot, baseUrl);
             String projectDescription = extractProjectDescription(result.output());

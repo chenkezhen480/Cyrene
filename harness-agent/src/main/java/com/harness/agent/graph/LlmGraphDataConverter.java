@@ -3,7 +3,7 @@ package com.harness.agent.graph;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.harness.ai.model.ChatModelProvider;
+import com.harness.provider.ChatModelProvider;
 import com.harness.graph.build.CanonicalJsonGraphDataConverter;
 import com.harness.graph.build.GraphBuildRequest;
 import com.harness.graph.build.GraphBuildSourceType;

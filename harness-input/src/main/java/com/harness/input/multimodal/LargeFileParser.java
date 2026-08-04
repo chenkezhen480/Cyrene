@@ -1,10 +1,10 @@
 package com.harness.input.multimodal;
 
-import com.harness.ai.model.ChatModelProvider;
-import com.harness.ai.model.VisionModelProvider;
-import com.harness.ai.model.VoiceModelProvider;
-import com.harness.env.EnvConfig;
-import com.harness.env.EnvKey;
+import com.harness.provider.ChatModelProvider;
+import com.harness.provider.VisionModelProvider;
+import com.harness.provider.VoiceModelProvider;
+import com.harness.core.env.EnvConfig;
+import com.harness.core.env.EnvKey;
 import dev.langchain4j.model.chat.ChatModel;
 import com.harness.core.model.ParsedContent;
 import com.harness.input.multimodal.impl.TextExtractorRegistry;

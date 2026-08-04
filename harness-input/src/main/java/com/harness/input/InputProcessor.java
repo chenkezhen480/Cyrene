@@ -1,8 +1,5 @@
 package com.harness.input;
 
-import com.harness.ai.model.ChatModelProvider;
-import com.harness.ai.model.VisionModelProvider;
-import com.harness.ai.model.VoiceModelProvider;
 import com.harness.core.model.AgentMessage;
 import com.harness.core.model.ParsedContent;
 import com.harness.input.auth.Authenticator;
@@ -17,20 +14,15 @@ import java.util.List;
  * Layer 1: Input Processing.
  * Validates auth, parses multimodal content, produces a unified AgentMessage.
  */
-public class InputProcessor {
+public class InputProcessor implements InputStage {
 
     private static final Logger log = LoggerFactory.getLogger(InputProcessor.class);
     private final Authenticator authenticator;
     private final MultimodalParser multimodalParser;
 
-    public InputProcessor() {
-        this.authenticator = new Authenticator();
-        this.multimodalParser = new MultimodalParser();
-    }
-
-    public InputProcessor(ChatModelProvider chatProvider, VisionModelProvider visionProvider, VoiceModelProvider voiceProvider) {
-        this.authenticator = new Authenticator();
-        this.multimodalParser = new MultimodalParser(chatProvider, visionProvider, voiceProvider);
+    public InputProcessor(Authenticator authenticator, MultimodalParser multimodalParser) {
+        this.authenticator = java.util.Objects.requireNonNull(authenticator, "authenticator");
+        this.multimodalParser = java.util.Objects.requireNonNull(multimodalParser, "multimodalParser");
     }
 
     /**
@@ -41,7 +33,7 @@ public class InputProcessor {
      * @param attachments raw attachments (optional)
      * @return parsed message + userId
      */
-    public InputResult process(String token, String text, List<MultimodalParser.RawAttachment> attachments) {
+    public ProcessedInput process(String token, String text, List<MultimodalParser.RawAttachment> attachments) {
         return process(token, text, attachments, null);
     }
 
@@ -53,8 +45,9 @@ public class InputProcessor {
      * @param attachments   raw attachments (optional)
      * @param contextUserId userId from request context (used when auth mode is none)
      */
-    public InputResult process(String token, String text, List<MultimodalParser.RawAttachment> attachments,
-                               String contextUserId) {
+    @Override
+    public ProcessedInput process(String token, String text, List<MultimodalParser.RawAttachment> attachments,
+                                  String contextUserId) {
         int attachCount = attachments != null ? attachments.size() : 0;
         log.debug("[L1-Input] Processing: textLen={}, attachments={}", text != null ? text.length() : 0, attachCount);
 
@@ -90,12 +83,6 @@ public class InputProcessor {
         AgentMessage message = new AgentMessage(AgentMessage.Role.USER, text, agentAttachments, null, null);
 
         log.debug("[L1-Input] Done: userId={}, attachments={}, parsedContents={}", userId, agentAttachments.size(), parsedContents.size());
-        return new InputResult(userId, message, parsedContents);
-    }
-
-    public record InputResult(String userId, AgentMessage message, List<ParsedContent> parsedContents) {
-        public InputResult(String userId, AgentMessage message) {
-            this(userId, message, Collections.emptyList());
-        }
+        return new ProcessedInput(userId, message, parsedContents);
     }
 }

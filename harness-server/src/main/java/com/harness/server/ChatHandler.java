@@ -2,10 +2,10 @@ package com.harness.server;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.harness.agent.AgentOrchestrator;
-import com.harness.ai.model.impl.CancellableHttpClient;
+import com.harness.provider.impl.CancellableHttpClient;
 import com.harness.core.model.*;
-import com.harness.env.EnvConfig;
-import com.harness.env.EnvKey;
+import com.harness.core.env.EnvConfig;
+import com.harness.core.env.EnvKey;
 import com.harness.input.auth.JwtUtil;
 import com.harness.input.multimodal.MultimodalParser;
 import com.harness.server.api.ApiErrorCode;

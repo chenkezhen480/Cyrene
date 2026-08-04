@@ -17,10 +17,6 @@
     <dependencies>
         <dependency>
             <groupId>com.harness</groupId>
-            <artifactId>harness-env</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>com.harness</groupId>
             <artifactId>harness-core</artifactId>
         </dependency>
         <dependency>
@@ -29,11 +25,11 @@
         </dependency>
         <dependency>
             <groupId>com.harness</groupId>
-            <artifactId>harness-preprocess</artifactId>
+            <artifactId>harness-provider</artifactId>
         </dependency>
         <dependency>
             <groupId>com.harness</groupId>
-            <artifactId>harness-ai</artifactId>
+            <artifactId>harness-react</artifactId>
         </dependency>
         <dependency>
             <groupId>com.harness</groupId>
@@ -41,11 +37,7 @@
         </dependency>
         <dependency>
             <groupId>com.harness</groupId>
-            <artifactId>harness-audit</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>com.harness</groupId>
-            <artifactId>harness-graph</artifactId>
+            <artifactId>harness-trace</artifactId>
         </dependency>
         <dependency>
             <groupId>dev.langchain4j</groupId>

@@ -1,6 +1,6 @@
 package com.harness.server;
 
-import com.harness.ai.model.VoiceModelProvider;
+import com.harness.provider.VoiceModelProvider;
 import io.javalin.http.Context;
 
 /**

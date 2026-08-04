@@ -4,8 +4,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.harness.agent.AgentOrchestrator;
 import com.harness.agent.ProjectDiscoveryService;
 import com.harness.core.model.ProjectApiConfig;
-import com.harness.env.EnvConfig;
-import com.harness.env.EnvKey;
+import com.harness.core.env.EnvConfig;
+import com.harness.core.env.EnvKey;
 import com.harness.server.api.ApiErrorCode;
 import com.harness.server.api.ApiResponses;
 import io.javalin.http.Context;
@@ -38,7 +38,7 @@ public class ProjectDiscoveryHandler {
         this.mapper = mapper;
         this.agent = agent;
         this.discoveryService = new ProjectDiscoveryService(
-                agent.chatModel(), agent.confirmationManager());
+                agent.reActLoopFactory(), agent.confirmationManager());
     }
 
     /**

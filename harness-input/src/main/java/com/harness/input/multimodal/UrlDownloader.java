@@ -1,8 +1,8 @@
 package com.harness.input.multimodal;
 
 import com.harness.core.exception.AgentException;
-import com.harness.env.EnvConfig;
-import com.harness.env.EnvKey;
+import com.harness.core.env.EnvConfig;
+import com.harness.core.env.EnvKey;
 import com.harness.input.multimodal.impl.TextExtractorRegistry;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;

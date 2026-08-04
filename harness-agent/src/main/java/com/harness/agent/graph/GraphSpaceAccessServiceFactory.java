@@ -1,8 +1,8 @@
 package com.harness.agent.graph;
 
-import com.harness.env.EnvConfig;
-import com.harness.env.EnvKey;
-import com.harness.env.MysqlConnectionPool;
+import com.harness.core.env.EnvConfig;
+import com.harness.core.env.EnvKey;
+import com.harness.core.env.MysqlConnectionPool;
 import com.harness.graph.store.KnowledgeGraphStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

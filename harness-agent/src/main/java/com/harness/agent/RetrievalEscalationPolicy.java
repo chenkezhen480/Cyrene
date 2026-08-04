@@ -1,9 +1,9 @@
 package com.harness.agent;
 
 import com.harness.core.model.ToolResult;
-import com.harness.env.EnvConfig;
-import com.harness.env.EnvKey;
-import com.harness.preprocess.ContextBuilder;
+import com.harness.core.env.EnvConfig;
+import com.harness.core.env.EnvKey;
+import com.harness.agent.context.ContextBuilder;
 
 /**
  * Decides whether one implicit query-rewrite escalation is justified.

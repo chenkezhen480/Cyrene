@@ -1,7 +1,7 @@
 package com.harness.agent.voice;
 
-import com.harness.env.EnvConfig;
-import com.harness.env.EnvKey;
+import com.harness.core.env.EnvConfig;
+import com.harness.core.env.EnvKey;
 
 /**
  * Validated per-process settings for phrase-level streamed voice replies.

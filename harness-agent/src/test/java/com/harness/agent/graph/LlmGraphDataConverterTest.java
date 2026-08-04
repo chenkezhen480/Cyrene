@@ -1,7 +1,7 @@
 package com.harness.agent.graph;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.harness.ai.model.ChatModelProvider;
+import com.harness.provider.ChatModelProvider;
 import com.harness.core.model.PageInfo;
 import com.harness.core.model.PageResponse;
 import com.harness.graph.build.GraphBuildRequest;

@@ -1,9 +1,9 @@
 package com.harness.server;
 
-import com.harness.ai.model.VoiceCapabilities;
-import com.harness.ai.model.VoiceModelProvider;
-import com.harness.env.EnvConfig;
-import com.harness.env.EnvKey;
+import com.harness.provider.VoiceCapabilities;
+import com.harness.provider.VoiceModelProvider;
+import com.harness.core.env.EnvConfig;
+import com.harness.core.env.EnvKey;
 import com.harness.server.api.ApiErrorCode;
 import com.harness.server.api.ApiResponses;
 import io.javalin.http.Context;

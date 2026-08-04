@@ -13,14 +13,12 @@
     <description>基于 Cyrene 架构的通用开源 AI Agent 框架</description>
 
     <modules>
-        <module>harness-env</module>
         <module>harness-core</module>
         <module>harness-input</module>
-        <module>harness-preprocess</module>
-        <module>harness-graph</module>
-        <module>harness-ai</module>
+        <module>harness-provider</module>
         <module>harness-tool</module>
-        <module>harness-audit</module>
+        <module>harness-react</module>
+        <module>harness-trace</module>
         <module>harness-agent</module>
         <module>harness-server</module>
     </modules>
@@ -29,7 +27,7 @@
         <java.version>21</java.version>
         <maven.compiler.source>21</maven.compiler.source>
         <maven.compiler.target>21</maven.compiler.target>
-        <revision>0.5.8</revision>
+        <revision>0.5.9</revision>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 
         <langchain4j.version>1.15.0</langchain4j.version>
@@ -71,11 +69,6 @@
             <!-- Internal modules -->
             <dependency>
                 <groupId>com.harness</groupId>
-                <artifactId>harness-env</artifactId>
-                <version>${project.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>com.harness</groupId>
                 <artifactId>harness-core</artifactId>
                 <version>${project.version}</version>
             </dependency>
@@ -86,17 +79,12 @@
             </dependency>
             <dependency>
                 <groupId>com.harness</groupId>
-                <artifactId>harness-preprocess</artifactId>
+                <artifactId>harness-provider</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
                 <groupId>com.harness</groupId>
-                <artifactId>harness-graph</artifactId>
-                <version>${project.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>com.harness</groupId>
-                <artifactId>harness-ai</artifactId>
+                <artifactId>harness-react</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
@@ -106,7 +94,7 @@
             </dependency>
             <dependency>
                 <groupId>com.harness</groupId>
-                <artifactId>harness-audit</artifactId>
+                <artifactId>harness-trace</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>

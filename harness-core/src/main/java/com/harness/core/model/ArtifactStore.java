@@ -5,7 +5,7 @@ import java.util.Optional;
 
 /**
  * Interface for artifact metadata persistence and retrieval.
- * Implementation lives in harness-preprocess (FilesystemArtifactStore).
+ * Filesystem-backed implementation lives in harness-tool.
  */
 public interface ArtifactStore {
 

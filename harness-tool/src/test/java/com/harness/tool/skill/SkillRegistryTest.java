@@ -2,7 +2,7 @@ package com.harness.tool.skill;
 
 import com.harness.core.model.Skill;
 import com.harness.core.model.SkillIndex;
-import com.harness.env.EnvConfig;
+import com.harness.core.env.EnvConfig;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 

@@ -1,7 +1,7 @@
 package com.harness.input.auth;
 
-import com.harness.env.EnvConfig;
-import com.harness.env.EnvKey;
+import com.harness.core.env.EnvConfig;
+import com.harness.core.env.EnvKey;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -30,9 +30,11 @@ public class Authenticator {
      * @throws com.harness.core.exception.AgentException if auth fails
      */
     public String authenticate(String token) {
+        if ("none".equals(mode)) {
+            return "anonymous";
+        }
         log.debug("[L1-Auth] Authenticating with mode={}", mode);
         return switch (mode) {
-            case "none" -> "anonymous";
             case "token" -> authenticateToken(token);
             case "jwt" -> authenticateJwt(token);
             default -> throw new IllegalStateException("Unknown auth mode: " + mode);

@@ -1,7 +1,7 @@
 package com.harness.agent;
 
 import com.harness.core.model.ToolResult;
-import com.harness.preprocess.ContextBuilder;
+import com.harness.agent.context.ContextBuilder;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;

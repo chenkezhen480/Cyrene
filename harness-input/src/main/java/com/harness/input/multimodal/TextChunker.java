@@ -1,7 +1,7 @@
 package com.harness.input.multimodal;
 
-import com.harness.env.EnvConfig;
-import com.harness.env.EnvKey;
+import com.harness.core.env.EnvConfig;
+import com.harness.core.env.EnvKey;
 
 import java.util.ArrayList;
 import java.util.List;

@@ -1,10 +1,10 @@
 package com.harness.server;
 
-import com.harness.audit.store.TraceStore;
+import com.harness.trace.store.TraceStore;
 import com.harness.core.model.AgentTrace;
 import com.harness.core.model.RiskLevel;
-import com.harness.preprocess.knowledge.IngestResult;
-import com.harness.preprocess.knowledge.KnowledgeIngestService;
+import com.harness.tool.knowledge.IngestResult;
+import com.harness.tool.knowledge.KnowledgeIngestService;
 import com.harness.server.api.ApiErrorCode;
 import com.harness.server.api.ApiResponses;
 import io.javalin.http.Context;

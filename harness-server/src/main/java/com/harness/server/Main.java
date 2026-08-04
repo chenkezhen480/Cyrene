@@ -3,16 +3,16 @@ package com.harness.server;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.harness.agent.AgentOrchestrator;
-import com.harness.audit.store.AuditCleanupScheduler;
-import com.harness.audit.store.TraceStore;
+import com.harness.trace.store.AuditCleanupScheduler;
+import com.harness.trace.store.TraceStore;
 import com.harness.core.model.AgentTrace;
 import com.harness.core.model.CancellationToken;
-import com.harness.env.EnvConfig;
-import com.harness.env.EnvKey;
+import com.harness.core.env.EnvConfig;
+import com.harness.core.env.EnvKey;
 import com.harness.graph.build.GraphBuildService;
 import com.harness.agent.graph.LlmGraphDataConverter;
 import com.harness.graph.build.GraphDataConverterRegistry;
-import com.harness.preprocess.knowledge.KnowledgeIngestService;
+import com.harness.tool.knowledge.KnowledgeIngestService;
 import com.harness.server.api.ApiErrorCode;
 import com.harness.server.api.ApiResponses;
 import com.harness.server.log.LogStorageService;
@@ -62,7 +62,7 @@ public class Main {
     public static void main(String[] args) {
         // Use our cancellable HTTP client (supports request cancellation for token savings)
         System.setProperty("langchain4j.http.clientBuilderFactory",
-                "com.harness.ai.model.impl.CancellableHttpClient$Factory");
+                "com.harness.provider.impl.CancellableHttpClient$Factory");
 
         EnvConfig.init(Collections.emptyMap());
 

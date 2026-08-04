@@ -1,9 +1,9 @@
 package com.harness.agent.voice;
 
-import com.harness.ai.model.AudioChunk;
-import com.harness.ai.model.AudioStreamCallback;
-import com.harness.ai.model.SynthesisRequest;
-import com.harness.ai.model.VoiceModelProvider;
+import com.harness.provider.AudioChunk;
+import com.harness.provider.AudioStreamCallback;
+import com.harness.provider.SynthesisRequest;
+import com.harness.provider.VoiceModelProvider;
 import com.harness.core.model.CancellationToken;
 import com.harness.core.model.StreamCallback;
 import com.harness.core.model.StreamEvent;

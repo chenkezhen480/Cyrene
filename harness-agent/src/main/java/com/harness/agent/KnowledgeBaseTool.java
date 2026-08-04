@@ -2,14 +2,14 @@ package com.harness.agent;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.harness.ai.model.ChatModelProvider;
-import com.harness.ai.model.EmbeddingModelProvider;
-import com.harness.ai.model.RerankModelProvider;
+import com.harness.provider.ChatModelProvider;
+import com.harness.provider.EmbeddingModelProvider;
+import com.harness.provider.RerankModelProvider;
 import com.harness.core.exception.ToolExecutionException;
 import com.harness.core.model.ReActStep;
 import com.harness.core.model.ToolResult;
 import com.harness.core.model.ToolSpec;
-import com.harness.preprocess.ContextBuilder;
+import com.harness.agent.context.ContextBuilder;
 import com.harness.tool.Tool;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.chat.ChatModel;

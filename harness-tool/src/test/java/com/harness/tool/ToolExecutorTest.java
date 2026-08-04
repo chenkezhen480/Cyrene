@@ -7,7 +7,7 @@ import com.harness.core.exception.ToolExecutionException;
 import com.harness.core.model.ToolCall;
 import com.harness.core.model.ToolResult;
 import com.harness.core.model.ToolSpec;
-import com.harness.env.EnvConfig;
+import com.harness.core.env.EnvConfig;
 import com.harness.tool.confirmation.ConfirmationManager;
 import com.harness.tool.confirmation.ConfirmationDecision;
 import com.harness.tool.confirmation.ConfirmationExecutionContext;

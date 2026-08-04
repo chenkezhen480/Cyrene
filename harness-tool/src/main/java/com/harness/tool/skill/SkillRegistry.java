@@ -2,8 +2,8 @@ package com.harness.tool.skill;
 
 import com.harness.core.model.Skill;
 import com.harness.core.model.SkillIndex;
-import com.harness.env.EnvConfig;
-import com.harness.env.EnvKey;
+import com.harness.core.env.EnvConfig;
+import com.harness.core.env.EnvKey;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

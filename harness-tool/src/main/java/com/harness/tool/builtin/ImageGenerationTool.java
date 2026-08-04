@@ -9,8 +9,8 @@ import com.harness.core.model.ToolResult;
 import com.harness.core.model.ToolSpec;
 import com.harness.tool.ArtifactProducingTool;
 import com.harness.tool.CancellableTool;
-import com.harness.env.EnvConfig;
-import com.harness.env.EnvKey;
+import com.harness.core.env.EnvConfig;
+import com.harness.core.env.EnvKey;
 import okhttp3.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -282,7 +282,7 @@ public class ImageGenerationTool implements ArtifactProducingTool, CancellableTo
         if (ref.startsWith("/files/")) {
             String relativePath = ref.substring("/files/".length());
             String uploadDir = EnvConfig.get().getString(
-                    com.harness.env.EnvKey.KNOWLEDGE_UPLOAD_DIR, "./knowledge-uploads");
+                    com.harness.core.env.EnvKey.KNOWLEDGE_UPLOAD_DIR, "./knowledge-uploads");
             java.nio.file.Path filePath = java.nio.file.Path.of(uploadDir, relativePath);
             if (java.nio.file.Files.exists(filePath)) {
                 log.debug("Loading reference image from local file: {}", filePath);

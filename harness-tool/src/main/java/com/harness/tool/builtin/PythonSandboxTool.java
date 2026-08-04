@@ -8,8 +8,8 @@ import com.harness.core.model.Artifact;
 import com.harness.core.model.ToolResult;
 import com.harness.core.model.ToolSpec;
 import com.harness.tool.ArtifactProducingTool;
-import com.harness.env.EnvConfig;
-import com.harness.env.EnvKey;
+import com.harness.core.env.EnvConfig;
+import com.harness.core.env.EnvKey;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -41,7 +41,7 @@ public class PythonSandboxTool implements ArtifactProducingTool {
 
     /**
      * Callback interface for storing artifacts.
-     * Avoids direct dependency on harness-preprocess module.
+     * Keeps artifact lookup behind the core store contract.
      */
     @FunctionalInterface
     public interface ArtifactStorer {

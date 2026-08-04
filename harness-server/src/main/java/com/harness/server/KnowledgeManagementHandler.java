@@ -1,7 +1,7 @@
 package com.harness.server;
 
-import com.harness.preprocess.knowledge.FileStorageService;
-import com.harness.preprocess.rag.VectorStore;
+import com.harness.tool.knowledge.FileStorageService;
+import com.harness.tool.rag.VectorStore;
 import com.harness.server.api.ApiErrorCode;
 import com.harness.server.api.ApiResponses;
 import io.javalin.http.Context;

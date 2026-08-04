@@ -1,16 +1,15 @@
 package com.harness.agent;
 
-import com.harness.ai.model.ChatModelProvider;
-import com.harness.ai.model.VisionModelProvider;
-import com.harness.ai.model.VoiceModelProvider;
-import com.harness.ai.react.ReActEngine;
-import com.harness.audit.TraceCollector;
-import com.harness.audit.store.TraceStore;
-import com.harness.core.model.AgentTrace;
+import com.harness.react.ReActLoop;
+import com.harness.react.ReActLoopFactory;
+import com.harness.react.ReActRequest;
+import com.harness.react.ReActResult;
 import com.harness.core.model.CancellationToken;
 import com.harness.core.model.RiskLevel;
-import com.harness.env.EnvConfig;
-import com.harness.env.EnvKey;
+import com.harness.core.runtime.RunTrace;
+import com.harness.core.runtime.RunTraceFactory;
+import com.harness.core.env.EnvConfig;
+import com.harness.core.env.EnvKey;
 import com.harness.tool.RunToolCatalog;
 import com.harness.tool.HttpApiTool;
 import com.harness.tool.ToolExecutor;
@@ -46,11 +45,9 @@ public class SubAgentManager {
             "cancel_subagents"
     );
 
-    private final ChatModelProvider chatModelProvider;
-    private final VisionModelProvider visionModelProvider;
-    private final VoiceModelProvider voiceModelProvider;
+    private final ReActLoopFactory reActLoopFactory;
+    private final RunTraceFactory traceFactory;
     private final ToolExecutor toolExecutor;
-    private final TraceStore traceStore;
 
     // Session resume support
     private final SessionInbox sessionInbox;
@@ -74,18 +71,14 @@ public class SubAgentManager {
     // Counter for active tasks (for monitoring)
     private final AtomicInteger activeTasks = new AtomicInteger(0);
 
-    public SubAgentManager(ChatModelProvider chatModelProvider,
-                           VisionModelProvider visionModelProvider,
-                           VoiceModelProvider voiceModelProvider,
+    public SubAgentManager(ReActLoopFactory reActLoopFactory,
+                           RunTraceFactory traceFactory,
                            ToolExecutor toolExecutor,
-                           TraceStore traceStore,
                            SessionInbox sessionInbox,
                            SessionResumeDispatcher resumeDispatcher) {
-        this.chatModelProvider = chatModelProvider;
-        this.visionModelProvider = visionModelProvider;
-        this.voiceModelProvider = voiceModelProvider;
+        this.reActLoopFactory = java.util.Objects.requireNonNull(reActLoopFactory, "reActLoopFactory");
+        this.traceFactory = java.util.Objects.requireNonNull(traceFactory, "traceFactory");
         this.toolExecutor = toolExecutor;
-        this.traceStore = traceStore;
         this.sessionInbox = sessionInbox;
         this.resumeDispatcher = resumeDispatcher;
 
@@ -260,23 +253,31 @@ public class SubAgentManager {
                 RunToolCatalog subAgentToolCatalog =
                         runContext.toolCatalog().allowing(allowedTools);
 
-                // Each sub-agent gets its own ReActEngine with task-specific tools
-                ReActEngine engine = new ReActEngine(chatModelProvider, subAgentToolCatalog, toolExecutor,
-                        visionModelProvider, voiceModelProvider);
+                ReActLoop reActLoop = reActLoopFactory.create(subAgentToolCatalog, toolExecutor);
 
                 // Build system prompt from LLM-generated persona + systemPrompt + context
                 String systemPrompt = buildSubAgentPrompt(record.task());
-                AgentTrace.Builder traceBuilder = AgentTrace.builder();
+                RunTrace trace = traceFactory.start();
+                trace.setSessionId(runContext.sessionId());
+                trace.recordInput(null, record.task().description(), List.of());
+                trace.recordLlmMeta("sub-agent", "sub-agent");
 
                 // Execute with task-specific cancellation token
-                ReActEngine.ReActResult result = engine.execute(systemPrompt, record.task().description(),
-                        List.of(), traceBuilder, null, taskToken, null);
+                ReActResult result = reActLoop.execute(new ReActRequest(
+                        systemPrompt,
+                        record.task().description(),
+                        List.of(),
+                        trace,
+                        null,
+                        taskToken,
+                        null,
+                        null));
 
                 long duration = System.currentTimeMillis() - start;
                 log.info("[SubAgentManager] Task {} completed in {}ms, steps={}", taskId, duration, result.steps().size());
 
                 // Persist sub-agent trace and record steps in parent trace
-                String subTraceId = saveSubAgentTrace(traceBuilder, record, runContext, result, duration);
+                String subTraceId = saveSubAgentTrace(trace, record, runContext, result, duration);
 
                 SubAgentResult subResult = SubAgentResult.success(taskId, result.output(), result.steps(), duration, subTraceId);
                 record.succeed(subResult);
@@ -435,24 +436,18 @@ public class SubAgentManager {
      *
      * @return the sub-agent's trace ID, or null if persistence failed
      */
-    private String saveSubAgentTrace(AgentTrace.Builder traceBuilder, SubAgentTaskRecord record,
-                                     AgentRunContext runContext, ReActEngine.ReActResult result, long durationMs) {
-        if (traceStore == null) return null;
+    private String saveSubAgentTrace(RunTrace trace, SubAgentTaskRecord record,
+                                     AgentRunContext runContext, ReActResult result, long durationMs) {
         try {
-            traceBuilder
-                    .sessionId(runContext.sessionId())
-                    .inputText(record.task().description())
-                    .llmModel(chatModelProvider.modelName())
-                    .promptVersion("sub-agent")
-                    .steps(result.steps())
-                    .finalOutput(result.output())
-                    .riskLevel(result.steps().stream()
-                            .flatMap(s -> s.toolResults().stream())
-                            .anyMatch(r -> !r.success()) ? RiskLevel.MEDIUM : RiskLevel.LOW)
-                    .totalDurationMs(durationMs);
+            result.steps().forEach(trace::addStep);
+            RiskLevel risk = result.steps().stream()
+                    .flatMap(step -> step.toolResults().stream())
+                    .anyMatch(toolResult -> !toolResult.success())
+                    ? RiskLevel.MEDIUM : RiskLevel.LOW;
+            trace.recordOutput(result.output(), risk, true);
 
             // Link to parent trace via metadata
-            java.util.Map<String, String> meta = new java.util.HashMap<>(traceBuilder.build().metadata());
+            java.util.Map<String, String> meta = new java.util.HashMap<>();
             meta.put("sub_agent_task_id", record.taskId());
             meta.put("parent_run_id", runContext.runId());
             if (runContext.parentTraceId() != null) {
@@ -460,10 +455,10 @@ public class SubAgentManager {
             }
             meta.put("sub_agent_persona", record.task().persona() != null ? record.task().persona() : "");
             meta.put("sub_agent_tools", String.join(",", record.task().tools()));
-            traceBuilder.metadata(meta);
+            meta.put("sub_agent_duration_ms", String.valueOf(durationMs));
+            trace.putMetadata(meta);
 
-            AgentTrace subTrace = traceBuilder.build();
-            traceStore.save(subTrace);
+            var subTrace = trace.finish();
             log.info("[SubAgentManager] Sub-agent trace saved: taskId={}, traceId={}, steps={}",
                     record.taskId(), subTrace.traceId(), subTrace.steps().size());
             return subTrace.traceId();
