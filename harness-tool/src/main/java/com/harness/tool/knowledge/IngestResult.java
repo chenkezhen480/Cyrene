@@ -8,5 +8,7 @@ public record IngestResult(
         String storedFilePath,
         long ingestDurationMs,
         int repairedBlockCount,
-        String repairModel
+        String repairModel,
+        int ocrBlockCount,
+        String ocrModel
 ) {}

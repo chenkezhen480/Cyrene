@@ -86,6 +86,10 @@ public class KnowledgeUploadHandler {
                 if (!result.repairModel().isBlank()) {
                     meta.put("repair_model", result.repairModel());
                 }
+                meta.put("ocr_block_count", String.valueOf(result.ocrBlockCount()));
+                if (!result.ocrModel().isBlank()) {
+                    meta.put("ocr_model", result.ocrModel());
+                }
 
                 AgentTrace trace = AgentTrace.builder()
                         .inputText("knowledge upload: " + fileName)
@@ -106,6 +110,8 @@ public class KnowledgeUploadHandler {
                     "embeddingDimension", result.embeddingDimension(),
                     "repairedBlockCount", result.repairedBlockCount(),
                     "repairModel", result.repairModel(),
+                    "ocrBlockCount", result.ocrBlockCount(),
+                    "ocrModel", result.ocrModel(),
                     "storedPath", result.storedFilePath(),
                     "ingestDurationMs", result.ingestDurationMs()
             ));

@@ -52,3 +52,13 @@ docker/neo4j/logs/*
 !docker/neo4j/logs/.gitkeep
 docker/neo4j/schemas/*
 !docker/neo4j/schemas/.gitkeep
+
+# Milvus runtime data (etcd + MinIO + standalone)
+docker/milvus/etcd/*
+!docker/milvus/etcd/.gitkeep
+docker/milvus/minio/*
+!docker/milvus/minio/.gitkeep
+docker/milvus/minio-data/*
+!docker/milvus/minio-data/.gitkeep
+docker/milvus/standalone/*
+!docker/milvus/standalone/.gitkeep

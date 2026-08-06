@@ -74,7 +74,10 @@ public class KnowledgeIngestService {
                 fileData, fileName, effectiveMimeType);
         String rawText = resolvedDocument.text();
         if (rawText == null || rawText.isBlank()) {
-            throw new IllegalArgumentException("No text content extracted from file: " + fileName);
+            throw new IllegalArgumentException("No text content extracted from file: " + fileName
+                    + (resolvedDocument.ocrBlockCount() == 0
+                            ? " (scanned PDF with no readable content)"
+                            : ""));
         }
 
         // Step 2: Split into chunks, then merge small ones
@@ -113,6 +116,10 @@ public class KnowledgeIngestService {
             if (!resolvedDocument.repairModel().isBlank()) {
                 metadata.put("repair_model", resolvedDocument.repairModel());
             }
+            metadata.put("ocr_block_count", resolvedDocument.ocrBlockCount());
+            if (!resolvedDocument.ocrModel().isBlank()) {
+                metadata.put("ocr_model", resolvedDocument.ocrModel());
+            }
 
             docs.add(new VectorStore.Document(
                     null,
@@ -144,7 +151,9 @@ public class KnowledgeIngestService {
                 storedPath,
                 duration,
                 resolvedDocument.repairedBlockCount(),
-                resolvedDocument.repairModel()
+                resolvedDocument.repairModel(),
+                resolvedDocument.ocrBlockCount(),
+                resolvedDocument.ocrModel()
         );
     }
 
