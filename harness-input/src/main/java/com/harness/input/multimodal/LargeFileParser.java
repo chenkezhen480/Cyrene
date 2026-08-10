@@ -1,13 +1,11 @@
 package com.harness.input.multimodal;
 
 import com.harness.provider.ChatModelProvider;
-import com.harness.provider.VisionModelProvider;
-import com.harness.provider.VoiceModelProvider;
 import com.harness.core.env.EnvConfig;
 import com.harness.core.env.EnvKey;
+import com.harness.core.exception.AgentException;
 import dev.langchain4j.model.chat.ChatModel;
 import com.harness.core.model.ParsedContent;
-import com.harness.input.multimodal.impl.TextExtractorRegistry;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.chat.request.ChatRequest;
 import org.slf4j.Logger;
@@ -18,13 +16,14 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
  * Large file parser using merge-then-summarize approach.
  * <ol>
- *   <li>Extract text via TextExtractorRegistry (supports PDF, DOCX, XLSX, etc.)</li>
+ *   <li>Receive canonical Markdown produced by the shared document converter</li>
  *   <li>Split by semantic boundaries via TextChunker</li>
  *   <li>Greedily merge consecutive chunks until reaching contextWindow × ratio</li>
  *   <li>Summarize each merged block (parallel, bounded by concurrency)</li>
@@ -37,13 +36,11 @@ public class LargeFileParser {
     private static final String SUMMARIZE_PROMPT = "请对以下文本进行摘要，保留关键信息，去除冗余内容：";
     private static final String MERGE_PROMPT = "请将以下多个摘要合并为一份连贯的最终摘要，保留所有关键信息：";
 
-    private final ChatModelProvider chatProvider;
     private final ChatModel noThinkingModel;
     private final int blockTokenBudget;
     private final int summaryConcurrency;
 
-    public LargeFileParser(ChatModelProvider chatProvider, VisionModelProvider visionProvider, VoiceModelProvider voiceProvider) {
-        this.chatProvider = chatProvider;
+    public LargeFileParser(ChatModelProvider chatProvider) {
         this.noThinkingModel = chatProvider.chatModel();
 
         EnvConfig cfg = EnvConfig.get();
@@ -56,14 +53,19 @@ public class LargeFileParser {
                 chatProvider.modelName(), contextWindow, ratio, blockTokenBudget, summaryConcurrency);
     }
 
-    public ParsedContent parse(byte[] fileData, String fileName, String mimeType) {
-        log.debug("Large file parsing: file={}, size={}KB, mimeType={}", fileName, fileData.length / 1024, mimeType);
+    public ParsedContent summarizeMarkdown(
+            String markdown,
+            String fileName,
+            long fileSizeBytes
+    ) {
+        if (markdown == null || markdown.isBlank()) {
+            throw new IllegalArgumentException("markdown must not be blank");
+        }
+        log.debug("Large Markdown summarization: file={}, size={}KB",
+                fileName, fileSizeBytes / 1024);
 
-        // Step 1: Extract raw text
-        String rawText = TextExtractorRegistry.extract(fileData, fileName, mimeType);
-
-        // Step 2: Semantic splitting
-        List<String> chunks = TextChunker.split(rawText);
+        // Step 1: Semantic splitting of the already converted Markdown
+        List<String> chunks = TextChunker.split(markdown);
 
 
         // Step 3: Greedy merge into blocks
@@ -83,7 +85,8 @@ public class LargeFileParser {
 
         Map<String, Object> metadata = new HashMap<>();
         metadata.put("file_name", fileName);
-        metadata.put("file_size_kb", fileData.length / 1024);
+        metadata.put("file_size_kb", fileSizeBytes / 1024);
+        metadata.put("source_format", "markdown");
         metadata.put("original_chunks", chunks.size());
         metadata.put("merged_blocks", blocks.size());
         metadata.put("summary_calls", summaries.size());
@@ -132,7 +135,15 @@ public class LargeFileParser {
                         () -> summarizeChunk(blocks.get(idx), idx + 1, blocks.size()),
                         executor));
             }
-            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+            try {
+                CompletableFuture.allOf(
+                        futures.toArray(new CompletableFuture[0])).join();
+            } catch (CompletionException e) {
+                if (e.getCause() instanceof RuntimeException runtimeException) {
+                    throw runtimeException;
+                }
+                throw new AgentException("Large document summarization failed", e);
+            }
 
             List<String> results = new ArrayList<>();
             for (CompletableFuture<String> f : futures) {
@@ -151,8 +162,9 @@ public class LargeFileParser {
                     .messages(UserMessage.from(prompt))
                     .build()).aiMessage().text();
         } catch (Exception e) {
-            log.warn("Failed to summarize block {}/{}: {}", index, total, e.getMessage());
-            return chunk;
+            throw new AgentException(
+                    "Failed to summarize document block " + index + "/" + total
+                            + ": " + e.getMessage(), e);
         }
     }
 
@@ -167,8 +179,8 @@ public class LargeFileParser {
                     .messages(UserMessage.from(prompt.toString()))
                     .build()).aiMessage().text();
         } catch (Exception e) {
-            log.warn("Failed to merge summaries: {}", e.getMessage());
-            return String.join("\n\n", summaries);
+            throw new AgentException(
+                    "Failed to merge document summaries: " + e.getMessage(), e);
         }
     }
 }

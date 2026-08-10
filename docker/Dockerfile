@@ -3,18 +3,16 @@
 FROM maven:3.9-eclipse-temurin-21 AS builder
 WORKDIR /build
 COPY pom.xml .
-# Download dependencies first (layer cache)
-RUN mvn dependency:go-offline -B
-COPY harness-env/pom.xml harness-env/
 COPY harness-core/pom.xml harness-core/
 COPY harness-input/pom.xml harness-input/
-COPY harness-preprocess/pom.xml harness-preprocess/
-COPY harness-ai/pom.xml harness-ai/
+COPY harness-provider/pom.xml harness-provider/
 COPY harness-tool/pom.xml harness-tool/
-COPY harness-audit/pom.xml harness-audit/
+COPY harness-react/pom.xml harness-react/
+COPY harness-trace/pom.xml harness-trace/
 COPY harness-agent/pom.xml harness-agent/
 COPY harness-server/pom.xml harness-server/
-RUN mvn dependency:go-offline -B || true
+# Download dependencies first so source-only changes reuse this layer.
+RUN mvn dependency:go-offline -B
 COPY . .
 RUN mvn clean package -DskipTests -B
 

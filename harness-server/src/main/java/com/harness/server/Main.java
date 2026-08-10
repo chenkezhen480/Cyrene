@@ -13,6 +13,7 @@ import com.harness.graph.build.GraphBuildService;
 import com.harness.agent.graph.LlmGraphDataConverter;
 import com.harness.graph.build.GraphDataConverterRegistry;
 import com.harness.tool.knowledge.KnowledgeIngestService;
+import com.harness.tool.knowledge.FileStorageService;
 import com.harness.server.api.ApiErrorCode;
 import com.harness.server.api.ApiResponses;
 import com.harness.server.log.LogStorageService;
@@ -95,7 +96,10 @@ public class Main {
 
         // Knowledge base upload service — reuse agent's instances
         KnowledgeIngestService ingestService = new KnowledgeIngestService(
-                agent.embeddingModel(), agent.vectorStore(), agent.visionModel());
+                agent.embeddingModel(),
+                agent.vectorStore(),
+                agent.documentConversionService(),
+                new FileStorageService());
         TraceStore traceStore = agent.traceStore();
 
         // Shared cancellation token registry for in-flight chat requests

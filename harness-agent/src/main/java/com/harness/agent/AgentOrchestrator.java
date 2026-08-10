@@ -29,6 +29,8 @@ import com.harness.graph.schema.GraphSchemaRegistry;
 import com.harness.graph.store.KnowledgeGraphStore;
 import com.harness.input.InputProcessor;
 import com.harness.input.auth.Authenticator;
+import com.harness.input.document.DocumentConversionService;
+import com.harness.input.document.MarkItDownDocumentConversionService;
 import com.harness.input.multimodal.MultimodalParser;
 import com.harness.agent.context.ContextBuilder;
 import com.harness.agent.context.AgentPromptBuilder;
@@ -85,6 +87,7 @@ public class AgentOrchestrator {
     private final AgentRuntime runtime;
     private final AgentToolRuntime toolRuntime;
     private final AgentPromptBuilder promptBuilder;
+    private final DocumentConversionService documentConversionService;
     private final AgentRunPreparer runPreparer;
     private final AgentRunCoordinator runCoordinator;
     private final ContextBuilder contextBuilder;
@@ -126,6 +129,7 @@ public class AgentOrchestrator {
         }
 
         ModelProviders modelProviders = ModelProviderFactory.createAll();
+        this.documentConversionService = MarkItDownDocumentConversionService.fromEnvironment();
 
         this.traceStore = TraceStoreFactory.create();
         this.runtime = new AgentRuntime(
@@ -134,8 +138,7 @@ public class AgentOrchestrator {
                         new Authenticator(),
                         new MultimodalParser(
                                 modelProviders.chat(),
-                                modelProviders.vision(),
-                                modelProviders.voice())),
+                                documentConversionService)),
                 new DefaultReActLoopFactory(modelProviders),
                 new TraceCollectorFactory(traceStore));
 
@@ -176,7 +179,8 @@ public class AgentOrchestrator {
                 artifactStorageService);
         this.toolRegistry = toolRuntime.tools();
         this.skillRegistry = toolRuntime.skills();
-        this.promptBuilder = new AgentPromptBuilder(skillRegistry);
+        this.promptBuilder = new AgentPromptBuilder(
+                skillRegistry, documentConversionService);
 
         int confirmationTimeoutSeconds = EnvConfig.get().getInt(
                 EnvKey.RISK_CONFIRMATION_TIMEOUT_SECONDS, 300);
@@ -449,6 +453,7 @@ public class AgentOrchestrator {
     // Expose model providers for external use (e.g., direct vision/voice calls)
     public ChatModelProvider chatModel() { return runtime.providers().chat(); }
     public VisionModelProvider visionModel() { return runtime.providers().vision(); }
+    public DocumentConversionService documentConversionService() { return documentConversionService; }
     public VoiceModelProvider voiceModel() { return runtime.providers().voice(); }
     public EmbeddingModelProvider embeddingModel() { return runtime.providers().embedding(); }
     public RerankModelProvider rerankModel() { return runtime.providers().rerank(); }

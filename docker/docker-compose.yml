@@ -37,6 +37,7 @@ services:
       - HARNESS_GRAPH_SCHEMA_DIR=/app/graph-schemas
       - HARNESS_TOOL_WEB_SEARCH_SEARXNG_URL=http://searxng:8080
       - HARNESS_TOOL_BROWSER_WORKER_URL=http://browser-worker:8081
+      - HARNESS_DOCUMENT_PARSER_URL=http://document-parser:8082
     depends_on:
       mysql:
         condition: service_healthy
@@ -48,9 +49,12 @@ services:
         condition: service_healthy
       browser-worker:
         condition: service_healthy
+      document-parser:
+        condition: service_healthy
     restart: unless-stopped
     networks:
       - cyrene-net
+      - document-parser-net
 
   # ============================================================
   # Browser Worker - isolated Python + Playwright page control
@@ -81,6 +85,34 @@ services:
     restart: unless-stopped
     networks:
       - cyrene-net
+
+  # ============================================================
+  # Document Parser - MarkItDown + image OCR/description
+  # ============================================================
+  document-parser:
+    build:
+      context: ./document-parser
+      dockerfile: Dockerfile
+    container_name: cyrene-document-parser
+    env_file:
+      - ../.env
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=1g
+    mem_limit: 2g
+    cpus: 2.0
+    pids_limit: 128
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      - HARNESS_DOCUMENT_PARSER_HOST=0.0.0.0
+      - HARNESS_DOCUMENT_PARSER_PORT=8082
+    restart: unless-stopped
+    networks:
+      - document-parser-net
 
   # ============================================================
   # MySQL 8.0 - 会话/消息/记忆/审计存储
@@ -277,4 +309,6 @@ volumes:
 
 networks:
   cyrene-net:
+    driver: bridge
+  document-parser-net:
     driver: bridge

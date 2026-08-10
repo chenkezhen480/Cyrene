@@ -1,12 +1,12 @@
 package com.harness.tool.knowledge;
 
 import com.harness.provider.EmbeddingModelProvider;
-import com.harness.provider.VisionModelProvider;
-import com.harness.provider.impl.NoOpVisionModelProvider;
 import com.harness.core.env.EnvConfig;
 import com.harness.core.env.EnvKey;
+import com.harness.input.document.DocumentConversionDiagnostics;
+import com.harness.input.document.DocumentConversionResult;
+import com.harness.input.document.DocumentConversionService;
 import com.harness.input.multimodal.TextChunker;
-import com.harness.input.multimodal.impl.TextExtractorRegistry;
 import com.harness.tool.rag.VectorStore;
 import dev.langchain4j.data.embedding.Embedding;
 import dev.langchain4j.data.segment.TextSegment;
@@ -25,23 +25,22 @@ public class KnowledgeIngestService {
     private final EmbeddingModelProvider embeddingProvider;
     private final VectorStore vectorStore;
     private final FileStorageService fileStorage;
-    private final KnowledgeDocumentTextResolver documentTextResolver;
+    private final DocumentConversionService documentConversionService;
     private final String defaultCollection;
     private final long maxFileSizeMb;
-
-    public KnowledgeIngestService(EmbeddingModelProvider embeddingProvider, VectorStore vectorStore) {
-        this(embeddingProvider, vectorStore, new NoOpVisionModelProvider());
-    }
 
     public KnowledgeIngestService(
             EmbeddingModelProvider embeddingProvider,
             VectorStore vectorStore,
-            VisionModelProvider visionModelProvider
+            DocumentConversionService documentConversionService,
+            FileStorageService fileStorage
     ) {
-        this.embeddingProvider = embeddingProvider;
-        this.vectorStore = vectorStore;
-        this.fileStorage = new FileStorageService();
-        this.documentTextResolver = new KnowledgeDocumentTextResolver(visionModelProvider);
+        this.embeddingProvider = java.util.Objects.requireNonNull(
+                embeddingProvider, "embeddingProvider");
+        this.vectorStore = java.util.Objects.requireNonNull(vectorStore, "vectorStore");
+        this.documentConversionService = java.util.Objects.requireNonNull(
+                documentConversionService, "documentConversionService");
+        this.fileStorage = java.util.Objects.requireNonNull(fileStorage, "fileStorage");
 
         EnvConfig cfg = EnvConfig.get();
         this.defaultCollection = cfg.getString(EnvKey.RAG_COLLECTION, "default");
@@ -64,21 +63,18 @@ public class KnowledgeIngestService {
                     "File size exceeds limit " + maxFileSizeMb + "MB");
         }
 
-        String effectiveMimeType = effectiveMimeType(fileName, mimeType);
-        validateDocumentTypeEnabled(effectiveMimeType);
-
         log.debug("Starting ingest: file={}, size={}KB, mimeType={}, collection={}", fileName, fileData.length / 1024, mimeType, coll);
 
-        // Step 1: Extract text from file
-        ResolvedDocumentText resolvedDocument = documentTextResolver.resolve(
-                fileData, fileName, effectiveMimeType);
-        String rawText = resolvedDocument.text();
+        // Step 1: Convert every document through the shared MarkItDown boundary.
+        DocumentConversionResult convertedDocument = documentConversionService.convert(
+                fileData, fileName, mimeType);
+        validateDocumentTypeEnabled(convertedDocument.detectedMimeType());
+        String rawText = convertedDocument.markdown();
         if (rawText == null || rawText.isBlank()) {
-            throw new IllegalArgumentException("No text content extracted from file: " + fileName
-                    + (resolvedDocument.ocrBlockCount() == 0
-                            ? " (scanned PDF with no readable content)"
-                            : ""));
+            throw new IllegalArgumentException(
+                    "No Markdown content converted from file: " + fileName);
         }
+        DocumentConversionDiagnostics conversion = convertedDocument.diagnostics();
 
         // Step 2: Split into chunks, then merge small ones
         int chunkSize = EnvConfig.get().getInt(EnvKey.KNOWLEDGE_CHUNK_SIZE, 1024);
@@ -112,13 +108,17 @@ public class KnowledgeIngestService {
             metadata.put("file_name", fileName);
             metadata.put("chunk_index", i);
             metadata.put("total_chunks", chunks.size());
-            metadata.put("repaired_block_count", resolvedDocument.repairedBlockCount());
-            if (!resolvedDocument.repairModel().isBlank()) {
-                metadata.put("repair_model", resolvedDocument.repairModel());
+            metadata.put("document_converter", conversion.converter());
+            metadata.put("document_mime_type", convertedDocument.detectedMimeType());
+            metadata.put("document_ocr_enabled", conversion.ocrEnabled());
+            metadata.put("document_vision_calls", conversion.visionCalls());
+            metadata.put("document_vision_source", conversion.visionSource());
+            if (conversion.model() != null) {
+                metadata.put("document_vision_model", conversion.model());
             }
-            metadata.put("ocr_block_count", resolvedDocument.ocrBlockCount());
-            if (!resolvedDocument.ocrModel().isBlank()) {
-                metadata.put("ocr_model", resolvedDocument.ocrModel());
+            if (!conversion.warnings().isEmpty()) {
+                metadata.put("document_conversion_warnings",
+                        String.join("\n", conversion.warnings()));
             }
 
             docs.add(new VectorStore.Document(
@@ -150,20 +150,15 @@ public class KnowledgeIngestService {
                 embeddingProvider.dimension(),
                 storedPath,
                 duration,
-                resolvedDocument.repairedBlockCount(),
-                resolvedDocument.repairModel(),
-                resolvedDocument.ocrBlockCount(),
-                resolvedDocument.ocrModel()
+                conversion.converter(),
+                convertedDocument.detectedMimeType(),
+                conversion.model(),
+                conversion.visionSource(),
+                conversion.ocrEnabled(),
+                conversion.visionCalls(),
+                conversion.elapsedMs(),
+                conversion.warnings()
         );
-    }
-
-    private static String effectiveMimeType(String fileName, String mimeType) {
-        if (mimeType != null && !mimeType.isBlank()
-                && !"application/octet-stream".equalsIgnoreCase(mimeType)) {
-            return mimeType.toLowerCase();
-        }
-        String guessed = TextExtractorRegistry.guessMimeType(fileName);
-        return guessed != null ? guessed : "application/octet-stream";
     }
 
     private static void validateDocumentTypeEnabled(String mimeType) {

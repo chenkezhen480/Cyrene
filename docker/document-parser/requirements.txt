@@ -1,0 +1,4 @@
+markitdown[all]==0.1.6
+markitdown-ocr==0.1.0
+openai==1.109.1
+anthropic==0.68.0

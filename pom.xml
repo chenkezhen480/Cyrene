@@ -44,8 +44,6 @@
         <jjwt.version>0.12.5</jjwt.version>
         <jedis.version>5.1.0</jedis.version>
         <dotenv.version>2.3.2</dotenv.version>
-        <pdfbox.version>3.0.7</pdfbox.version>
-        <poi.version>5.5.1</poi.version>
         <snakeyaml.version>2.2</snakeyaml.version>
         <jsoup.version>1.22.2</jsoup.version>
         <milvus.version>2.5.4</milvus.version>
@@ -198,22 +196,6 @@
             </dependency>
 
             <!-- Document parsing -->
-            <dependency>
-                <groupId>org.apache.pdfbox</groupId>
-                <artifactId>pdfbox</artifactId>
-                <version>${pdfbox.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>org.apache.poi</groupId>
-                <artifactId>poi-ooxml</artifactId>
-                <version>${poi.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>org.apache.poi</groupId>
-                <artifactId>poi-scratchpad</artifactId>
-                <version>${poi.version}</version>
-            </dependency>
-
             <!-- YAML -->
             <dependency>
                 <groupId>org.yaml</groupId>

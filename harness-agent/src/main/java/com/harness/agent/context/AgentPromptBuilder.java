@@ -2,12 +2,13 @@ package com.harness.agent.context;
 
 import com.harness.core.env.EnvConfig;
 import com.harness.core.env.EnvKey;
+import com.harness.core.exception.AgentException;
 import com.harness.core.model.AgentContext;
 import com.harness.core.model.GraphRequestContext;
 import com.harness.core.model.ParsedContent;
 import com.harness.core.model.Preference;
 import com.harness.core.model.SkillIndex;
-import com.harness.input.multimodal.impl.TextExtractorRegistry;
+import com.harness.input.document.DocumentConversionService;
 import com.harness.tool.skill.SkillRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -22,9 +23,15 @@ public final class AgentPromptBuilder {
     private static final Logger log = LoggerFactory.getLogger(AgentPromptBuilder.class);
 
     private final SkillRegistry skillRegistry;
+    private final DocumentConversionService documentConversionService;
 
-    public AgentPromptBuilder(SkillRegistry skillRegistry) {
+    public AgentPromptBuilder(
+            SkillRegistry skillRegistry,
+            DocumentConversionService documentConversionService
+    ) {
         this.skillRegistry = skillRegistry;
+        this.documentConversionService = java.util.Objects.requireNonNull(
+                documentConversionService, "documentConversionService");
     }
 
     public String enhanceUserText(
@@ -46,9 +53,6 @@ public final class AgentPromptBuilder {
         boolean hasReferenceHeader = false;
         for (String filePath : contextFilePaths(agentContext)) {
             String extracted = extractContextFileContent(filePath);
-            if (extracted == null) {
-                continue;
-            }
             if (!hasReferenceHeader) {
                 enhancedText.append("\n\n[参考文件 / Reference Files]");
                 hasReferenceHeader = true;
@@ -184,32 +188,31 @@ public final class AgentPromptBuilder {
                 .toList();
     }
 
-    private static String extractContextFileContent(String filePath) {
+    private String extractContextFileContent(String filePath) {
         try {
             String uploadDir = EnvConfig.get().getString(
                     EnvKey.KNOWLEDGE_UPLOAD_DIR, "./knowledge-uploads");
             String relativePath = filePath.startsWith("/files/")
                     ? filePath.substring("/files/".length())
                     : filePath;
-            Path diskPath = Path.of(uploadDir, relativePath).normalize();
+            Path uploadRoot = Path.of(uploadDir).toAbsolutePath().normalize();
+            Path diskPath = uploadRoot.resolve(relativePath).normalize();
+            if (!diskPath.startsWith(uploadRoot)) {
+                throw new AgentException("context.File resolves outside the upload directory: " + filePath);
+            }
             if (!Files.exists(diskPath)) {
-                log.debug("context.File not found on disk: {}", diskPath);
-                return null;
+                throw new AgentException("context.File not found: " + filePath);
             }
 
             String fileName = diskPath.getFileName().toString();
-            String mimeType = TextExtractorRegistry.guessMimeType(fileName);
-            if (mimeType != null && (mimeType.startsWith("image/")
-                    || mimeType.startsWith("video/")
-                    || mimeType.startsWith("audio/"))) {
-                return null;
-            }
-            String extracted = TextExtractorRegistry.extract(
-                    Files.readAllBytes(diskPath), fileName, mimeType);
-            return extracted == null || extracted.isBlank() ? null : extracted;
+            String mimeType = Files.probeContentType(diskPath);
+            return documentConversionService.convert(
+                    Files.readAllBytes(diskPath), fileName, mimeType).markdown();
+        } catch (AgentException e) {
+            throw e;
         } catch (Exception e) {
-            log.warn("Failed to extract context.File {}: {}", filePath, e.getMessage());
-            return null;
+            throw new AgentException(
+                    "Failed to convert context.File " + filePath + ": " + e.getMessage(), e);
         }
     }
 }

@@ -1,5 +1,7 @@
 package com.harness.tool.knowledge;
 
+import java.util.List;
+
 public record IngestResult(
         String fileName,
         String collection,
@@ -7,8 +9,16 @@ public record IngestResult(
         int embeddingDimension,
         String storedFilePath,
         long ingestDurationMs,
-        int repairedBlockCount,
-        String repairModel,
-        int ocrBlockCount,
-        String ocrModel
-) {}
+        String documentConverter,
+        String detectedMimeType,
+        String visionModel,
+        String visionSource,
+        boolean ocrEnabled,
+        int visionCalls,
+        long conversionDurationMs,
+        List<String> conversionWarnings
+) {
+    public IngestResult {
+        conversionWarnings = List.copyOf(conversionWarnings);
+    }
+}

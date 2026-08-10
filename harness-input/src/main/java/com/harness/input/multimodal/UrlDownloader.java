@@ -3,7 +3,6 @@ package com.harness.input.multimodal;
 import com.harness.core.exception.AgentException;
 import com.harness.core.env.EnvConfig;
 import com.harness.core.env.EnvKey;
-import com.harness.input.multimodal.impl.TextExtractorRegistry;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.Response;
@@ -14,6 +13,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.net.InetAddress;
 import java.net.URI;
+import java.net.URLConnection;
 import java.net.UnknownHostException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -152,7 +152,7 @@ public class UrlDownloader {
         // 2. URL extension
         String urlPath = URI.create(url).getPath();
         if (urlPath != null) {
-            String guessed = TextExtractorRegistry.guessMimeType(urlPath);
+            String guessed = URLConnection.guessContentTypeFromName(urlPath);
             if (guessed != null) return guessed;
         }
         // 3. Hint from caller

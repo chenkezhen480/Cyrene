@@ -30,24 +30,6 @@
             <artifactId>langchain4j</artifactId>
         </dependency>
 
-        <!-- PDF parsing -->
-        <dependency>
-            <groupId>org.apache.pdfbox</groupId>
-            <artifactId>pdfbox</artifactId>
-        </dependency>
-
-        <!-- Office document parsing (DOCX, XLSX) -->
-        <dependency>
-            <groupId>org.apache.poi</groupId>
-            <artifactId>poi-ooxml</artifactId>
-        </dependency>
-
-        <!-- Old Word .doc format support (HWPF) -->
-        <dependency>
-            <groupId>org.apache.poi</groupId>
-            <artifactId>poi-scratchpad</artifactId>
-        </dependency>
-
         <!-- HTTP client for URL downloads -->
         <dependency>
             <groupId>com.squareup.okhttp3</groupId>

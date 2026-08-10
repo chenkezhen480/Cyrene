@@ -5,6 +5,7 @@ import com.harness.core.model.AgentTrace;
 import com.harness.core.model.RiskLevel;
 import com.harness.tool.knowledge.IngestResult;
 import com.harness.tool.knowledge.KnowledgeIngestService;
+import com.harness.input.document.DocumentConversionException;
 import com.harness.server.api.ApiErrorCode;
 import com.harness.server.api.ApiResponses;
 import io.javalin.http.Context;
@@ -13,19 +14,12 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.HashMap;
-import java.util.List;
+import java.util.LinkedHashMap;
 import java.util.Map;
-import java.util.Set;
 
 public class KnowledgeUploadHandler {
 
     private static final Logger log = LoggerFactory.getLogger(KnowledgeUploadHandler.class);
-
-    // Only allow document types that TextExtractorRegistry can actually parse
-    private static final Set<String> ALLOWED_EXTENSIONS = Set.of(
-            "pdf", "doc", "docx", "xls", "xlsx", "pptx", "csv", "json", "xml",
-            "rtf", "odt", "ods", "txt", "md"
-    );
 
     private final KnowledgeIngestService ingestService;
     private final TraceStore traceStore;
@@ -57,14 +51,6 @@ public class KnowledgeUploadHandler {
             }
             String mimeType = uploadedFile.contentType();
 
-            // Validate file extension
-            String ext = getExtension(fileName).toLowerCase();
-            if (!ext.isEmpty() && !ALLOWED_EXTENSIONS.contains(ext)) {
-                ApiResponses.error(ctx, 400, ApiErrorCode.INVALID_REQUEST,
-                        "File type not allowed for knowledge base: ." + ext);
-                return;
-            }
-
             log.debug("[Server] POST /api/knowledge/upload: file={}, size={}KB, mimeType={}, collection={}",
                     fileName, fileData.length / 1024, mimeType, collection);
 
@@ -82,13 +68,19 @@ public class KnowledgeUploadHandler {
                 meta.put("chunk_count", String.valueOf(result.chunkCount()));
                 meta.put("embedding_dim", String.valueOf(result.embeddingDimension()));
                 meta.put("stored_path", result.storedFilePath());
-                meta.put("repaired_block_count", String.valueOf(result.repairedBlockCount()));
-                if (!result.repairModel().isBlank()) {
-                    meta.put("repair_model", result.repairModel());
+                meta.put("document_converter", result.documentConverter());
+                meta.put("detected_mime_type", result.detectedMimeType());
+                meta.put("document_ocr_enabled", String.valueOf(result.ocrEnabled()));
+                meta.put("document_vision_calls", String.valueOf(result.visionCalls()));
+                meta.put("document_vision_source", result.visionSource());
+                meta.put("document_conversion_duration_ms",
+                        String.valueOf(result.conversionDurationMs()));
+                if (result.visionModel() != null) {
+                    meta.put("document_vision_model", result.visionModel());
                 }
-                meta.put("ocr_block_count", String.valueOf(result.ocrBlockCount()));
-                if (!result.ocrModel().isBlank()) {
-                    meta.put("ocr_model", result.ocrModel());
+                if (!result.conversionWarnings().isEmpty()) {
+                    meta.put("document_conversion_warnings",
+                            String.join("\n", result.conversionWarnings()));
                 }
 
                 AgentTrace trace = AgentTrace.builder()
@@ -103,19 +95,31 @@ public class KnowledgeUploadHandler {
                 log.warn("[Server] Failed to save knowledge trace: {}", e.getMessage());
             }
 
-            ctx.json(Map.of(
-                    "fileName", result.fileName(),
-                    "collection", result.collection(),
-                    "chunkCount", result.chunkCount(),
-                    "embeddingDimension", result.embeddingDimension(),
-                    "repairedBlockCount", result.repairedBlockCount(),
-                    "repairModel", result.repairModel(),
-                    "ocrBlockCount", result.ocrBlockCount(),
-                    "ocrModel", result.ocrModel(),
-                    "storedPath", result.storedFilePath(),
-                    "ingestDurationMs", result.ingestDurationMs()
-            ));
+            Map<String, Object> response = new LinkedHashMap<>();
+            response.put("fileName", result.fileName());
+            response.put("collection", result.collection());
+            response.put("chunkCount", result.chunkCount());
+            response.put("embeddingDimension", result.embeddingDimension());
+            response.put("documentConverter", result.documentConverter());
+            response.put("detectedMimeType", result.detectedMimeType());
+            response.put("visionModel", result.visionModel());
+            response.put("visionSource", result.visionSource());
+            response.put("ocrEnabled", result.ocrEnabled());
+            response.put("visionCalls", result.visionCalls());
+            response.put("conversionDurationMs", result.conversionDurationMs());
+            response.put("conversionWarnings", result.conversionWarnings());
+            response.put("storedPath", result.storedFilePath());
+            response.put("ingestDurationMs", result.ingestDurationMs());
+            ctx.json(response);
 
+        } catch (DocumentConversionException e) {
+            int workerStatus = e.statusCode();
+            int status = workerStatus == 400 || workerStatus == 413
+                    || workerStatus == 415 || workerStatus == 422
+                    ? 400
+                    : 503;
+            log.warn("[Server] Knowledge document conversion failed: {}", e.getMessage());
+            ApiResponses.error(ctx, status, ApiErrorCode.fromHttpStatus(status), e.getMessage());
         } catch (IllegalArgumentException e) {
             log.warn("[Server] Knowledge upload validation failed: {}", e.getMessage());
             ApiResponses.error(ctx, 400, ApiErrorCode.INVALID_REQUEST, e.getMessage());
@@ -128,9 +132,4 @@ public class KnowledgeUploadHandler {
         }
     }
 
-    private String getExtension(String filename) {
-        if (filename == null) return "";
-        int dot = filename.lastIndexOf('.');
-        return dot >= 0 ? filename.substring(dot + 1) : "";
-    }
 }

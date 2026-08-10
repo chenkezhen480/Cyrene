@@ -307,6 +307,26 @@ public final class EnvKey {
     public static final String INPUT_FILE_SIZE_THRESHOLD_KB     = "HARNESS_INPUT_FILE_SIZE_THRESHOLD_KB";
     /** 分块目标 token 数，默认 1024 */
     public static final String INPUT_CHUNK_TOKEN_SIZE           = "HARNESS_INPUT_CHUNK_TOKEN_SIZE";
+    /** MarkItDown document parser internal service URL. */
+    public static final String DOCUMENT_PARSER_URL              = "HARNESS_DOCUMENT_PARSER_URL";
+    /** Optional bearer token shared with the document parser service. */
+    public static final String DOCUMENT_PARSER_TOKEN            = "HARNESS_DOCUMENT_PARSER_TOKEN";
+    /** Document conversion request timeout in seconds. */
+    public static final String DOCUMENT_PARSER_TIMEOUT_SECONDS  = "HARNESS_DOCUMENT_PARSER_TIMEOUT_SECONDS";
+    /** Java-to-worker HTTP timeout; keep above the worker conversion timeout. */
+    public static final String DOCUMENT_PARSER_REQUEST_TIMEOUT_SECONDS =
+            "HARNESS_DOCUMENT_PARSER_REQUEST_TIMEOUT_SECONDS";
+    /** Timeout for one vision-model request made by the parser worker. */
+    public static final String DOCUMENT_PARSER_VISION_TIMEOUT_SECONDS =
+            "HARNESS_DOCUMENT_PARSER_VISION_TIMEOUT_SECONDS";
+    /** Maximum document size accepted by the parser service, in MB. */
+    public static final String DOCUMENT_PARSER_MAX_FILE_SIZE_MB = "HARNESS_DOCUMENT_PARSER_MAX_FILE_SIZE_MB";
+    /** Maximum concurrent document conversions inside the parser worker. */
+    public static final String DOCUMENT_PARSER_MAX_CONCURRENT   = "HARNESS_DOCUMENT_PARSER_MAX_CONCURRENT";
+    /** Internal listener port used by the document parser container. */
+    public static final String DOCUMENT_PARSER_PORT             = "HARNESS_DOCUMENT_PARSER_PORT";
+    /** Internal bind host used by the document parser container. */
+    public static final String DOCUMENT_PARSER_HOST             = "HARNESS_DOCUMENT_PARSER_HOST";
     /** 模型上下文窗口大小 (token)，根据模型名称自动检测，仅在需要覆盖时设置 */
     public static final String MODEL_CHAT_CONTEXT_WINDOW       = "HARNESS_MODEL_CHAT_CONTEXT_WINDOW";
     /** 每个摘要块使用的上下文窗口比例，默认 0.4 */
@@ -374,11 +394,6 @@ public final class EnvKey {
     public static final String KNOWLEDGE_DOCX_ENABLED        = "HARNESS_KNOWLEDGE_DOCX_ENABLED";
     public static final String KNOWLEDGE_XLSX_ENABLED        = "HARNESS_KNOWLEDGE_XLSX_ENABLED";
     public static final String KNOWLEDGE_PPTX_ENABLED        = "HARNESS_KNOWLEDGE_PPTX_ENABLED";
-    public static final String KNOWLEDGE_CORRUPTION_THRESHOLD = "HARNESS_KNOWLEDGE_CORRUPTION_THRESHOLD";
-    public static final String KNOWLEDGE_VISUAL_RENDER_DPI   = "HARNESS_KNOWLEDGE_VISUAL_RENDER_DPI";
-    public static final String KNOWLEDGE_VISUAL_PPT_SCALE    = "HARNESS_KNOWLEDGE_VISUAL_PPT_SCALE";
-    public static final String KNOWLEDGE_VISUAL_REPAIR_CACHE_MAX_ENTRIES =
-            "HARNESS_KNOWLEDGE_VISUAL_REPAIR_CACHE_MAX_ENTRIES";
 
     // ==================== Artifact (文件生成产物) ====================
     /** 产物存储目录，默认 ./artifacts */
