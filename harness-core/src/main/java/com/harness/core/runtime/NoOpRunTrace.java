@@ -1,6 +1,7 @@
 package com.harness.core.runtime;
 
 import com.harness.core.model.AgentTrace;
+import com.harness.core.model.ModelUsage;
 import com.harness.core.model.ReActStep;
 import com.harness.core.model.RiskLevel;
 
@@ -19,6 +20,7 @@ final class NoOpRunTrace implements RunTrace {
     @Override public void recordLlmMeta(String model, String promptVersion) { }
     @Override public void addStep(ReActStep step) { }
     @Override public void addTokens(long tokenCount) { }
+    @Override public void recordModelUsage(ModelUsage usage) { }
     @Override public void recordOutput(String output, RiskLevel risk, boolean userConfirmed) { }
     @Override public void recordConfirmation(String requestId, String toolName, String argumentsHash, String decision) { }
     @Override public void recordReactStats(String outcome, int rounds, int toolCalls, int reflectionChecks,

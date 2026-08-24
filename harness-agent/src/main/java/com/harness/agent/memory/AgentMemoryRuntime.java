@@ -54,6 +54,7 @@ public final class AgentMemoryRuntime {
     private final MemoryCompressor memoryCompressor;
     private final SessionCleanupScheduler cleanupScheduler;
     private final SessionMessageCache messageCache;
+    private final SessionContextLoader sessionContextLoader;
     private final MessageWriteWorker messageWriteWorker;
 
     public AgentMemoryRuntime(
@@ -97,6 +98,7 @@ public final class AgentMemoryRuntime {
             this.messageWriteWorker = null;
             messageCache.setOnEvict(skillRegistry::clearSession);
         }
+        this.sessionContextLoader = new SessionContextLoader(messageCache, messageStore);
     }
 
     public boolean enabled() {
@@ -138,7 +140,7 @@ public final class AgentMemoryRuntime {
 
         CompletableFuture<List<MemoryMessage>> shorttermFuture =
                 CompletableFuture.supplyAsync(
-                        () -> loadMessages(sessionId, userId),
+                        () -> loadMessages(sessionId, userId, trace),
                         BlockingTaskExecutor.shared());
         CompletableFuture<List<Preference>> longtermFuture =
                 CompletableFuture.supplyAsync(
@@ -301,16 +303,11 @@ public final class AgentMemoryRuntime {
     }
 
     public List<MemoryMessage> loadMessages(String sessionId, String userId) {
-        List<MemoryMessage> cached = messageCache.getIfPresent(sessionId);
-        if (cached != null) {
-            return cached;
-        }
-        if (!enabled) {
-            return List.of();
-        }
-        List<MemoryMessage> loaded = messageStore.loadForContext(sessionId);
-        messageCache.put(sessionId, userId, loaded);
-        return loaded;
+        return loadMessages(sessionId, userId, RunTrace.noop());
+    }
+
+    private List<MemoryMessage> loadMessages(String sessionId, String userId, RunTrace trace) {
+        return sessionContextLoader.load(sessionId, userId, trace);
     }
 
     public List<Preference> loadPreferences(String userId) {

@@ -58,6 +58,7 @@ public final class ConfirmationManager {
         Instant createdAt = Instant.now();
         ConfirmationRequest request = new ConfirmationRequest(
                 UUID.randomUUID().toString(),
+                toolCall.id(),
                 userId,
                 sessionId,
                 toolCall.toolName(),

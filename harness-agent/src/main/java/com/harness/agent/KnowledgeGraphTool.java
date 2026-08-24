@@ -1,6 +1,5 @@
 package com.harness.agent;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -18,15 +17,19 @@ import com.harness.graph.model.GraphRouteResult;
 import com.harness.graph.retrieval.AnchoredNeighborhoodGraphRetriever;
 import com.harness.graph.retrieval.DefaultGraphResultFormatter;
 import com.harness.graph.retrieval.GraphKnowledgeRetriever;
+import com.harness.graph.retrieval.GraphToolData;
 import com.harness.graph.schema.GraphSchemaRegistry;
 import com.harness.graph.store.KnowledgeGraphStore;
 import com.harness.tool.Tool;
+import com.harness.tool.protocol.ToolEnvelope;
+import com.harness.tool.protocol.ToolEnvelopeStatus;
 
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 
@@ -218,20 +221,23 @@ public final class KnowledgeGraphTool implements Tool {
         }
     }
 
-    private String listGraphSpaces(JsonNode arguments, RuntimeContext runtimeContext)
-            throws JsonProcessingException {
+    private String listGraphSpaces(JsonNode arguments, RuntimeContext runtimeContext) {
         PageResponse<GraphSpaceReference> page = listRegisteredGraphSpaces(
                 runtimeContext.tenantId(),
                 settings.capLimit(integer(arguments, "limit")),
                 text(arguments, "cursor", "")
         );
-        if (page.items().isEmpty()) {
-            ToolResult.setCurrentStatus(ToolResult.ResultStatus.EMPTY);
-            return "No readable graph spaces were found.";
-        }
-        ToolResult.setCurrentStatus(ToolResult.ResultStatus.SUCCESS);
-        return "[Structured Knowledge Graph Spaces]\n"
-                + objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(page);
+        ToolEnvelope<GraphSpacesData> envelope = page.items().isEmpty()
+                ? ToolEnvelope.empty(
+                        new GraphSpacesData(List.of()),
+                        page.pageInfo(),
+                        Map.of("truncated", false))
+                : ToolEnvelope.success(
+                        new GraphSpacesData(page.items()),
+                        page.pageInfo(),
+                        Map.of("truncated", false));
+        setToolStatus(envelope.status());
+        return serialize(envelope);
     }
 
     private PageResponse<GraphSpaceReference> listRegisteredGraphSpaces(
@@ -269,8 +275,7 @@ public final class KnowledgeGraphTool implements Tool {
         ));
     }
 
-    private String findNodes(JsonNode arguments, RuntimeContext runtimeContext)
-            throws JsonProcessingException {
+    private String findNodes(JsonNode arguments, RuntimeContext runtimeContext) {
         GraphRequestContext serverContext = runtimeContext.requestContext();
         String graphId;
         String schemaId;
@@ -298,16 +303,11 @@ public final class KnowledgeGraphTool implements Tool {
                 settings.capLimit(integer(arguments, "limit")),
                 text(arguments, "cursor", "")
         ));
-        if (page.items().isEmpty()) {
-            ToolResult.setCurrentStatus(ToolResult.ResultStatus.EMPTY);
-            return "No graph nodes matched the requested filters.";
-        }
-
         GraphRouteResult result = new GraphRouteResult(
                 page.items(), List.of(), List.of(), List.of(), page.pageInfo(), java.util.Map.of());
-        ToolResult.setCurrentStatus(ToolResult.ResultStatus.SUCCESS);
-        return formatGraphResult(schemaId, result)
-                + "- pageInfo=" + objectMapper.writeValueAsString(page.pageInfo()) + "\n";
+        ToolEnvelope<GraphToolData> envelope = formatGraphResult(graphId, schemaId, result);
+        setToolStatus(envelope.status());
+        return serialize(envelope);
     }
 
     private String findNeighborhood(JsonNode arguments, RuntimeContext runtimeContext) {
@@ -381,12 +381,10 @@ public final class KnowledgeGraphTool implements Tool {
                 integer(arguments, "maxDepth"),
                 integer(arguments, "limit")
         );
-        if (result.isEmpty()) {
-            ToolResult.setCurrentStatus(ToolResult.ResultStatus.EMPTY);
-            return "No structured graph records were found for the requested subjects.";
-        }
-        ToolResult.setCurrentStatus(ToolResult.ResultStatus.SUCCESS);
-        return formatGraphResult(effectiveContext.schemaId(), result);
+        ToolEnvelope<GraphToolData> envelope = formatGraphResult(
+                effectiveContext.graphId(), effectiveContext.schemaId(), result);
+        setToolStatus(envelope.status());
+        return serialize(envelope);
     }
 
     private static void requireAllowedAction(
@@ -411,12 +409,27 @@ public final class KnowledgeGraphTool implements Tool {
         }
     }
 
-    private String formatGraphResult(String schemaId, GraphRouteResult result) {
+    private ToolEnvelope<GraphToolData> formatGraphResult(
+            String graphId, String schemaId, GraphRouteResult result) {
         return new DefaultGraphResultFormatter(
                 schemaRegistry.require(schemaId),
                 settings,
                 objectMapper
-        ).format(result);
+        ).format(graphId, result);
+    }
+
+    private String serialize(Object value) {
+        try {
+            return objectMapper.writeValueAsString(value);
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            throw new IllegalStateException("Failed to serialize graph tool result", e);
+        }
+    }
+
+    private static void setToolStatus(ToolEnvelopeStatus status) {
+        ToolResult.setCurrentStatus(status == ToolEnvelopeStatus.EMPTY
+                ? ToolResult.ResultStatus.EMPTY
+                : ToolResult.ResultStatus.SUCCESS);
     }
 
     private ObjectNode stringProperty(String description) {
@@ -539,5 +552,11 @@ public final class KnowledgeGraphTool implements Tool {
             String tenantId,
             GraphRequestContext requestContext
     ) {
+    }
+
+    private record GraphSpacesData(List<GraphSpaceReference> graphSpaces) {
+        private GraphSpacesData {
+            graphSpaces = graphSpaces == null ? List.of() : List.copyOf(graphSpaces);
+        }
     }
 }

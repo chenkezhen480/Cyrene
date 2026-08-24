@@ -16,9 +16,8 @@ search:
     - json
 
 server:
-  port: 8080
+  port: 8888
   bind_address: "0.0.0.0"
-  secret_key: "cyrene-searxng-change-me-in-production"
   limiter: false
   image_proxy: false
 
@@ -35,29 +34,8 @@ outgoing:
   pool_connections: 100
   pool_maxsize: 20
 
-# Enable engines as needed
+# The Java web_search tool passes its configured engine list on every request.
+# SEARXNG_SECRET is read directly by SearXNG and is supplied by Compose.
 engines:
-  - name: google
-    engine: google
-    shortcut: go
-    disabled: false
-
   - name: bing
-    engine: bing
-    shortcut: bi
-    disabled: false
-
-  - name: duckduckgo
-    engine: duckduckgo
-    shortcut: ddg
-    disabled: false
-
-  - name: wikipedia
-    engine: wikipedia
-    shortcut: wp
-    disabled: false
-
-  - name: brave
-    engine: brave
-    shortcut: br
-    disabled: false
+    weight: 2.0

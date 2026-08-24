@@ -2,6 +2,7 @@ package com.harness.react;
 
 import com.harness.core.model.Artifact;
 import com.harness.core.model.ReActStep;
+import com.harness.core.model.ToolCallStatus;
 import com.harness.tool.confirmation.ConfirmationDecision;
 import com.harness.tool.confirmation.ConfirmationRequest;
 
@@ -33,10 +34,24 @@ public interface ReActListener {
     default void onToolCallCreated(String toolName, String arguments) {}
 
     /**
+     * Called when a stable tool call is created.
+     */
+    default void onToolCallCreated(String toolCallId, String toolName, String arguments) {
+        onToolCallCreated(toolName, arguments);
+    }
+
+    /**
      * Called when a tool call begins execution during streaming.
      * Default is no-op for backward compatibility.
      */
     default void onToolCallStart(String toolName, String arguments) {}
+
+    /**
+     * Called when a stable tool call begins execution.
+     */
+    default void onToolCallStart(String toolCallId, String toolName, String arguments) {
+        onToolCallStart(toolName, arguments);
+    }
 
     /**
      * Called when a tool call finishes execution.
@@ -47,6 +62,18 @@ public interface ReActListener {
      * @param durationMs execution time in milliseconds
      */
     default void onToolCallDone(String toolName, boolean success, long durationMs) {}
+
+    /**
+     * Called when a stable tool call reaches a terminal state.
+     */
+    default void onToolCallDone(
+            String toolCallId,
+            String toolName,
+            ToolCallStatus status,
+            long durationMs,
+            String errorSummary) {
+        onToolCallDone(toolName, status == ToolCallStatus.SUCCEEDED, durationMs);
+    }
 
     /**
      * Called when execution is paused for explicit user approval.

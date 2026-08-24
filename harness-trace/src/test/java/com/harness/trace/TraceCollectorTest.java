@@ -2,6 +2,7 @@ package com.harness.trace;
 
 import com.harness.trace.store.TraceStore;
 import com.harness.core.model.AgentTrace;
+import com.harness.core.model.ModelUsage;
 import com.harness.core.model.ReActStep;
 import com.harness.core.model.RiskLevel;
 import org.junit.jupiter.api.BeforeEach;
@@ -104,6 +105,50 @@ class TraceCollectorTest {
                 .containsEntry("confirmation_1_decision", "APPROVED")
                 .containsEntry("confirmation_2_request_id", "request-2")
                 .containsEntry("confirmation_2_decision", "REJECTED");
+    }
+
+    @Test
+    void recordModelUsage_preservesPerCallAndAggregateCacheMetrics() {
+        collector.recordModelUsage(new ModelUsage(
+                200L, 150L, null, 40L, 12L,
+                80L, "fingerprint-1", 7L));
+        collector.recordModelUsage(new ModelUsage(
+                100L, 25L, null, 20L, null,
+                30L, "fingerprint-1", 7L));
+
+        AgentTrace trace = collector.snapshot();
+
+        assertThat(trace.metadata())
+                .containsEntry("llmUsageCallCount", "2")
+                .containsEntry("llmUsageCall1CachedInputTokens", "150")
+                .containsEntry("llmUsageCall1UncachedInputTokens", "50")
+                .containsEntry("llmUsageCall1ReasoningTokens", "12")
+                .containsEntry("llmUsageCall1CacheHitRatio", "0.75")
+                .containsEntry("llmUsageCall1PromptPrefixFingerprint", "fingerprint-1")
+                .containsEntry("llmUsageCall1ToolCatalogVersion", "7")
+                .containsEntry("llmInputTokens", "300")
+                .containsEntry("llmCachedInputTokens", "175")
+                .containsEntry("llmUncachedInputTokens", "125")
+                .containsEntry("llmCacheHitRatio", String.valueOf(175.0 / 300.0))
+                .containsEntry("llmOutputTokens", "60")
+                .containsEntry("llmReasoningTokens", "12")
+                .containsEntry("llmLatencyMs", "110")
+                .doesNotContainKey("llmCacheWriteTokens");
+    }
+
+    @Test
+    void recordModelUsage_doesNotTreatUnknownCachedTokensAsZero() {
+        collector.recordModelUsage(new ModelUsage(
+                100L, 40L, null, 10L, null,
+                20L, "fingerprint", 3L));
+        collector.recordModelUsage(new ModelUsage(
+                80L, null, null, 8L, null,
+                10L, "fingerprint", 3L));
+
+        assertThat(collector.snapshot().metadata())
+                .containsEntry("llmInputTokens", "180")
+                .containsEntry("llmCachedInputTokens", "40")
+                .doesNotContainKeys("llmUncachedInputTokens", "llmCacheHitRatio");
     }
 
     @Test

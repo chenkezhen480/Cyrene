@@ -4,7 +4,7 @@
 
 > 将已有业务系统、领域知识和权限体系接入自主 ReAct Agent，而不是重新开发一套孤立的 AI 应用。
 
-Cyrene Agent 是一个使用 Java 21 构建的 Agent 开发框架。它面向垂直领域开发者，帮助已有系统快速获得自然语言入口、项目接口调用、企业知识检索、关系数据检索、子 Agent 协作和全链路 Trace 能力。
+Cyrene Agent 是一个使用 Java 21 构建的 Agent 开发框架。它面向垂直领域开发者，帮助已有系统快速获得自然语言入口、项目接口调用、企业知识检索、关系数据检索、可校验结构化输出、子 Agent 协作和全链路 Trace 能力。当前版本为 `0.5.10`。
 
 ## 为什么需要 Cyrene Agent
 
@@ -20,7 +20,7 @@ Cyrene Agent 解决的是另一类问题：**如何为已有系统构建专用 A
 | 依赖模型自身理解权限        | 沿用原系统 Token 和权限边界 |
 | 关系数据常被压成文本片段      | 文档走向量检索，关系数据走知识图谱 |
 
-**所有信息数据均不会上云**
+框架服务、知识库与持久化组件可以本地部署；调用外部模型或业务 API 时，数据会按接入方配置发送到对应服务，请结合自身数据策略选择 Provider 与部署方式。
 
 ![对话界面](docs/assets/chat.png)
 
@@ -138,20 +138,20 @@ Milvus、pgvector、Neo4j、MySQL 和 Redis 均可由本地 Docker Compose 驱�
 ```bash
 cp .env.example .env
 # 编辑 .env，至少配置主 Chat Model
-docker compose -f docker/docker-compose.yml up -d --build
+docker compose --env-file .env -f docker/docker-compose.yml up -d --build
 ```
 
 知识图谱是可选能力：
 
 ```bash
-docker compose -f docker/docker-compose.yml --profile graph up -d neo4j
+docker compose --env-file .env -f docker/docker-compose.yml --profile graph up -d neo4j
 ```
 
 ### 本地构建
 
 ```bash
 mvn clean package -pl harness-server -am -DskipTests
-java -jar harness-server/target/harness-server-0.5.8.jar
+java -jar harness-server/target/harness-server-0.5.10.jar
 ```
 
 服务默认监听 `8080`。打开 Web 控制台后，可以完成项目接口扫描、知识库上传、图谱管理和 Agent 对话。
@@ -181,9 +181,12 @@ java -jar harness-server/target/harness-server-0.5.8.jar
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | `POST` | `/api/chat` | 阻塞或 SSE 流式 Agent 请求 |
+| `POST` | `/api/structured-output` | 按 JSON Schema 返回已校验的最终业务对象 |
 | `DELETE` | `/api/chat/{sessionId}` | 取消运行中的请求 |
 | `GET` | `/api/sessions` | 游标分页查询会话 |
 | `POST` | `/api/knowledge/upload` | 上传企业知识文档 |
+| `GET` | `/api/knowledge` | 游标分页查询知识集合 |
+| `GET` | `/api/knowledge/{collection}` | 按文件名筛选并分页查询 Chunk |
 | `POST` | `/api/project-discovery/scan` | 扫描已有项目接口 |
 | `POST` | `/api/project-discovery/reload` | 热加载项目接口工具 |
 | `GET` | `/api/health` | 健康检查 |
@@ -194,4 +197,4 @@ java -jar harness-server/target/harness-server-0.5.8.jar
 
 ## 许可证
 
-Apache License 2.0
+[MIT License](./LICENSE)。项目依赖的第三方组件继续适用其各自许可证。

@@ -1,5 +1,6 @@
 package com.harness.input.multimodal;
 
+import com.harness.core.text.TextTokenEstimator;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -8,113 +9,221 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class TextChunkerTest {
 
-    // ---- split(text, chunkTokenSize) ----
-
-    @Test
-    void split_nullText_returnsEmptyList() {
-        assertThat(TextChunker.split(null, 100)).isEmpty();
-    }
-
-    @Test
-    void split_blankText_returnsEmptyList() {
-        assertThat(TextChunker.split("   ", 100)).isEmpty();
-    }
-
-    @Test
-    void split_shortText_returnsSingleChunk() {
-        String text = "This is a short text.";
-        List<String> chunks = TextChunker.split(text, 100);
-
-        assertThat(chunks).hasSize(1);
-        assertThat(chunks.get(0)).isEqualTo(text);
-    }
-
-    @Test
-    void split_paragraphBreak_splitsIntoTwoChunks() {
-        String text = "First paragraph.\n\nSecond paragraph.";
-        List<String> chunks = TextChunker.split(text, 100);
-
-        assertThat(chunks).hasSize(2);
-        assertThat(chunks.get(0)).isEqualTo("First paragraph.");
-        assertThat(chunks.get(1)).isEqualTo("Second paragraph.");
-    }
-
-    @Test
-    void split_markdownHeading_splitsAtHeading() {
-        String text = "Some content.\n## New Section\nMore content.";
-        List<String> chunks = TextChunker.split(text, 100);
-
-        assertThat(chunks).hasSize(2);
-        assertThat(chunks.get(0)).isEqualTo("Some content.");
-        assertThat(chunks.get(1)).contains("## New Section");
-    }
-
-    @Test
-    void split_horizontalRule_splitsAtRule() {
-        String text = "Before the rule.\n\n---\n\nAfter the rule.";
-        List<String> chunks = TextChunker.split(text, 100);
-
-        assertThat(chunks).hasSize(3);
-    }
-
-    @Test
-    void split_largeText_splitsIntoMultipleChunks() {
-        // Each sentence ~20 tokens (60 chars), chunk size 50 tokens => ~2-3 sentences per chunk
-        StringBuilder sb = new StringBuilder();
-        for (int i = 0; i < 20; i++) {
-            sb.append("This is sentence number ").append(i).append(" with some extra text. ");
+    private static final TextTokenEstimator CODE_POINT_ESTIMATOR = new TextTokenEstimator() {
+        @Override
+        public int estimate(String text) {
+            return text == null ? 0 : text.codePointCount(0, text.length());
         }
-        String text = sb.toString().strip();
-        List<String> chunks = TextChunker.split(text, 50);
 
-        assertThat(chunks.size()).isGreaterThan(1);
-        // Each chunk should be non-blank
-        for (String chunk : chunks) {
-            assertThat(chunk).isNotBlank();
+        @Override
+        public String strategyName() {
+            return "test-code-points";
         }
+    };
+
+    private final TextChunker chunker = new TextChunker(CODE_POINT_ESTIMATOR);
+
+    @Test
+    void returnsNoChunksForMissingContent() {
+        assertThat(chunker.chunk(null, 100)).isEmpty();
+        assertThat(chunker.chunk("   \n", 100)).isEmpty();
     }
 
     @Test
-    void split_cjkText_splitsAtCjkSentenceBoundaries() {
-        // Chinese sentences ending with 。and ！ — use small chunk size to force split
-        // Each sentence is ~6 chars = 2 tokens, so chunk size 4 forces ~2 sentences per chunk
-        String text = "这是第一句话。这是第二句话！这是第三句话？这是第四句话。";
-        List<String> chunks = TextChunker.split(text, 4);
+    void bindsConsecutiveHeadingsToTheFirstBodyBlock() {
+        List<MarkdownChunk> chunks = chunker.chunk("""
+                # 上传文件
 
-        assertThat(chunks.size()).isGreaterThan(1);
-        for (String chunk : chunks) {
-            assertThat(chunk).isNotBlank();
-        }
+                ## 大小限制
+
+                单个文件最大 20 MB。
+                """, 100);
+
+        assertThat(chunks).singleElement().satisfies(chunk -> {
+            assertThat(chunk.content()).isEqualTo(
+                    "# 上传文件\n\n## 大小限制\n\n单个文件最大 20 MB。");
+            assertThat(chunk.headingPath()).containsExactly("上传文件", "大小限制");
+            assertThat(chunk.startBlockIndex()).isZero();
+            assertThat(chunk.endBlockIndex()).isEqualTo(2);
+        });
     }
 
     @Test
-    void split_multipleParagraphBreaks_handlesCorrectly() {
-        String text = "Para one.\n\n\n\nPara two.\n\nPara three.";
-        List<String> chunks = TextChunker.split(text, 100);
+    void bindsHeadingToFollowingListAndKeepsListLinesTogetherWhenTheyFit() {
+        List<MarkdownChunk> chunks = chunker.chunk("""
+                ## 支持格式
 
-        assertThat(chunks).hasSize(3);
-    }
+                - PDF
+                - Markdown
+                - Word
+                """, 100);
 
-    // ---- estimateTokens (package-private) ----
-
-    @Test
-    void estimateTokens_normalString() {
-        assertThat(TextChunker.estimateTokens("hello")).isEqualTo(1); // 5/3 = 1
-    }
-
-    @Test
-    void estimateTokens_null_returnsZero() {
-        assertThat(TextChunker.estimateTokens(null)).isEqualTo(0);
+        assertThat(chunks).singleElement().satisfies(chunk -> {
+            assertThat(chunk.content()).contains("## 支持格式", "- PDF", "- Word");
+            assertThat(chunk.headingPath()).containsExactly("支持格式");
+        });
     }
 
     @Test
-    void estimateTokens_emptyString_returnsZero() {
-        assertThat(TextChunker.estimateTokens("")).isEqualTo(0);
+    void treatsHorizontalRulesAsBoundariesWithoutProducingRuleChunks() {
+        List<MarkdownChunk> chunks = chunker.chunk("""
+                第一节。
+
+                ---
+
+                第二节。
+
+                ***
+
+                第三节。
+
+                ===
+                """, 100);
+
+        assertThat(chunks).extracting(MarkdownChunk::content)
+                .containsExactly("第一节。", "第二节。", "第三节。");
+        assertThat(chunks).allSatisfy(chunk ->
+                assertThat(chunk.content()).doesNotMatch("(?s)^\\s*(?:[-*_ =]\\s*){3,}\\s*$"));
     }
 
     @Test
-    void estimateTokens_longString() {
-        String text = "a".repeat(300);
-        assertThat(TextChunker.estimateTokens(text)).isEqualTo(100); // 300/3 = 100
+    void doesNotParseMarkdownMarkersInsideFencedCode() {
+        String markdown = """
+                ```java
+                # not-a-heading
+                ---
+                System.out.println("🙂");
+                ```
+                """;
+
+        assertThat(chunker.chunk(markdown, 1000))
+                .singleElement()
+                .extracting(MarkdownChunk::content)
+                .isEqualTo(markdown.strip());
+    }
+
+    @Test
+    void splitsOversizedCodeByLineAndRetainsFencesOnEveryChunk() {
+        List<MarkdownChunk> chunks = chunker.chunk("""
+                ```sql
+                SELECT id, display_name FROM users;
+                WHERE tenant_id = '000000';
+                ```
+                """, 28);
+
+        assertThat(chunks).hasSizeGreaterThan(1);
+        assertThat(chunks).allSatisfy(chunk -> {
+            assertThat(chunk.content()).startsWith("```sql").endsWith("```");
+            assertThat(chunk.tokenCount()).isLessThanOrEqualTo(28);
+        });
+    }
+
+    @Test
+    void splitsOversizedTableByRowsAndRepeatsItsHeader() {
+        List<MarkdownChunk> chunks = chunker.chunk("""
+                | id | name |
+                |---:|:-----|
+                | 1 | Alice |
+                | 2 | Bob |
+                | 3 | Carol |
+                """, 45);
+
+        assertThat(chunks).hasSizeGreaterThan(1);
+        assertThat(chunks).allSatisfy(chunk -> {
+            assertThat(chunk.content()).startsWith("| id | name |\n|---:|:-----|");
+            assertThat(chunk.tokenCount()).isLessThanOrEqualTo(45);
+        });
+    }
+
+    @Test
+    void splitsOneOversizedTableRowWithoutBreakingTheTableEnvelope() {
+        List<MarkdownChunk> chunks = chunker.chunk("""
+                | id | payload |
+                |---:|:--------|
+                | 1 | abcdefghijklmnopqrstuvwxyz |
+                """, 45);
+
+        assertThat(chunks).hasSizeGreaterThan(1);
+        assertThat(chunks).allSatisfy(chunk -> {
+            assertThat(chunk.content()).startsWith("| id | payload |\n|---:|:--------|");
+            assertThat(chunk.tokenCount()).isLessThanOrEqualTo(45);
+        });
+    }
+
+    @Test
+    void enforcesExactUnderAndOverBudgetBoundaries() {
+        assertThat(chunker.chunk("1234", 5)).singleElement()
+                .extracting(MarkdownChunk::tokenCount).isEqualTo(4);
+        assertThat(chunker.chunk("12345", 5)).singleElement()
+                .extracting(MarkdownChunk::tokenCount).isEqualTo(5);
+
+        List<MarkdownChunk> overBudget = chunker.chunk("123456", 5);
+        assertThat(overBudget).extracting(MarkdownChunk::content)
+                .containsExactly("12345", "6");
+        assertThat(overBudget).allSatisfy(chunk ->
+                assertThat(chunk.tokenCount()).isLessThanOrEqualTo(5));
+    }
+
+    @Test
+    void greedilyMergesAdjacentBlocksWhenCombinedContentFits() {
+        List<MarkdownChunk> chunks = chunker.chunk("alpha\n\nbeta", 11);
+
+        assertThat(chunks).singleElement().satisfies(chunk -> {
+            assertThat(chunk.content()).isEqualTo("alpha\n\nbeta");
+            assertThat(chunk.startBlockIndex()).isZero();
+            assertThat(chunk.endBlockIndex()).isEqualTo(1);
+            assertThat(chunk.tokenCount()).isEqualTo(11);
+        });
+    }
+
+    @Test
+    void keepsQuestionAndAnswerTogetherInKnowledgeCorpus() {
+        List<MarkdownChunk> chunks = chunker.chunk("""
+                ## 大小限制
+
+                单个上传文件的大小限制是多少？
+
+                单个上传文件最大 20 MB，超过限制会明确返回错误。
+                """, 200);
+
+        assertThat(chunks).singleElement().satisfies(chunk ->
+                assertThat(chunk.content())
+                        .contains("单个上传文件的大小限制是多少？")
+                        .contains("单个上传文件最大 20 MB"));
+    }
+
+    @Test
+    void handlesMixedLanguagesEmojiUrlsIdentifiersJsonJavaAndSqlInOrder() {
+        String markdown = """
+                English 与中文 mixed 🙂 https://example.com/a?q=1
+
+                UUID: 123e4567-e89b-12d3-a456-426614174000
+
+                JSON: {"name":"Cyrene"}
+
+                Java: record User(String displayName) {}
+
+                SQL: SELECT * FROM users ORDER BY id;
+                """;
+
+        List<MarkdownChunk> chunks = chunker.chunk(markdown, 1000);
+
+        assertThat(chunks).singleElement().satisfies(chunk -> {
+            assertThat(chunk.content()).isEqualTo(markdown.strip());
+            assertThat(chunk.tokenCount()).isEqualTo(CODE_POINT_ESTIMATOR.estimate(markdown.strip()));
+        });
+    }
+
+    @Test
+    void staticCompatibilityApiUsesUnicodeAwareEstimator() {
+        assertThat(TextChunker.split("hello 世界 🙂", 100))
+                .containsExactly("hello 世界 🙂");
+        assertThat(TextChunker.estimateTokens(null)).isZero();
+        assertThat(TextChunker.estimateTokens("hello 世界 🙂")).isPositive();
+    }
+
+    @Test
+    void neverProducesContentForHorizontalRuleOnlyDocuments() {
+        assertThat(chunker.chunk("---\n\n***\n\n===", 100)).isEmpty();
     }
 }

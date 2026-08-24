@@ -15,7 +15,17 @@ public interface SessionMessageCache {
 
     List<MemoryMessage> getIfPresent(String sessionId);
 
+    default SessionCacheLookup lookup(String sessionId) {
+        List<MemoryMessage> messages = getIfPresent(sessionId);
+        return messages != null ? SessionCacheLookup.hit(messages) : SessionCacheLookup.miss();
+    }
+
     void put(String sessionId, String userId, List<MemoryMessage> messages);
+
+    default boolean putObserved(String sessionId, String userId, List<MemoryMessage> messages) {
+        put(sessionId, userId, messages);
+        return true;
+    }
 
     void append(String sessionId, String userId, MemoryMessage message);
 
@@ -26,4 +36,12 @@ public interface SessionMessageCache {
     int evictExpired();
 
     long getGlobalEstimatedBytes();
+
+    default SessionCacheMetrics metrics() {
+        return SessionCacheMetrics.noop();
+    }
+
+    default SessionCacheMetrics.Snapshot metricsSnapshot() {
+        return metrics().snapshot(size(), getGlobalEstimatedBytes());
+    }
 }

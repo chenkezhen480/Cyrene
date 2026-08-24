@@ -46,36 +46,40 @@ public class AwaitSubAgentsTool implements Tool {
 
     @Override
     public ToolSpec spec() {
+        ObjectNode properties = mapper.createObjectNode();
+
+        ObjectNode taskIds = mapper.createObjectNode()
+                .put("type", "array")
+                .put("description", "List of task IDs to wait for");
+        taskIds.set("items", mapper.createObjectNode().put("type", "string"));
+        properties.set("task_ids", taskIds);
+
+        ObjectNode returnWhen = mapper.createObjectNode()
+                .put("type", "string")
+                .put("description", "When to return: ALL (wait for all), ANY (wait for any), FIRST_SUCCESS (wait for first success)");
+        returnWhen.set("enum", mapper.createArrayNode().add("ALL").add("ANY").add("FIRST_SUCCESS"));
+        properties.set("return_when", returnWhen);
+
+        properties.set("timeout_seconds", mapper.createObjectNode()
+                .put("type", "integer")
+                .put("description", "Shared timeout for all tasks in seconds (default from env: 120s)"));
+
+        ObjectNode onTimeout = mapper.createObjectNode()
+                .put("type", "string")
+                .put("description", "Action on timeout: RESUME_SESSION (auto-resume when done), RETURN_PENDING (just return status), CANCEL (cancel remaining)");
+        onTimeout.set("enum", mapper.createArrayNode()
+                .add("RESUME_SESSION").add("RETURN_PENDING").add("CANCEL"));
+        properties.set("on_timeout", onTimeout);
+
+        ObjectNode parameters = mapper.createObjectNode().put("type", "object");
+        parameters.set("properties", properties);
+        parameters.set("required", mapper.createArrayNode().add("task_ids"));
+
         return new ToolSpec(
                 "await_subagents",
                 "Wait for sub-agent tasks to complete and get their results. " +
                         "All tasks share a single timeout deadline. Uncompleted tasks can auto-resume session.",
-                mapper.createObjectNode()
-                        .put("type", "object")
-                        .<ObjectNode>set("properties",
-                                mapper.createObjectNode()
-                                        .<ObjectNode>set("task_ids",
-                                                mapper.createObjectNode()
-                                                        .put("type", "array")
-                                                        .put("description", "List of task IDs to wait for")
-                                                        .<ObjectNode>set("items",
-                                                                mapper.createObjectNode().put("type", "string")))
-                                        .<ObjectNode>set("return_when",
-                                                mapper.createObjectNode()
-                                                        .put("type", "string")
-                                                        .put("description", "When to return: ALL (wait for all), ANY (wait for any), FIRST_SUCCESS (wait for first success)")
-                                                        .put("enum", mapper.createArrayNode().add("ALL").add("ANY").add("FIRST_SUCCESS")))
-                                        .<ObjectNode>set("timeout_seconds",
-                                                mapper.createObjectNode()
-                                                        .put("type", "integer")
-                                                        .put("description", "Shared timeout for all tasks in seconds (default from env: 120s)"))
-                                        .<ObjectNode>set("on_timeout",
-                                                mapper.createObjectNode()
-                                                        .put("type", "string")
-                                                        .put("description", "Action on timeout: RESUME_SESSION (auto-resume when done), RETURN_PENDING (just return status), CANCEL (cancel remaining)")
-                                                        .put("enum", mapper.createArrayNode().add("RESUME_SESSION").add("RETURN_PENDING").add("CANCEL"))))
-                        .<ObjectNode>set("required",
-                                mapper.createArrayNode().add("task_ids"))
+                parameters
         );
     }
 
@@ -126,7 +130,8 @@ public class AwaitSubAgentsTool implements Tool {
         Instant deadline = Instant.now().plusSeconds(timeoutSeconds);
         List<SubAgentTaskRecord> completedRecords = new ArrayList<>();
         List<SubAgentTaskRecord> pendingRecords = new ArrayList<>();
-        List<SubAgentTaskRecord> records = SubAgentToolHelper.resolveTaskRecords(scope, taskIds);
+        List<SubAgentTaskRecord> records = SubAgentToolHelper.resolveTaskRecords(
+                scope, taskIds, "await_subagents");
 
         for (SubAgentTaskRecord record : records) {
             if (record.isTerminal()) {
@@ -183,7 +188,8 @@ public class AwaitSubAgentsTool implements Tool {
         Instant deadline = Instant.now().plusSeconds(timeoutSeconds);
         List<SubAgentTaskRecord> completedRecords = new ArrayList<>();
         List<SubAgentTaskRecord> pendingRecords = new ArrayList<>();
-        List<SubAgentTaskRecord> records = SubAgentToolHelper.resolveTaskRecords(scope, taskIds);
+        List<SubAgentTaskRecord> records = SubAgentToolHelper.resolveTaskRecords(
+                scope, taskIds, "await_subagents");
 
         // Check if any already match
         for (SubAgentTaskRecord record : records) {

@@ -34,6 +34,7 @@ import com.harness.input.document.MarkItDownDocumentConversionService;
 import com.harness.input.multimodal.MultimodalParser;
 import com.harness.agent.context.ContextBuilder;
 import com.harness.agent.context.AgentPromptBuilder;
+import com.harness.agent.context.KnowledgeAccessService;
 import com.harness.core.model.Artifact;
 import com.harness.core.model.ArtifactStore;
 import com.harness.tool.artifact.ArtifactStorageService;
@@ -198,7 +199,7 @@ public class AgentOrchestrator {
         // Sub-agent manager (initialized before ReActEngine so spawn_subagent is available)
         this.subAgentManager = new SubAgentManager(
                 runtime.reActLoops(), runtime.traces(), toolExecutor,
-                sessionInbox, resumeDispatcher);
+                artifactStore, sessionInbox, resumeDispatcher);
         // Register sub-agent tools
         toolRegistry.register(new SpawnSubAgentTool(subAgentManager));
         toolRegistry.register(new AwaitSubAgentsTool(subAgentManager));
@@ -290,6 +291,31 @@ public class AgentOrchestrator {
                 enableThinking,
                 contextUserId,
                 agentContext));
+    }
+
+    public AgentResult runStructured(
+            String token,
+            String text,
+            List<MultimodalParser.RawAttachment> attachments,
+            String requestedSessionId,
+            String systemPromptOverride,
+            CancellationToken cancellationToken,
+            Boolean enableThinking,
+            String contextUserId,
+            AgentContext agentContext,
+            FinalOutputContract.JsonSchema outputContract
+    ) {
+        return runCoordinator.run(new AgentRunCommand(
+                token,
+                text,
+                attachments,
+                requestedSessionId,
+                systemPromptOverride,
+                cancellationToken,
+                enableThinking,
+                contextUserId,
+                agentContext,
+                outputContract));
     }
 
     /**
@@ -394,6 +420,7 @@ public class AgentOrchestrator {
         LoadSkillTool.clearCurrentSession();
         UpdateMemoryTool.clearContext();
         KnowledgeGraphTool.clearCurrentContext();
+        KnowledgeAccessService.clearCurrentContext();
         AuthorizedUrlContext.clear();
     }
 
@@ -401,6 +428,7 @@ public class AgentOrchestrator {
         Set<String> unavailable = new HashSet<>();
         if (Boolean.FALSE.equals(context.needsKnowledgeBase())) {
             unavailable.add(KnowledgeBaseTool.TOOL_NAME);
+            unavailable.add(KnowledgeContextReadTool.TOOL_NAME);
         }
         if (Boolean.FALSE.equals(context.needsWebSearch())) {
             unavailable.add(WebSearchTool.TOOL_NAME);
@@ -511,12 +539,19 @@ public class AgentOrchestrator {
             for (SessionInbox.SubAgentCompletedEvent event : events) {
                 eventMessage.append("Task ID: ").append(event.taskId()).append("\n");
                 eventMessage.append("Original task: ").append(event.taskDescription()).append("\n");
-                eventMessage.append("Status: ").append(event.result().success() ? "SUCCEEDED" : "FAILED").append("\n");
+                eventMessage.append("Status: ").append(event.result().status()).append("\n");
 
-                if (event.result().success()) {
+                if (event.result().output() != null) {
                     eventMessage.append("Result: ").append(event.result().output()).append("\n");
-                } else {
-                    eventMessage.append("Error: ").append(event.result().output()).append("\n");
+                }
+                if (event.result().error() != null) {
+                    eventMessage.append("Error: ").append(event.result().error()).append("\n");
+                }
+                if (!event.result().contractValidation().violations().isEmpty()) {
+                    eventMessage.append("Contract violations: ")
+                            .append(String.join("; ",
+                                    event.result().contractValidation().violations()))
+                            .append("\n");
                 }
                 eventMessage.append("\n");
             }
@@ -539,6 +574,7 @@ public class AgentOrchestrator {
             try {
                 AuthorizedUrlContext.clear();
                 KnowledgeGraphTool.clearCurrentContext();
+                KnowledgeAccessService.clearCurrentContext();
                 activateToolContext(userId, sessionId);
                 resumeRunId = openRunScope(
                         sessionId,

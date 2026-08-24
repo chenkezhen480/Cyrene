@@ -7,7 +7,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * RAG (Retrieval-Augmented Generation) retriever.
@@ -46,22 +48,18 @@ public class RagRetriever {
             return Collections.emptyList();
         }
         if (embeddingProvider == null || !embeddingProvider.isAvailable()) {
-            log.warn("RAG retrieve requires an embedding provider. Set {}.", EnvKey.MODEL_EMBEDDING_PROVIDER);
-            return Collections.emptyList();
+            throw new IllegalStateException(
+                    "RAG retrieve requires an embedding provider. Set "
+                            + EnvKey.MODEL_EMBEDDING_PROVIDER + ".");
         }
 
         log.debug("RAG retrieve: provider={}, collection={}, topK={}, query={}", provider, collection, topK, query);
 
-        try {
-            float[] embedding = embeddingProvider.embed(query).vector();
-            List<VectorStore.Document> docs = vectorStore.searchVector(collection, embedding, topK);
-            return docs.stream()
-                    .map(d -> new RagDocument(d.id(), d.content(), d.source(), d.score()))
-                    .toList();
-        } catch (Exception e) {
-            log.warn("RAG retrieve failed: {}", e.getMessage());
-            return Collections.emptyList();
-        }
+        float[] embedding = embeddingProvider.embed(query).vector();
+        List<VectorStore.Document> docs = vectorStore.searchVector(collection, embedding, topK);
+        return docs.stream()
+                .map(RagDocument::from)
+                .toList();
     }
 
     /**
@@ -90,6 +88,28 @@ public class RagRetriever {
             String id,
             String content,
             String source,
-            double score
-    ) {}
+            double score,
+            Map<String, Object> metadata,
+            int chunkIndex
+    ) {
+        public RagDocument {
+            metadata = metadata == null
+                    ? Map.of()
+                    : Collections.unmodifiableMap(new LinkedHashMap<>(metadata));
+        }
+
+        public RagDocument(String id, String content, String source, double score) {
+            this(id, content, source, score, Map.of(), -1);
+        }
+
+        public static RagDocument from(VectorStore.Document document) {
+            return new RagDocument(
+                    document.id(),
+                    document.content(),
+                    document.source(),
+                    document.score(),
+                    document.metadata(),
+                    document.chunkIndex());
+        }
+    }
 }

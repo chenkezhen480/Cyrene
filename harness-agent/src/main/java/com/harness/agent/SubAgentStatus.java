@@ -7,6 +7,7 @@ public enum SubAgentStatus {
     QUEUED,
     RUNNING,
     SUCCEEDED,
+    INCOMPLETE,
     FAILED,
     CANCEL_REQUESTED,
     CANCELLED,

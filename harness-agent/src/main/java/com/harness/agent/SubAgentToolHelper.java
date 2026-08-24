@@ -5,9 +5,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.harness.core.exception.ToolExecutionException;
-import com.harness.core.model.ReActStep;
 
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 
 /**
@@ -61,15 +61,23 @@ final class SubAgentToolHelper {
     }
 
     /**
-     * Resolve task IDs to task records. Unknown IDs are silently skipped.
+     * Resolve task IDs to task records and reject unknown IDs explicitly.
      */
-    static List<SubAgentTaskRecord> resolveTaskRecords(SubAgentRunScope scope, List<String> taskIds) {
+    static List<SubAgentTaskRecord> resolveTaskRecords(
+            SubAgentRunScope scope, List<String> taskIds, String toolName) {
         List<SubAgentTaskRecord> records = new ArrayList<>();
+        LinkedHashSet<String> unknownTaskIds = new LinkedHashSet<>();
         for (String taskId : taskIds) {
             SubAgentTaskRecord record = scope.getTask(taskId);
             if (record != null) {
                 records.add(record);
+            } else {
+                unknownTaskIds.add(taskId);
             }
+        }
+        if (!unknownTaskIds.isEmpty()) {
+            throw new ToolExecutionException(
+                    toolName, "Unknown task IDs: " + String.join(", ", unknownTaskIds));
         }
         return records;
     }
@@ -77,56 +85,65 @@ final class SubAgentToolHelper {
     /**
      * Serialize a task result into a JSON node.
      * Used by both GetSubAgentsTool and AwaitSubAgentsTool.
-     * Includes sub-agent steps for parent trace recording.
+     * Full ReAct steps stay in the linked sub-trace and are never copied here.
      */
     static void serializeResult(ObjectNode taskNode, SubAgentResult result, ObjectMapper mapper) {
-        if (result == null) return;
+        if (result == null) {
+            return;
+        }
         if (result.traceId() != null) {
             taskNode.put("sub_trace_id", result.traceId());
         }
-        if (result.success()) {
+        taskNode.put("success", result.success());
+        taskNode.put("status", result.status().name());
+        taskNode.put("duration_ms", result.durationMs());
+        if (result.output() != null) {
             taskNode.put("output", result.output());
-            taskNode.put("steps", result.steps().size());
-            taskNode.put("duration_ms", result.durationMs());
-            if (result.steps() != null && !result.steps().isEmpty()) {
-                taskNode.set("step_details", serializeSteps(result.steps(), mapper));
-            }
-        } else {
-            taskNode.put("error", result.output());
-            if (result.steps() != null && !result.steps().isEmpty()) {
-                taskNode.set("step_details", serializeSteps(result.steps(), mapper));
-            }
         }
-    }
+        if (result.error() != null) {
+            taskNode.put("error", result.error());
+        }
 
-    /**
-     * Serialize sub-agent ReAct steps into a compact JSON array.
-     * Each entry contains: step number, action, tool call count, and truncated observation.
-     * This data is included in the parent's tool result for trace visibility.
-     */
-    static ArrayNode serializeSteps(List<ReActStep> steps, ObjectMapper mapper) {
-        ArrayNode stepsArray = mapper.createArrayNode();
-        for (ReActStep step : steps) {
-            ObjectNode stepNode = mapper.createObjectNode();
-            stepNode.put("step", step.stepNumber());
-            if (step.action() != null) stepNode.put("action", step.action());
-            if (step.toolCalls() != null && !step.toolCalls().isEmpty()) {
-                stepNode.put("tool_count", step.toolCalls().size());
-                ArrayNode toolsArray = mapper.createArrayNode();
-                for (var tc : step.toolCalls()) {
-                    toolsArray.add(tc.toolName());
-                }
-                stepNode.set("tools", toolsArray);
+        ArrayNode artifacts = mapper.createArrayNode();
+        result.artifacts().forEach(artifact -> {
+            ObjectNode artifactNode = mapper.createObjectNode();
+            artifactNode.put("id", artifact.id());
+            artifactNode.put("name", artifact.name());
+            artifactNode.put("type", artifact.type().name());
+            artifactNode.put("mime_type", artifact.mimeType());
+            artifactNode.put("size_bytes", artifact.sizeBytes());
+            artifactNode.put("download_url", artifact.downloadUrl());
+            artifactNode.put("preview_url", artifact.previewUrl());
+            artifacts.add(artifactNode);
+        });
+        taskNode.set("artifacts", artifacts);
+
+        ObjectNode summaryNode = mapper.createObjectNode();
+        summaryNode.put("total_executions", result.toolExecutionSummary().totalExecutions());
+        ObjectNode toolsNode = mapper.createObjectNode();
+        result.toolExecutionSummary().tools().forEach((toolName, stats) -> {
+            ObjectNode statsNode = mapper.createObjectNode();
+            statsNode.put("attempt_count", stats.attemptCount());
+            statsNode.put("successful_count", stats.successfulCount());
+            statsNode.put("failed_count", stats.failedCount());
+            if (stats.latestError() != null) {
+                statsNode.put("latest_error", stats.latestError());
             }
-            if (step.observation() != null) {
-                String obs = step.observation();
-                stepNode.put("observation", obs.length() > 500 ? obs.substring(0, 500) + "..." : obs);
-            }
-            if (step.inspection() != null) {
-                stepNode.put("inspection", step.inspection().status().name());
-            }
-            stepsArray.add(stepNode);
+            toolsNode.set(toolName, statsNode);
+        });
+        summaryNode.set("tools", toolsNode);
+        taskNode.set("tool_execution_summary", summaryNode);
+
+        ContractValidation validation = result.contractValidation();
+        ObjectNode validationNode = mapper.createObjectNode();
+        validationNode.put("declared", validation.declared());
+        validationNode.put("satisfied", validation.satisfied());
+        validationNode.put("status", validation.status().name());
+        validationNode.set("violations", mapper.valueToTree(validation.violations()));
+        taskNode.set("contract_validation", validationNode);
+
+        if (result.structuredOutput() != null) {
+            taskNode.set("structured_output", result.structuredOutput());
         }
-        return stepsArray;
     }
 }

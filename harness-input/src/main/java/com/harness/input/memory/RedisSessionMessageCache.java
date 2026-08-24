@@ -37,6 +37,7 @@ public class RedisSessionMessageCache implements SessionMessageCache {
     private final long maxMemoryBytesPerUser;
     private final long globalMaxMemoryBytes;
     private final double evictionTargetRatio;
+    private final SessionCacheMetrics metrics = new SessionCacheMetrics("redis");
 
     private Consumer<String> onEvict;
 
@@ -63,23 +64,35 @@ public class RedisSessionMessageCache implements SessionMessageCache {
     }
 
     @Override
-    public List<MemoryMessage> getIfPresent(String sessionId) {
+    public SessionCacheLookup lookup(String sessionId) {
         try (Jedis jedis = RedisConnectionPool.getConnection()) {
             String json = jedis.get(msgKey(sessionId));
-            if (json == null) return null;
+            if (json == null) {
+                return SessionCacheLookup.miss();
+            }
 
             List<MemoryMessage> messages = MAPPER.readValue(json, MSG_LIST_TYPE);
             // Update access time
             jedis.zadd(accessKey(), System.currentTimeMillis(), sessionId);
-            return messages;
+            return SessionCacheLookup.hit(messages);
         } catch (Exception e) {
             log.warn("[Cache] getIfPresent failed for session {}: {}", sessionId, e.getMessage());
-            return null;
+            return SessionCacheLookup.error();
         }
     }
 
     @Override
+    public List<MemoryMessage> getIfPresent(String sessionId) {
+        return lookup(sessionId).messages();
+    }
+
+    @Override
     public void put(String sessionId, String userId, List<MemoryMessage> messages) {
+        putObserved(sessionId, userId, messages);
+    }
+
+    @Override
+    public boolean putObserved(String sessionId, String userId, List<MemoryMessage> messages) {
         try (Jedis jedis = RedisConnectionPool.getConnection()) {
             // Calculate old bytes if session already exists
             long oldBytes = 0;
@@ -120,8 +133,10 @@ public class RedisSessionMessageCache implements SessionMessageCache {
             // Enforce limits
             enforcePerUserLimits(jedis, userId);
             enforceGlobalMemoryLimit(jedis);
+            return jedis.exists(msgKey(sessionId));
         } catch (Exception e) {
             log.warn("[Cache] put failed for session {}: {}", sessionId, e.getMessage());
+            return false;
         }
     }
 
@@ -168,7 +183,11 @@ public class RedisSessionMessageCache implements SessionMessageCache {
     @Override
     public void remove(String sessionId) {
         try (Jedis jedis = RedisConnectionPool.getConnection()) {
-            evictSessionInternal(jedis, sessionId, true);
+            evictSessionInternal(
+                    jedis,
+                    sessionId,
+                    true,
+                    SessionCacheMetrics.EvictionReason.EXPLICIT);
         } catch (Exception e) {
             log.warn("[Cache] remove failed for session {}: {}", sessionId, e.getMessage());
         }
@@ -192,7 +211,11 @@ public class RedisSessionMessageCache implements SessionMessageCache {
             int evicted = 0;
             for (String sid : allSessions) {
                 if (!jedis.exists(msgKey(sid))) {
-                    evictSessionInternal(jedis, sid, true);
+                    evictSessionInternal(
+                            jedis,
+                            sid,
+                            true,
+                            SessionCacheMetrics.EvictionReason.TTL);
                     evicted++;
                 }
             }
@@ -217,10 +240,21 @@ public class RedisSessionMessageCache implements SessionMessageCache {
         }
     }
 
+    @Override
+    public SessionCacheMetrics metrics() {
+        return metrics;
+    }
+
     // ========== Internal ==========
 
-    private void evictSessionInternal(Jedis jedis, String sessionId, boolean notifyEvict) {
+    private void evictSessionInternal(
+            Jedis jedis,
+            String sessionId,
+            boolean notifyEvict,
+            SessionCacheMetrics.EvictionReason reason
+    ) {
         // Get metadata before deletion
+        Double accessScore = jedis.zscore(accessKey(), sessionId);
         String userId = jedis.hget(metaKey(sessionId), "userId");
         String bytesStr = jedis.hget(metaKey(sessionId), "bytes");
         long freed = bytesStr != null ? Long.parseLong(bytesStr) : 0;
@@ -239,6 +273,10 @@ public class RedisSessionMessageCache implements SessionMessageCache {
         }
         if (freed > 0) {
             jedis.decrBy(globalBytesKey(), freed);
+        }
+
+        if (accessScore != null || userId != null || bytesStr != null) {
+            metrics.recordEviction(reason);
         }
 
         log.debug("[Cache] Evicted session: {}, freed {} bytes (user={}, notify={})", sessionId, freed, userId, notifyEvict);
@@ -266,7 +304,11 @@ public class RedisSessionMessageCache implements SessionMessageCache {
             if (oldest == null) break;
             log.warn("[Cache] Per-user session limit exceeded: user={}, sessions={}, max={}, evicting {}",
                     userId, sessionCount, maxSessionsPerUser, oldest);
-            evictSessionInternal(jedis, oldest, true);
+            evictSessionInternal(
+                    jedis,
+                    oldest,
+                    true,
+                    SessionCacheMetrics.EvictionReason.USER_COUNT);
             sessionCount = jedis.scard(userSessionsKey(userId));
         }
 
@@ -278,7 +320,11 @@ public class RedisSessionMessageCache implements SessionMessageCache {
             if (oldest == null) break;
             log.warn("[Cache] Per-user memory limit exceeded: user={}, bytes={}MB > {}MB, evicting {}",
                     userId, userBytes / (1024 * 1024), maxMemoryBytesPerUser / (1024 * 1024), oldest);
-            evictSessionInternal(jedis, oldest, true);
+            evictSessionInternal(
+                    jedis,
+                    oldest,
+                    true,
+                    SessionCacheMetrics.EvictionReason.USER_BYTES);
             userBytesStr = jedis.get(userBytesKey(userId));
             userBytes = userBytesStr != null ? Long.parseLong(userBytesStr) : 0;
         }
@@ -302,7 +348,11 @@ public class RedisSessionMessageCache implements SessionMessageCache {
             Set<String> oldest = new HashSet<>(jedis.zrange(accessKey(), 0, 0));
             if (oldest.isEmpty()) break;
             String sid = oldest.iterator().next();
-            evictSessionInternal(jedis, sid, true);
+            evictSessionInternal(
+                    jedis,
+                    sid,
+                    true,
+                    SessionCacheMetrics.EvictionReason.GLOBAL_BYTES);
 
             globalBytesStr = jedis.get(globalBytesKey());
             globalBytes = globalBytesStr != null ? Long.parseLong(globalBytesStr) : 0;

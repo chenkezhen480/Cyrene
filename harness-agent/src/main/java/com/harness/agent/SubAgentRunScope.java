@@ -121,21 +121,6 @@ public class SubAgentRunScope {
     }
 
     /**
-     * Get multiple task records by IDs.
-     */
-    public Map<String, SubAgentTaskRecord> getTasks(List<String> taskIds) {
-        lastAccessedAt = Instant.now();
-        ConcurrentHashMap<String, SubAgentTaskRecord> result = new ConcurrentHashMap<>();
-        for (String taskId : taskIds) {
-            SubAgentTaskRecord record = tasks.get(taskId);
-            if (record != null) {
-                result.put(taskId, record);
-            }
-        }
-        return result;
-    }
-
-    /**
      * Get all tasks in this scope.
      */
     public Map<String, SubAgentTaskRecord> getAllTasks() {
@@ -193,6 +178,9 @@ public class SubAgentRunScope {
             SubAgentStatus depStatus = dep.status().get();
             if (depStatus == SubAgentStatus.FAILED) {
                 return "Dependency already failed: " + depId;
+            }
+            if (depStatus == SubAgentStatus.INCOMPLETE) {
+                return "Dependency did not satisfy its completion contract: " + depId;
             }
             if (depStatus == SubAgentStatus.CANCELLED) {
                 return "Dependency already cancelled: " + depId;

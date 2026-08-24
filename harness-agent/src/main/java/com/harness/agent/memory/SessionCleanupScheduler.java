@@ -103,6 +103,7 @@ public class SessionCleanupScheduler {
             if (cacheEvicted > 0 || skillEvicted > 0) {
                 log.debug("[Cleanup] Cache eviction: messageCache={}, skillRegistry={}", cacheEvicted, skillEvicted);
             }
+            log.debug("[Cleanup] Session cache metrics: {}", messageCache.metricsSnapshot());
 
             // Step 1: Recover stuck refinements before processing new ones
             resetStuckRefinements();

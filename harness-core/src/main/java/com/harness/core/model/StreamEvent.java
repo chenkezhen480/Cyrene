@@ -46,29 +46,48 @@ public record StreamEvent(
         return new StreamEvent(Type.STEP, "", Map.of("step", step));
     }
 
-    public static StreamEvent toolCallCreated(String toolName, String arguments) {
+    public static StreamEvent toolCallCreated(
+            String toolCallId, String toolName, String arguments) {
         return new StreamEvent(Type.TOOL_CALL_CREATED, "", Map.of(
+                "toolCallId", requiredToolCallId(toolCallId),
                 "toolName", toolName != null ? toolName : "",
+                "status", ToolCallStatus.CREATED.name(),
                 "arguments", arguments != null ? arguments : ""
         ));
     }
 
-    public static StreamEvent toolCallStart(String toolName, String arguments) {
+    public static StreamEvent toolCallStart(
+            String toolCallId, String toolName, String arguments) {
         return new StreamEvent(Type.TOOL_CALL_START, "", Map.of(
+                "toolCallId", requiredToolCallId(toolCallId),
                 "toolName", toolName != null ? toolName : "",
+                "status", ToolCallStatus.RUNNING.name(),
                 "arguments", arguments != null ? arguments : ""
         ));
     }
 
-    public static StreamEvent toolCallDone(String toolName, boolean success, long durationMs) {
-        return new StreamEvent(Type.TOOL_CALL_DONE, "", Map.of(
-                "toolName", toolName != null ? toolName : "",
-                "success", success,
-                "durationMs", durationMs
-        ));
+    public static StreamEvent toolCallDone(
+            String toolCallId,
+            String toolName,
+            ToolCallStatus status,
+            long durationMs,
+            String errorSummary) {
+        if (status != ToolCallStatus.SUCCEEDED
+                && status != ToolCallStatus.FAILED
+                && status != ToolCallStatus.CANCELLED) {
+            throw new IllegalArgumentException("Tool completion requires a terminal status");
+        }
+        Map<String, Object> metadata = new java.util.HashMap<>();
+        metadata.put("toolCallId", requiredToolCallId(toolCallId));
+        metadata.put("toolName", toolName != null ? toolName : "");
+        metadata.put("status", status.name());
+        metadata.put("durationMs", durationMs);
+        metadata.put("errorSummary", errorSummary != null ? errorSummary : "");
+        return new StreamEvent(Type.TOOL_CALL_DONE, "", Map.copyOf(metadata));
     }
 
     public static StreamEvent confirmationRequired(
+            String toolCallId,
             String requestId,
             String toolName,
             Object arguments,
@@ -77,6 +96,7 @@ public record StreamEvent(
             String riskLevel,
             String expiresAt) {
         Map<String, Object> metadata = new java.util.HashMap<>();
+        metadata.put("toolCallId", requiredToolCallId(toolCallId));
         metadata.put("requestId", requestId);
         metadata.put("toolName", toolName);
         metadata.put("arguments", arguments);
@@ -84,16 +104,30 @@ public record StreamEvent(
         metadata.put("summary", summary != null ? summary : "");
         metadata.put("riskLevel", riskLevel);
         metadata.put("expiresAt", expiresAt);
+        metadata.put("status", ToolCallStatus.AWAITING_CONFIRMATION.name());
         return new StreamEvent(Type.CONFIRMATION_REQUIRED, "", metadata);
     }
 
     public static StreamEvent confirmationResolved(
-            String requestId, String toolName, String decision) {
+            String toolCallId,
+            String requestId,
+            String toolName,
+            String decision,
+            ToolCallStatus status) {
         return new StreamEvent(Type.CONFIRMATION_RESOLVED, "", Map.of(
+                "toolCallId", requiredToolCallId(toolCallId),
                 "requestId", requestId,
                 "toolName", toolName,
-                "decision", decision
+                "decision", decision,
+                "status", status.name()
         ));
+    }
+
+    private static String requiredToolCallId(String toolCallId) {
+        if (toolCallId == null || toolCallId.isBlank()) {
+            throw new IllegalArgumentException("toolCallId must not be blank");
+        }
+        return toolCallId;
     }
 
     public static StreamEvent done(String output, String traceId, String sessionId, int steps) {

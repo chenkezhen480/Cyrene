@@ -2,7 +2,9 @@ package com.harness.agent.runtime;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.harness.agent.KnowledgeBaseTool;
+import com.harness.agent.KnowledgeContextReadTool;
 import com.harness.agent.KnowledgeGraphTool;
+import com.harness.agent.context.KnowledgeAccessService;
 import com.harness.agent.graph.GraphSpaceAccessService;
 import com.harness.core.concurrent.BlockingTaskExecutor;
 import com.harness.core.env.EnvConfig;
@@ -131,10 +133,12 @@ public final class AgentToolRuntime {
 
         String ragProvider = config.getString(EnvKey.RAG_PROVIDER, "pgvector");
         if (!"none".equalsIgnoreCase(ragProvider) && providers.embedding().isAvailable()) {
-            toolRegistry.register(new KnowledgeBaseTool(
-                    providers.embedding(), providers.rerank(), providers.chat()));
+            KnowledgeAccessService knowledgeAccess = new KnowledgeAccessService(
+                    providers.rerank(), providers.embedding());
+            toolRegistry.register(new KnowledgeBaseTool(knowledgeAccess, providers.chat()));
+            toolRegistry.register(new KnowledgeContextReadTool(knowledgeAccess));
         } else {
-            log.info("Knowledge base tool disabled (ragProvider={}, embedding={})",
+            log.info("Knowledge tools disabled (ragProvider={}, embedding={})",
                     ragProvider, providers.embedding().isAvailable());
         }
 

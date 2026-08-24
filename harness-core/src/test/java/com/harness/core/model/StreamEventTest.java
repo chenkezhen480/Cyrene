@@ -57,6 +57,7 @@ class StreamEventTest {
     @Test
     void confirmationRequired_containsApprovalPayload() {
         var event = StreamEvent.confirmationRequired(
+                "call-1",
                 "request-1",
                 "delete_file",
                 Map.of("path", "/tmp/a.txt"),
@@ -67,9 +68,30 @@ class StreamEventTest {
 
         assertThat(event.type()).isEqualTo(StreamEvent.Type.CONFIRMATION_REQUIRED);
         assertThat(event.metadata())
+                .containsEntry("toolCallId", "call-1")
                 .containsEntry("requestId", "request-1")
                 .containsEntry("toolName", "delete_file")
+                .containsEntry("status", ToolCallStatus.AWAITING_CONFIRMATION.name())
                 .containsEntry("riskLevel", "HIGH");
+    }
+
+    @Test
+    void toolEvents_keepStableIdAndTypedStatus() {
+        var created = StreamEvent.toolCallCreated("call-7", "search", "{}");
+        var running = StreamEvent.toolCallStart("call-7", "search", "{}");
+        var done = StreamEvent.toolCallDone(
+                "call-7", "search", ToolCallStatus.SUCCEEDED, 12, "");
+
+        assertThat(created.metadata())
+                .containsEntry("toolCallId", "call-7")
+                .containsEntry("status", "CREATED");
+        assertThat(running.metadata())
+                .containsEntry("toolCallId", "call-7")
+                .containsEntry("status", "RUNNING");
+        assertThat(done.metadata())
+                .containsEntry("toolCallId", "call-7")
+                .containsEntry("status", "SUCCEEDED")
+                .doesNotContainKey("success");
     }
 
     @Test

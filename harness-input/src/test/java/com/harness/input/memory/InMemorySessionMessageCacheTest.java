@@ -84,6 +84,8 @@ class InMemorySessionMessageCacheTest {
 
         assertThat(cache.getIfPresent("s1")).isNull();
         assertThat(cache.size()).isEqualTo(0);
+        assertThat(cache.metricsSnapshot().evictionTotals()
+                .get(SessionCacheMetrics.EvictionReason.EXPLICIT)).isEqualTo(1);
     }
 
     @Test
@@ -159,6 +161,8 @@ class InMemorySessionMessageCacheTest {
         assertThat(cache.getIfPresent("s2")).isNotNull();
         assertThat(cache.getIfPresent("s3")).isNotNull();
         assertThat(cache.getIfPresent("s4")).isNotNull();
+        assertThat(cache.metricsSnapshot().evictionTotals()
+                .get(SessionCacheMetrics.EvictionReason.USER_COUNT)).isEqualTo(1);
     }
 
     @Test

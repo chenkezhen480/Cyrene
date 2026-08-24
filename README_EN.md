@@ -4,7 +4,7 @@
 
 > Add an autonomous ReAct Agent to an existing business system, its domain knowledge, and its authorization model instead of building an isolated AI application from scratch.
 
-Cyrene Agent is an enterprise Agent development framework built with Java 21. It is designed for vertical-domain developers who need to give an existing system a natural-language interface, project API control, enterprise knowledge retrieval, relational-data retrieval, sub-agent collaboration, and end-to-end tracing.
+Cyrene Agent is an enterprise Agent development framework built with Java 21. It is designed for vertical-domain developers who need to give an existing system a natural-language interface, project API control, enterprise knowledge retrieval, relational-data retrieval, validated structured output, sub-agent collaboration, and end-to-end tracing. The current version is `0.5.10`.
 
 ## Why Cyrene Agent
 
@@ -20,7 +20,7 @@ Cyrene Agent addresses a different question: **how do you build a dedicated Agen
 | Authorization is left to model behavior | Existing user tokens and authorization boundaries are preserved |
 | Relational data is often flattened into text | Documents use vector retrieval; relationships use a knowledge graph |
 
-**None of the information or data will be uploaded to the cloud**
+The framework service, knowledge stores, and persistence components can be deployed locally. Calls to external model providers or business APIs send data to the configured services, so deployments should select providers according to their own data policies.
 
 ![Chat interface](docs/assets/chat.png)
 
@@ -138,20 +138,20 @@ This reduces model distraction, unnecessary tool cost, and privilege exposure at
 ```bash
 cp .env.example .env
 # Edit .env and configure at least the main Chat Model
-docker compose -f docker/docker-compose.yml up -d --build
+docker compose --env-file .env -f docker/docker-compose.yml up -d --build
 ```
 
 The knowledge graph is optional:
 
 ```bash
-docker compose -f docker/docker-compose.yml --profile graph up -d neo4j
+docker compose --env-file .env -f docker/docker-compose.yml --profile graph up -d neo4j
 ```
 
 ### Local Build
 
 ```bash
 mvn clean package -pl harness-server -am -DskipTests
-java -jar harness-server/target/harness-server-0.5.8.jar
+java -jar harness-server/target/harness-server-0.5.10.jar
 ```
 
 The service listens on `8080` by default. Open the Web console to discover project APIs, upload knowledge, manage graph data, and talk to the Agent.
@@ -181,9 +181,12 @@ Common endpoints:
 | Method | Path | Description |
 |---|---|---|
 | `POST` | `/api/chat` | Blocking or SSE-streaming Agent request |
+| `POST` | `/api/structured-output` | Return a validated final business object under a JSON Schema |
 | `DELETE` | `/api/chat/{sessionId}` | Cancel an active request |
 | `GET` | `/api/sessions` | Cursor-paginated session query |
 | `POST` | `/api/knowledge/upload` | Upload enterprise knowledge documents |
+| `GET` | `/api/knowledge` | Cursor-paginated knowledge collections |
+| `GET` | `/api/knowledge/{collection}` | Filter by file name and paginate chunks |
 | `POST` | `/api/project-discovery/scan` | Discover APIs in an existing project |
 | `POST` | `/api/project-discovery/reload` | Hot-reload project API tools |
 | `GET` | `/api/health` | Health check |
@@ -195,4 +198,4 @@ Email 2: cken48153@gmail.com
 
 ## License
 
-Apache License 2.0
+[MIT License](./LICENSE). Third-party dependencies remain subject to their respective licenses.

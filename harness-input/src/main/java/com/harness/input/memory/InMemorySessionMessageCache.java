@@ -30,6 +30,7 @@ public class InMemorySessionMessageCache implements SessionMessageCache {
     private final long globalMaxMemoryBytes;
     private final double evictionTargetRatio; // 0.0 ~ 1.0
     private final long sessionTtlMs;
+    private final SessionCacheMetrics metrics = new SessionCacheMetrics("memory");
 
     /** sessionId → messages */
     private final Map<String, List<MemoryMessage>> cache = new HashMap<>();
@@ -68,20 +69,35 @@ public class InMemorySessionMessageCache implements SessionMessageCache {
     }
 
     @Override
-    public synchronized List<MemoryMessage> getIfPresent(String sessionId) {
+    public synchronized SessionCacheLookup lookup(String sessionId) {
         if (isExpired(sessionId)) {
-            evictSessionInternal(sessionId, true);
-            return null;
+            evictSessionInternal(sessionId, true, SessionCacheMetrics.EvictionReason.TTL);
+            return SessionCacheLookup.miss();
         }
         List<MemoryMessage> msgs = cache.get(sessionId);
         if (msgs != null) {
             touchSession(sessionId);
+            return SessionCacheLookup.hit(msgs);
         }
-        return msgs;
+        return SessionCacheLookup.miss();
+    }
+
+    @Override
+    public synchronized List<MemoryMessage> getIfPresent(String sessionId) {
+        return lookup(sessionId).messages();
     }
 
     @Override
     public synchronized void put(String sessionId, String userId, List<MemoryMessage> messages) {
+        putObserved(sessionId, userId, messages);
+    }
+
+    @Override
+    public synchronized boolean putObserved(
+            String sessionId,
+            String userId,
+            List<MemoryMessage> messages
+    ) {
         List<MemoryMessage> old = cache.put(sessionId, new ArrayList<>(messages));
         touchSession(sessionId);
 
@@ -112,6 +128,7 @@ public class InMemorySessionMessageCache implements SessionMessageCache {
 
         enforcePerUserLimits(userId);
         enforceGlobalMemoryLimit();
+        return cache.containsKey(sessionId);
     }
 
     @Override
@@ -131,7 +148,7 @@ public class InMemorySessionMessageCache implements SessionMessageCache {
 
     @Override
     public synchronized void remove(String sessionId) {
-        evictSessionInternal(sessionId, true);
+        evictSessionInternal(sessionId, true, SessionCacheMetrics.EvictionReason.EXPLICIT);
     }
 
     @Override
@@ -151,7 +168,7 @@ public class InMemorySessionMessageCache implements SessionMessageCache {
             expired.addAll(entry.getValue());
         }
         for (String sid : expired) {
-            evictSessionInternal(sid, true);
+            evictSessionInternal(sid, true, SessionCacheMetrics.EvictionReason.TTL);
             evicted++;
         }
         if (evicted > 0) {
@@ -163,6 +180,11 @@ public class InMemorySessionMessageCache implements SessionMessageCache {
     @Override
     public synchronized long getGlobalEstimatedBytes() {
         return globalEstimatedBytes;
+    }
+
+    @Override
+    public SessionCacheMetrics metrics() {
+        return metrics;
     }
 
     // ========== Internal ==========
@@ -181,7 +203,11 @@ public class InMemorySessionMessageCache implements SessionMessageCache {
         return last != null && (System.currentTimeMillis() - last) > sessionTtlMs;
     }
 
-    private void evictSessionInternal(String sessionId, boolean notifyEvict) {
+    private void evictSessionInternal(
+            String sessionId,
+            boolean notifyEvict,
+            SessionCacheMetrics.EvictionReason reason
+    ) {
         List<MemoryMessage> old = cache.remove(sessionId);
 
         Long ts = sessionToTime.remove(sessionId);
@@ -208,6 +234,10 @@ public class InMemorySessionMessageCache implements SessionMessageCache {
             if (userMemoryBytes.getOrDefault(userId, 0L) <= 0) {
                 userMemoryBytes.remove(userId);
             }
+        }
+
+        if (old != null || ts != null || userId != null) {
+            metrics.recordEviction(reason);
         }
 
         log.debug("[Cache] Evicted session: {}, freed {} messages (user={}, notify={})", sessionId, old != null ? old.size() : 0, userId, notifyEvict);
@@ -240,7 +270,7 @@ public class InMemorySessionMessageCache implements SessionMessageCache {
             if (oldest == null) break;
             log.warn("[Cache] Per-user session limit exceeded: user={}, sessions={}, max={}, evicting {}",
                     userId, sessions.size(), maxSessionsPerUser, oldest);
-            evictSessionInternal(oldest, true);
+            evictSessionInternal(oldest, true, SessionCacheMetrics.EvictionReason.USER_COUNT);
         }
 
         while (userMemoryBytes.getOrDefault(userId, 0L) > maxMemoryBytesPerUser) {
@@ -251,7 +281,7 @@ public class InMemorySessionMessageCache implements SessionMessageCache {
             log.warn("[Cache] Per-user memory limit exceeded: user={}, bytes={}MB > {}MB, evicting {}",
                     userId, userMemoryBytes.get(userId) / (1024 * 1024),
                     maxMemoryBytesPerUser / (1024 * 1024), oldest);
-            evictSessionInternal(oldest, true);
+            evictSessionInternal(oldest, true, SessionCacheMetrics.EvictionReason.USER_BYTES);
         }
     }
 
@@ -269,7 +299,7 @@ public class InMemorySessionMessageCache implements SessionMessageCache {
         while (globalEstimatedBytes > targetBytes && !cache.isEmpty()) {
             String oldest = findGloballyOldestSession();
             if (oldest == null) break;
-            evictSessionInternal(oldest, true);
+            evictSessionInternal(oldest, true, SessionCacheMetrics.EvictionReason.GLOBAL_BYTES);
         }
 
         log.debug("[Cache] After global eviction: sessions={}, globalMB={}",

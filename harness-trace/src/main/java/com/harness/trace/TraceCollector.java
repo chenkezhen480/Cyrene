@@ -2,6 +2,7 @@ package com.harness.trace;
 
 import com.harness.trace.store.TraceStore;
 import com.harness.core.model.AgentTrace;
+import com.harness.core.model.ModelUsage;
 import com.harness.core.model.ReActStep;
 import com.harness.core.model.RiskLevel;
 import com.harness.core.runtime.RunTrace;
@@ -80,6 +81,59 @@ public class TraceCollector implements RunTrace {
         builder.totalTokens(totalTokens > Integer.MAX_VALUE
                 ? Integer.MAX_VALUE
                 : (int) totalTokens);
+    }
+
+    @Override
+    public synchronized void recordModelUsage(ModelUsage usage) {
+        if (usage == null) {
+            return;
+        }
+        java.util.Map<String, String> metadata =
+                new java.util.HashMap<>(builder.build().metadata());
+        int callNumber = Integer.parseInt(metadata.getOrDefault("llmUsageCallCount", "0")) + 1;
+        String prefix = "llmUsageCall" + callNumber;
+        metadata.put("llmUsageCallCount", String.valueOf(callNumber));
+        putIfObserved(metadata, prefix + "InputTokens", usage.inputTokens());
+        putIfObserved(metadata, prefix + "CachedInputTokens", usage.cachedInputTokens());
+        putIfObserved(metadata, prefix + "UncachedInputTokens", usage.uncachedInputTokens());
+        putIfObserved(metadata, prefix + "CacheWriteTokens", usage.cacheWriteTokens());
+        putIfObserved(metadata, prefix + "OutputTokens", usage.outputTokens());
+        putIfObserved(metadata, prefix + "ReasoningTokens", usage.reasoningTokens());
+        metadata.put(prefix + "LatencyMs", String.valueOf(usage.llmLatencyMs()));
+        if (usage.cacheHitRatio() != null) {
+            metadata.put(prefix + "CacheHitRatio", String.valueOf(usage.cacheHitRatio()));
+        }
+        if (usage.promptPrefixFingerprint() != null) {
+            metadata.put(prefix + "PromptPrefixFingerprint", usage.promptPrefixFingerprint());
+        }
+        if (usage.toolCatalogVersion() != null) {
+            metadata.put(prefix + "ToolCatalogVersion", String.valueOf(usage.toolCatalogVersion()));
+        }
+
+        accumulateObserved(metadata, "llmInputTokens", usage.inputTokens());
+        accumulateObserved(metadata, "llmCachedInputTokens", usage.cachedInputTokens());
+        incrementObservationCount(metadata, "llmInputUsageObservedCalls", usage.inputTokens());
+        incrementObservationCount(
+                metadata, "llmCachedInputUsageObservedCalls", usage.cachedInputTokens());
+        accumulateObserved(metadata, "llmCacheWriteTokens", usage.cacheWriteTokens());
+        accumulateObserved(metadata, "llmOutputTokens", usage.outputTokens());
+        accumulateObserved(metadata, "llmReasoningTokens", usage.reasoningTokens());
+        accumulateObserved(metadata, "llmLatencyMs", usage.llmLatencyMs());
+        Long totalInputTokens = observedLong(metadata, "llmInputTokens");
+        Long totalCachedInputTokens = observedLong(metadata, "llmCachedInputTokens");
+        if (totalInputTokens != null && totalInputTokens > 0
+                && totalCachedInputTokens != null
+                && metadata.get("llmInputUsageObservedCalls").equals(
+                        metadata.get("llmCachedInputUsageObservedCalls"))) {
+            metadata.put("llmUncachedInputTokens", String.valueOf(
+                    Math.max(totalInputTokens - totalCachedInputTokens, 0)));
+            metadata.put("llmCacheHitRatio", String.valueOf(
+                    totalCachedInputTokens.doubleValue() / totalInputTokens));
+        } else {
+            metadata.remove("llmUncachedInputTokens");
+            metadata.remove("llmCacheHitRatio");
+        }
+        builder.metadata(metadata);
     }
 
     @Override
@@ -218,5 +272,52 @@ public class TraceCollector implements RunTrace {
     @Override
     public synchronized AgentTrace snapshot() {
         return builder.build();
+    }
+
+    private static void putIfObserved(
+            java.util.Map<String, String> metadata,
+            String key,
+            Long value
+    ) {
+        if (value != null) {
+            metadata.put(key, String.valueOf(value));
+        }
+    }
+
+    private static void accumulateObserved(
+            java.util.Map<String, String> metadata,
+            String key,
+            Long value
+    ) {
+        if (value == null) {
+            return;
+        }
+        long current = Long.parseLong(metadata.getOrDefault(key, "0"));
+        metadata.put(key, String.valueOf(current + value));
+    }
+
+    private static void accumulateObserved(
+            java.util.Map<String, String> metadata,
+            String key,
+            long value
+    ) {
+        accumulateObserved(metadata, key, Long.valueOf(value));
+    }
+
+    private static Long observedLong(java.util.Map<String, String> metadata, String key) {
+        String value = metadata.get(key);
+        return value != null ? Long.parseLong(value) : null;
+    }
+
+    private static void incrementObservationCount(
+            java.util.Map<String, String> metadata,
+            String key,
+            Long observedValue
+    ) {
+        if (observedValue == null) {
+            return;
+        }
+        long current = Long.parseLong(metadata.getOrDefault(key, "0"));
+        metadata.put(key, String.valueOf(current + 1));
     }
 }

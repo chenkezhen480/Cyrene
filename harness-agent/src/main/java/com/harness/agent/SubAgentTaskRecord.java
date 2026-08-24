@@ -12,7 +12,7 @@ import java.util.concurrent.atomic.AtomicReference;
  * and result delivery state.
  *
  * Two independent state machines:
- * - SubAgentStatus: QUEUED → RUNNING → SUCCEEDED/FAILED/CANCELLED/TIMED_OUT
+ * - SubAgentStatus: QUEUED → RUNNING → SUCCEEDED/INCOMPLETE/FAILED/CANCELLED/TIMED_OUT
  * - ResultDeliveryState: INLINE_PENDING → INLINE_CONSUMED/DETACHED → SESSION_RESUMED
  */
 public class SubAgentTaskRecord {
@@ -66,8 +66,7 @@ public class SubAgentTaskRecord {
         SubAgentStatus current;
         do {
             current = status.get();
-            if (current == SubAgentStatus.FAILED || current == SubAgentStatus.CANCELLED ||
-                current == SubAgentStatus.TIMED_OUT) {
+            if (isTerminal(current)) {
                 return; // Already in a terminal state, don't overwrite
             }
         } while (!status.compareAndSet(current, SubAgentStatus.SUCCEEDED));
@@ -82,11 +81,23 @@ public class SubAgentTaskRecord {
         SubAgentStatus current;
         do {
             current = status.get();
-            if (current == SubAgentStatus.SUCCEEDED || current == SubAgentStatus.CANCELLED ||
-                current == SubAgentStatus.TIMED_OUT) {
+            if (isTerminal(current)) {
                 return; // Already in a terminal state, don't overwrite
             }
         } while (!status.compareAndSet(current, SubAgentStatus.FAILED));
+        this.storedResult = result;
+        completion.complete(result);
+    }
+
+    /** Mark a normally completed task whose declared completion contract was unmet. */
+    public void markIncomplete(SubAgentResult result) {
+        SubAgentStatus current;
+        do {
+            current = status.get();
+            if (isTerminal(current)) {
+                return;
+            }
+        } while (!status.compareAndSet(current, SubAgentStatus.INCOMPLETE));
         this.storedResult = result;
         completion.complete(result);
     }
@@ -99,8 +110,7 @@ public class SubAgentTaskRecord {
         SubAgentStatus current;
         do {
             current = status.get();
-            if (current == SubAgentStatus.SUCCEEDED || current == SubAgentStatus.FAILED ||
-                current == SubAgentStatus.CANCELLED || current == SubAgentStatus.TIMED_OUT) {
+            if (isTerminal(current)) {
                 return false;
             }
             if (current == SubAgentStatus.CANCEL_REQUESTED) {
@@ -120,12 +130,12 @@ public class SubAgentTaskRecord {
         SubAgentStatus current;
         do {
             current = status.get();
-            if (current == SubAgentStatus.SUCCEEDED || current == SubAgentStatus.FAILED ||
-                current == SubAgentStatus.TIMED_OUT) {
+            if (isTerminal(current)) {
                 return;
             }
         } while (!status.compareAndSet(current, SubAgentStatus.CANCELLED));
-        this.storedResult = SubAgentResult.failure(taskId, "Cancelled", java.util.List.of(), 0);
+        this.storedResult = SubAgentResult.failure(
+                taskId, "Cancelled", 0, task.completionContract() != null);
         completion.complete(storedResult);
     }
 
@@ -136,12 +146,12 @@ public class SubAgentTaskRecord {
         SubAgentStatus current;
         do {
             current = status.get();
-            if (current == SubAgentStatus.SUCCEEDED || current == SubAgentStatus.FAILED ||
-                current == SubAgentStatus.CANCELLED) {
+            if (isTerminal(current)) {
                 return;
             }
         } while (!status.compareAndSet(current, SubAgentStatus.TIMED_OUT));
-        this.storedResult = SubAgentResult.failure(taskId, "Task timed out", java.util.List.of(), 0);
+        this.storedResult = SubAgentResult.failure(
+                taskId, "Task timed out", 0, task.completionContract() != null);
         completion.complete(storedResult);
     }
 
@@ -150,8 +160,7 @@ public class SubAgentTaskRecord {
      */
     public boolean isTerminal() {
         SubAgentStatus s = status.get();
-        return s == SubAgentStatus.SUCCEEDED || s == SubAgentStatus.FAILED ||
-               s == SubAgentStatus.CANCELLED || s == SubAgentStatus.TIMED_OUT;
+        return isTerminal(s);
     }
 
     /**
@@ -199,5 +208,13 @@ public class SubAgentTaskRecord {
      */
     public void storeCompletionResult(SubAgentResult result) {
         this.storedResult = result;
+    }
+
+    private static boolean isTerminal(SubAgentStatus status) {
+        return status == SubAgentStatus.SUCCEEDED
+                || status == SubAgentStatus.INCOMPLETE
+                || status == SubAgentStatus.FAILED
+                || status == SubAgentStatus.CANCELLED
+                || status == SubAgentStatus.TIMED_OUT;
     }
 }

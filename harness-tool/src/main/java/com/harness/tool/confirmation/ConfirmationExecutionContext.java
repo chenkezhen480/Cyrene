@@ -1,7 +1,7 @@
 package com.harness.tool.confirmation;
 
-import com.fasterxml.jackson.databind.JsonNode;
 import com.harness.core.model.CancellationToken;
+import com.harness.core.model.ToolCall;
 
 import java.util.Objects;
 import java.util.function.BiConsumer;
@@ -16,7 +16,7 @@ public record ConfirmationExecutionContext(
         CancellationToken cancellationToken,
         Consumer<ConfirmationRequest> onConfirmationRequired,
         BiConsumer<ConfirmationRequest, ConfirmationDecision> onConfirmationResolved,
-        BiConsumer<String, JsonNode> onExecutionStart
+        Consumer<ToolCall> onExecutionStart
 ) {
     public ConfirmationExecutionContext {
         Objects.requireNonNull(onConfirmationRequired, "onConfirmationRequired");

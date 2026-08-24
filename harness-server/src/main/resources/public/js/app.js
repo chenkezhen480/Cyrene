@@ -30,6 +30,9 @@ function stripArtifactLinks(text) {
   return text.replace(ARTIFACT_LINK_RE, '').trim();
 }
 
+const upsertToolCall = CyreneToolCalls.upsert;
+const formatToolArguments = CyreneToolCalls.formatArguments;
+
 // ── SVG Icons ──
 const Icons = {
   chat: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>`,
@@ -833,7 +836,14 @@ const ChatPage = {
       scrollToBottom();
 
       isStreaming.value = true;
-      messages.value.push({ role: 'assistant', content: '', toolCalls: [] });
+      messages.value.push({
+        role: 'assistant',
+        content: '',
+        toolCalls: [],
+        toolCallsById: new Map(),
+        compressions: [],
+        artifacts: [],
+      });
       const msgIdx = messages.value.length - 1;
 
       try {
@@ -851,27 +861,16 @@ const ChatPage = {
 
         const reader = resp.body.getReader();
         const decoder = new TextDecoder();
-        let sseBuffer = '';
-        let currentEventType = '';
+        const sseParser = CyreneSSE.createParser(({ type, data }) => {
+          let parsed;
+          try {
+            parsed = JSON.parse(data);
+          } catch {
+            showToast(t('invalidStreamEvent'), 'error');
+            return;
+          }
 
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-
-          sseBuffer += decoder.decode(value, { stream: true });
-          const lines = sseBuffer.split('\n');
-          sseBuffer = lines.pop() || '';
-
-          for (const line of lines) {
-            if (line.startsWith('event: ')) {
-              currentEventType = line.slice(7).trim();
-              continue;
-            }
-            if (line.startsWith('data: ')) {
-              const data = line.slice(6);
-              try {
-                const parsed = JSON.parse(data);
-                switch (currentEventType) {
+          switch (type) {
                   case 'start':
                     if (parsed.sessionId) {
                       currentSessionId.value = parsed.sessionId;
@@ -885,42 +884,18 @@ const ChatPage = {
                     if (parsed.text) messages.value[msgIdx].content += parsed.text;
                     break;
                   case 'tool_call_created':
-                    messages.value[msgIdx].toolCalls.push({ name: parsed.toolName, status: 'queued' });
-                    break;
                   case 'tool_call_start':
-                    {
-                      const tc = messages.value[msgIdx].toolCalls;
-                      const queued = tc.findLast(t => t.name === parsed.toolName && t.status === 'queued');
-                      if (queued) queued.status = 'running';
-                    }
-                    break;
                   case 'tool_call_done':
-                    {
-                      const tc = messages.value[msgIdx].toolCalls;
-                      const last = tc.findLast(t => t.name === parsed.toolName
-                        && (t.status === 'pending' || t.status === 'running'
-                          || t.status === 'queued' || t.status === 'awaiting_approval'));
-                      if (last) last.status = parsed.success ? 'success' : 'error';
-                    }
+                    upsertToolCall(messages.value[msgIdx], parsed);
                     break;
                   case 'confirmation_required':
                     pendingConfirmation.value = parsed;
                     confirmationAcknowledged.value = false;
-                    {
-                      const tc = messages.value[msgIdx].toolCalls;
-                      const waiting = tc.findLast(t => t.name === parsed.toolName
-                        && (t.status === 'queued' || t.status === 'running'));
-                      if (waiting) waiting.status = 'awaiting_approval';
-                    }
+                    upsertToolCall(messages.value[msgIdx], parsed);
                     break;
                   case 'confirmation_resolved':
                     {
-                      const tc = messages.value[msgIdx].toolCalls;
-                      const waiting = tc.findLast(t => t.name === parsed.toolName
-                        && t.status === 'awaiting_approval');
-                      if (waiting) {
-                        waiting.status = parsed.decision === 'APPROVED' ? 'queued' : 'error';
-                      }
+                      upsertToolCall(messages.value[msgIdx], parsed);
                       if (pendingConfirmation.value?.requestId === parsed.requestId) {
                         pendingConfirmation.value = null;
                         confirmationAcknowledged.value = false;
@@ -928,9 +903,7 @@ const ChatPage = {
                     }
                     break;
                   case 'compress':
-                    const modeLabel = parsed.mode === 'major' ? t('majorCompress') : t('minorCompress');
-                    const compressHtml = `\n\n<div class="compress-block"><span class="compress-icon">🗜️</span> <span class="compress-label">${modeLabel}</span> <span class="compress-detail">${parsed.detail || ''}</span></div>\n\n`;
-                    messages.value[msgIdx].content += compressHtml;
+                    messages.value[msgIdx].compressions.push(parsed);
                     break;
                   case 'artifact':
                     {
@@ -938,17 +911,15 @@ const ChatPage = {
                       messages.value[msgIdx].content = messages.value[msgIdx].content.replace(
                         /\n?<div class="artifact-loading-canvas"[\s\S]*?<\/div>\n?/, ''
                       );
-                      // Embed artifact inline into message content
-                      if (parsed.type === 'IMAGE') {
-                        const url = getArtifactPreviewUrl(parsed.id || parsed.artifactId);
-                        messages.value[msgIdx].content += `\n\n![${parsed.name || 'image'}](${url})\n\n`;
-                      } else if (parsed.type === 'VIDEO') {
-                        const url = getArtifactPreviewUrl(parsed.id || parsed.artifactId);
-                        messages.value[msgIdx].content += `\n\n<video controls src="${url}" style="max-width:100%;border-radius:8px"></video>\n\n`;
-                      } else {
-                        const url = getArtifactUrl(parsed.id || parsed.artifactId);
-                        messages.value[msgIdx].content += `\n\n📎 [${parsed.name || 'file'}](${url})\n\n`;
+                      if (typeof parsed.artifactId !== 'string' || !parsed.artifactId) {
+                        throw new Error('Artifact event is missing artifactId');
                       }
+                      const artifacts = messages.value[msgIdx].artifacts;
+                      const existingArtifact = artifacts.find(
+                        artifact => artifact.artifactId === parsed.artifactId
+                      );
+                      if (existingArtifact) Object.assign(existingArtifact, parsed);
+                      else artifacts.push(parsed);
                     }
                     break;
                   case 'audio_start':
@@ -989,22 +960,22 @@ const ChatPage = {
                     showToast(parsed.error || t('requestFailed'), 'error');
                     break;
                   default:
-                    if (parsed.text) messages.value[msgIdx].content += parsed.text;
-                    else if (parsed.output != null) messages.value[msgIdx].content = [{ type: 'TEXT', text: parsed.output }];
-                }
-              } catch (e) {
-                if (typeof messages.value[msgIdx].content === 'string') {
-                  messages.value[msgIdx].content += data;
-                }
-              }
-              currentEventType = '';
-            }
+                    break;
           }
+        });
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          sseParser.feed(decoder.decode(value, { stream: true }));
 
           // Force yield to macrotask queue so browser can repaint
           scrollToBottom();
           await new Promise(r => setTimeout(r, 0));
         }
+        sseParser.feed(decoder.decode());
+        sseParser.finish();
 
         // Reload sessions list
         loadSessions();
@@ -1075,6 +1046,7 @@ const ChatPage = {
       toggleVoiceReply, toggleVoiceInput, clearVoiceInputFlag,
       approvePendingConfirmation, rejectPendingConfirmation, formatConfirmationArguments,
       getArtifactUrl, getArtifactPreviewUrl, formatSize,
+      formatToolArguments,
     };
   },
   template: `
@@ -1120,18 +1092,26 @@ const ChatPage = {
                 <div v-else class="message-content">
                   <!-- Tool calls inside the bubble -->
                   <div v-if="msg.toolCalls && msg.toolCalls.length" class="tool-calls-section">
-                    <div v-for="(tc, ti) in msg.toolCalls" :key="ti"
+                    <div v-for="tc in msg.toolCalls" :key="tc.id"
                          :class="['tool-call-block',
-                           tc.status === 'queued' || tc.status === 'running' ? 'tool-call-running' : '',
-                           tc.status === 'awaiting_approval' ? 'tool-call-awaiting' : '']">
+                           tc.status === 'CREATED' || tc.status === 'RUNNING' ? 'tool-call-running' : '',
+                           tc.status === 'AWAITING_CONFIRMATION' ? 'tool-call-awaiting' : '']">
                       <div class="tool-call-header">
                         <span class="tool-call-name"><span v-html="Icons.tool" class="tool-call-icon"></span>{{ tc.name }}</span>
-                        <span v-if="tc.status === 'queued'" class="tool-call-status tool-call-pending">⏳</span>
-                        <span v-else-if="tc.status === 'running'" class="tool-call-status tool-call-pending">⏳</span>
-                        <span v-else-if="tc.status === 'awaiting_approval'"
+                        <span v-if="tc.status === 'CREATED'" class="tool-call-status tool-call-pending">⏳</span>
+                        <span v-else-if="tc.status === 'RUNNING'" class="tool-call-status tool-call-pending">⏳</span>
+                        <span v-else-if="tc.status === 'AWAITING_CONFIRMATION'"
                               class="tool-call-status tool-call-awaiting-status">!</span>
-                        <span v-else-if="tc.status === 'success'" class="tool-call-status tool-call-success">✅</span>
-                        <span v-else class="tool-call-status tool-call-error">❌</span>
+                        <span v-else-if="tc.status === 'SUCCEEDED'" class="tool-call-status tool-call-success">✅</span>
+                        <span v-else-if="tc.status === 'CANCELLED'" class="tool-call-status">⊘</span>
+                        <span v-else class="tool-call-status tool-call-error" :title="tc.errorSummary">❌</span>
+                      </div>
+                      <details v-if="tc.arguments" class="tool-call-arguments">
+                        <summary>{{ t('toolArguments') }}</summary>
+                        <pre>{{ formatToolArguments(tc.arguments) }}</pre>
+                      </details>
+                      <div v-if="tc.errorSummary" class="tool-call-error-summary">
+                        {{ tc.errorSummary }}
                       </div>
                     </div>
                   </div>
@@ -1152,7 +1132,27 @@ const ChatPage = {
                     </template>
                   </div>
                   <div v-else-if="typeof msg.content === 'string' && msg.content" class="md-body" v-html="renderMarkdown(msg.content)"></div>
-                  <div v-else class="loading-dots" v-meteor><span></span><span></span><span></span></div>
+                  <div v-if="msg.compressions && msg.compressions.length">
+                    <div v-for="(compression, ci) in msg.compressions" :key="ci" class="compress-block">
+                      <span class="compress-icon">🗜️</span>
+                      <span class="compress-label">{{ compression.mode === 'major' ? t('majorCompress') : t('minorCompress') }}</span>
+                      <span class="compress-detail">{{ compression.detail }}</span>
+                    </div>
+                  </div>
+                  <div v-if="msg.artifacts && msg.artifacts.length" class="message-artifacts">
+                    <template v-for="artifact in msg.artifacts" :key="artifact.artifactId">
+                      <img v-if="artifact.type === 'IMAGE'"
+                           :src="getArtifactPreviewUrl(artifact.artifactId)"
+                           :alt="artifact.name || 'image'"
+                           style="max-width:100%;border-radius:8px;margin:8px 0;" />
+                      <video v-else-if="artifact.type === 'VIDEO'"
+                             controls :src="getArtifactPreviewUrl(artifact.artifactId)"
+                             style="max-width:100%;border-radius:8px;margin:8px 0;"></video>
+                      <a v-else :href="getArtifactUrl(artifact.artifactId)">📎 {{ artifact.name || 'file' }}</a>
+                    </template>
+                  </div>
+                  <div v-if="!msg.content && !(msg.compressions && msg.compressions.length) && !(msg.artifacts && msg.artifacts.length)"
+                       class="loading-dots" v-meteor><span></span><span></span><span></span></div>
                 </div>
               </div>
             </template>
@@ -1268,44 +1268,101 @@ const KnowledgePage = {
     const Icons = inject('Icons');
     const t = inject('t');
     const collections = ref([]);
+    const collectionPageInfo = ref({ limit: 50, nextCursor: '', hasMore: false });
+    const loadingCollections = ref(false);
     const selectedCollection = ref('');
     const documents = ref([]);
+    const pageInfo = ref({ limit: 50, nextCursor: '', hasMore: false });
+    const fileNameFilter = ref('');
+    const loadingDocuments = ref(false);
+    const loadingMore = ref(false);
+    const documentListError = ref('');
+    const deletingDocumentId = ref('');
     const uploading = ref(false);
     const uploadCollection = ref('');
     const fileInput = ref(null);
     const editingDoc = ref(null);
     const editingContent = ref('');
     const saving = ref(false);
+    let searchTimer = null;
+    let documentQueryVersion = 0;
 
-    async function loadCollections() {
+    async function loadCollections({ append = false, cursor = '' } = {}) {
+      if (loadingCollections.value) return;
+      loadingCollections.value = true;
       try {
-        const data = await CyreneAPI.listCollections();
-        collections.value = requireArrayField(
-          data,
-          'collections',
+        const page = requirePageResponse(
+          await CyreneAPI.listCollections({
+            limit: collectionPageInfo.value.limit,
+            cursor,
+          }),
           item => typeof item === 'string',
           t('invalidCollectionListResponse')
         );
+        collections.value = append ? [...collections.value, ...page.items] : page.items;
+        collectionPageInfo.value = page.pageInfo;
       } catch (e) {
-        collections.value = [];
+        if (!append) collections.value = [];
         showToast(t('loadFailed') + e.message, 'error');
+      } finally {
+        loadingCollections.value = false;
       }
     }
 
-    async function loadDocuments() {
-      if (!selectedCollection.value) return;
+    function loadMoreCollections() {
+      if (!collectionPageInfo.value.hasMore || loadingCollections.value) return;
+      loadCollections({ append: true, cursor: collectionPageInfo.value.nextCursor });
+    }
+
+    async function loadDocuments({ append = false, cursor = '' } = {}) {
+      if (!selectedCollection.value) {
+        documents.value = [];
+        pageInfo.value = { limit: 50, nextCursor: '', hasMore: false };
+        return;
+      }
+      const queryVersion = ++documentQueryVersion;
+      if (append) loadingMore.value = true;
+      else loadingDocuments.value = true;
+      documentListError.value = '';
       try {
-        const data = await CyreneAPI.listKnowledge(selectedCollection.value);
-        documents.value = requireArrayField(
-          data,
-          'documents',
-          item => item && typeof item === 'object',
+        const page = requirePageResponse(
+          await CyreneAPI.listKnowledge(selectedCollection.value, {
+            fileName: fileNameFilter.value.trim(),
+            limit: pageInfo.value.limit,
+            cursor,
+          }),
+          item => typeof item?.id === 'string'
+            && typeof item.fileName === 'string'
+            && Number.isInteger(item.chunkIndex),
           t('invalidKnowledgeListResponse')
         );
+        if (queryVersion !== documentQueryVersion) return;
+        documents.value = append ? [...documents.value, ...page.items] : page.items;
+        pageInfo.value = page.pageInfo;
       } catch (e) {
-        documents.value = [];
+        if (queryVersion !== documentQueryVersion) return;
+        if (!append) documents.value = [];
+        documentListError.value = e.message;
         showToast(t('loadFailed') + e.message, 'error');
+      } finally {
+        if (queryVersion === documentQueryVersion) {
+          loadingDocuments.value = false;
+          loadingMore.value = false;
+        }
       }
+    }
+
+    function loadMoreDocuments() {
+      if (!pageInfo.value.hasMore || loadingDocuments.value || loadingMore.value) return;
+      loadDocuments({ append: true, cursor: pageInfo.value.nextCursor });
+    }
+
+    function clearFileNameFilter() {
+      if (!fileNameFilter.value) {
+        loadDocuments();
+        return;
+      }
+      fileNameFilter.value = '';
     }
 
     async function uploadFile() {
@@ -1330,12 +1387,16 @@ const KnowledgePage = {
     }
 
     async function deleteDoc(docId) {
+      if (deletingDocumentId.value || loadingDocuments.value || loadingMore.value) return;
+      deletingDocumentId.value = docId;
       try {
         await CyreneAPI.deleteDocument(selectedCollection.value, docId);
         showToast(t('deleted'), 'success');
         loadDocuments();
       } catch (e) {
         showToast(t('deleteFailed') + e.message, 'error');
+      } finally {
+        deletingDocumentId.value = '';
       }
     }
 
@@ -1346,6 +1407,7 @@ const KnowledgePage = {
         showToast(t('collectionDeleted'), 'success');
         selectedCollection.value = '';
         documents.value = [];
+        loadCollections();
       } catch (e) {
         showToast(t('deleteFailed') + e.message, 'error');
       }
@@ -1382,10 +1444,35 @@ const KnowledgePage = {
       editingContent.value = '';
     }
 
-    watch(selectedCollection, loadDocuments);
+    watch(selectedCollection, () => {
+      clearTimeout(searchTimer);
+      documentQueryVersion++;
+      documents.value = [];
+      pageInfo.value = { limit: 50, nextCursor: '', hasMore: false };
+      documentListError.value = '';
+      loadDocuments();
+    });
+    watch(fileNameFilter, () => {
+      clearTimeout(searchTimer);
+      documentQueryVersion++;
+      loadingDocuments.value = true;
+      loadingMore.value = false;
+      searchTimer = setTimeout(() => loadDocuments(), 300);
+    });
     onMounted(loadCollections);
+    onUnmounted(() => {
+      clearTimeout(searchTimer);
+      documentQueryVersion++;
+    });
 
-    return { Icons, t, collections, selectedCollection, documents, uploading, uploadCollection, fileInput, editingDoc, editingContent, saving, loadCollections, loadDocuments, uploadFile, deleteDoc, deleteCol, openEdit, saveEdit, closeEdit };
+    return {
+      Icons, t, collections, collectionPageInfo, loadingCollections,
+      selectedCollection, documents, pageInfo, fileNameFilter,
+      loadingDocuments, loadingMore, documentListError, deletingDocumentId,
+      uploading, uploadCollection, fileInput, editingDoc, editingContent, saving,
+      loadCollections, loadMoreCollections, loadDocuments, loadMoreDocuments, clearFileNameFilter,
+      uploadFile, deleteDoc, deleteCol, openEdit, saveEdit, closeEdit,
+    };
   },
   template: `
     <div>
@@ -1436,13 +1523,37 @@ const KnowledgePage = {
 
           <!-- Selected collection -->
           <div v-if="selectedCollection" style="margin-bottom: var(--space-3);">
-            <button class="btn btn-ghost btn-sm" @click="selectedCollection = ''; documents = []">
-              {{ t('back') }}
-            </button>
-            <span class="text-sm text-ash" style="margin-left: var(--space-2);">{{ t('current') }}{{ selectedCollection }}</span>
+            <div class="knowledge-filter-row">
+              <div>
+                <button class="btn btn-ghost btn-sm" @click="selectedCollection = ''">
+                  {{ t('back') }}
+                </button>
+                <span class="text-sm text-ash" style="margin-left: var(--space-2);">{{ t('current') }}{{ selectedCollection }}</span>
+              </div>
+              <div class="knowledge-file-filter">
+                <input class="input" v-model="fileNameFilter"
+                       :placeholder="t('knowledgeFileNamePlaceholder')" />
+                <button v-if="fileNameFilter" class="btn btn-ghost btn-sm"
+                        @click="clearFileNameFilter" :disabled="loadingDocuments">
+                  {{ t('clearFilter') }}
+                </button>
+              </div>
+            </div>
           </div>
+          <button v-if="!selectedCollection && collectionPageInfo.hasMore"
+                  class="btn btn-ghost btn-sm"
+                  :disabled="loadingCollections"
+                  @click="loadMoreCollections">
+            {{ loadingCollections ? t('loadingCollections') : t('loadMoreCollections') }}
+          </button>
 
-          <template v-if="documents.length">
+          <div v-if="loadingDocuments" class="text-sm text-ash knowledge-list-state">
+            {{ t('loadingChunks') }}
+          </div>
+          <div v-else-if="documentListError" class="text-sm knowledge-list-state knowledge-list-error">
+            {{ documentListError }}
+          </div>
+          <template v-else-if="documents.length">
             <table>
               <thead>
                 <tr>
@@ -1453,26 +1564,31 @@ const KnowledgePage = {
               </thead>
               <tbody>
                 <tr v-for="doc in documents" :key="doc.id">
-                  <td class="text-sm">{{ doc.source || doc.id }}</td>
-                  <td class="text-ash text-xs">#{{ doc.metadata?.chunk_index ?? '-' }}</td>
+                  <td class="text-sm">{{ doc.fileName || doc.id }}</td>
+                  <td class="text-ash text-xs">#{{ doc.chunkIndex }}</td>
                   <td>
                     <button class="btn btn-ghost btn-sm" @click="openEdit(doc.id)" :title="t('edit')">
                       <span v-html="Icons.edit" style="width:14px;height:14px;"></span>
                     </button>
-                    <button class="btn btn-ghost btn-sm" @click="deleteDoc(doc.id)" :title="t('deleteDoc')">
+                    <button class="btn btn-ghost btn-sm" @click="deleteDoc(doc.id)"
+                            :disabled="deletingDocumentId || loadingMore" :title="t('deleteDoc')">
                       <span v-html="Icons.trash" style="width:14px;height:14px;"></span>
                     </button>
                   </td>
                 </tr>
               </tbody>
             </table>
+            <button v-if="pageInfo.hasMore" class="btn btn-ghost btn-sm w-full mt-4"
+                    @click="loadMoreDocuments" :disabled="loadingMore || deletingDocumentId">
+              {{ loadingMore ? t('loadingChunks') : t('loadMoreChunks') }}
+            </button>
           </template>
           <empty-state v-else-if="!selectedCollection && !collections.length"
             :icon="Icons.knowledge"
             :title="t('seedsNotSown')"
             :hint="t('uploadToBuild')" />
           <div v-else-if="selectedCollection && !documents.length" class="text-sm text-ash" style="padding: var(--space-4); text-align: center;">
-            {{ t('noDocsInCollection') }}
+            {{ fileNameFilter ? t('noMatchingChunks') : t('noDocsInCollection') }}
           </div>
         </div>
       </div>

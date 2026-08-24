@@ -4,6 +4,7 @@ import com.harness.agent.AgentRunContext;
 import com.harness.agent.KnowledgeGraphTool;
 import com.harness.agent.SpawnSubAgentTool;
 import com.harness.agent.SubAgentManager;
+import com.harness.agent.context.KnowledgeAccessService;
 import com.harness.agent.memory.AgentMemoryRuntime;
 import com.harness.agent.memory.AgentMemoryRuntime.CompressionOutcome;
 import com.harness.agent.runtime.AgentRunPreparer.AgentRunRequest;
@@ -18,11 +19,13 @@ import com.harness.core.model.AgentResult;
 import com.harness.core.model.AgentTrace;
 import com.harness.core.model.Artifact;
 import com.harness.core.model.CancellationToken;
+import com.harness.core.model.FinalOutputContract;
 import com.harness.core.model.MessageBlock;
 import com.harness.core.model.ReActStep;
 import com.harness.core.model.RiskLevel;
 import com.harness.core.model.StreamCallback;
 import com.harness.core.model.StreamEvent;
+import com.harness.core.model.ToolCallStatus;
 import com.harness.core.model.ToolResult;
 import com.harness.core.model.ToolSpec;
 import com.harness.core.runtime.RunTrace;
@@ -90,10 +93,18 @@ public final class AgentRunCoordinator {
     }
 
     public AgentResult run(AgentRunCommand command) {
+        return run(command, command.finalOutputContract());
+    }
+
+    private AgentResult run(
+            AgentRunCommand command,
+            FinalOutputContract finalOutputContract
+    ) {
         long startedAt = System.currentTimeMillis();
         RunTrace trace = runtime.startTrace();
         String runId = null;
         try {
+            recordFinalOutputContract(trace, finalOutputContract);
             PreparedAgentRun prepared = runPreparer.prepare(toRequest(command, true), trace);
             RunToolCatalog toolCatalog = createToolCatalog(prepared.unavailableTools());
             runId = openRunScope(
@@ -110,7 +121,8 @@ public final class AgentRunCoordinator {
                     listener,
                     command.cancellationToken(),
                     effectiveThinking(command, prepared),
-                    null));
+                    null,
+                    finalOutputContract));
             result.steps().forEach(trace::addStep);
             recordReactStats(trace, result);
 
@@ -178,8 +190,12 @@ public final class AgentRunCoordinator {
                     command.cancellationToken(),
                     listener::onConfirmationRequired,
                     listener::onConfirmationResolved,
-                    (toolName, arguments) -> listener.onToolCallStart(
-                            toolName, arguments != null ? arguments.toString() : "null"));
+                    toolCall -> listener.onToolCallStart(
+                            toolCall.id(),
+                            toolCall.toolName(),
+                            toolCall.arguments() != null
+                                    ? toolCall.arguments().toString()
+                                    : "null"));
 
             ReActResult result = createLoop(toolCatalog).streamExecute(new ReActRequest(
                     prepared.systemPrompt(),
@@ -189,7 +205,7 @@ public final class AgentRunCoordinator {
                     listener,
                     command.cancellationToken(),
                     effectiveThinking(command, prepared),
-                    confirmationContext), voiceOutput);
+                    confirmationContext));
             result.steps().forEach(trace::addStep);
             finishVoice(voiceCoordinator);
             recordReactStats(trace, result);
@@ -299,23 +315,34 @@ public final class AgentRunCoordinator {
             }
 
             @Override
-            public void onToolCallCreated(String toolName, String arguments) {
-                callback.onEvent(StreamEvent.toolCallCreated(toolName, arguments));
+            public void onToolCallCreated(
+                    String toolCallId, String toolName, String arguments) {
+                callback.onEvent(StreamEvent.toolCallCreated(
+                        toolCallId, toolName, arguments));
             }
 
             @Override
-            public void onToolCallStart(String toolName, String arguments) {
-                callback.onEvent(StreamEvent.toolCallStart(toolName, arguments));
+            public void onToolCallStart(
+                    String toolCallId, String toolName, String arguments) {
+                callback.onEvent(StreamEvent.toolCallStart(
+                        toolCallId, toolName, arguments));
             }
 
             @Override
-            public void onToolCallDone(String toolName, boolean success, long durationMs) {
-                callback.onEvent(StreamEvent.toolCallDone(toolName, success, durationMs));
+            public void onToolCallDone(
+                    String toolCallId,
+                    String toolName,
+                    ToolCallStatus status,
+                    long durationMs,
+                    String errorSummary) {
+                callback.onEvent(StreamEvent.toolCallDone(
+                        toolCallId, toolName, status, durationMs, errorSummary));
             }
 
             @Override
             public void onConfirmationRequired(ConfirmationRequest request) {
                 callback.onEvent(StreamEvent.confirmationRequired(
+                        request.toolCallId(),
                         request.requestId(),
                         request.toolName(),
                         request.arguments(),
@@ -337,7 +364,11 @@ public final class AgentRunCoordinator {
                         request.argumentsHash(),
                         decision.name());
                 callback.onEvent(StreamEvent.confirmationResolved(
-                        request.requestId(), request.toolName(), decision.name()));
+                        request.toolCallId(),
+                        request.requestId(),
+                        request.toolName(),
+                        decision.name(),
+                        confirmationStatus(decision)));
             }
 
             @Override
@@ -348,6 +379,14 @@ public final class AgentRunCoordinator {
                     callback.onEvent(StreamEvent.artifact(artifact));
                 }
             }
+        };
+    }
+
+    private static ToolCallStatus confirmationStatus(ConfirmationDecision decision) {
+        return switch (decision) {
+            case APPROVED -> ToolCallStatus.RUNNING;
+            case CANCELLED -> ToolCallStatus.CANCELLED;
+            case REJECTED, EXPIRED -> ToolCallStatus.FAILED;
         };
     }
 
@@ -379,6 +418,7 @@ public final class AgentRunCoordinator {
         LoadSkillTool.clearCurrentSession();
         UpdateMemoryTool.clearContext();
         KnowledgeGraphTool.clearCurrentContext();
+        KnowledgeAccessService.clearCurrentContext();
         AuthorizedUrlContext.clear();
     }
 
@@ -576,7 +616,42 @@ public final class AgentRunCoordinator {
             CancellationToken cancellationToken,
             Boolean enableThinking,
             String contextUserId,
-            AgentContext agentContext
+            AgentContext agentContext,
+            FinalOutputContract finalOutputContract
     ) {
+        public AgentRunCommand {
+            finalOutputContract = finalOutputContract != null
+                    ? finalOutputContract
+                    : new FinalOutputContract.Text();
+        }
+
+        public AgentRunCommand(
+                String token,
+                String text,
+                List<MultimodalParser.RawAttachment> attachments,
+                String requestedSessionId,
+                String systemPromptOverride,
+                CancellationToken cancellationToken,
+                Boolean enableThinking,
+                String contextUserId,
+                AgentContext agentContext
+        ) {
+            this(token, text, attachments, requestedSessionId, systemPromptOverride,
+                    cancellationToken, enableThinking, contextUserId, agentContext,
+                    new FinalOutputContract.Text());
+        }
+    }
+
+    private static void recordFinalOutputContract(
+            RunTrace trace, FinalOutputContract outputContract) {
+        Map<String, String> metadata = new HashMap<>(trace.snapshot().metadata());
+        if (outputContract instanceof FinalOutputContract.JsonSchema jsonSchema) {
+            metadata.put("final_output_contract", "json_schema");
+            metadata.put("final_output_schema_name", jsonSchema.name());
+            metadata.put("final_output_schema_strict", String.valueOf(jsonSchema.strict()));
+        } else {
+            metadata.put("final_output_contract", "text");
+        }
+        trace.putMetadata(metadata);
     }
 }

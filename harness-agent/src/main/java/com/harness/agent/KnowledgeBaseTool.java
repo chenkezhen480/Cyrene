@@ -2,15 +2,20 @@ package com.harness.agent;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.harness.provider.ChatModelProvider;
-import com.harness.provider.EmbeddingModelProvider;
-import com.harness.provider.RerankModelProvider;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.harness.agent.context.KnowledgeAccessService;
+import com.harness.agent.context.ContextBuilder;
 import com.harness.core.exception.ToolExecutionException;
 import com.harness.core.model.ReActStep;
 import com.harness.core.model.ToolResult;
 import com.harness.core.model.ToolSpec;
-import com.harness.agent.context.ContextBuilder;
+import com.harness.provider.ChatModelProvider;
+import com.harness.provider.EmbeddingModelProvider;
+import com.harness.provider.RerankModelProvider;
 import com.harness.tool.Tool;
+import com.harness.tool.knowledge.KnowledgeSearchData;
+import com.harness.tool.protocol.ToolEnvelope;
+import com.harness.tool.protocol.ToolEnvelopeStatus;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.request.ChatRequest;
@@ -18,27 +23,18 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 
-/**
- * 内部知识库检索工具，将 RAG 检索流程暴露给 ReAct 引擎。
- * <p>
- * 模型只看到一个参数 {@code query}，感知不到 rewrite 开关的存在。
- * rewrite 决策完全由工具执行层根据检索分数和 ReActStep 历史驱动：
- * <ul>
- *   <li>第 1 次调用 → fast path：单 query 直接检索</li>
- *   <li>硬阈值以下但达到候选下限 → 下一次调用隐式升级为 rewrite 流水线</li>
- *   <li>完全无关或已经升级过 → 不再触发 rewrite</li>
- * </ul>
- * <p>
- * rewrite 全套流水线：一次 LLM 调用生成 multi-query(3) + step-back(1) + hyde(1) = 5 个查询，
- * 每个查询按配置的 topK 检索，合并去重后 rerank 返回最终结果。
- */
+/** Searches internal knowledge and returns stable document anchors. */
 public class KnowledgeBaseTool implements Tool {
 
     public static final String TOOL_NAME = "knowledge_base_search";
+
     private static final Logger log = LoggerFactory.getLogger(KnowledgeBaseTool.class);
-    private static final ObjectMapper mapper = new ObjectMapper();
+    private static final ObjectMapper SPEC_MAPPER = new ObjectMapper();
 
     private static final String COMBINED_REWRITE_PROMPT = """
             请为以下检索问题生成 5 个不同的查询版本，帮助从知识库中检索到最全面的相关文档。
@@ -51,48 +47,94 @@ public class KnowledgeBaseTool implements Tool {
 
             原始问题：%s""";
 
-    private final ContextBuilder contextBuilder;
+    private final KnowledgeAccessService knowledgeAccess;
     private final ChatModel chatModel;
     private final RetrievalEscalationPolicy escalationPolicy;
+    private final ObjectMapper objectMapper;
 
-    public KnowledgeBaseTool(EmbeddingModelProvider embeddingProvider,
-                             RerankModelProvider rerankModelProvider,
-                             ChatModelProvider chatModelProvider) {
-        this.contextBuilder = new ContextBuilder(rerankModelProvider, embeddingProvider);
-        this.chatModel = chatModelProvider != null ? chatModelProvider.chatModel() : null;
-        this.escalationPolicy = RetrievalEscalationPolicy.fromEnvironment();
+    public KnowledgeBaseTool(
+            EmbeddingModelProvider embeddingProvider,
+            RerankModelProvider rerankModelProvider,
+            ChatModelProvider chatModelProvider
+    ) {
+        this(
+                new KnowledgeAccessService(rerankModelProvider, embeddingProvider),
+                chatModelProvider != null ? chatModelProvider.chatModel() : null,
+                RetrievalEscalationPolicy.fromEnvironment(),
+                new ObjectMapper());
         log.info("[KnowledgeBaseTool] initialized");
+    }
+
+    public KnowledgeBaseTool(
+            KnowledgeAccessService knowledgeAccess,
+            ChatModelProvider chatModelProvider
+    ) {
+        this(
+                knowledgeAccess,
+                chatModelProvider != null ? chatModelProvider.chatModel() : null,
+                RetrievalEscalationPolicy.fromEnvironment(),
+                new ObjectMapper());
+    }
+
+    KnowledgeBaseTool(
+            ContextBuilder contextBuilder,
+            ChatModel chatModel,
+            RetrievalEscalationPolicy escalationPolicy,
+            ObjectMapper objectMapper
+    ) {
+        this(new KnowledgeAccessService(contextBuilder, 2),
+                chatModel, escalationPolicy, objectMapper);
+    }
+
+    KnowledgeBaseTool(
+            KnowledgeAccessService knowledgeAccess,
+            ChatModel chatModel,
+            RetrievalEscalationPolicy escalationPolicy,
+            ObjectMapper objectMapper
+    ) {
+        this.knowledgeAccess = Objects.requireNonNull(knowledgeAccess, "knowledgeAccess");
+        this.chatModel = chatModel;
+        this.escalationPolicy = Objects.requireNonNull(escalationPolicy, "escalationPolicy");
+        this.objectMapper = Objects.requireNonNull(objectMapper, "objectMapper");
     }
 
     @Override
     public ToolSpec spec() {
+        boolean trustedCollection = knowledgeAccess.hasTrustedCollection();
+
+        ObjectNode properties = SPEC_MAPPER.createObjectNode();
+        properties.set("query", stringProperty(
+                "Complete standalone query for knowledge-base search."));
+        properties.set("limit", integerProperty(1, knowledgeAccess.maxSearchLimit()));
+        if (!trustedCollection) {
+            properties.set("collection", stringProperty(
+                    "Optional logical collection. Defaults to the configured collection."));
+        }
+        ObjectNode schema = SPEC_MAPPER.createObjectNode();
+        schema.put("type", "object");
+        schema.set("properties", properties);
+        schema.putArray("required").add("query");
+        schema.put("additionalProperties", false);
+
         return new ToolSpec(
                 TOOL_NAME,
-                "Search the knowledge base for relevant documents. " +
-                        "Use this tool when the user's question may benefit from internal knowledge, documentation, or reference materials. " +
-                        "The query MUST be a complete, standalone question that can be understood without any conversation context. " +
-                        "Do NOT use pronouns or references like 'this', 'that', 'the above', 'mentioned earlier'. " +
-                        "Example good query: 'What is the maximum file upload size limit?' " +
-                        "Example bad query: 'What is the limit for this?'",
-                mapper.createObjectNode()
-                        .put("type", "object")
-                        .<com.fasterxml.jackson.databind.node.ObjectNode>set("properties",
-                                mapper.createObjectNode()
-                                        .<com.fasterxml.jackson.databind.node.ObjectNode>set("query",
-                                                mapper.createObjectNode()
-                                                        .put("type", "string")
-                                                        .put("description",
-                                                                "A complete, standalone search query. Must not contain pronouns or context-dependent references.")))
-                        .<com.fasterxml.jackson.databind.node.ObjectNode>set("required",
-                                mapper.createArrayNode().add("query"))
-        );
+                "Search internal knowledge and return relevant chunks with stable documentId and chunkIndex anchors. "
+                        + "If a returned chunk lacks a definition, prerequisite, or following step, call knowledge_context_read with that anchor. "
+                        + "Search queries must be complete standalone questions without conversation-dependent pronouns.",
+                schema);
     }
 
     @Override
     public String execute(JsonNode arguments) {
-        String query = arguments.has("query") ? arguments.get("query").asText() : null;
-        if (query == null || query.isBlank()) {
+        String query = textArgument(arguments, "query");
+        if (query == null) {
             throw new ToolExecutionException(TOOL_NAME, "Missing required parameter: query");
+        }
+        String collection = effectiveCollection(arguments);
+        int limit = integerArgument(arguments, "limit", knowledgeAccess.maxSearchLimit());
+        if (limit < 1 || limit > knowledgeAccess.maxSearchLimit()) {
+            throw new ToolExecutionException(
+                    TOOL_NAME, "limit must be between 1 and " + knowledgeAccess.maxSearchLimit());
         }
 
         ToolResult.ResultStatus lastResultStatus = ReActStep.getLastToolResultStatus(TOOL_NAME);
@@ -100,78 +142,71 @@ public class KnowledgeBaseTool implements Tool {
         boolean escalationAlreadyUsed = ReActStep.hasToolResultStatus(
                 TOOL_NAME, ToolResult.ResultStatus.ESCALATING);
 
-        log.info("[KnowledgeBaseTool] query=\"{}\", lastResultStatus={}, forceRewrite={}",
-                truncate(query), lastResultStatus, forceRewrite);
+        log.info("[KnowledgeBaseTool] collection={}, query=\"{}\", forceRewrite={}",
+                collection, truncate(query), forceRewrite);
 
         try {
             ContextBuilder.ContextResult result;
             if (forceRewrite && chatModel != null) {
-                result = executeWithRewrite(query);
+                result = executeWithRewrite(query, collection, limit);
             } else {
-                result = contextBuilder.buildRagForTool(query);
+                result = knowledgeAccess.search(query, collection, limit);
             }
 
             ToolResult.ResultStatus resultStatus = escalationPolicy.evaluate(
                     result, forceRewrite, escalationAlreadyUsed);
             ToolResult.setCurrentStatus(resultStatus);
+            KnowledgeSearchData data = KnowledgeSearchData.from(result.documents());
+            ToolEnvelopeStatus envelopeStatus = data.hits().isEmpty()
+                    ? ToolEnvelopeStatus.EMPTY
+                    : ToolEnvelopeStatus.SUCCESS;
 
-            if (!result.hasContext()) {
+            if (data.hits().isEmpty()) {
                 log.info("[KnowledgeBaseTool] No accepted results: bestObservedScore={}, status={}",
                         String.format("%.4f", result.bestObservedScore()), resultStatus);
-                return "No results found in knowledge base for: " + query;
+            } else {
+                log.info("[KnowledgeBaseTool] Found {} hits, topScore={}, rewrite={}, status={}",
+                        data.hits().size(), String.format("%.4f", result.topScore()),
+                        forceRewrite, resultStatus);
             }
 
-            double topScore = result.topScore();
-            if (resultStatus != ToolResult.ResultStatus.SUCCESS) {
-                log.info("[KnowledgeBaseTool] Result quality requires attention: topScore={}, status={}",
-                        String.format("%.4f", topScore), resultStatus);
-                return result.contextBlock();
-            }
-
-            log.info("[KnowledgeBaseTool] Found {} RAG hits, context={} chars, topScore={}, rewrite={}",
-                    result.ragHitIds().size(), result.contextBlock().length(),
-                    String.format("%.4f", topScore), forceRewrite);
-            return result.contextBlock();
-        } catch (ToolExecutionException e) {
-            throw e;
-        } catch (Exception e) {
-            log.error("[KnowledgeBaseTool] execution failed: {}", e.getMessage(), e);
-            throw new ToolExecutionException("knowledge_base_search",
-                    "Knowledge base search failed: " + e.getMessage());
+            return objectMapper.writeValueAsString(new ToolEnvelope<>(
+                    envelopeStatus,
+                    data,
+                    null,
+                    diagnosticMeta(result, forceRewrite)));
+        } catch (ToolExecutionException exception) {
+            throw exception;
+        } catch (Exception exception) {
+            log.error("[KnowledgeBaseTool] search failed: {}", exception.getMessage(), exception);
+            throw new ToolExecutionException(
+                    TOOL_NAME, "Knowledge base search failed: " + exception.getMessage());
         }
     }
 
-    /**
-     * 带查询改写的 RAG 执行。
-     * 调用主 LLM 一次生成 5 个查询（multi-query 3 + step-back 1 + hyde 1），
-     * 然后通过 ContextBuilder 执行完整的检索流程。
-     */
-    private ContextBuilder.ContextResult executeWithRewrite(String originalQuery) {
+    private ContextBuilder.ContextResult executeWithRewrite(
+            String originalQuery,
+            String collection,
+            int limit
+    ) {
         List<String> queries = generateRewrittenQueries(originalQuery);
         if (queries.isEmpty()) {
-            log.warn("[KnowledgeBaseTool] Rewrite produced no queries, falling back to original");
-            return contextBuilder.buildRagForTool(originalQuery);
+            log.warn("[KnowledgeBaseTool] Rewrite produced no queries, using original query");
+            return knowledgeAccess.search(originalQuery, collection, limit);
         }
-
         log.info("[KnowledgeBaseTool] Rewrite generated {} queries", queries.size());
-        return contextBuilder.buildRagWithQueries(queries);
+        return knowledgeAccess.searchWithQueries(queries, collection, limit);
     }
 
-    /**
-     * 调用主 LLM 一次生成 5 个改写查询。
-     * 失败时返回空列表，调用方降级为原始查询。
-     */
     private List<String> generateRewrittenQueries(String originalQuery) {
         try {
             String prompt = String.format(COMBINED_REWRITE_PROMPT, originalQuery);
             String response = chatModel.chat(ChatRequest.builder()
                     .messages(UserMessage.from(prompt))
                     .build()).aiMessage().text();
-
             if (response == null || response.isBlank()) {
                 return List.of();
             }
-
             List<String> queries = new ArrayList<>();
             for (String line : response.strip().split("\\n")) {
                 String trimmed = line.strip();
@@ -179,23 +214,111 @@ public class KnowledgeBaseTool implements Tool {
                     queries.add(trimmed);
                 }
             }
-
             if (queries.size() < 2) {
-                log.warn("[KnowledgeBaseTool] Rewrite produced only {} queries, discarding", queries.size());
+                log.warn("[KnowledgeBaseTool] Rewrite produced only {} queries, discarding",
+                        queries.size());
                 return List.of();
             }
-            if (queries.size() > 6) {
-                queries = queries.subList(0, 6);
-            }
-
-            return queries;
-        } catch (Exception e) {
-            log.warn("[KnowledgeBaseTool] Rewrite LLM call failed: {}", e.getMessage());
+            return queries.size() > 6 ? List.copyOf(queries.subList(0, 6)) : List.copyOf(queries);
+        } catch (Exception exception) {
+            log.warn("[KnowledgeBaseTool] Rewrite LLM call failed: {}", exception.getMessage());
             return List.of();
         }
     }
 
-    private static String truncate(String s) {
-        return s.length() <= 80 ? s : s.substring(0, 80) + "...";
+    private String effectiveCollection(JsonNode arguments) {
+        String requestedCollection = textArgument(arguments, "collection");
+        return knowledgeAccess.effectiveCollection(requestedCollection);
     }
+
+    private static String textArgument(JsonNode arguments, String name) {
+        JsonNode value = arguments == null ? null : arguments.get(name);
+        if (value == null || value.isNull()) {
+            return null;
+        }
+        if (!value.isTextual() || value.asText().isBlank()) {
+            throw new ToolExecutionException(TOOL_NAME, name + " must be a non-blank string");
+        }
+        return value.asText().trim();
+    }
+
+    private static int integerArgument(JsonNode arguments, String name, int defaultValue) {
+        JsonNode value = arguments == null ? null : arguments.get(name);
+        if (value == null || value.isNull()) {
+            return defaultValue;
+        }
+        if (!value.isIntegralNumber() || !value.canConvertToInt()) {
+            throw new ToolExecutionException(TOOL_NAME, name + " must be an integer");
+        }
+        return value.intValue();
+    }
+
+    private static ObjectNode stringProperty(String description) {
+        return SPEC_MAPPER.createObjectNode()
+                .put("type", "string")
+                .put("description", description);
+    }
+
+    private static ObjectNode integerProperty(int minimum, int maximum) {
+        return SPEC_MAPPER.createObjectNode()
+                .put("type", "integer")
+                .put("minimum", minimum)
+                .put("maximum", maximum);
+    }
+
+    private static String truncate(String value) {
+        return value.length() <= 80 ? value : value.substring(0, 80) + "...";
+    }
+
+    private static Map<String, Object> diagnosticMeta(
+            ContextBuilder.ContextResult result,
+            boolean rewrite
+    ) {
+        Map<String, Object> meta = new LinkedHashMap<>();
+        putIntegerMetadata(meta, "queryCount", result.metadata(), "query_count");
+        putStringMetadata(meta, "provider", result.metadata(), "provider");
+        putStringMetadata(meta, "collection", result.metadata(), "collection");
+        putLongMetadata(meta, "rerankMs", result.metadata(), "rerank_ms");
+        meta.put("bestObservedScore", result.bestObservedScore());
+        meta.put("observedCandidateCount", result.observedCandidateCount());
+        meta.put("rewrite", rewrite);
+        return Map.copyOf(meta);
+    }
+
+    private static void putStringMetadata(
+            Map<String, Object> target,
+            String targetKey,
+            Map<String, String> source,
+            String sourceKey
+    ) {
+        String value = source.get(sourceKey);
+        if (value != null) {
+            target.put(targetKey, value);
+        }
+    }
+
+    private static void putIntegerMetadata(
+            Map<String, Object> target,
+            String targetKey,
+            Map<String, String> source,
+            String sourceKey
+    ) {
+        String value = source.get(sourceKey);
+        if (value != null) {
+            target.put(targetKey, Integer.parseInt(value));
+        }
+    }
+
+    private static void putLongMetadata(
+            Map<String, Object> target,
+            String targetKey,
+            Map<String, String> source,
+            String sourceKey
+    ) {
+        String value = source.get(sourceKey);
+        if (value != null) {
+            target.put(targetKey, Long.parseLong(value));
+        }
+    }
+
 }

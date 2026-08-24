@@ -11,6 +11,7 @@ import java.time.Instant;
  */
 public record ConfirmationRequest(
         String requestId,
+        String toolCallId,
         String userId,
         String sessionId,
         String toolName,

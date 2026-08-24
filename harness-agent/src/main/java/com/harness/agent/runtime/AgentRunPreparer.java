@@ -1,8 +1,10 @@
 package com.harness.agent.runtime;
 
 import com.harness.agent.KnowledgeBaseTool;
+import com.harness.agent.KnowledgeContextReadTool;
 import com.harness.agent.KnowledgeGraphTool;
 import com.harness.agent.context.AgentPromptBuilder;
+import com.harness.agent.context.KnowledgeAccessService;
 import com.harness.agent.memory.AgentMemoryRuntime;
 import com.harness.agent.memory.AgentMemoryRuntime.CompressionOutcome;
 import com.harness.agent.memory.AgentMemoryRuntime.MemoryContext;
@@ -129,6 +131,8 @@ public final class AgentRunPreparer {
         } else {
             KnowledgeGraphTool.clearCurrentContext();
         }
+        KnowledgeAccessService.setCurrentContext(
+                agentContext.tenantId(), agentContext.knowledgeRequestContext());
         LoadSkillTool.setCurrentSession(memoryContext.sessionId());
         UpdateMemoryTool.setCurrentUserId(memoryContext.userId());
         UpdateMemoryTool.setCurrentSessionId(memoryContext.sessionId());
@@ -150,6 +154,7 @@ public final class AgentRunPreparer {
         Set<String> unavailable = new HashSet<>();
         if (Boolean.FALSE.equals(context.needsKnowledgeBase())) {
             unavailable.add(KnowledgeBaseTool.TOOL_NAME);
+            unavailable.add(KnowledgeContextReadTool.TOOL_NAME);
         }
         if (Boolean.FALSE.equals(context.needsWebSearch())) {
             unavailable.add(WebSearchTool.TOOL_NAME);

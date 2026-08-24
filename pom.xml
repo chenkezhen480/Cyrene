@@ -10,7 +10,16 @@
     <packaging>pom</packaging>
 
     <name>Cyrene Agent</name>
-    <description>基于 Cyrene 架构的通用开源 AI Agent 框架</description>
+    <description>面向已有业务系统、领域知识与权限边界的开源 ReAct Agent 框架</description>
+    <url>https://github.com/chenkezhen480/Cyrene</url>
+
+    <licenses>
+        <license>
+            <name>MIT License</name>
+            <url>https://opensource.org/licenses/MIT</url>
+            <distribution>repo</distribution>
+        </license>
+    </licenses>
 
     <modules>
         <module>harness-core</module>
@@ -27,7 +36,7 @@
         <java.version>21</java.version>
         <maven.compiler.source>21</maven.compiler.source>
         <maven.compiler.target>21</maven.compiler.target>
-        <revision>0.5.9</revision>
+        <revision>0.5.10</revision>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 
         <langchain4j.version>1.15.0</langchain4j.version>
@@ -46,7 +55,7 @@
         <dotenv.version>2.3.2</dotenv.version>
         <snakeyaml.version>2.2</snakeyaml.version>
         <jsoup.version>1.22.2</jsoup.version>
-        <milvus.version>2.5.4</milvus.version>
+        <milvus.version>2.5.13</milvus.version>
         <neo4j-driver.version>6.1.0</neo4j-driver.version>
 
         <!-- Plugin -->

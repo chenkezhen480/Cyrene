@@ -29,6 +29,8 @@ public final class EnvKey {
     public static final String MODEL_CHAT_API_KEY     = "HARNESS_MODEL_CHAT_API_KEY";
     public static final String MODEL_CHAT_BASE_URL    = "HARNESS_MODEL_CHAT_BASE_URL";
     public static final String MODEL_CHAT_MODEL       = "HARNESS_MODEL_CHAT_MODEL";
+    /** 上游 OpenAI-compatible 协议：chat_completions | responses */
+    public static final String MODEL_CHAT_API_FORMAT  = "HARNESS_MODEL_CHAT_API_FORMAT";
     public static final String MODEL_CHAT_MAX_TOKENS  = "HARNESS_MODEL_CHAT_MAX_TOKENS";
     public static final String MODEL_CHAT_TEMPERATURE = "HARNESS_MODEL_CHAT_TEMPERATURE";
     /** 是否开启思考/推理模式（影响 DashScope 等支持思考模式的 API），默认 true */
@@ -182,9 +184,9 @@ public final class EnvKey {
     /** Milvus 距离度量类型：COSINE | L2 | IP，默认 COSINE */
     public static final String RAG_MILVUS_METRIC_TYPE = "HARNESS_RAG_MILVUS_METRIC_TYPE";
 
-    // ==================== RAG (语义回溯) ====================
-    /** 截断 chunk 时最多向前查找的 chunk 数，默认 2 */
-    public static final String RAG_CONTEXT_LOOKBACK_MAX    = "HARNESS_RAG_CONTEXT_LOOKBACK_MAX";
+    // ==================== RAG (显式上下文窗口) ====================
+    /** readContext 的 before/after 单侧最大 chunk 数，默认 2 */
+    public static final String RAG_CONTEXT_WINDOW_MAX      = "HARNESS_RAG_CONTEXT_WINDOW_MAX";
 
     // ==================== RAG (多路召回 — 已废弃，检索策略由 Provider 内聚) ====================
     /** @deprecated 多路召回已废弃，全文检索和混合检索现在由 VectorStore provider 内部处理 */
@@ -223,6 +225,10 @@ public final class EnvKey {
     public static final String TOOL_WEB_SEARCH_ENABLED        = "HARNESS_TOOL_WEB_SEARCH_ENABLED";
     /** SearXNG 实例地址，默认 http://localhost:8888 */
     public static final String TOOL_WEB_SEARCH_SEARXNG_URL   = "HARNESS_TOOL_WEB_SEARCH_SEARXNG_URL";
+    /** SearXNG 引擎清单；web_search 会随每次请求传给服务端 */
+    public static final String TOOL_WEB_SEARCH_ENGINES       = "HARNESS_TOOL_WEB_SEARCH_ENGINES";
+    /** web_search 最多返回的去重结果数，默认 8 */
+    public static final String TOOL_WEB_SEARCH_RESULT_LIMIT  = "HARNESS_TOOL_WEB_SEARCH_RESULT_LIMIT";
     public static final String TOOL_URL_READER_ENABLED       = "HARNESS_TOOL_URL_READER_ENABLED";
     public static final String TOOL_URL_READER_MAX_BYTES     = "HARNESS_TOOL_URL_READER_MAX_BYTES";
     public static final String TOOL_URL_READER_PAGE_CHARS    = "HARNESS_TOOL_URL_READER_PAGE_CHARS";
@@ -254,6 +260,16 @@ public final class EnvKey {
     public static final String REACT_STRATEGY            = "HARNESS_REACT_STRATEGY";
     /** 自适应反思触发阈值（连续 N 次非 PASS 结果触发反思），默认 5 */
     public static final String REACT_REFLECTION_THRESHOLD = "HARNESS_REACT_REFLECTION_THRESHOLD";
+
+    // ==================== Structured Output ====================
+    public static final String STRUCTURED_SCHEMA_MAX_BYTES =
+            "HARNESS_STRUCTURED_SCHEMA_MAX_BYTES";
+    public static final String STRUCTURED_SCHEMA_MAX_DEPTH =
+            "HARNESS_STRUCTURED_SCHEMA_MAX_DEPTH";
+    public static final String STRUCTURED_SCHEMA_MAX_PROPERTIES =
+            "HARNESS_STRUCTURED_SCHEMA_MAX_PROPERTIES";
+    public static final String STRUCTURED_SCHEMA_MAX_ENUM_VALUES =
+            "HARNESS_STRUCTURED_SCHEMA_MAX_ENUM_VALUES";
 
     // ==================== Sub-Agent ====================
     /** 每个编排器最大并发子代理任务数，默认 3 */

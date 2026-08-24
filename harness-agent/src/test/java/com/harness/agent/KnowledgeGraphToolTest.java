@@ -88,7 +88,7 @@ class KnowledgeGraphToolTest {
     }
 
     @Test
-    void listsReadableGraphSpacesWithoutServerScope() {
+    void listsReadableGraphSpacesWithoutServerScope() throws Exception {
         var page = new PageResponse<>(
                 List.of(new GraphSpaceReference(
                         "students",
@@ -109,11 +109,17 @@ class KnowledgeGraphToolTest {
         String output = tool.execute(objectMapper.createObjectNode()
                 .put("action", KnowledgeGraphTool.ACTION_LIST_GRAPH_SPACES));
 
-        assertThat(output)
-                .contains("Structured Knowledge Graph Spaces")
-                .contains("students")
-                .contains("student-capability-v1")
-                .contains("Student, teacher, and capability relationships");
+        var envelope = objectMapper.readTree(output);
+        assertThat(envelope.path("status").asText()).isEqualTo("SUCCESS");
+        assertThat(envelope.path("data").path("graphSpaces")).hasSize(1);
+        assertThat(envelope.at("/data/graphSpaces/0/graphId").asText())
+                .isEqualTo("students");
+        assertThat(envelope.at("/data/graphSpaces/0/schemaId").asText())
+                .isEqualTo("student-capability-v1");
+        assertThat(envelope.at("/data/graphSpaces/0/description").asText())
+                .isEqualTo("Student, teacher, and capability relationships");
+        assertThat(envelope.at("/pageInfo/limit").asInt()).isEqualTo(10);
+        assertThat(envelope.at("/meta/truncated").asBoolean()).isFalse();
         assertThat(ToolResult.consumeCurrentStatus())
                 .isEqualTo(ToolResult.ResultStatus.SUCCESS);
     }
@@ -140,7 +146,7 @@ class KnowledgeGraphToolTest {
     }
 
     @Test
-    void hidesGraphSpacesWhoseSchemasAreNotRegistered() {
+    void hidesGraphSpacesWhoseSchemasAreNotRegistered() throws Exception {
         when(graphSpaceAccessService.listReadable("tenant-1", 10, ""))
                 .thenReturn(new PageResponse<>(
                         List.of(new GraphSpaceReference(
@@ -152,13 +158,16 @@ class KnowledgeGraphToolTest {
         String output = tool.execute(objectMapper.createObjectNode()
                 .put("action", KnowledgeGraphTool.ACTION_LIST_GRAPH_SPACES));
 
-        assertThat(output).isEqualTo("No readable graph spaces were found.");
+        var envelope = objectMapper.readTree(output);
+        assertThat(envelope.path("status").asText()).isEqualTo("EMPTY");
+        assertThat(envelope.path("data").path("graphSpaces")).isEmpty();
+        assertThat(envelope.at("/pageInfo/hasMore").asBoolean()).isFalse();
         assertThat(ToolResult.consumeCurrentStatus())
                 .isEqualTo(ToolResult.ResultStatus.EMPTY);
     }
 
     @Test
-    void continuesPaginationPastUnregisteredGraphSpaces() {
+    void continuesPaginationPastUnregisteredGraphSpaces() throws Exception {
         when(graphSpaceAccessService.listReadable("tenant-1", 10, ""))
                 .thenReturn(new PageResponse<>(
                         List.of(new GraphSpaceReference(
@@ -182,14 +191,18 @@ class KnowledgeGraphToolTest {
         String output = tool.execute(objectMapper.createObjectNode()
                 .put("action", KnowledgeGraphTool.ACTION_LIST_GRAPH_SPACES));
 
-        assertThat(output)
-                .contains("students", "student-schema", "student capabilities")
+        var graphSpaces = objectMapper.readTree(output).at("/data/graphSpaces");
+        assertThat(graphSpaces).hasSize(1);
+        assertThat(graphSpaces.get(0).path("graphId").asText()).isEqualTo("students");
+        assertThat(graphSpaces.get(0).path("schemaId").asText()).isEqualTo("student-schema");
+        assertThat(graphSpaces.toString())
                 .doesNotContain("orphaned-space", "deleted-schema");
         verify(graphSpaceAccessService).listReadable("tenant-1", 10, "next-page");
     }
 
     @Test
-    void autonomouslyRetrievesNeighborhoodAfterAuthorization() {
+    void autonomouslyRetrievesNeighborhoodAfterAuthorization() throws Exception {
+        stubSchema("student-capability-v1");
         when(retriever.retrieve(
                 any(GraphRequestContext.class),
                 eq(AnchoredNeighborhoodGraphRetriever.QUERY_ID),
@@ -207,7 +220,14 @@ class KnowledgeGraphToolTest {
 
         String output = tool.execute(arguments);
 
-        assertThat(output).contains("No structured graph records");
+        var envelope = objectMapper.readTree(output);
+        assertThat(envelope.path("status").asText()).isEqualTo("EMPTY");
+        assertThat(envelope.at("/data/graphId").asText()).isEqualTo("students");
+        assertThat(envelope.at("/data/schemaId").asText())
+                .isEqualTo("student-capability-v1");
+        assertThat(envelope.at("/data/nodes")).isEmpty();
+        assertThat(envelope.at("/data/relations")).isEmpty();
+        assertThat(envelope.at("/data/paths")).isEmpty();
         verify(graphSpaceAccessService).requireReadable(
                 "tenant-1",
                 "students",
@@ -229,6 +249,7 @@ class KnowledgeGraphToolTest {
 
     @Test
     void keepsServerScopeAuthoritative() {
+        stubSchema("student-capability-v1");
         GraphRequestContext serverContext = new GraphRequestContext(
                 "students",
                 "student-capability-v1",
@@ -323,7 +344,8 @@ class KnowledgeGraphToolTest {
     }
 
     @Test
-    void graphSpaceScopeDefaultsToNodeDiscoveryUsingServerIdentifiers() {
+    void graphSpaceScopeDefaultsToNodeDiscoveryUsingServerIdentifiers() throws Exception {
+        stubSchema("student-capability-v1");
         GraphRequestContext graphSpaceContext = new GraphRequestContext(
                 "students",
                 "student-capability-v1",
@@ -336,7 +358,13 @@ class KnowledgeGraphToolTest {
 
         String output = tool.execute(objectMapper.createObjectNode().put("name", "Xiaoming"));
 
-        assertThat(output).isEqualTo("No graph nodes matched the requested filters.");
+        var envelope = objectMapper.readTree(output);
+        assertThat(envelope.path("status").asText()).isEqualTo("EMPTY");
+        assertThat(envelope.at("/data/graphId").asText()).isEqualTo("students");
+        assertThat(envelope.at("/data/schemaId").asText())
+                .isEqualTo("student-capability-v1");
+        assertThat(envelope.at("/data/nodes")).isEmpty();
+        assertThat(envelope.at("/pageInfo/limit").asInt()).isEqualTo(10);
         verify(graphSpaceAccessService).requireReadable(
                 "tenant-1", "students", "student-capability-v1");
         ArgumentCaptor<GraphNodePageRequest> requestCaptor =
@@ -345,5 +373,11 @@ class KnowledgeGraphToolTest {
         assertThat(requestCaptor.getValue().graphId()).isEqualTo("students");
         assertThat(requestCaptor.getValue().schemaId()).isEqualTo("student-capability-v1");
         assertThat(requestCaptor.getValue().name()).isEqualTo("Xiaoming");
+    }
+
+    private void stubSchema(String schemaId) {
+        GraphSchemaDefinition schema = org.mockito.Mockito.mock(GraphSchemaDefinition.class);
+        when(schema.schemaId()).thenReturn(schemaId);
+        when(schemaRegistry.require(schemaId)).thenReturn(schema);
     }
 }

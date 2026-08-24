@@ -37,6 +37,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * Endpoints:
  *   POST   /api/auth/token        - Get JWT token (userId/username + password)
  *   POST   /api/chat              - Send a message, get agent response (SSE stream)
+ *   POST   /api/structured-output - Run agent and return validated JSON
  *   DELETE /api/chat/{sessionId}  - Cancel an in-progress chat request
  *   POST   /api/sessions          - Create a new session
  *   GET    /api/sessions          - List sessions (cursor pagination, filter by userId/status)
@@ -95,11 +96,12 @@ public class Main {
         Runtime.getRuntime().addShutdownHook(new Thread(agent::shutdown));
 
         // Knowledge base upload service — reuse agent's instances
+        FileStorageService fileStorageService = new FileStorageService();
         KnowledgeIngestService ingestService = new KnowledgeIngestService(
                 agent.embeddingModel(),
                 agent.vectorStore(),
                 agent.documentConversionService(),
-                new FileStorageService());
+                fileStorageService);
         TraceStore traceStore = agent.traceStore();
 
         // Shared cancellation token registry for in-flight chat requests
@@ -168,13 +170,11 @@ public class Main {
         app.get("/api/audio/capabilities", audioCapabilityHandler::handle);
 
         // Knowledge base management endpoints
-        KnowledgeManagementHandler knowledgeMgmtHandler = new KnowledgeManagementHandler(agent.vectorStore());
+        KnowledgeManagementHandler knowledgeMgmtHandler = new KnowledgeManagementHandler(
+                agent.vectorStore(), agent.embeddingModel(), fileStorageService);
         app.get("/api/knowledge/{collection}", knowledgeMgmtHandler::listDocuments);
         // List all knowledge collections
-        app.get("/api/knowledge", ctx -> {
-            List<String> collections = agent.vectorStore().listCollections();
-            ctx.json(Map.of("collections", collections));
-        });
+        app.get("/api/knowledge", knowledgeMgmtHandler::listCollections);
         app.get("/api/knowledge/{collection}/{documentId}", knowledgeMgmtHandler::getDocument);
         app.put("/api/knowledge/{collection}/{documentId}", knowledgeMgmtHandler::updateDocument);
         app.delete("/api/knowledge/{collection}", knowledgeMgmtHandler::deleteCollection);
@@ -237,6 +237,9 @@ public class Main {
         // Chat endpoint (SSE streaming)
         ChatHandler chatHandler = new ChatHandler(agent, activeRequests);
         app.post("/api/chat", chatHandler::handle);
+        StructuredOutputHandler structuredOutputHandler =
+                new StructuredOutputHandler(agent, activeRequests);
+        app.post("/api/structured-output", structuredOutputHandler::handle);
 
         ConfirmationHandler confirmationHandler =
                 new ConfirmationHandler(agent.confirmationManager());
@@ -271,6 +274,10 @@ public class Main {
         app.get("/api/sessions/{sessionId}/messages", sessionHandler::messages);
         app.get("/api/sessions/{sessionId}/stats", sessionHandler::stats);
         app.delete("/api/sessions/{sessionId}", sessionHandler::delete);
+
+        // Bounded process-level cache metrics. Labels never include user or session identifiers.
+        app.get("/api/metrics/session-cache",
+                ctx -> ctx.json(agent.messageCache().metricsSnapshot()));
 
         // Cancel in-progress chat request
         app.delete("/api/chat/{sessionId}", ctx -> {

@@ -13,7 +13,7 @@ import java.util.*;
 
 /**
  * Layer 2: Preprocessing.
- * Orchestrates RAG retrieval + semantic enhancement + reranking to build context for the AI layer.
+ * Orchestrates RAG retrieval and reranking, plus explicit document-window reads.
  */
 public class ContextBuilder {
 
@@ -21,7 +21,6 @@ public class ContextBuilder {
 
     private final VectorStore vectorStore;
     private final Reranker reranker;
-    private final SemanticContextRetriever semanticRetriever;
 
     public ContextBuilder(RerankModelProvider rerankModelProvider,
                           EmbeddingModelProvider embeddingModelProvider) {
@@ -30,7 +29,6 @@ public class ContextBuilder {
 
     ContextBuilder(VectorStore vectorStore, Reranker reranker) {
         this.vectorStore = vectorStore;
-        this.semanticRetriever = vectorStore != null ? new SemanticContextRetriever(vectorStore) : null;
         this.reranker = Objects.requireNonNull(reranker, "reranker");
     }
 
@@ -42,11 +40,16 @@ public class ContextBuilder {
      * @return context result
      */
     public ContextResult buildRagForTool(String query) {
+        return buildRagForTool(query, defaultCollection(), maxSearchLimit());
+    }
+
+    public ContextResult buildRagForTool(String query, String collection, int limit) {
         if (vectorStore == null) {
             log.warn("[L3-RAG] RAG provider is none, skipping tool-based retrieval");
             return ContextResult.empty();
         }
-        return executeRetrieval(List.of(query), query);
+        validateSearchScope(collection, limit);
+        return executeRetrieval(List.of(query), query, collection, limit);
     }
 
     /**
@@ -57,6 +60,14 @@ public class ContextBuilder {
      * @return context result
      */
     public ContextResult buildRagWithQueries(List<String> queries) {
+        return buildRagWithQueries(queries, defaultCollection(), maxSearchLimit());
+    }
+
+    public ContextResult buildRagWithQueries(
+            List<String> queries,
+            String collection,
+            int limit
+    ) {
         if (vectorStore == null) {
             log.warn("[L3-RAG] RAG provider is none, skipping multi-query retrieval");
             return ContextResult.empty();
@@ -64,8 +75,26 @@ public class ContextBuilder {
         if (queries == null || queries.isEmpty()) {
             return ContextResult.empty();
         }
+        validateSearchScope(collection, limit);
         // 使用第一个查询作为 rerank 的参考文本
-        return executeRetrieval(queries, queries.get(0));
+        return executeRetrieval(queries, queries.get(0), collection, limit);
+    }
+
+    public List<RagRetriever.RagDocument> readContext(
+            String collection,
+            String documentId,
+            int anchorChunkIndex,
+            int before,
+            int after
+    ) {
+        if (vectorStore == null) {
+            throw new IllegalStateException("Knowledge base provider is disabled");
+        }
+        return vectorStore.readDocumentWindow(
+                        collection, documentId, anchorChunkIndex, before, after)
+                .stream()
+                .map(RagRetriever.RagDocument::from)
+                .toList();
     }
 
     /**
@@ -75,28 +104,18 @@ public class ContextBuilder {
      * @param rerankText 用于 rerank 的参考文本（通常为原始查询）
      * @return context result
      */
-    private ContextResult executeRetrieval(List<String> queries, String rerankText) {
+    private ContextResult executeRetrieval(
+            List<String> queries,
+            String rerankText,
+            String collection,
+            int limit
+    ) {
         // Step 1: RAG retrieval (support multi-query with dedup)
-        RetrievalBatch retrievalBatch = doMultiRetrieve(queries);
+        RetrievalBatch retrievalBatch = doMultiRetrieve(queries, collection, limit);
         List<RagRetriever.RagDocument> ragDocs = retrievalBatch.documents();
         log.debug("[L3-RAG] Retrieved {} docs from {} queries", ragDocs.size(), queries.size());
 
-        // Step 2: Semantic enhancement (lookback for truncated chunks)
-        int totalLookback = 0;
-        List<String> lookbackChunkIds = List.of();
-        if (semanticRetriever != null && !ragDocs.isEmpty()) {
-            List<SemanticContextRetriever.EnhancedChunk> enhanced = semanticRetriever.enhance(ragDocs);
-            totalLookback = enhanced.stream().mapToInt(SemanticContextRetriever.EnhancedChunk::lookbackCount).sum();
-            lookbackChunkIds = enhanced.stream()
-                    .flatMap(e -> e.lookbackChunkIds().stream())
-                    .toList();
-            ragDocs = enhanced.stream().map(SemanticContextRetriever.EnhancedChunk::document).toList();
-            if (totalLookback > 0) {
-                log.debug("[L3-RAG] Semantic enhancement: {} lookbacks for {} chunks", totalLookback, lookbackChunkIds.size());
-            }
-        }
-
-        // Step 3: Rerank (with timing)
+        // Step 2: Rerank (with timing)
         long rerankStart = System.currentTimeMillis();
         Reranker.RerankResult rerankResult = reranker.rerank(rerankText, ragDocs);
         long rerankMs = System.currentTimeMillis() - rerankStart;
@@ -104,12 +123,8 @@ public class ContextBuilder {
         log.debug("[L3-RAG] Reranked {} → {} docs in {}ms (topScore={})", ragDocs.size(), reranked.size(), rerankMs,
                 String.format("%.4f", rerankResult.topScore()));
 
-        // Step 4: Format context string
-        String contextBlock = formatContext(reranked);
-        if (contextBlock.isEmpty()) {
+        if (reranked.isEmpty()) {
             log.debug("[L3-RAG] No RAG results");
-        } else {
-            log.debug("[L3-RAG] Context block: {} chars", contextBlock.length());
         }
 
         Map<String, String> metadata = new HashMap<>();
@@ -119,16 +134,11 @@ public class ContextBuilder {
         metadata.put("top_score", String.valueOf(rerankResult.topScore()));
         metadata.put("best_observed_score", String.valueOf(retrievalBatch.bestObservedScore()));
         metadata.put("observed_candidate_count", String.valueOf(retrievalBatch.observedCandidateCount()));
-        metadata.put("lookback_count", String.valueOf(totalLookback));
         metadata.put("query_count", String.valueOf(queries.size()));
+        metadata.put("collection", collection);
         metadata.put("provider", vectorStore != null ? vectorStore.providerName() : "none");
-        if (!lookbackChunkIds.isEmpty()) {
-            metadata.put("lookback_chunk_ids", String.join(",", lookbackChunkIds));
-        }
-
         return new ContextResult(
-                reranked.stream().map(RagRetriever.RagDocument::id).toList(),
-                contextBlock,
+                reranked,
                 metadata
         );
     }
@@ -137,16 +147,20 @@ public class ContextBuilder {
      * 多查询检索并合并去重。
      * 每个查询独立检索，结果按 document ID 去重，保留最高分。
      */
-    private RetrievalBatch doMultiRetrieve(List<String> queries) {
+    private RetrievalBatch doMultiRetrieve(
+            List<String> queries,
+            String collection,
+            int limit
+    ) {
         if (queries.size() == 1) {
-            return doRetrieve(queries.get(0));
+            return doRetrieve(queries.get(0), collection, limit);
         }
 
         Map<String, RagRetriever.RagDocument> documentsById = new HashMap<>();
         double bestObservedScore = 0.0;
         int observedCandidateCount = 0;
         for (String query : queries) {
-            RetrievalBatch batch = doRetrieve(query);
+            RetrievalBatch batch = doRetrieve(query, collection, limit);
             bestObservedScore = Math.max(bestObservedScore, batch.bestObservedScore());
             observedCandidateCount += batch.observedCandidateCount();
             for (RagRetriever.RagDocument document : batch.documents()) {
@@ -161,14 +175,12 @@ public class ContextBuilder {
         return new RetrievalBatch(documents, bestObservedScore, observedCandidateCount);
     }
 
-    private RetrievalBatch doRetrieve(String query) {
+    private RetrievalBatch doRetrieve(String query, String collection, int limit) {
         if (vectorStore == null) return RetrievalBatch.empty();
-        EnvConfig cfg = EnvConfig.get();
-        String collection = cfg.getString(EnvKey.RAG_COLLECTION, "default");
-        int topK = cfg.getInt(EnvKey.RAG_TOP_K, 5);
-        VectorStore.SearchResult searchResult = vectorStore.searchTextWithEvidence(collection, query, topK);
+        VectorStore.SearchResult searchResult =
+                vectorStore.searchTextWithEvidence(collection, query, limit);
         List<RagRetriever.RagDocument> documents = searchResult.documents().stream()
-                .map(d -> new RagRetriever.RagDocument(d.id(), d.content(), d.source(), d.score()))
+                .map(RagRetriever.RagDocument::from)
                 .toList();
         return new RetrievalBatch(
                 documents,
@@ -186,31 +198,43 @@ public class ContextBuilder {
         }
     }
 
-    private String formatContext(List<RagRetriever.RagDocument> docs) {
-        if (docs == null || docs.isEmpty()) {
-            return "";
-        }
-        StringBuilder sb = new StringBuilder();
-        sb.append("[Retrieved Context]\n");
-        for (int i = 0; i < docs.size(); i++) {
-            RagRetriever.RagDocument doc = docs.get(i);
-            sb.append(String.format("--- Source %d (score: %.2f) ---\n", i + 1, doc.score()));
-            sb.append(doc.content()).append("\n");
-        }
-        return sb.toString();
-    }
-
     public VectorStore vectorStore() {
         return vectorStore;
     }
 
+    public String defaultCollection() {
+        return EnvConfig.get().getString(EnvKey.RAG_COLLECTION, "default");
+    }
+
+    public int maxSearchLimit() {
+        return EnvConfig.get().getInt(EnvKey.RAG_TOP_K, 5);
+    }
+
+    private void validateSearchScope(String collection, int limit) {
+        if (collection == null || collection.isBlank()) {
+            throw new IllegalArgumentException("knowledge collection is required");
+        }
+        if (limit < 1 || limit > maxSearchLimit()) {
+            throw new IllegalArgumentException(
+                    "knowledge search limit must be between 1 and " + maxSearchLimit());
+        }
+    }
+
     public record ContextResult(
-            List<String> ragHitIds,
-            String contextBlock,
+            List<RagRetriever.RagDocument> documents,
             Map<String, String> metadata
     ) {
+        public ContextResult {
+            documents = documents == null ? List.of() : List.copyOf(documents);
+            metadata = metadata == null ? Map.of() : Map.copyOf(metadata);
+        }
+
         public boolean hasContext() {
-            return contextBlock != null && !contextBlock.isBlank();
+            return !documents.isEmpty();
+        }
+
+        public List<String> ragHitIds() {
+            return documents.stream().map(RagRetriever.RagDocument::id).toList();
         }
 
         /**
@@ -246,7 +270,7 @@ public class ContextBuilder {
         }
 
         public static ContextResult empty() {
-            return new ContextResult(List.of(), "", Map.of());
+            return new ContextResult(List.of(), Map.of());
         }
     }
 }

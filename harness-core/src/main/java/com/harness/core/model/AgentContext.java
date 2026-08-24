@@ -19,6 +19,7 @@ public record AgentContext(
     public static final String KEY_ENABLE_THINKING = "enableThinking";
     public static final String KEY_CREDENTIALS = "credentials";
     public static final String KEY_GRAPH_REQUEST_CONTEXT = "graphRequestContext";
+    public static final String KEY_KNOWLEDGE_REQUEST_CONTEXT = "knowledgeRequestContext";
     public static final String KEY_NEEDS_GRAPH_KNOWLEDGE = "needsGraphKnowledge";
 
     // ==================== GapAnalysis 显式覆盖字段 ====================
@@ -117,6 +118,18 @@ public record AgentContext(
         );
     }
 
+    /** Parse the server-created knowledge collection and optional document scope. */
+    public KnowledgeRequestContext knowledgeRequestContext() {
+        Object value = data.get(KEY_KNOWLEDGE_REQUEST_CONTEXT);
+        if (!(value instanceof Map<?, ?> knowledgeData)) {
+            return null;
+        }
+        return new KnowledgeRequestContext(
+                textValue(knowledgeData.get("collection")),
+                stringSet(knowledgeData.get("allowedDocumentIds"))
+        );
+    }
+
     /**
      * 是否联网搜索。
      * <ul>
@@ -159,6 +172,7 @@ public record AgentContext(
         Map<String, Object> copy = new HashMap<>(data);
         copy.put(KEY_CREDENTIALS, Map.of());
         copy.remove(KEY_GRAPH_REQUEST_CONTEXT);
+        copy.remove(KEY_KNOWLEDGE_REQUEST_CONTEXT);
         copy.remove(KEY_NEEDS_GRAPH_KNOWLEDGE);
         return new AgentContext(copy);
     }

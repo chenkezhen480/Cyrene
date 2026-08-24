@@ -1,4 +1,4 @@
-package com.harness.react;
+package com.harness.provider;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import dev.langchain4j.model.chat.request.json.JsonArraySchema;
@@ -13,28 +13,22 @@ import dev.langchain4j.model.chat.request.json.JsonStringSchema;
 import java.util.ArrayList;
 import java.util.List;
 
-/**
- * Converts OpenAI-style JSON Schema nodes into LangChain4j schema elements.
- */
-final class JsonSchemaConverter {
+/** Converts provider-neutral JSON Schema documents into LangChain4j schema elements. */
+public final class LangChainJsonSchemaMapper {
 
-    private JsonSchemaConverter() {
-    }
+    private LangChainJsonSchemaMapper() {}
 
-    static JsonObjectSchema toObjectSchema(JsonNode schemaNode) {
-        if (schemaNode == null || schemaNode.isNull()) {
-            return null;
-        }
+    public static JsonObjectSchema toObjectSchema(JsonNode schemaNode) {
         JsonSchemaElement schema = toSchemaElement(schemaNode);
         if (schema instanceof JsonObjectSchema objectSchema) {
             return objectSchema;
         }
-        throw new IllegalArgumentException("Tool parameter schema root must be an object");
+        throw new IllegalArgumentException("JSON Schema root must be an object");
     }
 
-    private static JsonSchemaElement toSchemaElement(JsonNode schemaNode) {
+    public static JsonSchemaElement toSchemaElement(JsonNode schemaNode) {
         if (schemaNode == null || schemaNode.isNull()) {
-            return JsonStringSchema.builder().build();
+            throw new IllegalArgumentException("JSON Schema must not be null");
         }
 
         String description = textValue(schemaNode, "description");
@@ -67,14 +61,12 @@ final class JsonSchemaConverter {
             properties.properties().forEach(entry ->
                     builder.addProperty(entry.getKey(), toSchemaElement(entry.getValue())));
         }
-
         JsonNode required = schemaNode.get("required");
         if (required != null && required.isArray()) {
             List<String> requiredNames = new ArrayList<>();
             required.forEach(value -> requiredNames.add(value.asText()));
             builder.required(requiredNames);
         }
-
         JsonNode additionalProperties = schemaNode.get("additionalProperties");
         if (additionalProperties != null && additionalProperties.isBoolean()) {
             builder.additionalProperties(additionalProperties.asBoolean());
@@ -95,16 +87,10 @@ final class JsonSchemaConverter {
 
     private static String inferType(JsonNode schemaNode) {
         JsonNode typeNode = schemaNode.get("type");
-        if (typeNode != null && typeNode.isTextual()) {
-            return typeNode.asText();
-        }
-        if (schemaNode.has("properties")) {
-            return "object";
-        }
-        if (schemaNode.has("items")) {
-            return "array";
-        }
-        return "string";
+        if (typeNode != null && typeNode.isTextual()) return typeNode.asText();
+        if (schemaNode.has("properties")) return "object";
+        if (schemaNode.has("items")) return "array";
+        throw new IllegalArgumentException("JSON Schema node must declare a type");
     }
 
     private static String textValue(JsonNode node, String fieldName) {

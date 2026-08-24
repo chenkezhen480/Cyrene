@@ -29,8 +29,6 @@ import java.util.Map;
  *   collection    VarChar(128)    逻辑集合名
  *   embedding     FloatVector     向量嵌入
  *   chunk_index   Int64           分块序号
- *   prev_chunk_id VarChar(64)     前一个 chunk ID，nullable
- *   next_chunk_id VarChar(64)     后一个 chunk ID，nullable
  *   metadata      JSON            扩展元数据
  *   sparse_content SparseFloatVector  BM25 自动生成，用于全文检索
  */
@@ -83,12 +81,6 @@ public class MilvusCollectionInitializer {
                 .dimension(embedDim).build());
         schema.addField(AddFieldReq.builder()
                 .fieldName("chunk_index").dataType(DataType.Int64).build());
-        schema.addField(AddFieldReq.builder()
-                .fieldName("prev_chunk_id").dataType(DataType.VarChar)
-                .maxLength(64).isNullable(true).build());
-        schema.addField(AddFieldReq.builder()
-                .fieldName("next_chunk_id").dataType(DataType.VarChar)
-                .maxLength(64).isNullable(true).build());
         schema.addField(AddFieldReq.builder()
                 .fieldName("metadata").dataType(DataType.JSON).build());
         schema.addField(AddFieldReq.builder()

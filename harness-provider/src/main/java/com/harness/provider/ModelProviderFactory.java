@@ -5,6 +5,7 @@ import com.harness.core.env.EnvConfig;
 import com.harness.core.env.EnvKey;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.StreamingChatModel;
+import java.util.Locale;
 import java.util.concurrent.Semaphore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -35,10 +36,17 @@ public final class ModelProviderFactory {
      * 1. General Chat Model (required)
      */
     public static ChatModelProvider createChat() {
-        String provider = EnvConfig.get().getString(EnvKey.MODEL_CHAT_PROVIDER, "openai");
+        EnvConfig config = EnvConfig.get();
+        String provider = config.getString(EnvKey.MODEL_CHAT_PROVIDER, "openai")
+                .trim().toLowerCase(Locale.ROOT);
+        OpenAiChatApiFormat apiFormat = validateChatApiFormat(
+                provider,
+                config.getString(
+                        EnvKey.MODEL_CHAT_API_FORMAT,
+                        OpenAiChatApiFormat.CHAT_COMPLETIONS.configValue()));
         log.info("Creating chat model provider: {}", provider);
-        ChatModelProvider chatProvider = switch (provider.toLowerCase()) {
-            case "openai", "dashscope" -> new OpenAiChatModelProvider();
+        ChatModelProvider chatProvider = switch (provider) {
+            case "openai", "dashscope" -> new OpenAiChatModelProvider(apiFormat);
             case "anthropic", "claude" -> new AnthropicChatModelProvider();
             case "ollama" -> new OllamaChatModelProvider();
             default -> throw new IllegalStateException("Unknown chat model provider: " + provider);
@@ -51,10 +59,28 @@ public final class ModelProviderFactory {
         Semaphore semaphore = new Semaphore(maxConcurrent, true);
         log.info("[Semaphore] LLM API concurrency limit={}, fair=true", maxConcurrent);
         ChatModel chatModel = new SemaphoreChatModel(chatProvider.chatModel(), semaphore);
+        ChatModel structuredChatModel = chatProvider.supportsStructuredOutput()
+                ? new SemaphoreChatModel(chatProvider.structuredChatModel(), semaphore)
+                : null;
         StreamingChatModel streamingRaw = chatProvider.streamingModel();
         StreamingChatModel streamingModel = streamingRaw != null
                 ? new SemaphoreStreamingChatModel(streamingRaw, semaphore) : null;
-        return new SemaphoreChatModelProvider(chatProvider, chatModel, streamingModel);
+        return new SemaphoreChatModelProvider(
+                chatProvider, chatModel, structuredChatModel, streamingModel);
+    }
+
+    static OpenAiChatApiFormat validateChatApiFormat(
+            String provider,
+            String configuredFormat
+    ) {
+        OpenAiChatApiFormat apiFormat = OpenAiChatApiFormat.parse(configuredFormat);
+        boolean openAiCompatible = "openai".equals(provider) || "dashscope".equals(provider);
+        if (apiFormat == OpenAiChatApiFormat.RESPONSES && !openAiCompatible) {
+            throw new IllegalStateException(
+                    "HARNESS_MODEL_CHAT_API_FORMAT=responses requires an OpenAI-compatible "
+                            + "chat provider, but HARNESS_MODEL_CHAT_PROVIDER=" + provider);
+        }
+        return apiFormat;
     }
 
     /**

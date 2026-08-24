@@ -71,4 +71,20 @@ class AgentPromptBuilderTest {
                 .isInstanceOf(AgentException.class)
                 .hasMessageContaining("outside the upload directory");
     }
+
+    @Test
+    void knowledgeGuidanceExplainsSearchThenExplicitContextRead() {
+        AgentPromptBuilder builder = new AgentPromptBuilder(
+                mock(SkillRegistry.class), mock(DocumentConversionService.class));
+
+        String prompt = builder.buildSystemPrompt(
+                List.of(), null, "session-1", true, false, null, false);
+
+        assertThat(prompt)
+                .contains("Use knowledge_base_search first")
+                .contains("knowledge_context_read")
+                .contains("exact documentId and chunkIndex")
+                .contains("defaults to one chunk before and after")
+                .contains("Never guess an anchor");
+    }
 }

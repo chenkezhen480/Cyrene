@@ -2,8 +2,18 @@ package com.harness.provider;
 
 import com.harness.core.env.EnvConfig;
 import com.harness.core.env.EnvKey;
+import com.harness.core.model.ModelUsage;
+import com.harness.core.model.FinalOutputContract;
+import com.harness.core.exception.StructuredOutputException;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.StreamingChatModel;
+import dev.langchain4j.model.chat.request.ChatRequestParameters;
+import dev.langchain4j.model.chat.request.ResponseFormat;
+import dev.langchain4j.model.chat.response.ChatResponse;
+import dev.langchain4j.agent.tool.ToolSpecification;
+
+import java.util.List;
+import java.util.Objects;
 
 /**
  * 1. General Chat Model Provider
@@ -23,6 +33,46 @@ public interface ChatModelProvider {
 
     String providerName();
     String modelName();
+
+    default ModelUsage modelUsage(ChatResponse response, long llmLatencyMs) {
+        return ChatModelUsageMapper.map(response, llmLatencyMs);
+    }
+
+    /**
+     * Builds provider-specific planning parameters without exposing protocol types to ReAct.
+     * Providers with no portable thinking override still receive the ordinary tool catalog.
+     */
+    default ChatRequestParameters planningRequestParameters(
+            Boolean enableThinking,
+            List<ToolSpecification> toolSpecifications
+    ) {
+        Objects.requireNonNull(toolSpecifications, "toolSpecifications");
+        if (toolSpecifications.isEmpty()) {
+            return null;
+        }
+        return ChatRequestParameters.builder()
+                .toolSpecifications(toolSpecifications)
+                .build();
+    }
+
+    default boolean supportsStructuredOutput() {
+        return false;
+    }
+
+    default ChatModel structuredChatModel() {
+        throw new StructuredOutputException(
+                StructuredOutputException.Code.STRUCTURED_OUTPUT_UNSUPPORTED,
+                "Provider does not support strict structured output: " + providerName());
+    }
+
+    default ResponseFormat responseFormat(FinalOutputContract outputContract) {
+        if (outputContract instanceof FinalOutputContract.Text) {
+            return ResponseFormat.TEXT;
+        }
+        throw new StructuredOutputException(
+                StructuredOutputException.Code.STRUCTURED_OUTPUT_UNSUPPORTED,
+                "Provider does not support strict structured output: " + providerName());
+    }
 
     /**
      * Returns the model's context window size in tokens.

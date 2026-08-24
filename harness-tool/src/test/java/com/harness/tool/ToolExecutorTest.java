@@ -216,7 +216,7 @@ class ToolExecutorTest {
                     requestCreated.countDown();
                 },
                 (request, decision) -> resolvedDecision.set(decision),
-                (toolName, arguments) -> executionStarted.set(true));
+                toolCall -> executionStarted.set(true));
 
         CompletableFuture<ToolResult> resultFuture = CompletableFuture.supplyAsync(
                 () -> executor.executeAuthorized(call, tool, context));

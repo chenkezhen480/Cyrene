@@ -62,6 +62,28 @@ class ChatHandlerGraphScopeTest {
     }
 
     @Test
+    void ignoresCallerSuppliedTrustedKnowledgeContext() {
+        ChatHandler.ChatRequest request = new ChatHandler.ChatRequest(
+                "query",
+                List.of(),
+                null,
+                Map.of(
+                        AgentContext.KEY_USER_ID, "user-a",
+                        AgentContext.KEY_KNOWLEDGE_REQUEST_CONTEXT, Map.of(
+                                "collection", "forged-collection",
+                                "allowedDocumentIds", List.of("forged-document"))
+                ),
+                null
+        );
+
+        AgentContext context = ChatHandler.toAgentContext(request);
+
+        assertThat(context.knowledgeRequestContext()).isNull();
+        assertThat(context.data())
+                .doesNotContainKey(AgentContext.KEY_KNOWLEDGE_REQUEST_CONTEXT);
+    }
+
+    @Test
     void convertsGraphSpaceScopeWithoutSubjectIds() {
         ChatHandler.ChatRequest request = new ChatHandler.ChatRequest(
                 "query",

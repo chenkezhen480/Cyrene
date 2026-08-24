@@ -1,10 +1,15 @@
 package com.harness.agent;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.harness.agent.context.KnowledgeAccessService;
+import com.harness.core.model.ArtifactStore;
 import com.harness.react.ReActLoop;
 import com.harness.react.ReActLoopFactory;
 import com.harness.react.ReActRequest;
 import com.harness.react.ReActResult;
 import com.harness.core.model.CancellationToken;
+import com.harness.core.model.FinalOutputContract;
 import com.harness.core.model.RiskLevel;
 import com.harness.core.runtime.RunTrace;
 import com.harness.core.runtime.RunTraceFactory;
@@ -17,9 +22,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.List;
-import java.util.HashSet;
 import java.util.Map;
-import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -38,13 +41,6 @@ import java.util.concurrent.atomic.AtomicInteger;
 public class SubAgentManager {
 
     private static final Logger log = LoggerFactory.getLogger(SubAgentManager.class);
-    private static final Set<String> SUBAGENT_ORCHESTRATION_TOOLS = Set.of(
-            "spawn_subagent",
-            "await_subagents",
-            "get_subagents",
-            "cancel_subagents"
-    );
-
     private final ReActLoopFactory reActLoopFactory;
     private final RunTraceFactory traceFactory;
     private final ToolExecutor toolExecutor;
@@ -52,6 +48,7 @@ public class SubAgentManager {
     // Session resume support
     private final SessionInbox sessionInbox;
     private final SessionResumeDispatcher resumeDispatcher;
+    private final SubAgentCompletionContractValidator completionContractValidator;
 
     // Configurable limits
     private final int maxConcurrent;
@@ -74,6 +71,7 @@ public class SubAgentManager {
     public SubAgentManager(ReActLoopFactory reActLoopFactory,
                            RunTraceFactory traceFactory,
                            ToolExecutor toolExecutor,
+                           ArtifactStore artifactStore,
                            SessionInbox sessionInbox,
                            SessionResumeDispatcher resumeDispatcher) {
         this.reActLoopFactory = java.util.Objects.requireNonNull(reActLoopFactory, "reActLoopFactory");
@@ -81,6 +79,8 @@ public class SubAgentManager {
         this.toolExecutor = toolExecutor;
         this.sessionInbox = sessionInbox;
         this.resumeDispatcher = resumeDispatcher;
+        this.completionContractValidator = new SubAgentCompletionContractValidator(
+                artifactStore, new ObjectMapper());
 
         // Load configurable limits from env
         this.maxConcurrent = EnvConfig.get().getInt(EnvKey.AGENT_MAX_SUBAGENTS, 3);
@@ -187,15 +187,15 @@ public class SubAgentManager {
         SubAgentRunScope scope = scopes.get(runId);
 
         if (scope == null) {
-            log.error("[SubAgentManager] No scope found for run {}", runId);
-            return null;
+            throw new IllegalStateException("No sub-agent scope found for run " + runId);
         }
+
+        completionContractValidator.validateTaskDefinition(task, runContext.toolCatalog());
 
         // Validate dependencies
         String depError = scope.validateDependencies(task);
         if (depError != null) {
-            log.warn("[SubAgentManager] Dependency validation failed for task {}: {}", task.taskId(), depError);
-            return null;
+            throw new IllegalArgumentException(depError);
         }
 
         // Create task-level cancellation token (linked to parent)
@@ -222,6 +222,8 @@ public class SubAgentManager {
         final Map<String, String> parentCredentials = HttpApiTool.getCurrentCredentialsSnapshot();
         final KnowledgeGraphTool.ContextSnapshot graphContext =
                 KnowledgeGraphTool.captureCurrentContext();
+        final KnowledgeAccessService.ContextSnapshot knowledgeContext =
+                KnowledgeAccessService.captureCurrentContext();
 
         CompletableFuture<SubAgentResult> future = CompletableFuture.supplyAsync(() -> {
             Thread currentThread = Thread.currentThread();
@@ -233,6 +235,7 @@ public class SubAgentManager {
             // Propagate credentials to sub-agent thread
             HttpApiTool.setCurrentCredentials(parentCredentials);
             KnowledgeGraphTool.restoreCurrentContext(graphContext);
+            KnowledgeAccessService.restoreCurrentContext(knowledgeContext);
 
             long start = System.currentTimeMillis();
             String taskId = record.taskId();
@@ -248,10 +251,8 @@ public class SubAgentManager {
             log.debug("[SubAgentManager] Executing task: id={}, activeTasks={}", taskId, activeTasks.get());
 
             try {
-                Set<String> allowedTools = new HashSet<>(record.task().tools());
-                allowedTools.removeAll(SUBAGENT_ORCHESTRATION_TOOLS);
                 RunToolCatalog subAgentToolCatalog =
-                        runContext.toolCatalog().allowing(allowedTools);
+                        runContext.toolCatalog().allowing(record.task().tools());
 
                 ReActLoop reActLoop = reActLoopFactory.create(subAgentToolCatalog, toolExecutor);
 
@@ -271,16 +272,29 @@ public class SubAgentManager {
                         null,
                         taskToken,
                         null,
-                        null));
+                        null,
+                        finalOutputContract(record.task())));
 
                 long duration = System.currentTimeMillis() - start;
                 log.info("[SubAgentManager] Task {} completed in {}ms, steps={}", taskId, duration, result.steps().size());
 
-                // Persist sub-agent trace and record steps in parent trace
+                // Persist full ReAct steps only in the linked sub-agent trace.
                 String subTraceId = saveSubAgentTrace(trace, record, runContext, result, duration);
 
-                SubAgentResult subResult = SubAgentResult.success(taskId, result.output(), result.steps(), duration, subTraceId);
-                record.succeed(subResult);
+                SubAgentCompletionContractValidator.Evaluation evaluation =
+                        completionContractValidator.evaluate(
+                                record.task().completionContract(),
+                                result.steps(), result.artifacts(), result.output());
+                SubAgentResult subResult;
+                if (evaluation.contractValidation().satisfied()) {
+                    subResult = SubAgentResult.success(
+                            taskId, result.output(), evaluation, duration, subTraceId);
+                    record.succeed(subResult);
+                } else {
+                    subResult = SubAgentResult.incomplete(
+                            taskId, result.output(), evaluation, duration, subTraceId);
+                    record.markIncomplete(subResult);
+                }
                 return subResult;
 
             } catch (Exception e) {
@@ -290,17 +304,22 @@ public class SubAgentManager {
                 if (record.isCancelRequested() || taskToken.isCancelled()) {
                     log.info("[SubAgentManager] Task {} cancelled after {}ms", taskId, duration);
                     record.markCancelled();
-                    return SubAgentResult.failure(taskId, "Cancelled", List.of(), duration);
+                    return SubAgentResult.failure(
+                            taskId, "Cancelled", duration,
+                            record.task().completionContract() != null);
                 }
 
                 log.error("[SubAgentManager] Task {} failed in {}ms: {}", taskId, duration, e.getMessage());
-                SubAgentResult failResult = SubAgentResult.failure(taskId, e.getMessage(), List.of(), duration);
+                SubAgentResult failResult = SubAgentResult.failure(
+                        taskId, e.getMessage(), duration,
+                        record.task().completionContract() != null);
                 record.fail(failResult);
                 return failResult;
 
             } finally {
                 HttpApiTool.clearCurrentCredentials();
                 KnowledgeGraphTool.clearCurrentContext();
+                KnowledgeAccessService.clearCurrentContext();
                 taskToken.untrackThread(currentThread);
                 activeTasks.decrementAndGet();
 
@@ -321,7 +340,7 @@ public class SubAgentManager {
                           if (record.isDetached() && record.ownerSessionId() != null) {
                               SubAgentResult timeoutResult = SubAgentResult.failure(
                                       record.taskId(), "Task timed out after " + taskTimeoutSeconds + "s",
-                                      List.of(), 0);
+                                      0, record.task().completionContract() != null);
                               submitCompletionEvent(record, timeoutResult);
                           }
                       }
@@ -337,7 +356,8 @@ public class SubAgentManager {
                     record.storeCompletionResult(result);
                 } else {
                     record.storeCompletionResult(SubAgentResult.failure(record.taskId(),
-                            error != null ? error.getMessage() : "Task failed", List.of(), 0));
+                            error != null ? error.getMessage() : "Task failed", 0,
+                            record.task().completionContract() != null));
                 }
             }
 
@@ -427,7 +447,40 @@ public class SubAgentManager {
         // Task — what to accomplish
         sb.append("[Task]\n").append(task.description()).append("\n");
 
+        SubAgentCompletionContract contract = task.completionContract();
+        if (contract != null) {
+            sb.append("\n[Completion contract]\n");
+            if (!contract.requiredSuccessfulTools().isEmpty()) {
+                sb.append("Successfully execute each required tool at least once: ")
+                        .append(String.join(", ", contract.requiredSuccessfulTools()))
+                        .append(".\n");
+            }
+            for (RequiredArtifact artifact : contract.requiredArtifacts()) {
+                sb.append("Produce at least ").append(artifact.minCount())
+                        .append(" stored artifact(s) of type ")
+                        .append(artifact.artifactType());
+                if (!artifact.allowedMimeTypes().isEmpty()) {
+                    sb.append(" with MIME type in ")
+                            .append(String.join(", ", artifact.allowedMimeTypes()));
+                }
+                sb.append(".\n");
+            }
+            if (contract.outputSchema() != null) {
+                sb.append("Return the final summary as JSON matching the supplied output schema.\n");
+            }
+        }
+
         return sb.toString();
+    }
+
+    private static FinalOutputContract finalOutputContract(SubAgentTask task) {
+        JsonNode schema = task.completionContract() != null
+                ? task.completionContract().outputSchema()
+                : null;
+        return schema == null
+                ? new FinalOutputContract.Text()
+                : new FinalOutputContract.JsonSchema(
+                        "subAgentCompletion", schema, true);
     }
 
     /**
@@ -538,7 +591,8 @@ public class SubAgentManager {
                             record.taskCancellationToken().cancel();
                             if (record.ownerSessionId() != null) {
                                 SubAgentResult timeoutResult = SubAgentResult.failure(
-                                        record.taskId(), "Task timed out (scope TTL expired)", List.of(), 0);
+                                        record.taskId(), "Task timed out (scope TTL expired)", 0,
+                                        record.task().completionContract() != null);
                                 submitCompletionEvent(record, timeoutResult);
                             }
                         }

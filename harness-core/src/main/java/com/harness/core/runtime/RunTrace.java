@@ -1,6 +1,7 @@
 package com.harness.core.runtime;
 
 import com.harness.core.model.AgentTrace;
+import com.harness.core.model.ModelUsage;
 import com.harness.core.model.ReActStep;
 import com.harness.core.model.RiskLevel;
 
@@ -24,6 +25,9 @@ public interface RunTrace {
     void addStep(ReActStep step);
 
     void addTokens(long tokenCount);
+
+    default void recordModelUsage(ModelUsage usage) {
+    }
 
     void recordOutput(String output, RiskLevel risk, boolean userConfirmed);
 

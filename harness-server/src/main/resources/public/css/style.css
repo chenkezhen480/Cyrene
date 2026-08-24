@@ -1385,6 +1385,8 @@ input[type="file"].input::file-selector-button:hover {
   margin-bottom: 8px;
   padding-bottom: 8px;
   border-bottom: 1px solid rgba(139, 126, 200, 0.1);
+  max-width: 100%;
+  min-width: 0;
 }
 .tool-call-block {
   background: rgba(139, 126, 200, 0.06);
@@ -1395,6 +1397,38 @@ input[type="file"].input::file-selector-button:hover {
   animation: tool-call-enter 0.4s cubic-bezier(0.16, 1, 0.3, 1) both;
   position: relative;
   overflow: hidden;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.tool-call-arguments {
+  margin-top: 6px;
+  color: var(--ash);
+  font-family: var(--font-mono);
+  font-size: 0.76em;
+}
+
+.tool-call-arguments summary {
+  cursor: pointer;
+  user-select: none;
+}
+
+.tool-call-arguments pre {
+  max-width: 100%;
+  margin: 6px 0 0;
+  padding: 8px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: rgba(23, 20, 38, 0.45);
+  border-radius: 4px;
+}
+
+.tool-call-error-summary {
+  margin-top: 6px;
+  color: var(--error);
+  font-size: 0.78em;
+  overflow-wrap: anywhere;
 }
 /* Shimmer sweep on appear */
 .tool-call-block::before {
@@ -3381,6 +3415,33 @@ tr.status-dusk td {
   white-space: nowrap;
 }
 
+.knowledge-filter-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.knowledge-file-filter {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: min(420px, 100%);
+}
+
+.knowledge-file-filter .input {
+  min-width: 0;
+}
+
+.knowledge-list-state {
+  padding: var(--space-4);
+  text-align: center;
+}
+
+.knowledge-list-error {
+  color: var(--error);
+}
+
 /* ── Responsive ── */
 @media (max-width: 768px) {
   :root {
@@ -3417,6 +3478,15 @@ tr.status-dusk td {
 
   .page-container {
     padding: var(--space-4);
+  }
+
+  .knowledge-filter-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .knowledge-file-filter {
+    width: 100%;
   }
 
   .chat-messages {

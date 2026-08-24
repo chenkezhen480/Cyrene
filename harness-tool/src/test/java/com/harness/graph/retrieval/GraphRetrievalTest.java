@@ -5,6 +5,7 @@ import com.harness.core.model.GraphRequestContext;
 import com.harness.graph.config.GraphProvider;
 import com.harness.graph.config.GraphSettings;
 import com.harness.graph.model.GraphNode;
+import com.harness.graph.model.GraphPath;
 import com.harness.graph.model.GraphRelation;
 import com.harness.graph.model.GraphRouteResult;
 import com.harness.graph.schema.GraphNodeTypeDefinition;
@@ -16,6 +17,8 @@ import com.harness.graph.schema.GraphSchemaMode;
 import com.harness.graph.schema.GraphSchemaProvider;
 import com.harness.graph.schema.GraphSchemaRegistry;
 import com.harness.graph.store.KnowledgeGraphStore;
+import com.harness.tool.protocol.ToolEnvelope;
+import com.harness.tool.protocol.ToolEnvelopeStatus;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
@@ -109,18 +112,110 @@ class GraphRetrievalTest {
                 Map.of()
         );
 
-        String formatted = new DefaultGraphResultFormatter(
-                registry().require("project-graph"), settings(), new ObjectMapper())
-                .format(result);
+        ObjectMapper objectMapper = new ObjectMapper();
+        ToolEnvelope<GraphToolData> envelope = new DefaultGraphResultFormatter(
+                registry().require("project-graph"), settings(), objectMapper)
+                .format("graph-1", result);
 
-        assertThat(formatted)
-                .contains("[Structured Knowledge Graph]")
-                .contains("person-1")
-                .contains("WORKS_ON")
-                .contains("maintainer")
-                .doesNotContain("private-value")
-                .doesNotContain("chunk")
-                .doesNotContain("score");
+        assertThat(envelope.status()).isEqualTo(ToolEnvelopeStatus.SUCCESS);
+        assertThat(envelope.data().graphId()).isEqualTo("graph-1");
+        assertThat(envelope.data().schemaId()).isEqualTo("project-graph");
+        assertThat(envelope.data().nodes()).hasSize(2);
+        assertThat(envelope.data().relations()).hasSize(1);
+        assertThat(envelope.data().nodes().getFirst().properties())
+                .containsEntry("name", "Alex")
+                .doesNotContainKey("secret");
+        assertThat(envelope.data().relations().getFirst().properties())
+                .containsEntry("role", "maintainer");
+        assertThat(envelope.meta()).containsEntry("truncated", false);
+        assertThat(objectMapper.valueToTree(envelope).toString())
+                .doesNotContain("private-value", "chunk", "score");
+    }
+
+    @Test
+    void formatterAppliesLimitsBeforeSerializationAndReturnsValidJson() throws Exception {
+        GraphRouteResult result = new GraphRouteResult(
+                List.of(
+                        new GraphNode("person-1", Set.of("Person"), Map.of("name", "Alex")),
+                        new GraphNode("project-1", Set.of("Project"), Map.of("name", "Cyrene"))
+                ),
+                List.of(),
+                List.of(),
+                List.of(),
+                null,
+                Map.of()
+        );
+        ObjectMapper objectMapper = new ObjectMapper();
+        GraphSettings boundedSettings = settings(1, 500);
+
+        ToolEnvelope<GraphToolData> envelope = new DefaultGraphResultFormatter(
+                registry().require("project-graph"), boundedSettings, objectMapper)
+                .format("graph-1", result);
+        String json = objectMapper.writeValueAsString(envelope);
+
+        assertThat(json.length()).isLessThanOrEqualTo(boundedSettings.contextMaxChars());
+        assertThat(objectMapper.readTree(json).path("meta").path("truncated").asBoolean())
+                .isTrue();
+        assertThat(envelope.data().nodes()).hasSize(1);
+    }
+
+    @Test
+    void formatterUsesTheSameEnvelopeForEmptyResults() {
+        ToolEnvelope<GraphToolData> envelope = new DefaultGraphResultFormatter(
+                registry().require("project-graph"), settings(), new ObjectMapper())
+                .format("graph-1", GraphRouteResult.empty());
+
+        assertThat(envelope.status()).isEqualTo(ToolEnvelopeStatus.EMPTY);
+        assertThat(envelope.data().graphId()).isEqualTo("graph-1");
+        assertThat(envelope.data().nodes()).isEmpty();
+        assertThat(envelope.data().relations()).isEmpty();
+        assertThat(envelope.data().paths()).isEmpty();
+    }
+
+    @Test
+    void formatterFiltersSensitivePropertiesInsidePaths() {
+        GraphNode person = new GraphNode(
+                "person-1", Set.of("Person"), Map.of("name", "Alex", "secret", "hidden"));
+        GraphNode project = new GraphNode(
+                "project-1", Set.of("Project"), Map.of("name", "Cyrene"));
+        GraphRelation relation = new GraphRelation(
+                "relation-1", "person-1", "project-1", "WORKS_ON", Map.of("role", "maintainer"));
+        GraphRouteResult result = new GraphRouteResult(
+                List.of(),
+                List.of(),
+                List.of(new GraphPath(List.of(person, project), List.of(relation), 1)),
+                List.of(),
+                null,
+                Map.of());
+
+        ToolEnvelope<GraphToolData> envelope = new DefaultGraphResultFormatter(
+                registry().require("project-graph"), settings(), new ObjectMapper())
+                .format("graph-1", result);
+
+        assertThat(envelope.data().paths()).hasSize(1);
+        assertThat(envelope.data().paths().getFirst().nodes().getFirst().properties())
+                .containsEntry("name", "Alex")
+                .doesNotContainKey("secret");
+    }
+
+    @Test
+    void formatterUsesCharacterLimitWithoutCuttingJson() throws Exception {
+        GraphRouteResult result = new GraphRouteResult(
+                List.of(new GraphNode(
+                        "person-1", Set.of("Person"), Map.of("name", "A long display name"))),
+                List.of(), List.of(), List.of(), null, Map.of());
+        ObjectMapper objectMapper = new ObjectMapper();
+        GraphSettings boundedSettings = settings(20, 180);
+
+        ToolEnvelope<GraphToolData> envelope = new DefaultGraphResultFormatter(
+                registry().require("project-graph"), boundedSettings, objectMapper)
+                .format("graph-1", result);
+        String json = objectMapper.writeValueAsString(envelope);
+
+        assertThat(json.length()).isLessThanOrEqualTo(180);
+        assertThat(objectMapper.readTree(json).path("meta").path("truncated").asBoolean())
+                .isTrue();
+        assertThat(envelope.data().nodes()).isEmpty();
     }
 
     static GraphSchemaRegistry registry() {
@@ -164,6 +259,10 @@ class GraphRetrievalTest {
     }
 
     static GraphSettings settings() {
+        return settings(20, 4_000);
+    }
+
+    static GraphSettings settings(int contextMaxItems, int contextMaxChars) {
         return new GraphSettings(
                 GraphProvider.NONE,
                 "",
@@ -177,8 +276,8 @@ class GraphRetrievalTest {
                 100,
                 1,
                 2,
-                20,
-                4_000
+                contextMaxItems,
+                contextMaxChars
         );
     }
 }

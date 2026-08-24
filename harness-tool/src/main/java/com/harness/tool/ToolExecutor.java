@@ -116,7 +116,7 @@ public class ToolExecutor {
 
     private void notifyExecutionStart(ConfirmationExecutionContext context, ToolCall toolCall) {
         if (context != null) {
-            context.onExecutionStart().accept(toolCall.toolName(), toolCall.arguments());
+            context.onExecutionStart().accept(toolCall);
         }
     }
 

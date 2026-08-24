@@ -1,5 +1,7 @@
 package com.harness.react;
 
+import com.harness.provider.LangChainJsonSchemaMapper;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.langchain4j.model.chat.request.json.JsonArraySchema;
 import dev.langchain4j.model.chat.request.json.JsonEnumSchema;
@@ -52,7 +54,7 @@ class JsonSchemaConverterTest {
                 }
                 """);
 
-        JsonObjectSchema result = JsonSchemaConverter.toObjectSchema(source);
+        JsonObjectSchema result = LangChainJsonSchemaMapper.toObjectSchema(source);
 
         assertThat(result.required()).containsExactly("profile", "items");
         assertThat(result.properties().get("profile")).isInstanceOf(JsonObjectSchema.class);
@@ -81,7 +83,7 @@ class JsonSchemaConverterTest {
                 {"type":"array","items":{"type":"string"}}
                 """);
 
-        assertThatThrownBy(() -> JsonSchemaConverter.toObjectSchema(source))
+        assertThatThrownBy(() -> LangChainJsonSchemaMapper.toObjectSchema(source))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("root must be an object");
     }
@@ -95,7 +97,7 @@ class JsonSchemaConverterTest {
                 }
                 """);
 
-        assertThatThrownBy(() -> JsonSchemaConverter.toObjectSchema(source))
+        assertThatThrownBy(() -> LangChainJsonSchemaMapper.toObjectSchema(source))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("must define items");
     }

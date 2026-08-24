@@ -12,7 +12,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.List;
-import java.util.Map;
 
 /**
  * Tool to query sub-agent task status without blocking.
@@ -59,12 +58,12 @@ public class GetSubAgentsTool implements Tool {
             ObjectNode result = mapper.createObjectNode();
             ArrayNode tasksArray = mapper.createArrayNode();
 
-            Map<String, SubAgentTaskRecord> tasks = taskIds.isEmpty()
-                    ? scope.getAllTasks()
-                    : scope.getTasks(taskIds);
+            List<SubAgentTaskRecord> tasks = taskIds.isEmpty()
+                    ? List.copyOf(scope.getAllTasks().values())
+                    : SubAgentToolHelper.resolveTaskRecords(
+                            scope, taskIds, "get_subagents");
 
-            for (Map.Entry<String, SubAgentTaskRecord> entry : tasks.entrySet()) {
-                SubAgentTaskRecord record = entry.getValue();
+            for (SubAgentTaskRecord record : tasks) {
                 ObjectNode taskNode = mapper.createObjectNode();
                 taskNode.put("task_id", record.taskId());
                 taskNode.put("status", record.status().get().name());
@@ -73,7 +72,6 @@ public class GetSubAgentsTool implements Tool {
                 if (record.isTerminal()) {
                     SubAgentResult subResult = record.completion().join();
                     ObjectNode resultNode = taskNode.putObject("result");
-                    resultNode.put("success", subResult.success());
                     SubAgentToolHelper.serializeResult(resultNode, subResult, mapper);
                 }
 

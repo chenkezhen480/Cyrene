@@ -15,8 +15,6 @@ CREATE TABLE IF NOT EXISTS knowledge_documents (
     embedding       vector(1024)    NOT NULL             COMMENT '向量嵌入（维度需匹配embedding模型）',
     metadata        JSONB           DEFAULT NULL         COMMENT '扩展元数据',
     chunk_index     INT             DEFAULT NULL         COMMENT '文本块在原文中的序号',
-    prev_chunk_id   VARCHAR(64)     DEFAULT NULL         COMMENT '前一个文本块ID（语义回溯用）',
-    next_chunk_id   VARCHAR(64)     DEFAULT NULL         COMMENT '后一个文本块ID（语义前探用）',
     created_at      TIMESTAMPTZ     NOT NULL DEFAULT NOW() COMMENT '创建时间'
 );
 

@@ -163,8 +163,11 @@ const CyreneAPI = (() => {
   }
 
   // ── Knowledge ──
-  function listCollections() {
-    return request('GET', '/api/knowledge');
+  function listCollections({ limit = 50, cursor = '' } = {}) {
+    const params = new URLSearchParams();
+    params.set('limit', String(limit));
+    if (cursor) params.set('cursor', cursor);
+    return request('GET', `/api/knowledge?${params}`);
   }
 
   function uploadKnowledge(file, collection) {
@@ -178,8 +181,12 @@ const CyreneAPI = (() => {
       .then(r => r.json());
   }
 
-  function listKnowledge(collection) {
-    return request('GET', `/api/knowledge/${collection}`);
+  function listKnowledge(collection, { fileName = '', limit = 50, cursor = '' } = {}) {
+    const params = new URLSearchParams();
+    if (fileName) params.set('fileName', fileName);
+    params.set('limit', String(limit));
+    if (cursor) params.set('cursor', cursor);
+    return request('GET', `/api/knowledge/${encodeURIComponent(collection)}?${params}`);
   }
 
   function deleteCollection(collection) {

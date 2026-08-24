@@ -11,7 +11,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Built-in tool that spawns a sub-agent for async task execution.
@@ -72,52 +74,76 @@ public class SpawnSubAgentTool implements Tool {
                         "- context: relevant background info, compressed conversation history, and prior results. " +
                         "The sub-agent has NO access to conversation history — you MUST include relevant history here.\n\n" +
                         "Optionally provide 'tools' to give the sub-agent specific tools. If omitted, the sub-agent has NO tools (text-only analysis).\n\n" +
-                        "Available tool names: web_search, knowledge_base_search, image_generation, " +
+                        "Optionally provide 'completion_contract' when completion must be verified from successful tool calls, stored artifacts, or structured output.\n\n" +
+                        "Available tool names: web_search, knowledge_base_search, knowledge_context_read, image_generation, " +
                         "code_sandbox, load_skill, and any registered MCP tools.",
-                mapper.createObjectNode()
-                        .put("type", "object")
-                        .<ObjectNode>set("properties",
-                                mapper.createObjectNode()
-                                        .<ObjectNode>set("persona",
-                                                mapper.createObjectNode()
-                                                        .put("type", "string")
-                                                        .put("description", "Specific role/identity for the sub-agent. Define who they are, their expertise, and approach. Example: 'You are a senior Python developer with 10 years of experience in data pipeline optimization.'"))
-                                        .<ObjectNode>set("system_prompt",
-                                                mapper.createObjectNode()
-                                                        .put("type", "string")
-                                                        .put("description", "Task-specific system instructions. Include methodology, step-by-step approach, output format requirements, quality criteria, and any constraints. Be specific and actionable."))
-                                        .<ObjectNode>set("task_description",
-                                                mapper.createObjectNode()
-                                                        .put("type", "string")
-                                                        .put("description", "Clear, specific description of the task to accomplish. This becomes the user message for the sub-agent."))
-                                        .<ObjectNode>set("context",
-                                                mapper.createObjectNode()
-                                                        .put("type", "string")
-                                                        .put("description", "Relevant context for the sub-agent. MUST include:\n" +
-                                                                "1. Relevant conversation history — compress and summarize only the parts directly related to this task (e.g. user requirements, prior decisions, key data points)\n" +
-                                                                "2. Background info or data the sub-agent needs\n" +
-                                                                "3. Prior results from other sub-agents if this task depends on them\n\n" +
-                                                                "Keep concise. Omit anything not directly relevant to this specific task. " +
-                                                                "The sub-agent has NO access to conversation history — if you don't include it here, the sub-agent won't know it."))
-                                        .<ObjectNode>set("tools",
-                                                mapper.createObjectNode()
-                                                        .put("type", "array")
-                                                        .put("description", "List of tool names this sub-agent needs. If omitted, the sub-agent has NO tools (pure text analysis). Include tools like web_search, knowledge_base_search, code_sandbox, etc. when the task requires them.")
-                                                        .<ObjectNode>set("items",
-                                                                mapper.createObjectNode().put("type", "string")))
-                                        .<ObjectNode>set("dependencies",
-                                                mapper.createObjectNode()
-                                                        .put("type", "array")
-                                                        .put("description", "Optional list of task IDs this task depends on (must complete first)")
-                                                        .<ObjectNode>set("items",
-                                                                mapper.createObjectNode().put("type", "string"))))
-                        .<ObjectNode>set("required",
-                                mapper.createArrayNode()
-                                        .add("persona")
-                                        .add("system_prompt")
-                                        .add("task_description")
-                                        .add("context"))
+                buildParametersSchema()
         );
+    }
+
+    private static ObjectNode buildParametersSchema() {
+        ObjectNode properties = mapper.createObjectNode();
+        properties.set("persona", mapper.createObjectNode()
+                .put("type", "string")
+                .put("description", "Specific role and expertise for the sub-agent."));
+        properties.set("system_prompt", mapper.createObjectNode()
+                .put("type", "string")
+                .put("description", "Task-specific methodology, constraints, and output guidance."));
+        properties.set("task_description", mapper.createObjectNode()
+                .put("type", "string")
+                .put("description", "Clear description of the task to accomplish."));
+        properties.set("context", mapper.createObjectNode()
+                .put("type", "string")
+                .put("description", "Relevant compressed history and background. The sub-agent cannot read the parent conversation."));
+        properties.set("tools", stringArraySchema(
+                "Allowed tool names. Omit for text-only analysis."));
+        properties.set("dependencies", stringArraySchema(
+                "Existing task IDs that this task depends on."));
+
+        ObjectNode requiredArtifactProperties = mapper.createObjectNode();
+        requiredArtifactProperties.set("artifact_type", mapper.createObjectNode()
+                .put("type", "string")
+                .put("description", "Artifact type: IMAGE, DOCUMENT, CODE, VIDEO, AUDIO, or OTHER."));
+        requiredArtifactProperties.set("allowed_mime_types", stringArraySchema(
+                "Allowed MIME types. Omit or use an empty array to allow any MIME type."));
+        requiredArtifactProperties.set("min_count", mapper.createObjectNode()
+                .put("type", "integer")
+                .put("description", "Minimum number of matching stored artifacts."));
+        ObjectNode requiredArtifactSchema = mapper.createObjectNode().put("type", "object");
+        requiredArtifactSchema.set("properties", requiredArtifactProperties);
+        requiredArtifactSchema.set("required", mapper.createArrayNode()
+                .add("artifact_type").add("min_count"));
+
+        ObjectNode completionProperties = mapper.createObjectNode();
+        completionProperties.set("required_successful_tools", stringArraySchema(
+                "Allowed tools that must each execute successfully at least once."));
+        ObjectNode requiredArtifacts = mapper.createObjectNode()
+                .put("type", "array")
+                .put("description", "Artifact requirements verified against ArtifactStore records.");
+        requiredArtifacts.set("items", requiredArtifactSchema);
+        completionProperties.set("required_artifacts", requiredArtifacts);
+        completionProperties.set("output_schema", mapper.createObjectNode()
+                .put("type", "object")
+                .put("description", "Strict JSON Schema for the sub-agent final summary."));
+        ObjectNode completionSchema = mapper.createObjectNode().put("type", "object");
+        completionSchema.set("properties", completionProperties);
+        completionSchema.set("required", mapper.createArrayNode());
+        properties.set("completion_contract", completionSchema);
+
+        ObjectNode parameters = mapper.createObjectNode().put("type", "object");
+        parameters.set("properties", properties);
+        parameters.set("required", mapper.createArrayNode()
+                .add("persona").add("system_prompt")
+                .add("task_description").add("context"));
+        return parameters;
+    }
+
+    private static ObjectNode stringArraySchema(String description) {
+        ObjectNode schema = mapper.createObjectNode()
+                .put("type", "array")
+                .put("description", description);
+        schema.set("items", mapper.createObjectNode().put("type", "string"));
+        return schema;
     }
 
     @Override
@@ -155,6 +181,8 @@ public class SpawnSubAgentTool implements Tool {
             arguments.get("dependencies").forEach(dep -> dependencies.add(dep.asText()));
         }
 
+        SubAgentCompletionContract completionContract = parseCompletionContract(arguments);
+
         String taskId = SubAgentManager.generateTaskId();
         String sessionId = runContext.sessionId();
         log.info("[SpawnSubAgent] Submitting task: taskId={}, runId={}, sessionId={}, tools={}, deps={}",
@@ -162,7 +190,7 @@ public class SpawnSubAgentTool implements Tool {
 
         try {
             SubAgentTask task = SubAgentTask.create(taskId, taskDescription, context,
-                    persona, systemPrompt, tools, dependencies);
+                    persona, systemPrompt, tools, dependencies, completionContract);
             SubAgentTaskRecord record = subAgentManager.submitTask(runContext, task, sessionId);
 
             if (record == null) {
@@ -187,5 +215,83 @@ public class SpawnSubAgentTool implements Tool {
             log.error("[SpawnSubAgent] Task submission error: {}", e.getMessage());
             throw new ToolExecutionException("spawn_subagent", "Task submission failed: " + e.getMessage(), e);
         }
+    }
+
+    private static SubAgentCompletionContract parseCompletionContract(JsonNode arguments) {
+        JsonNode contractNode = arguments.get("completion_contract");
+        if (contractNode == null || contractNode.isNull()) {
+            return null;
+        }
+        if (!contractNode.isObject()) {
+            throw new ToolExecutionException(
+                    "spawn_subagent", "completion_contract must be an object");
+        }
+
+        Set<String> requiredTools = readStringSet(
+                contractNode, "required_successful_tools");
+        List<RequiredArtifact> requiredArtifacts = new ArrayList<>();
+        JsonNode artifactsNode = contractNode.get("required_artifacts");
+        if (artifactsNode != null) {
+            if (!artifactsNode.isArray()) {
+                throw new ToolExecutionException(
+                        "spawn_subagent", "required_artifacts must be an array");
+            }
+            for (JsonNode artifactNode : artifactsNode) {
+                if (!artifactNode.isObject()) {
+                    throw new ToolExecutionException(
+                            "spawn_subagent", "Each required_artifacts entry must be an object");
+                }
+                String artifactType = requiredText(artifactNode, "artifact_type");
+                int minCount = artifactNode.has("min_count")
+                        ? artifactNode.get("min_count").asInt(0)
+                        : 0;
+                try {
+                    requiredArtifacts.add(new RequiredArtifact(
+                            artifactType,
+                            readStringSet(artifactNode, "allowed_mime_types"),
+                            minCount));
+                } catch (IllegalArgumentException e) {
+                    throw new ToolExecutionException(
+                            "spawn_subagent", "Invalid artifact requirement: " + e.getMessage(), e);
+                }
+            }
+        }
+
+        JsonNode outputSchema = contractNode.get("output_schema");
+        if (outputSchema != null && !outputSchema.isObject()) {
+            throw new ToolExecutionException(
+                    "spawn_subagent", "output_schema must be an object");
+        }
+        return new SubAgentCompletionContract(
+                requiredTools, requiredArtifacts, outputSchema);
+    }
+
+    private static Set<String> readStringSet(JsonNode objectNode, String fieldName) {
+        JsonNode value = objectNode.get(fieldName);
+        if (value == null || value.isNull()) {
+            return Set.of();
+        }
+        if (!value.isArray()) {
+            throw new ToolExecutionException(
+                    "spawn_subagent", fieldName + " must be an array");
+        }
+        LinkedHashSet<String> values = new LinkedHashSet<>();
+        for (JsonNode item : value) {
+            if (!item.isTextual() || item.asText().isBlank()) {
+                throw new ToolExecutionException(
+                        "spawn_subagent", fieldName + " entries must be non-blank strings");
+            }
+            values.add(item.asText());
+        }
+        return Set.copyOf(values);
+    }
+
+    private static String requiredText(JsonNode node, String fieldName) {
+        JsonNode value = node.get(fieldName);
+        if (value == null || !value.isTextual() || value.asText().isBlank()) {
+            throw new ToolExecutionException(
+                    "spawn_subagent", "Missing required artifact field: " + fieldName);
+        }
+        return value.asText();
     }
 }

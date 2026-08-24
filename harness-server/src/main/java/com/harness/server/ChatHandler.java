@@ -1,18 +1,15 @@
 package com.harness.server;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.harness.agent.AgentOrchestrator;
 import com.harness.provider.impl.CancellableHttpClient;
 import com.harness.core.model.*;
-import com.harness.core.env.EnvConfig;
-import com.harness.core.env.EnvKey;
-import com.harness.input.auth.JwtUtil;
 import com.harness.input.multimodal.MultimodalParser;
 import com.harness.server.api.ApiErrorCode;
 import com.harness.server.api.ApiResponses;
 import com.harness.tool.HttpApiTool;
 import io.javalin.http.Context;
-import io.jsonwebtoken.Claims;
 import jakarta.servlet.http.HttpServletResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -31,20 +28,24 @@ public class ChatHandler {
 
     private static final Logger log = LoggerFactory.getLogger(ChatHandler.class);
     private final AgentOrchestrator agent;
-    private final String authMode;
-    private final JwtUtil jwtUtil;
+    private final ApiRequestAuthenticator authenticator;
     private final ConcurrentHashMap<String, CancellationToken> activeRequests;
     private final ObjectMapper mapper;
-    private final int refreshThresholdMinutes;
 
     public ChatHandler(AgentOrchestrator agent, ConcurrentHashMap<String, CancellationToken> activeRequests) {
+        this(agent, activeRequests, new ApiRequestAuthenticator());
+    }
+
+    ChatHandler(
+            AgentOrchestrator agent,
+            ConcurrentHashMap<String, CancellationToken> activeRequests,
+            ApiRequestAuthenticator authenticator
+    ) {
         this.agent = agent;
         this.activeRequests = activeRequests;
-        this.authMode = EnvConfig.get().getString(EnvKey.AUTH_MODE, "none");
-        this.jwtUtil = "jwt".equals(authMode) ? new JwtUtil() : null;
+        this.authenticator = authenticator;
         this.mapper = new ObjectMapper();
-        this.refreshThresholdMinutes = EnvConfig.get().getInt(EnvKey.AUTH_JWT_REFRESH_THRESHOLD_MINUTES, 60);
-        log.info("[Server] ChatHandler initialized: authMode={}, refreshThreshold={}min", authMode, refreshThresholdMinutes);
+        log.info("[Server] ChatHandler initialized: authMode={}", authenticator.authMode());
     }
 
     public void handle(Context ctx) {
@@ -62,34 +63,13 @@ public class ChatHandler {
                 }
             }
 
-            // Auth gate: skip if mode=none, validate JWT if mode=jwt
-            String rawToken = null;
-            if ("jwt".equals(authMode)) {
-                String authHeader = ctx.header("Authorization");
-                if (authHeader == null || !authHeader.startsWith("Bearer ")) {
-                    log.warn("[Server] Missing or invalid Authorization header");
-                    ApiResponses.error(
-                            ctx, 401, ApiErrorCode.UNAUTHORIZED, "Missing Bearer token");
-                    return;
-                }
-                rawToken = authHeader.substring(7);
-                try {
-                    Claims claims = jwtUtil.verifyTokenClaims(rawToken);
-                    String userId = claims.getSubject();
-                    log.debug("[Server] JWT verified: userId={}", userId);
-
-                    // Sliding window refresh: if remaining lifetime < threshold, issue new token
-                    if (jwtUtil.shouldRefresh(claims, refreshThresholdMinutes)) {
-                        String newToken = jwtUtil.refreshToken(userId);
-                        ctx.header("X-New-Token", newToken);
-                        log.info("[Server] JWT refreshed for userId={}", userId);
-                    }
-                } catch (Exception e) {
-                    log.warn("[Server] JWT verification failed: {}", e.getMessage());
-                    ApiResponses.error(ctx, 401, ApiErrorCode.UNAUTHORIZED,
-                            "Invalid token: " + e.getMessage());
-                    return;
-                }
+            String rawToken;
+            try {
+                rawToken = authenticator.authenticate(ctx);
+            } catch (ApiRequestAuthenticator.RequestAuthenticationException e) {
+                log.warn("[Server] Request authentication failed: {}", e.getMessage());
+                ApiResponses.error(ctx, 401, ApiErrorCode.UNAUTHORIZED, e.getMessage());
+                return;
             }
 
             // Register cancellation token
@@ -145,27 +125,12 @@ public class ChatHandler {
                                         }
                                         case TOKEN -> writeSseEvent(out, "token",
                                                 mapper.writeValueAsString(Map.of("text", event.data())));
-
-
-
-
-
-
-
-
                                         case TOOL_CALL_CREATED -> writeSseEvent(out, "tool_call_created",
-                                                mapper.writeValueAsString(Map.of(
-                                                        "toolName", event.metadata().get("toolName"),
-                                                        "arguments", event.metadata().get("arguments"))));
+                                                mapper.writeValueAsString(toolEventPayload(event, true)));
                                         case TOOL_CALL_START -> writeSseEvent(out, "tool_call_start",
-                                                mapper.writeValueAsString(Map.of(
-                                                        "toolName", event.metadata().get("toolName"),
-                                                        "arguments", event.metadata().get("arguments"))));
+                                                mapper.writeValueAsString(toolEventPayload(event, true)));
                                         case TOOL_CALL_DONE -> writeSseEvent(out, "tool_call_done",
-                                                mapper.writeValueAsString(Map.of(
-                                                        "toolName", event.metadata().get("toolName"),
-                                                        "success", event.metadata().get("success"),
-                                                        "durationMs", event.metadata().get("durationMs"))));
+                                                mapper.writeValueAsString(toolCompletionPayload(event)));
                                         case CONFIRMATION_REQUIRED -> writeSseEvent(
                                                 out,
                                                 "confirmation_required",
@@ -323,11 +288,34 @@ public class ChatHandler {
         }
     }
 
+    private Map<String, Object> toolEventPayload(
+            StreamEvent event, boolean includeArguments) throws IOException {
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("toolCallId", event.metadata().get("toolCallId"));
+        payload.put("toolName", event.metadata().get("toolName"));
+        payload.put("status", event.metadata().get("status"));
+        if (includeArguments) {
+            payload.put("arguments", parseToolArguments(event.metadata().get("arguments")));
+        }
+        return payload;
+    }
+
+    private Map<String, Object> toolCompletionPayload(StreamEvent event) throws IOException {
+        Map<String, Object> payload = toolEventPayload(event, false);
+        payload.put("durationMs", event.metadata().get("durationMs"));
+        payload.put("errorSummary", event.metadata().get("errorSummary"));
+        return payload;
+    }
+
+    private JsonNode parseToolArguments(Object arguments) throws IOException {
+        if (!(arguments instanceof String json)) {
+            throw new IOException("Tool event arguments must be JSON text");
+        }
+        return mapper.readTree(json);
+    }
+
     static AgentContext toAgentContext(ChatRequest request) {
-        Map<String, Object> contextData = new HashMap<>(
-                request.context() != null ? request.context() : Map.of());
-        contextData.remove(AgentContext.KEY_GRAPH_REQUEST_CONTEXT);
-        contextData.remove(AgentContext.KEY_NEEDS_GRAPH_KNOWLEDGE);
+        Map<String, Object> contextData = AgentContextRequestMapper.sanitize(request.context());
 
         if (request.graphScope() != null) {
             Map<String, Object> internalGraphContext = new HashMap<>();

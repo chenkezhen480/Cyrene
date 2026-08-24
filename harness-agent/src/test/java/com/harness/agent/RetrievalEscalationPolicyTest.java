@@ -2,6 +2,7 @@ package com.harness.agent;
 
 import com.harness.core.model.ToolResult;
 import com.harness.agent.context.ContextBuilder;
+import com.harness.tool.rag.RagRetriever;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -56,7 +57,6 @@ class RetrievalEscalationPolicyTest {
     private static ContextBuilder.ContextResult resultWithoutContext(double bestObservedScore) {
         return new ContextBuilder.ContextResult(
                 List.of(),
-                "",
                 Map.of(
                         "top_score", "0.0",
                         "best_observed_score", String.valueOf(bestObservedScore),
@@ -65,8 +65,8 @@ class RetrievalEscalationPolicyTest {
 
     private static ContextBuilder.ContextResult resultWithContext(double topScore) {
         return new ContextBuilder.ContextResult(
-                List.of("doc-1"),
-                "[Retrieved Context]\ncontent",
+                List.of(new RagRetriever.RagDocument(
+                        "doc-1", "content", "source.md", topScore)),
                 Map.of(
                         "top_score", String.valueOf(topScore),
                         "best_observed_score", "0.8",

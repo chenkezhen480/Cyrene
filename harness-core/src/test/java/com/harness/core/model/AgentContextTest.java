@@ -151,17 +151,48 @@ class AgentContextTest {
     }
 
     @Test
-    void withClearedCredentials_removesGraphScope() {
+    void knowledgeRequestContext_usesTrustedCollectionAndDocumentScope() {
+        AgentContext context = AgentContext.of(Map.of(
+                "knowledgeRequestContext", Map.of(
+                        "collection", "tenant-manuals",
+                        "allowedDocumentIds", List.of("document-1", "document-2")
+                )
+        ));
+
+        KnowledgeRequestContext knowledgeContext = context.knowledgeRequestContext();
+
+        assertThat(knowledgeContext.collection()).isEqualTo("tenant-manuals");
+        assertThat(knowledgeContext.allowsDocument("document-1")).isTrue();
+        assertThat(knowledgeContext.allowsDocument("document-3")).isFalse();
+    }
+
+    @Test
+    void knowledgeRequestContext_requiresCollection() {
+        AgentContext context = AgentContext.of(Map.of(
+                "knowledgeRequestContext", Map.of(
+                        "allowedDocumentIds", List.of("document-1")
+                )
+        ));
+
+        assertThatThrownBy(context::knowledgeRequestContext)
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("collection");
+    }
+
+    @Test
+    void withClearedCredentials_removesTrustedRetrievalScopes() {
         AgentContext context = AgentContext.of(Map.of(
                 "graphRequestContext", Map.of(
                         "schemaId", "project-graph",
                         "subjectIds", List.of("project-1")
-                )
+                ),
+                "knowledgeRequestContext", Map.of("collection", "tenant-manuals")
         ));
 
         AgentContext isolated = context.withClearedCredentials();
 
         assertThat(isolated.graphRequestContext()).isNull();
+        assertThat(isolated.knowledgeRequestContext()).isNull();
         assertThat(isolated.data()).doesNotContainKey(AgentContext.KEY_NEEDS_GRAPH_KNOWLEDGE);
     }
 }

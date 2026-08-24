@@ -41,7 +41,9 @@ services:
       - HARNESS_MEMORY_REDIS_URL=redis://redis:6379
       - HARNESS_GRAPH_NEO4J_URI=bolt://neo4j:7687
       - HARNESS_GRAPH_SCHEMA_DIR=/app/graph-schemas
-      - HARNESS_TOOL_WEB_SEARCH_SEARXNG_URL=http://searxng:8080
+      - HARNESS_TOOL_WEB_SEARCH_SEARXNG_URL=http://searxng:8888
+      - HARNESS_TOOL_WEB_SEARCH_ENGINES=${HARNESS_TOOL_WEB_SEARCH_ENGINES:-bing,duckduckgo,brave,google,wikipedia}
+      - HARNESS_TOOL_WEB_SEARCH_RESULT_LIMIT=${HARNESS_TOOL_WEB_SEARCH_RESULT_LIMIT:-8}
       - HARNESS_TOOL_BROWSER_WORKER_URL=http://browser-worker:8081
       - HARNESS_DOCUMENT_PARSER_URL=http://document-parser:8082
     depends_on:
@@ -208,7 +210,7 @@ services:
   # Milvus Standalone - 向量数据库
   # ============================================================
   milvus:
-    image: milvusdb/milvus:v2.5.4
+    image: milvusdb/milvus:v2.5.13
     container_name: cyrene-milvus
     command: ["milvus", "run", "standalone"]
     security_opt:
@@ -301,16 +303,26 @@ services:
   # SearXNG - 元搜索引擎（联网搜索后端）
   # ============================================================
   searxng:
-    image: searxng/searxng:latest
+    image: searxng/searxng:2026.8.21-bbb3c7d82
     container_name: cyrene-searxng
     ports:
-      - "8888:8088"
+      - "8888:8888"
     volumes:
       - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
     environment:
       - SEARXNG_BASE_URL=http://localhost:8888/
+      - SEARXNG_SECRET=${SEARXNG_SECRET:-}
+      - GRANIAN_PORT=8888
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        if [ -z "$${SEARXNG_SECRET:-}" ]; then
+          export SEARXNG_SECRET="$$(head -c 48 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9')"
+        fi
+        exec /usr/local/searxng/entrypoint.sh
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/healthz"]
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8888/healthz"]
       interval: 10s
       timeout: 5s
       retries: 5

@@ -17,7 +17,24 @@ Provider
 
 Keep framework code domain-neutral. Domain models, tenant identity sources, authorization, and graph semantics belong to the integrating system. Existing-system APIs use user credentials from trusted `context.credentials`; authorization remains the business system's responsibility.
 
-The root `pom.xml` `revision` is the only version source. Current version: `0.5.9`. Do not change it or release notes unless explicitly requested.
+The root `pom.xml` `revision` is the only version source. Current version: `0.5.10`. Do not change it or release notes unless explicitly requested.
+
+### Version 0.5.10 implementation notes
+
+- Structured output is an outward-facing business response contract, not a fixed Tool-result format. `/api/structured-output` accepts a final JSON Schema, applies it only to the final tool-free model call, uses the Provider's strict response format, validates the returned JSON again, and maps unsupported capabilities or invalid values to explicit API errors. Ordinary `/api/chat` text and SSE contracts remain unchanged.
+- Tool results that benefit from machine readability use a shared JSON envelope and typed DTOs. Knowledge-base and knowledge-graph tools expose stable fields, explicit result status, truncation metadata, and filtered sensitive properties without coupling every Tool to one universal payload shape.
+- ReAct tool-planning text is not streamed as final prose. Tool events are correlated by normalized `toolCallId`; cancellation raises a cancellation outcome; exhausting the iteration limit performs one final tool-free response generation instead of returning raw Tool output.
+- Text budgeting uses an injected Unicode-aware estimator. Markdown ingestion parses semantic blocks and packs headings, paragraphs, lists, tables, fenced code, and separators within a token budget. Stable `documentId`, `chunkIndex`, and heading context are persisted for new knowledge chunks.
+- Automatic adjacent-Chunk expansion was removed. `knowledge_base_search` returns deterministic chunk identity and heading context, while the independent `knowledge_context_read` Tool lets the Agent explicitly fetch a bounded window. Its `before` and `after` arguments both default to `1` and remain collection/document scoped.
+- Milvus and pgvector management operations are collection scoped. Chunk and collection lists use stable cursor pagination with `limit + 1`; filename filtering executes server-side; update re-embeds changed content; retrieval and storage failures are surfaced instead of being disguised as empty results. File-storage paths are normalized and constrained to the configured upload root.
+- Milvus client and Docker image are aligned to `2.5.13`. Logical collections remain isolated inside the physical Milvus collection, including get, update, delete, explicit-ID upsert, and collection deletion semantics.
+- Sub-Agent completion contracts are optional. A task can require an allowlisted tool set, successful Tool executions, typed artifacts, and a final output Schema. Results include contract validation, artifact summaries, and Tool execution summaries; unmet contracts finish explicitly as `INCOMPLETE` or `FAILED_CONTRACT` without unbounded retries.
+- OpenAI-compatible chat Providers support validated `chat_completions` and `responses` API formats behind `HARNESS_MODEL_CHAT_API_FORMAT`. The framework keeps local full conversation state and does not enable `previousResponseId`, hosted reasoning continuation, or an inbound `/v1/responses` compatibility route in this version.
+- Session-cache and Provider prompt-cache metrics are observable separately through Trace: hit/miss, source, load/refill latency, eviction reasons, active sessions, estimated memory, cached tokens, cache-hit ratio, and prefix fingerprints. Real traffic baselines and any TTL, capacity, backend, prompt-layout, or cache-key optimization remain intentionally pending.
+- SearXNG uses `HARNESS_TOOL_WEB_SEARCH_ENGINES` as the request-level engine-selection source. Bing keeps the configured higher weight, engine failures are diagnostic metadata rather than user-facing result text, secrets are supplied or generated at deployment, and the container, health check, internal URL, and host mapping consistently use port `8888`.
+- Trusted knowledge and graph request scopes are removed from untrusted HTTP context input and rebuilt at the server boundary. Model arguments cannot widen trusted tenant, graph, schema, subject, query, or knowledge scope.
+- The management UI reads the exact `PageResponse<T>` contract, supports responsive collection/file-name search and load-more interaction, and renders asynchronous failures explicitly.
+- Project licensing is MIT. Third-party libraries, images, services, and container images retain their own license terms.
 
 ## Before Editing
 
@@ -37,7 +54,7 @@ mvn clean test -Dmaven.compiler.fork=true -DskipITs
 mvn test -pl harness-agent,harness-server -am -DskipITs
 mvn test -pl harness-agent -am -Dtest=KnowledgeGraphToolTest -Dsurefire.failIfNoSpecifiedTests=false -DskipITs
 mvn clean package -pl harness-server -am -DskipTests
-java -jar harness-server/target/harness-server-0.5.9.jar
+java -jar harness-server/target/harness-server-0.5.10.jar
 ```
 
 Quote complex or comma-containing `-D...` arguments in PowerShell. Before committing, run scope-appropriate tests plus:
@@ -203,8 +220,8 @@ Trusted server `graphRequestContext` overrides model arguments. The model cannot
 ## Docker and Persistence
 
 ```bash
-docker compose -f docker/docker-compose.yml up -d --build
-docker compose -f docker/docker-compose.yml --profile graph up -d neo4j
+docker compose --env-file .env -f docker/docker-compose.yml up -d --build
+docker compose --env-file .env -f docker/docker-compose.yml --profile graph up -d neo4j
 ```
 
 Main services: `cyrene-agent`, `document-parser`, `mysql`, `milvus`, `redis`, `searxng`, and `browser-worker`; optional `neo4j` is under the `graph` profile.

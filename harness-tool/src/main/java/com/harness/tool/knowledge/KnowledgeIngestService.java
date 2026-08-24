@@ -6,6 +6,7 @@ import com.harness.core.env.EnvKey;
 import com.harness.input.document.DocumentConversionDiagnostics;
 import com.harness.input.document.DocumentConversionResult;
 import com.harness.input.document.DocumentConversionService;
+import com.harness.input.multimodal.MarkdownChunk;
 import com.harness.input.multimodal.TextChunker;
 import com.harness.tool.rag.VectorStore;
 import dev.langchain4j.data.embedding.Embedding;
@@ -17,6 +18,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 public class KnowledgeIngestService {
 
@@ -26,6 +28,7 @@ public class KnowledgeIngestService {
     private final VectorStore vectorStore;
     private final FileStorageService fileStorage;
     private final DocumentConversionService documentConversionService;
+    private final TextChunker textChunker;
     private final String defaultCollection;
     private final long maxFileSizeMb;
 
@@ -41,6 +44,7 @@ public class KnowledgeIngestService {
         this.documentConversionService = java.util.Objects.requireNonNull(
                 documentConversionService, "documentConversionService");
         this.fileStorage = java.util.Objects.requireNonNull(fileStorage, "fileStorage");
+        this.textChunker = new TextChunker(embeddingProvider.tokenEstimator());
 
         EnvConfig cfg = EnvConfig.get();
         this.defaultCollection = cfg.getString(EnvKey.RAG_COLLECTION, "default");
@@ -76,13 +80,17 @@ public class KnowledgeIngestService {
         }
         DocumentConversionDiagnostics conversion = convertedDocument.diagnostics();
 
-        // Step 2: Split into chunks, then merge small ones
+        // Step 2: Parse Markdown blocks and pack adjacent blocks in one budget-aware pass.
         int chunkSize = EnvConfig.get().getInt(EnvKey.KNOWLEDGE_CHUNK_SIZE, 1024);
-        List<String> rawChunks = TextChunker.split(rawText, chunkSize);
-        List<String> chunks = TextChunker.mergeSmallChunks(rawChunks, chunkSize);
+        List<MarkdownChunk> chunks = textChunker.chunk(rawText, chunkSize);
+        if (chunks.isEmpty()) {
+            throw new IllegalArgumentException(
+                    "No retrievable Markdown content converted from file: " + fileName);
+        }
 
         // Step 3: Generate embeddings (batched to avoid API body size limits)
         List<TextSegment> segments = chunks.stream()
+                .map(MarkdownChunk::content)
                 .map(TextSegment::from)
                 .toList();
         int batchSize = 10;
@@ -102,12 +110,20 @@ public class KnowledgeIngestService {
         String storedPath = fileStorage.store(fileData, fileName, coll);
 
         // Step 5: Build documents and upsert via VectorStore
+        String documentId = UUID.randomUUID().toString();
         List<VectorStore.Document> docs = new ArrayList<>();
         for (int i = 0; i < chunks.size(); i++) {
+            MarkdownChunk chunk = chunks.get(i);
             Map<String, Object> metadata = new HashMap<>();
+            metadata.put("document_id", documentId);
             metadata.put("file_name", fileName);
             metadata.put("chunk_index", i);
             metadata.put("total_chunks", chunks.size());
+            metadata.put("start_block_index", chunk.startBlockIndex());
+            metadata.put("end_block_index", chunk.endBlockIndex());
+            metadata.put("heading_path", chunk.headingPath());
+            metadata.put("token_count", chunk.tokenCount());
+            metadata.put("token_estimator", textChunker.tokenEstimatorStrategy());
             metadata.put("document_converter", conversion.converter());
             metadata.put("document_mime_type", convertedDocument.detectedMimeType());
             metadata.put("document_ocr_enabled", conversion.ocrEnabled());
@@ -123,7 +139,7 @@ public class KnowledgeIngestService {
 
             docs.add(new VectorStore.Document(
                     null,
-                    chunks.get(i),
+                    chunk.content(),
                     fileName,
                     0,
                     metadata,
@@ -141,7 +157,8 @@ public class KnowledgeIngestService {
         }
 
         long duration = System.currentTimeMillis() - startTime;
-        log.info("Ingest complete: {} chunks in {}ms", chunks.size(), duration);
+        log.info("Ingest complete: {} chunks in {}ms using {}", chunks.size(), duration,
+                textChunker.tokenEstimatorStrategy());
 
         return new IngestResult(
                 fileName,

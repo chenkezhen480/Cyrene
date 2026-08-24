@@ -13,11 +13,12 @@ public record SubAgentTask(
         String persona,
         String systemPrompt,
         List<String> tools,
-        List<String> dependencies
+        List<String> dependencies,
+        SubAgentCompletionContract completionContract
 ) {
     public SubAgentTask {
-        if (dependencies == null) dependencies = List.of();
-        if (tools == null) tools = List.of();
+        dependencies = dependencies == null ? List.of() : List.copyOf(dependencies);
+        tools = tools == null ? List.of() : List.copyOf(tools);
     }
 
     /**
@@ -25,7 +26,9 @@ public record SubAgentTask(
      */
     public static SubAgentTask create(String taskId, String description, String context,
                                        String persona, String systemPrompt,
-                                       List<String> tools, List<String> dependencies) {
-        return new SubAgentTask(taskId, description, context, persona, systemPrompt, tools, dependencies);
+                                       List<String> tools, List<String> dependencies,
+                                       SubAgentCompletionContract completionContract) {
+        return new SubAgentTask(taskId, description, context, persona, systemPrompt,
+                tools, dependencies, completionContract);
     }
 }

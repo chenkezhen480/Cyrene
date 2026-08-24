@@ -5,6 +5,10 @@ import com.harness.core.concurrent.BlockingTaskExecutor;
 import com.harness.core.env.EnvConfig;
 import com.harness.core.env.EnvKey;
 import com.harness.core.env.PgConnectionPool;
+import com.harness.core.model.PageResponse;
+import com.harness.tool.knowledge.KnowledgeChunkSummary;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.langchain4j.data.embedding.Embedding;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -18,7 +22,7 @@ import java.util.concurrent.CompletableFuture;
 
 /**
  * PostgreSQL pgvector 向量存储实现。
- * 实现 VectorStore 通用接口，同时保留 PgVector 特有的 chunk 链表能力。
+ * 实现 VectorStore 通用接口。
  *
  * Configured via:
  *   HARNESS_RAG_URL / HARNESS_RAG_PG_URL — JDBC URL
@@ -33,6 +37,8 @@ import java.util.concurrent.CompletableFuture;
 public class PgVectorStore implements VectorStore {
 
     private static final Logger log = LoggerFactory.getLogger(PgVectorStore.class);
+    private static final ObjectMapper JSON_MAPPER = new ObjectMapper();
+    private static final TypeReference<Map<String, Object>> METADATA_TYPE = new TypeReference<>() {};
 
     private final String table;
     private final String collection;
@@ -60,10 +66,10 @@ public class PgVectorStore implements VectorStore {
 
     @Override
     public void upsert(String collection, List<Document> docs) {
-        // 转换为内部格式并调用 insertBatchWithLinks
-        List<DocumentLinkEntry> entries = new ArrayList<>();
+        List<DocumentEntry> entries = new ArrayList<>();
         for (Document doc : docs) {
-            entries.add(new DocumentLinkEntry(
+            entries.add(new DocumentEntry(
+                    parseOptionalId(doc.id()),
                     doc.content(),
                     doc.source(),
                     doc.embedding() != null ? doc.embedding() : new float[0],
@@ -72,7 +78,7 @@ public class PgVectorStore implements VectorStore {
                     doc.metadata()
             ));
         }
-        insertBatchWithLinks(entries);
+        insertBatch(entries);
     }
 
     @Override
@@ -81,29 +87,35 @@ public class PgVectorStore implements VectorStore {
     }
 
     @Override
-    public boolean deleteById(String id) {
-        String sql = String.format("DELETE FROM %s WHERE id = ?", table);
+    public boolean deleteById(String collection, String id) {
+        long numericId = parseRequiredId(id);
+        String sql = String.format("DELETE FROM %s WHERE collection = ? AND id = ?", table);
         try (Connection conn = PgConnectionPool.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setLong(1, Long.parseLong(id));
+            ps.setString(1, requireCollection(collection));
+            ps.setLong(2, numericId);
             int deleted = ps.executeUpdate();
             if (deleted > 0) {
                 log.info("Deleted document {} from knowledge base", id);
                 return true;
             }
             log.debug("Document {} not found for deletion", id);
-        } catch (SQLException | NumberFormatException e) {
-            log.error("Failed to delete document {}: {}", id, e.getMessage(), e);
+        } catch (SQLException e) {
+            throw new IllegalStateException("Failed to delete pgvector knowledge chunk " + id, e);
         }
         return false;
     }
 
     @Override
-    public Document getById(String id) {
-        String sql = String.format("SELECT id, content, source FROM %s WHERE id = ?", table);
+    public Document getById(String collection, String id) {
+        long numericId = parseRequiredId(id);
+        String sql = String.format(
+                "SELECT id, content, source, chunk_index, metadata FROM %s "
+                        + "WHERE collection = ? AND id = ?", table);
         try (Connection conn = PgConnectionPool.getConnection();
-             PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setLong(1, Long.parseLong(id));
+            PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, requireCollection(collection));
+            ps.setLong(2, numericId);
             ResultSet rs = ps.executeQuery();
             if (rs.next()) {
                 return new Document(
@@ -111,56 +123,131 @@ public class PgVectorStore implements VectorStore {
                         rs.getString("content"),
                         rs.getString("source"),
                         1.0,
-                        null
+                        parseMetadata(rs.getString("metadata")),
+                        null,
+                        nullableChunkIndex(rs)
                 );
             }
-        } catch (SQLException | NumberFormatException e) {
-            log.debug("Failed to get by id {}: {}", id, e.getMessage());
+        } catch (SQLException e) {
+            throw new IllegalStateException("Failed to read pgvector knowledge chunk " + id, e);
         }
         return null;
     }
 
     @Override
-    public List<Document> listByCollection(String collectionName) {
+    public void updateContent(String collection, String id, String content, float[] embedding) {
+        if (content == null || content.isBlank()) {
+            throw new IllegalArgumentException("Knowledge chunk content is required");
+        }
+        if (embedding == null || embedding.length == 0) {
+            throw new IllegalArgumentException("Knowledge chunk embedding is required");
+        }
+        long numericId = parseRequiredId(id);
         String sql = String.format(
-                "SELECT id, source, chunk_index, created_at FROM %s WHERE collection = ? ORDER BY id ASC",
-                table);
-        List<Document> results = new ArrayList<>();
+                "UPDATE %s SET content = ?, embedding = ?::vector "
+                        + "WHERE collection = ? AND id = ?", table);
         try (Connection conn = PgConnectionPool.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setString(1, collectionName);
-            ResultSet rs = ps.executeQuery();
-            while (rs.next()) {
-                results.add(new Document(
-                        String.valueOf(rs.getLong("id")),
-                        null,
-                        rs.getString("source"),
-                        0,
-                        Map.of("chunk_index", rs.getObject("chunk_index") != null ? rs.getInt("chunk_index") : -1,
-                                "created_at", rs.getTimestamp("created_at") != null ? rs.getTimestamp("created_at").toString() : "")
-                ));
+            ps.setString(1, content);
+            ps.setString(2, toVectorLiteral(embedding));
+            ps.setString(3, requireCollection(collection));
+            ps.setLong(4, numericId);
+            if (ps.executeUpdate() != 1) {
+                throw new IllegalArgumentException(
+                        "Knowledge chunk does not exist in collection: " + id);
             }
-            log.debug("Listed {} documents in collection '{}'", results.size(), collectionName);
         } catch (SQLException e) {
-            log.error("Failed to list collection '{}': {}", collectionName, e.getMessage(), e);
+            throw new IllegalStateException("Failed to update pgvector knowledge chunk " + id, e);
         }
-        return results;
     }
 
     @Override
-    public List<String> listCollections() {
-        String sql = String.format("SELECT DISTINCT collection FROM %s ORDER BY collection", table);
-        List<String> collections = new ArrayList<>();
+    public PageResponse<KnowledgeChunkSummary> listKnowledgeChunks(
+            String collectionName,
+            String fileName,
+            int limit,
+            String cursor
+    ) {
+        validateManagementQuery(collectionName, limit);
+        String normalizedFileName = KnowledgeChunkCursorCodec.normalizeFileName(fileName);
+        String lastId = KnowledgeChunkCursorCodec.decodeLastId(
+                cursor, collectionName, normalizedFileName);
+        Long lastNumericId = parseCursorId(lastId);
+
+        StringBuilder sql = new StringBuilder(String.format(
+                "SELECT id, source, chunk_index, metadata FROM %s WHERE collection = ?",
+                table));
+        if (!normalizedFileName.isBlank()) {
+            sql.append(" AND source = ?");
+        }
+        if (lastNumericId != null) {
+            sql.append(" AND id > ?");
+        }
+        sql.append(" ORDER BY id ASC LIMIT ?");
+
+        List<KnowledgeChunkSummary> fetched = new ArrayList<>();
         try (Connection conn = PgConnectionPool.getConnection();
-             PreparedStatement ps = conn.prepareStatement(sql);
-             ResultSet rs = ps.executeQuery()) {
-            while (rs.next()) {
-                collections.add(rs.getString("collection"));
+             PreparedStatement ps = conn.prepareStatement(sql.toString())) {
+            int parameterIndex = 1;
+            ps.setString(parameterIndex++, collectionName);
+            if (!normalizedFileName.isBlank()) {
+                ps.setString(parameterIndex++, normalizedFileName);
+            }
+            if (lastNumericId != null) {
+                ps.setLong(parameterIndex++, lastNumericId);
+            }
+            ps.setInt(parameterIndex, limit + 1);
+
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    Map<String, Object> metadata = parseMetadata(rs.getString("metadata"));
+                    fetched.add(toKnowledgeChunkSummary(
+                            String.valueOf(rs.getLong("id")),
+                            rs.getString("source"),
+                            nullableChunkIndex(rs),
+                            metadata));
+                }
             }
         } catch (SQLException e) {
-            log.error("Failed to list collections: {}", e.getMessage(), e);
+            throw new IllegalStateException(
+                    "Failed to list knowledge chunks for collection '" + collectionName + "'", e);
         }
-        return collections;
+
+        return PageResponse.fromFetched(
+                fetched,
+                limit,
+                item -> KnowledgeChunkCursorCodec.encode(
+                        collectionName, normalizedFileName, item.id()));
+    }
+
+    @Override
+    public PageResponse<String> listCollections(int limit, String cursor) {
+        validateCollectionPageLimit(limit);
+        String lastCollection = KnowledgeChunkCursorCodec.decodeLastCollection(cursor);
+        String sql = lastCollection == null
+                ? String.format(
+                        "SELECT DISTINCT collection FROM %s ORDER BY collection LIMIT ?", table)
+                : String.format(
+                        "SELECT DISTINCT collection FROM %s WHERE collection > ? "
+                                + "ORDER BY collection LIMIT ?", table);
+        List<String> collections = new ArrayList<>();
+        try (Connection conn = PgConnectionPool.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            int parameterIndex = 1;
+            if (lastCollection != null) {
+                ps.setString(parameterIndex++, lastCollection);
+            }
+            ps.setInt(parameterIndex, limit + 1);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    collections.add(rs.getString("collection"));
+                }
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("Failed to list knowledge collections", e);
+        }
+        return PageResponse.fromFetched(
+                collections, limit, KnowledgeChunkCursorCodec::encodeCollection);
     }
 
     @Override
@@ -177,7 +264,7 @@ public class PgVectorStore implements VectorStore {
         String vectorLiteral = toVectorLiteral(embedding);
         String sql = String.format("""
                 WITH candidates AS (
-                    SELECT id, content, source,
+                    SELECT id, content, source, chunk_index, metadata,
                            1 - (embedding <=> '%s'::vector) AS score
                     FROM %s
                     WHERE collection = ?
@@ -188,7 +275,8 @@ public class PgVectorStore implements VectorStore {
                            COUNT(*) AS observed_candidate_count
                     FROM candidates
                 )
-                SELECT candidates.id, candidates.content, candidates.source, candidates.score,
+                SELECT candidates.id, candidates.content, candidates.source, candidates.chunk_index,
+                       candidates.metadata, candidates.score,
                        candidate_stats.best_observed_score,
                        candidate_stats.observed_candidate_count
                 FROM candidate_stats
@@ -215,7 +303,9 @@ public class PgVectorStore implements VectorStore {
                             rs.getString("content"),
                             rs.getString("source"),
                             rs.getDouble("score"),
-                            null
+                            parseMetadata(rs.getString("metadata")),
+                            null,
+                            nullableChunkIndex(rs)
                     ));
                 }
             }
@@ -223,8 +313,7 @@ public class PgVectorStore implements VectorStore {
                             + "(collection={}, topK={}, bestObservedScore={})",
                     results.size(), observedCandidateCount, collection, topK, bestObservedScore);
         } catch (SQLException e) {
-            log.error("pgvector search failed: {}", e.getMessage(), e);
-            return SearchResult.empty();
+            throw new IllegalStateException("pgvector vector search failed", e);
         }
         return new SearchResult(results, bestObservedScore, observedCandidateCount);
     }
@@ -237,7 +326,7 @@ public class PgVectorStore implements VectorStore {
         String lang = cfg.getString(EnvKey.RAG_LANG,
                 cfg.getString(EnvKey.RAG_FULLTEXT_LANG, "english"));
 
-        String sql = "SELECT id, content, source, " +
+        String sql = "SELECT id, content, source, chunk_index, metadata, " +
                 "ts_rank_cd(to_tsvector(?, content), plainto_tsquery(?, ?)) AS score " +
                 "FROM " + table + " " +
                 "WHERE collection = ? " +
@@ -266,14 +355,16 @@ public class PgVectorStore implements VectorStore {
                                 rs.getString("content"),
                                 rs.getString("source"),
                                 score,
-                                null
+                                parseMetadata(rs.getString("metadata")),
+                                null,
+                                nullableChunkIndex(rs)
                         ));
                     }
                 }
             }
             log.debug("pgvector keyword search returned {} documents", results.size());
         } catch (SQLException e) {
-            log.warn("[PgVectorStore] Keyword search failed: {}", e.getMessage());
+            throw new IllegalStateException("pgvector keyword search failed", e);
         }
         return results;
     }
@@ -297,13 +388,13 @@ public class PgVectorStore implements VectorStore {
         java.util.LinkedHashMap<String, Document> merged = new java.util.LinkedHashMap<>();
         for (Document doc : vectorDocs) {
             merged.put(doc.id(), new Document(doc.id(), doc.content(), doc.source(),
-                    doc.score() * vectorWeight, doc.metadata()));
+                    doc.score() * vectorWeight, doc.metadata(), null, doc.chunkIndex()));
         }
         for (Document doc : keywordDocs) {
             merged.merge(doc.id(), doc, (existing, incoming) -> {
                 double combinedScore = existing.score() + incoming.score() * bm25Weight;
                 return new Document(existing.id(), existing.content(), existing.source(),
-                        combinedScore, existing.metadata());
+                        combinedScore, existing.metadata(), null, existing.chunkIndex());
             });
         }
 
@@ -321,44 +412,51 @@ public class PgVectorStore implements VectorStore {
         return "pgvector";
     }
 
-    // ==================== Chunk 链表能力（VectorStore 接口） ====================
+    // ==================== Explicit document context ====================
 
     @Override
-    public String getPrevChunkId(String chunkId) {
-        String sql = String.format("SELECT prev_chunk_id FROM %s WHERE id = ?", table);
+    public List<Document> readDocumentWindow(
+            String collection,
+            String documentId,
+            int anchorChunkIndex,
+            int before,
+            int after
+    ) {
+        validateWindowArguments(collection, documentId, anchorChunkIndex, before, after);
+        int startIndex = Math.max(0, anchorChunkIndex - before);
+        int endIndex = Math.addExact(anchorChunkIndex, after);
+        String sql = String.format("""
+                SELECT id, content, source, chunk_index, metadata
+                FROM %s
+                WHERE collection = ?
+                  AND metadata ->> 'document_id' = ?
+                  AND chunk_index BETWEEN ? AND ?
+                ORDER BY chunk_index ASC, id ASC
+                """, table);
+        List<Document> documents = new ArrayList<>();
         try (Connection conn = PgConnectionPool.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setLong(1, Long.parseLong(chunkId));
-            ResultSet rs = ps.executeQuery();
-            if (rs.next()) {
-                return rs.getString("prev_chunk_id");
+            ps.setString(1, collection);
+            ps.setString(2, documentId);
+            ps.setInt(3, startIndex);
+            ps.setInt(4, endIndex);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    documents.add(new Document(
+                            String.valueOf(rs.getLong("id")),
+                            rs.getString("content"),
+                            rs.getString("source"),
+                            0.0,
+                            parseMetadata(rs.getString("metadata")),
+                            null,
+                            nullableChunkIndex(rs)
+                    ));
+                }
             }
-        } catch (SQLException | NumberFormatException e) {
-            log.debug("Failed to get prev_chunk_id for {}: {}", chunkId, e.getMessage());
+        } catch (SQLException e) {
+            throw new IllegalStateException("Failed to read pgvector document context", e);
         }
-        return null;
-    }
-
-    @Override
-    public Document fetchById(String id) {
-        String sql = String.format("SELECT id, content, source FROM %s WHERE id = ?", table);
-        try (Connection conn = PgConnectionPool.getConnection();
-             PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setLong(1, Long.parseLong(id));
-            ResultSet rs = ps.executeQuery();
-            if (rs.next()) {
-                return new Document(
-                        String.valueOf(rs.getLong("id")),
-                        rs.getString("content"),
-                        rs.getString("source"),
-                        1.0,
-                        null
-                );
-            }
-        } catch (SQLException | NumberFormatException e) {
-            log.debug("Failed to fetch by id {}: {}", id, e.getMessage());
-        }
-        return null;
+        return List.copyOf(documents);
     }
 
     // ==================== PgVector 特有方法 ====================
@@ -371,16 +469,16 @@ public class PgVectorStore implements VectorStore {
     @Override
     public SearchResult searchTextWithEvidence(String collection, String query, int topK) {
         if (embeddingProvider == null || !embeddingProvider.isAvailable()) {
-            log.warn("searchText() requires an embedding provider. Set HARNESS_MODEL_EMBEDDING_PROVIDER.");
-            return SearchResult.empty();
+            throw new IllegalStateException(
+                    "searchText() requires an embedding provider. Set HARNESS_MODEL_EMBEDDING_PROVIDER.");
         }
+        Embedding embedding;
         try {
-            Embedding embedding = embeddingProvider.embed(query);
-            return searchVectorWithEvidence(collection, embedding.vector(), topK);
+            embedding = embeddingProvider.embed(query);
         } catch (Exception e) {
-            log.error("Failed to embed query for RAG retrieval: {}", e.getMessage(), e);
-            return SearchResult.empty();
+            throw new IllegalStateException("Failed to embed query for RAG retrieval", e);
         }
+        return searchVectorWithEvidence(collection, embedding.vector(), topK);
     }
 
     /**
@@ -395,52 +493,29 @@ public class PgVectorStore implements VectorStore {
             log.info("Deleted {} documents from collection '{}'", deleted, collectionName);
             return deleted;
         } catch (SQLException e) {
-            log.error("Failed to delete collection '{}': {}", collectionName, e.getMessage(), e);
+            throw new IllegalStateException(
+                    "Failed to delete pgvector collection '" + collectionName + "'", e);
         }
-        return 0;
     }
 
-    /**
-     * List documents as RagDocumentSummary (for backward compatibility).
-     */
-    public List<RagDocumentSummary> listByCollectionSummary(String collectionName) {
-        String sql = String.format(
-                "SELECT id, source, chunk_index, created_at FROM %s WHERE collection = ? ORDER BY id ASC",
-                table);
-        List<RagDocumentSummary> results = new ArrayList<>();
-        try (Connection conn = PgConnectionPool.getConnection();
-             PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setString(1, collectionName);
-            ResultSet rs = ps.executeQuery();
-            while (rs.next()) {
-                Timestamp ts = rs.getTimestamp("created_at");
-                results.add(new RagDocumentSummary(
-                        String.valueOf(rs.getLong("id")),
-                        rs.getString("source"),
-                        rs.getObject("chunk_index") != null ? rs.getInt("chunk_index") : null,
-                        ts != null ? ts.toInstant() : null
-                ));
-            }
-            log.debug("Listed {} documents in collection '{}'", results.size(), collectionName);
-        } catch (SQLException e) {
-            log.error("Failed to list collection '{}': {}", collectionName, e.getMessage(), e);
-        }
-        return results;
-    }
-
-    /**
-     * Insert multiple documents with chunk linking (prev_chunk_id, next_chunk_id).
-     * Uses a two-step approach: insert all chunks, then update links in a batch.
-     */
-    public List<Long> insertBatchWithLinks(List<DocumentLinkEntry> entries) {
+    /** Insert all chunks atomically. */
+    public List<Long> insertBatch(List<DocumentEntry> entries) {
         String insertSql = String.format("""
                 INSERT INTO %s (collection, source, content, embedding, chunk_index, metadata)
                 VALUES (?, ?, ?, ?::vector, ?, ?::jsonb)
                 RETURNING id
                 """, table);
-
-        String updateLinkSql = String.format("""
-                UPDATE %s SET prev_chunk_id = ?, next_chunk_id = ? WHERE id = ?
+        String upsertSql = String.format("""
+                INSERT INTO %s AS target (id, collection, source, content, embedding, chunk_index, metadata)
+                VALUES (?, ?, ?, ?, ?::vector, ?, ?::jsonb)
+                ON CONFLICT (id) DO UPDATE SET
+                    source = EXCLUDED.source,
+                    content = EXCLUDED.content,
+                    embedding = EXCLUDED.embedding,
+                    chunk_index = EXCLUDED.chunk_index,
+                    metadata = EXCLUDED.metadata
+                WHERE target.collection = EXCLUDED.collection
+                RETURNING id
                 """, table);
 
         List<Long> ids = new ArrayList<>();
@@ -449,40 +524,37 @@ public class PgVectorStore implements VectorStore {
             conn = PgConnectionPool.getConnection();
             conn.setAutoCommit(false);
 
-            // Step 1: Insert all chunks and collect IDs
-            try (PreparedStatement ps = conn.prepareStatement(insertSql)) {
-                for (DocumentLinkEntry entry : entries) {
-                    ps.setString(1, entry.collection() != null ? entry.collection() : collection);
-                    ps.setString(2, entry.source());
-                    ps.setString(3, entry.content());
-                    ps.setString(4, toVectorLiteral(entry.embedding()));
-                    ps.setInt(5, entry.chunkIndex());
-                    ps.setString(6, entry.metadata() != null ? mapToJson(entry.metadata()) : "{}");
-                    ResultSet rs = ps.executeQuery();
-                    if (rs.next()) {
+            try (PreparedStatement insert = conn.prepareStatement(insertSql);
+                 PreparedStatement upsert = conn.prepareStatement(upsertSql)) {
+                for (DocumentEntry entry : entries) {
+                    PreparedStatement statement = entry.id() == null ? insert : upsert;
+                    int parameterIndex = 1;
+                    if (entry.id() != null) {
+                        statement.setLong(parameterIndex++, entry.id());
+                    }
+                    statement.setString(parameterIndex++,
+                            entry.collection() != null ? entry.collection() : collection);
+                    statement.setString(parameterIndex++, entry.source());
+                    statement.setString(parameterIndex++, entry.content());
+                    statement.setString(parameterIndex++, toVectorLiteral(entry.embedding()));
+                    statement.setInt(parameterIndex++, entry.chunkIndex());
+                    statement.setString(parameterIndex,
+                            entry.metadata() != null ? mapToJson(entry.metadata()) : "{}");
+                    try (ResultSet rs = statement.executeQuery()) {
+                        if (!rs.next()) {
+                            throw new SQLException(
+                                    "Knowledge chunk id belongs to another collection: " + entry.id());
+                        }
                         ids.add(rs.getLong(1));
                     }
                 }
             }
 
-            // Step 2: Update prev/next links
-            try (PreparedStatement ps = conn.prepareStatement(updateLinkSql)) {
-                for (int i = 0; i < ids.size(); i++) {
-                    long prevId = i > 0 ? ids.get(i - 1) : 0;
-                    long nextId = i < ids.size() - 1 ? ids.get(i + 1) : 0;
-                    ps.setString(1, prevId > 0 ? String.valueOf(prevId) : null);
-                    ps.setString(2, nextId > 0 ? String.valueOf(nextId) : null);
-                    ps.setLong(3, ids.get(i));
-                    ps.addBatch();
-                }
-                ps.executeBatch();
-            }
-
             conn.commit();
-            log.info("Inserted {} linked documents into pgvector", entries.size());
+            log.info("Inserted {} documents into pgvector", entries.size());
 
         } catch (SQLException e) {
-            log.error("pgvector linked batch insert failed, rolling back: {}", e.getMessage(), e);
+            log.error("pgvector batch insert failed, rolling back: {}", e.getMessage(), e);
             if (conn != null) {
                 try {
                     conn.rollback();
@@ -520,16 +592,132 @@ public class PgVectorStore implements VectorStore {
 
     private String mapToJson(Map<String, Object> map) {
         try {
-            com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
-            return mapper.writeValueAsString(map);
+            return JSON_MAPPER.writeValueAsString(map);
         } catch (Exception e) {
-            return "{}";
+            throw new IllegalStateException("Failed to serialize knowledge document metadata", e);
+        }
+    }
+
+    private static Map<String, Object> parseMetadata(String json) {
+        if (json == null || json.isBlank()) {
+            return Map.of();
+        }
+        try {
+            Map<String, Object> metadata = JSON_MAPPER.readValue(json, METADATA_TYPE);
+            return metadata == null
+                    ? Map.of()
+                    : Collections.unmodifiableMap(new java.util.LinkedHashMap<>(metadata));
+        } catch (Exception e) {
+            throw new IllegalStateException("Failed to parse knowledge document metadata", e);
+        }
+    }
+
+    private static int nullableChunkIndex(ResultSet resultSet) throws SQLException {
+        int chunkIndex = resultSet.getInt("chunk_index");
+        return resultSet.wasNull() ? -1 : chunkIndex;
+    }
+
+    private static KnowledgeChunkSummary toKnowledgeChunkSummary(
+            String id,
+            String source,
+            int chunkIndex,
+            Map<String, Object> metadata
+    ) {
+        return new KnowledgeChunkSummary(
+                id,
+                source,
+                chunkIndex,
+                stringMetadata(metadata, "document_id"),
+                stringListMetadata(metadata, "heading_path"));
+    }
+
+    private static String stringMetadata(Map<String, Object> metadata, String key) {
+        Object value = metadata.get(key);
+        return value == null ? "" : value.toString();
+    }
+
+    private static List<String> stringListMetadata(Map<String, Object> metadata, String key) {
+        Object value = metadata.get(key);
+        if (!(value instanceof List<?> values)) {
+            return List.of();
+        }
+        return values.stream().map(String::valueOf).toList();
+    }
+
+    private static Long parseCursorId(String lastId) {
+        if (lastId == null) {
+            return null;
+        }
+        try {
+            return Long.parseLong(lastId);
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("Invalid pgvector knowledge page cursor", e);
+        }
+    }
+
+    private static Long parseOptionalId(String id) {
+        if (id == null || id.isBlank()) {
+            return null;
+        }
+        try {
+            return Long.parseLong(id);
+        } catch (NumberFormatException exception) {
+            throw new IllegalArgumentException("pgvector knowledge chunk id must be numeric", exception);
+        }
+    }
+
+    private static long parseRequiredId(String id) {
+        Long parsedId = parseOptionalId(id);
+        if (parsedId == null) {
+            throw new IllegalArgumentException("knowledge chunk id is required");
+        }
+        return parsedId;
+    }
+
+    private static String requireCollection(String collection) {
+        if (collection == null || collection.isBlank()) {
+            throw new IllegalArgumentException("Knowledge collection is required");
+        }
+        return collection.trim();
+    }
+
+    private static void validateManagementQuery(String collection, int limit) {
+        if (collection == null || collection.isBlank()) {
+            throw new IllegalArgumentException("collection is required");
+        }
+        if (limit <= 0 || limit > 100) {
+            throw new IllegalArgumentException("limit must be between 1 and 100");
+        }
+    }
+
+    private static void validateCollectionPageLimit(int limit) {
+        if (limit <= 0 || limit > 100) {
+            throw new IllegalArgumentException("limit must be between 1 and 100");
+        }
+    }
+
+    private static void validateWindowArguments(
+            String collection,
+            String documentId,
+            int anchorChunkIndex,
+            int before,
+            int after
+    ) {
+        if (collection == null || collection.isBlank()) {
+            throw new IllegalArgumentException("collection is required");
+        }
+        if (documentId == null || documentId.isBlank()) {
+            throw new IllegalArgumentException("documentId is required");
+        }
+        if (anchorChunkIndex < 0 || before < 0 || after < 0) {
+            throw new IllegalArgumentException("chunk indexes and window sizes cannot be negative");
         }
     }
 
     // ==================== 记录类型 ====================
 
-    public record DocumentLinkEntry(
+    public record DocumentEntry(
+            Long id,
             String content,
             String source,
             float[] embedding,
@@ -538,10 +726,4 @@ public class PgVectorStore implements VectorStore {
             Map<String, Object> metadata
     ) {}
 
-    public record RagDocumentSummary(
-            String id,
-            String source,
-            Integer chunkIndex,
-            java.time.Instant createdAt
-    ) {}
 }

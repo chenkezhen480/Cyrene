@@ -1,5 +1,8 @@
 package com.harness.tool.rag;
 
+import com.harness.core.model.PageResponse;
+import com.harness.tool.knowledge.KnowledgeChunkSummary;
+
 import java.util.List;
 import java.util.Map;
 
@@ -28,24 +31,34 @@ public interface VectorStore {
      *
      * @return true 如果文档存在并被删除
      */
-    boolean deleteById(String id);
+    boolean deleteById(String collection, String id);
 
     // ==================== 2. 查询能力 ====================
 
     /**
      * 按 ID 获取单个文档。
      */
-    Document getById(String id);
+    Document getById(String collection, String id);
 
     /**
-     * 列出某个集合下的所有文档（不含向量字段，用于管理展示）。
+     * Atomically replace one chunk's content and embedding inside its collection.
+     * Implementations must fail when the scoped chunk does not exist.
      */
-    List<Document> listByCollection(String collection);
+    void updateContent(String collection, String id, String content, float[] embedding);
 
     /**
-     * 列出所有集合名称。
+     * Cursor-paginated management projection. Implementations must use a stable
+     * primary-key order, fetch limit + 1 rows, and bind cursors to the query scope.
      */
-    List<String> listCollections();
+    PageResponse<KnowledgeChunkSummary> listKnowledgeChunks(
+            String collection,
+            String fileName,
+            int limit,
+            String cursor
+    );
+
+    /** Cursor-paginated logical collection names in stable lexical order. */
+    PageResponse<String> listCollections(int limit, String cursor);
 
     // ==================== 3. 检索能力 ====================
 
@@ -82,24 +95,19 @@ public interface VectorStore {
         return SearchResult.fromAccepted(searchText(collection, query, topK));
     }
 
-    // ==================== 4. Chunk 链表能力（语义回溯） ====================
+    // ==================== 4. 显式文档上下文 ====================
 
     /**
-     * 获取指定 chunk 的前一个 chunk ID。
-     * 用于 SemanticContextRetriever 语义完整性回溯。
-     * 默认返回 null（不支持链表的实现）。
+     * Read one bounded window from a stable document anchor.
+     * Results must be ordered by chunkIndex and remain inside collection + documentId.
      */
-    default String getPrevChunkId(String chunkId) {
-        return null;
-    }
-
-    /**
-     * 按 ID 获取完整文档（含 content），用于回溯拼接。
-     * 默认返回 null。
-     */
-    default Document fetchById(String id) {
-        return null;
-    }
+    List<Document> readDocumentWindow(
+            String collection,
+            String documentId,
+            int anchorChunkIndex,
+            int before,
+            int after
+    );
 
     // ==================== 5. Provider 名称 ====================
 

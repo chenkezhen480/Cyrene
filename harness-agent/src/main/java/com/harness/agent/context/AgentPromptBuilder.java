@@ -98,8 +98,13 @@ public final class AgentPromptBuilder {
             return;
         }
         prompt.append("Internal knowledge-base search is available and route analysis indicates it may help. "
-                + "Use knowledge_base_search when retrieved internal documents would improve the answer. "
-                + "Its query must be a complete, standalone question without context-dependent references.\n\n");
+                + "Use knowledge_base_search first when retrieved internal documents would improve the answer. "
+                + "Its query must be a complete, standalone question without context-dependent references. "
+                + "If a returned chunk already contains enough evidence, answer without reading more context. "
+                + "Only when the hit clearly lacks a definition, prerequisite, or following step, call "
+                + "knowledge_context_read with the exact documentId and chunkIndex returned by the search hit. "
+                + "The context window defaults to one chunk before and after the anchor; enlarge it only when "
+                + "necessary and within the tool limits. Never guess an anchor or repeat an identical window.\n\n");
     }
 
     private static void appendKnowledgeGraphGuidance(

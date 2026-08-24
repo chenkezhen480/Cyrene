@@ -1,5 +1,7 @@
 package com.harness.provider;
 
+import com.harness.core.text.TextTokenEstimator;
+import com.harness.core.text.UnicodeAwareTextTokenEstimator;
 import dev.langchain4j.data.embedding.Embedding;
 import dev.langchain4j.data.segment.TextSegment;
 import java.util.List;
@@ -38,4 +40,8 @@ public interface EmbeddingModelProvider {
 
     String providerName();
     String modelName();
+
+    default TextTokenEstimator tokenEstimator() {
+        return UnicodeAwareTextTokenEstimator.INSTANCE;
+    }
 }
