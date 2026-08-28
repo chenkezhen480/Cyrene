@@ -15,6 +15,9 @@ public final class EnvKey {
 
     private EnvKey() {}
 
+    /** Web 管理的模型配置持久化文件。内容作为显式模型覆盖，高于进程环境变量。 */
+    public static final String CONFIG_MODEL_FILE = "HARNESS_CONFIG_MODEL_FILE";
+
     // ==================== Gap Analysis / 动态路由 ====================
     /**
      * 功能总开关，默认 true。关闭后所有字段回退全局静态配置。

@@ -28,7 +28,10 @@ public class OpenAiRerankModelProvider implements RerankModelProvider {
     private volatile ObjectMapper mapper;
 
     public OpenAiRerankModelProvider() {
-        EnvConfig cfg = EnvConfig.get();
+        this(EnvConfig.get());
+    }
+
+    public OpenAiRerankModelProvider(EnvConfig cfg) {
         this.apiKey = cfg.requireString(EnvKey.MODEL_RERANK_API_KEY);
         this.baseUrl = cfg.getString(EnvKey.MODEL_RERANK_BASE_URL, "https://api.openai.com/v1");
         this.model = cfg.getString(EnvKey.MODEL_RERANK_MODEL, "rerank-english-v3.0");

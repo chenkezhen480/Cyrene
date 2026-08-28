@@ -57,9 +57,16 @@ public class VideoGenerationTool implements TypedOutputTool {
     private final ConcurrentHashMap<String, TaskState> tasks = new ConcurrentHashMap<>();
 
     public VideoGenerationTool(ArtifactStorer storer, ArtifactCallback callback) {
+        this(storer, callback, EnvConfig.get());
+    }
+
+    public VideoGenerationTool(
+            ArtifactStorer storer,
+            ArtifactCallback callback,
+            EnvConfig cfg
+    ) {
         this.storer = storer;
         this.callback = callback;
-        EnvConfig cfg = EnvConfig.get();
         int timeoutSeconds = cfg.getInt(EnvKey.MODEL_CHAT_TIMEOUT_SECONDS, 300);
         this.http = new OkHttpClient.Builder()
                 .connectTimeout(30, TimeUnit.SECONDS)

@@ -20,7 +20,10 @@ public class OpenAiVisionModelProvider implements VisionModelProvider {
     private final ChatModel chatModel;
 
     public OpenAiVisionModelProvider() {
-        EnvConfig cfg = EnvConfig.get();
+        this(EnvConfig.get());
+    }
+
+    public OpenAiVisionModelProvider(EnvConfig cfg) {
         boolean dedicatedVision = !cfg.getString(EnvKey.MODEL_VISION_PROVIDER, "").isBlank();
         this.apiKey = cfg.requireString(dedicatedVision
                 ? EnvKey.MODEL_VISION_API_KEY

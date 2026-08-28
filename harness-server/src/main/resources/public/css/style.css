@@ -2156,15 +2156,6 @@ tr.status-dusk td {
   margin-left: auto;
 }
 
-.model-config-restart-notice {
-  padding: 8px 12px;
-  color: var(--gold);
-  background: rgba(205, 178, 114, 0.08);
-  border: 1px solid rgba(205, 178, 114, 0.18);
-  border-radius: var(--radius-sm);
-  font-size: var(--text-xs);
-}
-
 .model-config-inline-error {
   justify-content: space-between;
   gap: var(--space-3);

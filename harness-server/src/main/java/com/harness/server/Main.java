@@ -151,7 +151,11 @@ public class Main {
         ModelConfigurationHandler modelConfigurationHandler = new ModelConfigurationHandler(
                 new ModelConfigurationService(
                         EnvConfig.get(),
-                        new ModelConfigurationFileStore(Path.of(".env"))));
+                        new ModelConfigurationFileStore(Path.of(
+                                EnvConfig.get().getString(
+                                        EnvKey.CONFIG_MODEL_FILE,
+                                        "./data/model-config.env"))),
+                        agent));
         app.get("/api/model-config", modelConfigurationHandler::get);
         app.put("/api/model-config", modelConfigurationHandler::update);
 

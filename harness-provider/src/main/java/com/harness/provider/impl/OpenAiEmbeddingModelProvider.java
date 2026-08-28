@@ -26,7 +26,10 @@ public class OpenAiEmbeddingModelProvider implements EmbeddingModelProvider {
     private volatile OpenAiEmbeddingModel model;
 
     public OpenAiEmbeddingModelProvider() {
-        EnvConfig cfg = EnvConfig.get();
+        this(EnvConfig.get());
+    }
+
+    public OpenAiEmbeddingModelProvider(EnvConfig cfg) {
         this.apiKey = cfg.requireString(EnvKey.MODEL_EMBEDDING_API_KEY);
         this.baseUrl = cfg.getString(EnvKey.MODEL_EMBEDDING_BASE_URL, "https://api.openai.com/v1");
         this.modelName = cfg.getString(EnvKey.MODEL_EMBEDDING_MODEL, "text-embedding-3-small");

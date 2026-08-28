@@ -36,7 +36,7 @@ public final class ModelConfigurationHandler {
                     context.bodyAsClass(
                             ModelConfigurationService.ModelConfigurationUpdateRequest.class);
             context.json(configurationService.update(request));
-        } catch (IllegalArgumentException e) {
+        } catch (IllegalArgumentException | IllegalStateException e) {
             ApiResponses.error(
                     context,
                     400,

@@ -16,6 +16,7 @@ import com.harness.trace.store.TraceStore;
 import com.harness.trace.store.TraceStoreFactory;
 import com.harness.core.model.*;
 import com.harness.core.runtime.RunTrace;
+import com.harness.core.runtime.ModelConfigurationRuntime;
 import com.harness.core.env.EnvConfig;
 import com.harness.core.env.EnvKey;
 import com.harness.core.env.MysqlConnectionPool;
@@ -74,7 +75,7 @@ import com.harness.core.model.StreamCallback;
 /**
  * Wires all layers together using LangChain4j model providers.
  */
-public class AgentOrchestrator {
+public class AgentOrchestrator implements ModelConfigurationRuntime {
 
     private static final Logger log = LoggerFactory.getLogger(AgentOrchestrator.class);
 
@@ -86,6 +87,7 @@ public class AgentOrchestrator {
     }
 
     private final AgentRuntime runtime;
+    private final ModelProviderRuntime modelProviderRuntime;
     private final AgentToolRuntime toolRuntime;
     private final AgentPromptBuilder promptBuilder;
     private final DocumentConversionService documentConversionService;
@@ -129,7 +131,9 @@ public class AgentOrchestrator {
             RedisConnectionPool.init();
         }
 
-        ModelProviders modelProviders = ModelProviderFactory.createAll();
+        ModelProviders initialModelProviders = ModelProviderFactory.createAll();
+        this.modelProviderRuntime = new ModelProviderRuntime(initialModelProviders);
+        ModelProviders modelProviders = modelProviderRuntime.delegates();
         this.documentConversionService = MarkItDownDocumentConversionService.fromEnvironment();
 
         this.traceStore = TraceStoreFactory.create();
@@ -140,7 +144,7 @@ public class AgentOrchestrator {
                         new MultimodalParser(
                                 modelProviders.chat(),
                                 documentConversionService)),
-                new DefaultReActLoopFactory(modelProviders),
+                new DefaultReActLoopFactory(modelProviderRuntime),
                 new TraceCollectorFactory(traceStore));
 
         // Independent structured knowledge graph route
@@ -281,16 +285,17 @@ public class AgentOrchestrator {
                            String requestedSessionId, String systemPromptOverride,
                            CancellationToken cancellationToken,
                            Boolean enableThinking, String contextUserId, AgentContext agentContext) {
-        return runCoordinator.run(new AgentRunCommand(
-                token,
-                text,
-                attachments,
-                requestedSessionId,
-                systemPromptOverride,
-                cancellationToken,
-                enableThinking,
-                contextUserId,
-                agentContext));
+        return modelProviderRuntime.withCurrent(ignored ->
+                runCoordinator.run(new AgentRunCommand(
+                        token,
+                        text,
+                        attachments,
+                        requestedSessionId,
+                        systemPromptOverride,
+                        cancellationToken,
+                        enableThinking,
+                        contextUserId,
+                        agentContext)));
     }
 
     public AgentResult runStructured(
@@ -305,17 +310,18 @@ public class AgentOrchestrator {
             AgentContext agentContext,
             FinalOutputContract.JsonSchema outputContract
     ) {
-        return runCoordinator.run(new AgentRunCommand(
-                token,
-                text,
-                attachments,
-                requestedSessionId,
-                systemPromptOverride,
-                cancellationToken,
-                enableThinking,
-                contextUserId,
-                agentContext,
-                outputContract));
+        return modelProviderRuntime.withCurrent(ignored ->
+                runCoordinator.run(new AgentRunCommand(
+                        token,
+                        text,
+                        attachments,
+                        requestedSessionId,
+                        systemPromptOverride,
+                        cancellationToken,
+                        enableThinking,
+                        contextUserId,
+                        agentContext,
+                        outputContract)));
     }
 
     /**
@@ -348,17 +354,75 @@ public class AgentOrchestrator {
                           CancellationToken cancellationToken,
                           StreamCallback callback, Boolean enableThinking, String contextUserId,
                           AgentContext agentContext) {
-        runCoordinator.stream(new AgentRunCommand(
-                token,
-                text,
-                attachments,
-                requestedSessionId,
-                systemPromptOverride,
-                cancellationToken,
-                enableThinking,
-                contextUserId,
-                agentContext), callback);
+        modelProviderRuntime.withCurrentVoid(ignored ->
+                runCoordinator.stream(new AgentRunCommand(
+                        token,
+                        text,
+                        attachments,
+                        requestedSessionId,
+                        systemPromptOverride,
+                        cancellationToken,
+                        enableThinking,
+                        contextUserId,
+                        agentContext), callback));
     }
+
+    @Override
+    public PreparedUpdate prepare(EnvConfig candidateConfiguration) {
+        java.util.Objects.requireNonNull(candidateConfiguration, "candidateConfiguration");
+        EmbeddingIdentity currentEmbedding = embeddingIdentity(EnvConfig.get());
+        EmbeddingIdentity candidateEmbedding = embeddingIdentity(candidateConfiguration);
+        if (!currentEmbedding.equals(candidateEmbedding)) {
+            throw new IllegalArgumentException(
+                    "Embedding provider, base URL, model, or dimension cannot be hot-switched; "
+                            + "re-index existing knowledge data before changing embedding identity");
+        }
+
+        ModelProviders candidateProviders = ModelProviderFactory.createAll(
+                candidateConfiguration);
+        AgentToolRuntime.PreparedModelTools candidateTools =
+                toolRuntime.prepareModelToolChanges(
+                        EnvConfig.get(), candidateConfiguration);
+        Map<String, String> managedValues = candidateConfiguration.managedModelOverrides();
+        return () -> modelProviderRuntime.activate(candidateProviders, () -> {
+            EnvConfig.get().replaceManagedModelOverrides(managedValues);
+            toolRuntime.applyModelTools(candidateTools);
+            log.info("Model configuration activated: chat={}, vision={}, voice={}, "
+                            + "embedding={}, rerank={}, classifier={}",
+                    candidateProviders.chat().modelName(),
+                    candidateProviders.vision().modelName(),
+                    candidateProviders.voice().providerName(),
+                    candidateProviders.embedding().modelName(),
+                    candidateProviders.rerank().modelName(),
+                    candidateProviders.classifier().modelName());
+        });
+    }
+
+    private static EmbeddingIdentity embeddingIdentity(EnvConfig config) {
+        String provider = config.getString(EnvKey.MODEL_EMBEDDING_PROVIDER, "")
+                .trim().toLowerCase(java.util.Locale.ROOT);
+        String defaultBaseUrl = "ollama".equals(provider)
+                ? "http://localhost:11434"
+                : "https://api.openai.com/v1";
+        String defaultModel = "ollama".equals(provider)
+                ? "nomic-embed-text"
+                : "text-embedding-3-small";
+        int defaultDimension = "ollama".equals(provider)
+                ? 768
+                : EnvKey.MODEL_EMBEDDING_DIM_DEFAULT;
+        return new EmbeddingIdentity(
+                provider,
+                config.getString(EnvKey.MODEL_EMBEDDING_BASE_URL, defaultBaseUrl).trim(),
+                config.getString(EnvKey.MODEL_EMBEDDING_MODEL, defaultModel).trim(),
+                config.getInt(EnvKey.MODEL_EMBEDDING_DIM, defaultDimension));
+    }
+
+    private record EmbeddingIdentity(
+            String provider,
+            String baseUrl,
+            String model,
+            int dimension
+    ) {}
 
     private static void activateToolContext(String userId, String sessionId) {
         LoadSkillTool.setCurrentSession(sessionId);

@@ -34,13 +34,11 @@ public class GapClassifier {
             t=needsThinking k=needsKnowledgeBase s=needsWebSearch
             Output ONLY the JSON, no explanation.""";
 
-    private final ChatModel model;
-    private final boolean available;
+    private final ClassifierModelProvider provider;
 
     public GapClassifier(ClassifierModelProvider provider) {
-        this.available = provider.isAvailable() && provider.chatModel() != null;
-        this.model = available ? provider.chatModel() : null;
-        log.info("[GapClassifier] available={}", available);
+        this.provider = java.util.Objects.requireNonNull(provider, "provider");
+        log.info("[GapClassifier] available={}", provider.isAvailable());
     }
 
     /**
@@ -50,11 +48,15 @@ public class GapClassifier {
      * @return GapAnalysis（四字段可能部分为 null），失败时返回 null
      */
     public GapAnalysis classify(String query) {
-        if (!available || query == null || query.isBlank()) {
+        if (!provider.isAvailable() || query == null || query.isBlank()) {
             return null;
         }
 
         try {
+            ChatModel model = provider.chatModel();
+            if (model == null) {
+                return null;
+            }
             log.info("[GapClassifier] === Tier 2 LLM Classification ===");
             log.info("[GapClassifier] System Prompt:\n{}", SYSTEM_PROMPT);
             log.info("[GapClassifier] User Query: {}", query);

@@ -48,7 +48,7 @@ public class KnowledgeBaseTool implements Tool {
             原始问题：%s""";
 
     private final KnowledgeAccessService knowledgeAccess;
-    private final ChatModel chatModel;
+    private final java.util.function.Supplier<ChatModel> chatModelSupplier;
     private final RetrievalEscalationPolicy escalationPolicy;
     private final ObjectMapper objectMapper;
 
@@ -59,7 +59,7 @@ public class KnowledgeBaseTool implements Tool {
     ) {
         this(
                 new KnowledgeAccessService(rerankModelProvider, embeddingProvider),
-                chatModelProvider != null ? chatModelProvider.chatModel() : null,
+                chatModelProvider != null ? chatModelProvider::chatModel : () -> null,
                 RetrievalEscalationPolicy.fromEnvironment(),
                 new ObjectMapper());
         log.info("[KnowledgeBaseTool] initialized");
@@ -71,7 +71,7 @@ public class KnowledgeBaseTool implements Tool {
     ) {
         this(
                 knowledgeAccess,
-                chatModelProvider != null ? chatModelProvider.chatModel() : null,
+                chatModelProvider != null ? chatModelProvider::chatModel : () -> null,
                 RetrievalEscalationPolicy.fromEnvironment(),
                 new ObjectMapper());
     }
@@ -83,7 +83,7 @@ public class KnowledgeBaseTool implements Tool {
             ObjectMapper objectMapper
     ) {
         this(new KnowledgeAccessService(contextBuilder, 2),
-                chatModel, escalationPolicy, objectMapper);
+                () -> chatModel, escalationPolicy, objectMapper);
     }
 
     KnowledgeBaseTool(
@@ -92,8 +92,17 @@ public class KnowledgeBaseTool implements Tool {
             RetrievalEscalationPolicy escalationPolicy,
             ObjectMapper objectMapper
     ) {
+        this(knowledgeAccess, () -> chatModel, escalationPolicy, objectMapper);
+    }
+
+    private KnowledgeBaseTool(
+            KnowledgeAccessService knowledgeAccess,
+            java.util.function.Supplier<ChatModel> chatModelSupplier,
+            RetrievalEscalationPolicy escalationPolicy,
+            ObjectMapper objectMapper
+    ) {
         this.knowledgeAccess = Objects.requireNonNull(knowledgeAccess, "knowledgeAccess");
-        this.chatModel = chatModel;
+        this.chatModelSupplier = Objects.requireNonNull(chatModelSupplier, "chatModelSupplier");
         this.escalationPolicy = Objects.requireNonNull(escalationPolicy, "escalationPolicy");
         this.objectMapper = Objects.requireNonNull(objectMapper, "objectMapper");
     }
@@ -147,8 +156,9 @@ public class KnowledgeBaseTool implements Tool {
 
         try {
             ContextBuilder.ContextResult result;
+            ChatModel chatModel = chatModelSupplier.get();
             if (forceRewrite && chatModel != null) {
-                result = executeWithRewrite(query, collection, limit);
+                result = executeWithRewrite(query, collection, limit, chatModel);
             } else {
                 result = knowledgeAccess.search(query, collection, limit);
             }
@@ -187,9 +197,10 @@ public class KnowledgeBaseTool implements Tool {
     private ContextBuilder.ContextResult executeWithRewrite(
             String originalQuery,
             String collection,
-            int limit
+            int limit,
+            ChatModel chatModel
     ) {
-        List<String> queries = generateRewrittenQueries(originalQuery);
+        List<String> queries = generateRewrittenQueries(originalQuery, chatModel);
         if (queries.isEmpty()) {
             log.warn("[KnowledgeBaseTool] Rewrite produced no queries, using original query");
             return knowledgeAccess.search(originalQuery, collection, limit);
@@ -198,7 +209,10 @@ public class KnowledgeBaseTool implements Tool {
         return knowledgeAccess.searchWithQueries(queries, collection, limit);
     }
 
-    private List<String> generateRewrittenQueries(String originalQuery) {
+    private List<String> generateRewrittenQueries(
+            String originalQuery,
+            ChatModel chatModel
+    ) {
         try {
             String prompt = String.format(COMBINED_REWRITE_PROMPT, originalQuery);
             String response = chatModel.chat(ChatRequest.builder()

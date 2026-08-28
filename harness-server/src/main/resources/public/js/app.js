@@ -6805,7 +6805,7 @@ const ModelConfigPage = {
     const sections = ref([]);
     const activeSectionId = ref('chat');
     const configurationPath = ref('');
-    const restartRequired = ref(false);
+    const runtimeSynchronized = ref(false);
     const loading = ref(false);
     const saving = ref(false);
     const error = ref('');
@@ -6830,7 +6830,7 @@ const ModelConfigPage = {
     function requireModelConfiguration(data) {
       if (!data
           || typeof data.path !== 'string'
-          || typeof data.restartRequired !== 'boolean'
+          || typeof data.runtimeSynchronized !== 'boolean'
           || !Array.isArray(data.sections)) {
         throw new Error(t('invalidModelConfigResponse'));
       }
@@ -6845,7 +6845,7 @@ const ModelConfigPage = {
               || typeof field.sensitive !== 'boolean'
               || typeof field.managed !== 'boolean'
               || typeof field.effectiveConfigured !== 'boolean'
-              || typeof field.pendingRestart !== 'boolean') {
+              || typeof field.runtimeSynchronized !== 'boolean') {
             throw new Error(t('invalidModelConfigResponse'));
           }
         });
@@ -6875,7 +6875,7 @@ const ModelConfigPage = {
       const configuration = requireModelConfiguration(data);
       sections.value = configuration.sections;
       configurationPath.value = configuration.path;
-      restartRequired.value = configuration.restartRequired;
+      runtimeSynchronized.value = configuration.runtimeSynchronized;
       if (!sections.value.some(section => section.id === activeSectionId.value)) {
         activeSectionId.value = sections.value[0]?.id || '';
       }
@@ -6967,7 +6967,7 @@ const ModelConfigPage = {
       activeSection,
       activeSectionId,
       configurationPath,
-      restartRequired,
+      runtimeSynchronized,
       loading,
       saving,
       error,
@@ -7005,14 +7005,11 @@ const ModelConfigPage = {
         </div>
         <div class="model-config-toolbar-meta">
           <span><strong>{{ configuredCount }}</strong> / {{ totalCount }} {{ t('configuredItems') }}</span>
-          <span class="model-config-path">{{ t('persistedFile') }}：{{ configurationPath || '.env' }}</span>
-          <span :class="['tag', restartRequired ? 'tag-gold' : 'tag-dusk']">
-            {{ restartRequired ? t('restartRequired') : t('configurationSynchronized') }}
+          <span class="model-config-path">{{ t('persistedFile') }}：{{ configurationPath || 'data/model-config.env' }}</span>
+          <span :class="['tag', runtimeSynchronized ? 'tag-dusk' : 'tag-gold']">
+            {{ runtimeSynchronized ? t('configurationSynchronized') : t('configurationSwitching') }}
           </span>
           <span class="model-config-security-note">{{ t('modelConfigSecurityHint') }}</span>
-        </div>
-        <div v-if="restartRequired" class="model-config-restart-notice">
-          {{ t('restartRequiredHint') }}
         </div>
         <div v-if="error" class="model-config-inline-error">
           <span>{{ error }}</span>
@@ -7046,7 +7043,9 @@ const ModelConfigPage = {
             <label v-for="field in activeSection.fields" :key="field.key" class="model-config-control">
               <span class="model-config-key-row">
                 <code class="model-config-key">{{ field.key }}</code>
-                <span v-if="field.pendingRestart" class="tag tag-gold">{{ t('pendingRestart') }}</span>
+                <span v-if="!field.runtimeSynchronized" class="tag tag-gold">
+                  {{ t('configurationOutOfSync') }}
+                </span>
               </span>
 
               <template v-if="field.sensitive">
@@ -7064,11 +7063,11 @@ const ModelConfigPage = {
                      :placeholder="t('notConfigured')" />
 
               <span class="model-config-control-meta">
-                <span>{{ field.managed ? t('managedInDotenv') : t('runtimeOrUnset') }}</span>
-                <span v-if="field.pendingRestart && !field.sensitive">
+                <span>{{ field.managed ? t('managedInModelConfig') : t('runtimeOrUnset') }}</span>
+                <span v-if="!field.runtimeSynchronized && !field.sensitive">
                   {{ t('runtimeCurrent') }}：{{ field.effectiveConfigured ? field.effectiveValue : t('notConfigured') }}
                 </span>
-                <span v-else-if="field.sensitive && field.configured">{{ t('credentialConfigured') }}</span>
+                <span v-if="field.sensitive && field.configured">{{ t('credentialConfigured') }}</span>
               </span>
             </label>
           </div>

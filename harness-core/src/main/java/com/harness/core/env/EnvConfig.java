@@ -1,7 +1,9 @@
 package com.harness.core.env;
 
+import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -10,21 +12,25 @@ import io.github.cdimascio.dotenv.Dotenv;
 
 /**
  * Centralized environment configuration.
- * Loads all HARNESS_* variables at startup, provides typed accessors with defaults.
+ * Loads HARNESS_* values at startup and keeps Web-managed model overrides mutable.
+ * Precedence for model keys: Web-managed file > explicit overrides > process env > .env.
  */
 public final class EnvConfig {
 
     private static volatile EnvConfig instance;
+    private final Map<String, String> baseStore;
+    private final Map<String, String> explicitOverrides;
     private final Map<String, String> store;
+    private volatile Map<String, String> managedModelOverrides;
 
     private EnvConfig(Map<String, String> overrides) {
-        this.store = new ConcurrentHashMap<>();
+        Map<String, String> baseValues = new LinkedHashMap<>();
         // Load .env file as fallback (silently skip if missing)
         try {
             Dotenv dotenv = Dotenv.configure().ignoreIfMissing().load();
             for (var entry : dotenv.entries()) {
                 if (entry.getKey().startsWith("HARNESS_")) {
-                    store.putIfAbsent(entry.getKey(), entry.getValue());
+                    baseValues.putIfAbsent(entry.getKey(), entry.getValue());
                 }
             }
         } catch (Exception e) {
@@ -33,13 +39,27 @@ public final class EnvConfig {
         // System env takes precedence over .env
         System.getenv().forEach((k, v) -> {
             if (k.startsWith("HARNESS_")) {
-                store.put(k, v);
+                baseValues.put(k, v);
             }
         });
-        // Overrides take highest precedence
-        if (overrides != null) {
-            store.putAll(overrides);
-        }
+        this.baseStore = Map.copyOf(baseValues);
+        this.explicitOverrides = overrides == null ? Map.of() : Map.copyOf(overrides);
+        this.managedModelOverrides = loadManagedModelOverrides(
+                configuredModelFile(baseValues, this.explicitOverrides));
+        this.store = new ConcurrentHashMap<>();
+        rebuildStore();
+    }
+
+    private EnvConfig(
+            Map<String, String> baseStore,
+            Map<String, String> explicitOverrides,
+            Map<String, String> managedModelOverrides
+    ) {
+        this.baseStore = Map.copyOf(baseStore);
+        this.explicitOverrides = Map.copyOf(explicitOverrides);
+        this.managedModelOverrides = normalizeModelOverrides(managedModelOverrides);
+        this.store = new ConcurrentHashMap<>();
+        rebuildStore();
     }
 
     public static void init(Map<String, String> overrides) {
@@ -51,6 +71,21 @@ public final class EnvConfig {
             init(Collections.emptyMap());
         }
         return instance;
+    }
+
+    /** Build an isolated candidate configuration without mutating the active runtime. */
+    public EnvConfig previewModelOverrides(Map<String, String> modelOverrides) {
+        return new EnvConfig(baseStore, explicitOverrides, modelOverrides);
+    }
+
+    /** Publish the Web-managed model overrides after new providers are ready. */
+    public synchronized void replaceManagedModelOverrides(Map<String, String> modelOverrides) {
+        this.managedModelOverrides = normalizeModelOverrides(modelOverrides);
+        rebuildStore();
+    }
+
+    public Map<String, String> managedModelOverrides() {
+        return managedModelOverrides;
     }
 
     // ==================== Typed Accessors ====================
@@ -117,6 +152,72 @@ public final class EnvConfig {
 
     public Map<String, String> all() {
         return Collections.unmodifiableMap(store);
+    }
+
+    private synchronized void rebuildStore() {
+        store.clear();
+        store.putAll(baseStore);
+        store.putAll(explicitOverrides);
+        // Web-managed model values are explicit runtime choices and win for model keys.
+        store.putAll(managedModelOverrides);
+    }
+
+    private static Path configuredModelFile(
+            Map<String, String> baseValues,
+            Map<String, String> overrides
+    ) {
+        String configured = overrides.getOrDefault(
+                EnvKey.CONFIG_MODEL_FILE,
+                baseValues.getOrDefault(
+                        EnvKey.CONFIG_MODEL_FILE,
+                        "./data/model-config.env"));
+        return Path.of(configured).toAbsolutePath().normalize();
+    }
+
+    private static Map<String, String> loadManagedModelOverrides(Path path) {
+        try {
+            Path parent = path.getParent();
+            Path fileName = path.getFileName();
+            if (parent == null || fileName == null) {
+                return Map.of();
+            }
+            Dotenv dotenv = Dotenv.configure()
+                    .directory(parent.toString())
+                    .filename(fileName.toString())
+                    .ignoreIfMissing()
+                    .load();
+            Map<String, String> values = new LinkedHashMap<>();
+            for (var entry : dotenv.entries()) {
+                if (isManagedModelKey(entry.getKey())) {
+                    values.put(entry.getKey(), entry.getValue());
+                }
+            }
+            return Map.copyOf(values);
+        } catch (RuntimeException exception) {
+            throw new IllegalStateException(
+                    "Unable to load Web-managed model configuration: " + path,
+                    exception);
+        }
+    }
+
+    private static Map<String, String> normalizeModelOverrides(Map<String, String> overrides) {
+        if (overrides == null || overrides.isEmpty()) {
+            return Map.of();
+        }
+        Map<String, String> normalized = new LinkedHashMap<>();
+        overrides.forEach((key, value) -> {
+            if (isManagedModelKey(key) && value != null && !value.isBlank()) {
+                normalized.put(key, value);
+            }
+        });
+        return Map.copyOf(normalized);
+    }
+
+    private static boolean isManagedModelKey(String key) {
+        return key != null && (key.startsWith("HARNESS_MODEL_")
+                || key.startsWith("HARNESS_RERANK_")
+                || key.startsWith("HARNESS_TOOL_IMAGE_GEN_")
+                || key.startsWith("HARNESS_TOOL_VIDEO_GEN_"));
     }
 
     // ==================== 连接池共享配置 ====================

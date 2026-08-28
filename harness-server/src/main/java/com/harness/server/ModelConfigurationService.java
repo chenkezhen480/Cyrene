@@ -2,6 +2,7 @@ package com.harness.server;
 
 import com.harness.core.env.EnvConfig;
 import com.harness.core.env.EnvKey;
+import com.harness.core.runtime.ModelConfigurationRuntime;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
@@ -13,7 +14,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 
 /** Reads, validates, and persists model configuration managed by the Web console. */
 public final class ModelConfigurationService {
@@ -33,18 +33,29 @@ public final class ModelConfigurationService {
 
     private final EnvConfig config;
     private final ModelConfigurationFileStore fileStore;
-    private final Set<String> pendingClearKeys = ConcurrentHashMap.newKeySet();
+    private final ModelConfigurationRuntime runtime;
 
     public ModelConfigurationService(
             EnvConfig config,
             ModelConfigurationFileStore fileStore
     ) {
+        this(config, fileStore, candidate -> () ->
+                config.replaceManagedModelOverrides(
+                        candidate.managedModelOverrides()));
+    }
+
+    public ModelConfigurationService(
+            EnvConfig config,
+            ModelConfigurationFileStore fileStore,
+            ModelConfigurationRuntime runtime
+    ) {
         this.config = Objects.requireNonNull(config, "config");
         this.fileStore = Objects.requireNonNull(fileStore, "fileStore");
+        this.runtime = Objects.requireNonNull(runtime, "runtime");
     }
 
     public ModelConfigurationResponse current() throws IOException {
-        Map<String, String> managedValues = fileStore.read();
+        Map<String, String> managedValues = readManagedValues();
         Map<String, List<ModelConfigurationField>> fieldsBySection = modelKeys().stream()
                 .map(key -> toField(key, managedValues))
                 .collect(java.util.stream.Collectors.groupingBy(
@@ -58,16 +69,13 @@ public final class ModelConfigurationService {
                         fieldsBySection.getOrDefault(sectionId, List.of())))
                 .filter(section -> !section.fields().isEmpty())
                 .toList();
-        boolean restartRequired = sections.stream()
-                .flatMap(section -> section.fields().stream())
-                .anyMatch(ModelConfigurationField::pendingRestart);
         return new ModelConfigurationResponse(
                 fileStore.path().toString(),
-                restartRequired,
+                managedValues.equals(config.managedModelOverrides()),
                 sections);
     }
 
-    public ModelConfigurationResponse update(ModelConfigurationUpdateRequest request)
+    public synchronized ModelConfigurationResponse update(ModelConfigurationUpdateRequest request)
             throws IOException {
         Objects.requireNonNull(request, "request");
         Map<String, String> values = request.values() == null
@@ -105,24 +113,50 @@ public final class ModelConfigurationService {
             normalizedValues.put(key, value.trim());
         });
 
-        fileStore.update(normalizedValues, clearKeys);
-        pendingClearKeys.removeAll(normalizedValues.keySet());
-        pendingClearKeys.addAll(clearKeys);
+        Map<String, String> previousValues = readManagedValues();
+        Map<String, String> candidateValues = new LinkedHashMap<>(previousValues);
+        clearKeys.forEach(candidateValues::remove);
+        candidateValues.putAll(normalizedValues);
+
+        EnvConfig candidateConfiguration = config.previewModelOverrides(candidateValues);
+        ModelConfigurationRuntime.PreparedUpdate preparedUpdate =
+                runtime.prepare(candidateConfiguration);
+        fileStore.replace(candidateValues);
+        try {
+            preparedUpdate.activate();
+        } catch (RuntimeException activationFailure) {
+            try {
+                fileStore.replace(previousValues);
+            } catch (IOException rollbackFailure) {
+                activationFailure.addSuppressed(rollbackFailure);
+            }
+            throw activationFailure;
+        }
         return current();
+    }
+
+    private Map<String, String> readManagedValues() throws IOException {
+        Set<String> allowedKeys = Set.copyOf(modelKeys());
+        Map<String, String> managedValues = new LinkedHashMap<>();
+        fileStore.read().forEach((key, value) -> {
+            if (allowedKeys.contains(key)) {
+                managedValues.put(key, value);
+            }
+        });
+        return Map.copyOf(managedValues);
     }
 
     private ModelConfigurationField toField(String key, Map<String, String> managedValues) {
         boolean managed = managedValues.containsKey(key);
-        boolean pendingClear = pendingClearKeys.contains(key);
         String managedValue = managedValues.get(key);
         String effectiveValue = config.all().get(key);
-        String displayedValue = pendingClear ? null : managed ? managedValue : effectiveValue;
+        String displayedValue = managed ? managedValue : effectiveValue;
         boolean configured = displayedValue != null && !displayedValue.isBlank();
         boolean effectiveConfigured = effectiveValue != null && !effectiveValue.isBlank();
         boolean sensitive = key.endsWith("_API_KEY");
-        boolean pendingRestart = pendingClear
-                ? effectiveConfigured
-                : managed && !Objects.equals(managedValue, effectiveValue);
+        boolean runtimeSynchronized = managed
+                ? Objects.equals(managedValue, effectiveValue)
+                : !config.managedModelOverrides().containsKey(key);
         return new ModelConfigurationField(
                 key,
                 sensitive ? null : displayedValue,
@@ -131,7 +165,7 @@ public final class ModelConfigurationService {
                 managed,
                 sensitive ? null : effectiveValue,
                 effectiveConfigured,
-                pendingRestart);
+                runtimeSynchronized);
     }
 
     static List<String> modelKeys() {
@@ -177,7 +211,7 @@ public final class ModelConfigurationService {
 
     public record ModelConfigurationResponse(
             String path,
-            boolean restartRequired,
+            boolean runtimeSynchronized,
             List<ModelConfigurationSection> sections
     ) {
         public ModelConfigurationResponse {
@@ -201,7 +235,7 @@ public final class ModelConfigurationService {
             boolean managed,
             String effectiveValue,
             boolean effectiveConfigured,
-            boolean pendingRestart
+            boolean runtimeSynchronized
     ) {
         public ModelConfigurationField {
             Objects.requireNonNull(key, "key");

@@ -56,7 +56,11 @@ public class OpenAiVoiceModelProvider implements VoiceModelProvider {
     private final ObjectMapper mapper;
 
     public OpenAiVoiceModelProvider() {
-        this(configurationFromEnvironment());
+        this(configurationFrom(EnvConfig.get()));
+    }
+
+    public OpenAiVoiceModelProvider(EnvConfig config) {
+        this(configurationFrom(config));
     }
 
     private OpenAiVoiceModelProvider(ProviderConfiguration configuration) {
@@ -427,8 +431,7 @@ public class OpenAiVoiceModelProvider implements VoiceModelProvider {
         return value;
     }
 
-    private static ProviderConfiguration configurationFromEnvironment() {
-        EnvConfig config = EnvConfig.get();
+    private static ProviderConfiguration configurationFrom(EnvConfig config) {
         int timeoutSeconds = config.getInt(EnvKey.MODEL_VOICE_TIMEOUT_SECONDS, 120);
         int maxAsrSizeMb = config.getInt(EnvKey.MODEL_VOICE_ASR_MAX_SIZE_MB, 20);
         if (timeoutSeconds <= 0 || maxAsrSizeMb <= 0) {

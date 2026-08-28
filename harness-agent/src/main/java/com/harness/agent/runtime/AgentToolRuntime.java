@@ -40,6 +40,8 @@ import org.slf4j.LoggerFactory;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 
@@ -53,6 +55,8 @@ public final class AgentToolRuntime {
 
     private final ToolRegistry toolRegistry;
     private final SkillRegistry skillRegistry;
+    private final ArtifactStore artifactStore;
+    private final ArtifactStorageService artifactStorageService;
 
     public AgentToolRuntime(
             ModelProviders providers,
@@ -66,6 +70,9 @@ public final class AgentToolRuntime {
     ) {
         this.toolRegistry = new ToolRegistry();
         this.skillRegistry = new SkillRegistry();
+        this.artifactStore = java.util.Objects.requireNonNull(artifactStore, "artifactStore");
+        this.artifactStorageService = java.util.Objects.requireNonNull(
+                artifactStorageService, "artifactStorageService");
         registerBuiltins(
                 providers,
                 graphSettings,
@@ -164,39 +171,129 @@ public final class AgentToolRuntime {
                         artifactStorageService.storeFromPath(source, name, mimeType, sessionId),
                 artifactStore::get));
 
+        PreparedModelTools modelTools = prepareModelTools(config);
+        modelTools.replacements().values().forEach(toolRegistry::register);
+
+        registerDiscoveryTools(resolveConfiguredProjectRoot());
+    }
+
+    /** Build model-backed tools without publishing them to request snapshots. */
+    public PreparedModelTools prepareModelTools(EnvConfig config) {
+        Map<String, com.harness.tool.Tool> replacements = new LinkedHashMap<>();
+        Set<String> removals = new java.util.HashSet<>();
+
+        prepareImageTool(config, replacements, removals);
+        prepareVideoTool(config, replacements, removals);
+        return new PreparedModelTools(replacements, removals);
+    }
+
+    /** Build only tools whose effective configuration changes. */
+    public PreparedModelTools prepareModelToolChanges(
+            EnvConfig current,
+            EnvConfig candidate
+    ) {
+        Map<String, com.harness.tool.Tool> replacements = new LinkedHashMap<>();
+        Set<String> removals = new java.util.HashSet<>();
+        if (!sameValues(current, candidate, List.of(
+                EnvKey.TOOL_IMAGE_GEN_PROVIDER,
+                EnvKey.TOOL_IMAGE_GEN_API_KEY,
+                EnvKey.TOOL_IMAGE_GEN_BASE_URL,
+                EnvKey.TOOL_IMAGE_GEN_MODEL,
+                EnvKey.MODEL_CHAT_TIMEOUT_SECONDS))) {
+            prepareImageTool(candidate, replacements, removals);
+        }
+        if (!sameValues(current, candidate, List.of(
+                EnvKey.TOOL_VIDEO_GEN_PROVIDER,
+                EnvKey.TOOL_VIDEO_GEN_API_KEY,
+                EnvKey.TOOL_VIDEO_GEN_BASE_URL,
+                EnvKey.TOOL_VIDEO_GEN_MODEL,
+                EnvKey.TOOL_VIDEO_GEN_SUBMIT_PATH,
+                EnvKey.TOOL_VIDEO_GEN_STATUS_PATH,
+                EnvKey.MODEL_CHAT_TIMEOUT_SECONDS))) {
+            prepareVideoTool(candidate, replacements, removals);
+        }
+        return new PreparedModelTools(replacements, removals);
+    }
+
+    private void prepareImageTool(
+            EnvConfig config,
+            Map<String, com.harness.tool.Tool> replacements,
+            Set<String> removals
+    ) {
         String imageApiKey = config.getString(EnvKey.TOOL_IMAGE_GEN_API_KEY, "");
         if (!imageApiKey.isBlank()) {
-            toolRegistry.register(new ImageGenerationTool(new ImageGenerationTool.ArtifactStorer() {
-                @Override
-                public Artifact store(byte[] data, String name, String mimeType, String sessionId) {
-                    return artifactStorageService.store(data, name, mimeType, sessionId);
-                }
+            ImageGenerationTool imageTool = new ImageGenerationTool(
+                    new ImageGenerationTool.ArtifactStorer() {
+                        @Override
+                        public Artifact store(
+                                byte[] data,
+                                String name,
+                                String mimeType,
+                                String sessionId
+                        ) {
+                            return artifactStorageService.store(
+                                    data, name, mimeType, sessionId);
+                        }
 
-                @Override
-                public byte[] loadBytes(String artifactId) {
-                    return artifactStore.get(artifactId)
-                            .map(artifact -> readArtifact(artifactId, artifact))
-                            .orElseThrow(() -> new IllegalArgumentException(
-                                    "Artifact not found: " + artifactId));
-                }
-            }));
+                        @Override
+                        public byte[] loadBytes(String artifactId) {
+                            return artifactStore.get(artifactId)
+                                    .map(artifact -> readArtifact(artifactId, artifact))
+                                    .orElseThrow(() -> new IllegalArgumentException(
+                                            "Artifact not found: " + artifactId));
+                        }
+                    },
+                    config);
+            replacements.put(imageTool.spec().name(), imageTool);
         } else {
-            log.info("Image generation tool disabled (no HARNESS_TOOL_IMAGE_GEN_API_KEY)");
+            removals.add("image_generation");
         }
+    }
 
+    private void prepareVideoTool(
+            EnvConfig config,
+            Map<String, com.harness.tool.Tool> replacements,
+            Set<String> removals
+    ) {
         String videoApiKey = config.getString(EnvKey.TOOL_VIDEO_GEN_API_KEY, "");
         String videoBaseUrl = config.getString(EnvKey.TOOL_VIDEO_GEN_BASE_URL, "");
         if (!videoApiKey.isBlank() && !videoBaseUrl.isBlank()) {
-            toolRegistry.register(new VideoGenerationTool(
+            VideoGenerationTool videoTool = new VideoGenerationTool(
                     artifactStorageService::store,
                     (sessionId, artifact) -> log.info(
                             "[ArtifactCallback] Video artifact ready: {} for session {}",
-                            artifact.name(), sessionId)));
+                            artifact.name(), sessionId),
+                    config);
+            replacements.put(videoTool.spec().name(), videoTool);
         } else {
-            log.info("Video generation tool disabled (no HARNESS_TOOL_VIDEO_GEN_API_KEY/BASE_URL)");
+            removals.add("video_generation");
         }
+    }
 
-        registerDiscoveryTools(resolveConfiguredProjectRoot());
+    private static boolean sameValues(
+            EnvConfig first,
+            EnvConfig second,
+            List<String> keys
+    ) {
+        return keys.stream().allMatch(key -> java.util.Objects.equals(
+                first.getString(key), second.getString(key)));
+    }
+
+    public void applyModelTools(PreparedModelTools modelTools) {
+        if (modelTools.replacements().isEmpty() && modelTools.removals().isEmpty()) {
+            return;
+        }
+        toolRegistry.applyChanges(modelTools.replacements(), modelTools.removals());
+    }
+
+    public record PreparedModelTools(
+            Map<String, com.harness.tool.Tool> replacements,
+            Set<String> removals
+    ) {
+        public PreparedModelTools {
+            replacements = Map.copyOf(replacements);
+            removals = Set.copyOf(removals);
+        }
     }
 
     private static byte[] readArtifact(String artifactId, Artifact artifact) {

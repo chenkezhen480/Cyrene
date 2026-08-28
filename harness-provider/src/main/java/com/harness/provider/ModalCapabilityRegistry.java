@@ -25,8 +25,6 @@ public final class ModalCapabilityRegistry {
             "llava",            Set.of(ModalCapability.TEXT, ModalCapability.IMAGE_INPUT)
     );
 
-    private static volatile Set<ModalCapability> userOverride;
-
     private ModalCapabilityRegistry() {}
 
     /**
@@ -56,8 +54,6 @@ public final class ModalCapabilityRegistry {
     }
 
     private static Set<ModalCapability> getUserOverride() {
-        if (userOverride != null) return userOverride;
-
         String envVal = EnvConfig.get().getString(EnvKey.MODEL_CHAT_CAPABILITIES, "");
         if (envVal.isBlank()) return null;
 
@@ -70,7 +66,6 @@ public final class ModalCapabilityRegistry {
                 log.warn("Unknown modal capability in env override: {}", trimmed);
             }
         }
-        userOverride = caps.isEmpty() ? null : caps;
-        return userOverride;
+        return caps.isEmpty() ? null : Set.copyOf(caps);
     }
 }

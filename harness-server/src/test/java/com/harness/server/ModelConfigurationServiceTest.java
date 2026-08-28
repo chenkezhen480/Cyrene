@@ -98,11 +98,9 @@ class ModelConfigurationServiceTest {
     }
 
     @Test
-    void persistsUpdatesAndClearsWithoutRewritingUnrelatedDotenvEntries() throws Exception {
-        Path envFile = temporaryDirectory.resolve(".env");
+    void persistsAndActivatesUpdatesWhileClearsRestoreBaseValues() throws Exception {
+        Path envFile = temporaryDirectory.resolve("model-config.env");
         Files.writeString(envFile, String.join(System.lineSeparator(),
-                "# keep this comment",
-                "UNRELATED_VALUE=untouched",
                 EnvKey.MODEL_CHAT_MODEL + "=old-model",
                 EnvKey.MODEL_CHAT_PROVIDER + "=openai",
                 ""));
@@ -122,22 +120,19 @@ class ModelConfigurationServiceTest {
 
         String saved = Files.readString(envFile);
         assertThat(saved)
-                .contains("# keep this comment")
-                .contains("UNRELATED_VALUE=untouched")
                 .contains(EnvKey.MODEL_CHAT_MODEL + "=\"new model\"")
                 .contains(EnvKey.MODEL_CHAT_API_KEY + "=secret-key")
                 .doesNotContain(EnvKey.MODEL_CHAT_PROVIDER + "=");
-        assertThat(response.restartRequired()).isTrue();
+        assertThat(response.runtimeSynchronized()).isTrue();
         ModelConfigurationService.ModelConfigurationField provider = response.sections().stream()
                 .flatMap(section -> section.fields().stream())
                 .filter(field -> EnvKey.MODEL_CHAT_PROVIDER.equals(field.key()))
                 .findFirst()
                 .orElseThrow();
-        assertThat(provider.value()).isNull();
-        assertThat(provider.configured()).isFalse();
+        assertThat(provider.value()).isEqualTo("openai");
+        assertThat(provider.configured()).isTrue();
         assertThat(provider.managed()).isFalse();
         assertThat(provider.effectiveValue()).isEqualTo("openai");
-        assertThat(provider.pendingRestart()).isTrue();
         ModelConfigurationService.ModelConfigurationField apiKey = response.sections().stream()
                 .flatMap(section -> section.fields().stream())
                 .filter(field -> EnvKey.MODEL_CHAT_API_KEY.equals(field.key()))
@@ -146,7 +141,34 @@ class ModelConfigurationServiceTest {
         assertThat(apiKey.value()).isNull();
         assertThat(apiKey.configured()).isTrue();
         assertThat(apiKey.managed()).isTrue();
-        assertThat(apiKey.pendingRestart()).isTrue();
+        assertThat(EnvConfig.get().getString(EnvKey.MODEL_CHAT_MODEL))
+                .isEqualTo("new model");
+    }
+
+    @Test
+    void rollsBackPersistentFileWhenRuntimeActivationFails() throws Exception {
+        Path configFile = temporaryDirectory.resolve("model-config.env");
+        Files.writeString(configFile, EnvKey.MODEL_CHAT_MODEL + "=old-model\n");
+        EnvConfig.init(Map.of(EnvKey.MODEL_CHAT_MODEL, "old-model"));
+        ModelConfigurationService service = new ModelConfigurationService(
+                EnvConfig.get(),
+                new ModelConfigurationFileStore(configFile),
+                candidate -> () -> {
+                    throw new IllegalStateException("activation failed");
+                });
+
+        assertThatThrownBy(() -> service.update(
+                new ModelConfigurationService.ModelConfigurationUpdateRequest(
+                        Map.of(EnvKey.MODEL_CHAT_MODEL, "new-model"),
+                        List.of())))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("activation failed");
+
+        assertThat(Files.readString(configFile))
+                .contains(EnvKey.MODEL_CHAT_MODEL + "=old-model")
+                .doesNotContain("new-model");
+        assertThat(EnvConfig.get().getString(EnvKey.MODEL_CHAT_MODEL))
+                .isEqualTo("old-model");
     }
 
     @Test

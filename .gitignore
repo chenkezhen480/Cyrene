@@ -22,6 +22,7 @@ artifacts/
 
 # Env
 .env
+data/model-config.env
 *.log
 project-apis.json
 

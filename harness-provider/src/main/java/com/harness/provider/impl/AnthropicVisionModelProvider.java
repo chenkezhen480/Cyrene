@@ -20,7 +20,10 @@ public class AnthropicVisionModelProvider implements VisionModelProvider {
     private final ChatModel chatModel;
 
     public AnthropicVisionModelProvider() {
-        EnvConfig cfg = EnvConfig.get();
+        this(EnvConfig.get());
+    }
+
+    public AnthropicVisionModelProvider(EnvConfig cfg) {
         boolean dedicatedVision = !cfg.getString(EnvKey.MODEL_VISION_PROVIDER, "").isBlank();
         this.apiKey = cfg.requireString(dedicatedVision
                 ? EnvKey.MODEL_VISION_API_KEY

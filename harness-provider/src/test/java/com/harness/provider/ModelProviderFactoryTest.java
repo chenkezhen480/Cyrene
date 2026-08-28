@@ -1,7 +1,11 @@
 package com.harness.provider;
 
+import com.harness.core.env.EnvConfig;
+import com.harness.core.env.EnvKey;
 import com.harness.provider.impl.OpenAiChatApiFormat;
 import org.junit.jupiter.api.Test;
+
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -38,5 +42,19 @@ class ModelProviderFactoryTest {
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("HARNESS_MODEL_CHAT_API_FORMAT")
                 .hasMessageContaining("chat_completions, responses");
+    }
+
+    @Test
+    void optionalProvidersRequireKnownProviderOrExplicitNone() {
+        EnvConfig.init(Map.of(EnvKey.MODEL_VOICE_PROVIDER, "unknown-provider"));
+
+        assertThatThrownBy(() -> ModelProviderFactory.createVoice(EnvConfig.get()))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Unsupported voice model provider")
+                .hasMessageContaining("unknown-provider");
+
+        EnvConfig.init(Map.of(EnvKey.MODEL_VOICE_PROVIDER, "none"));
+        assertThat(ModelProviderFactory.createVoice(EnvConfig.get()).isTranscribeAvailable())
+                .isFalse();
     }
 }

@@ -15,7 +15,10 @@ public class OllamaEmbeddingModelProvider implements EmbeddingModelProvider {
     private final int dim;
 
     public OllamaEmbeddingModelProvider() {
-        EnvConfig cfg = EnvConfig.get();
+        this(EnvConfig.get());
+    }
+
+    public OllamaEmbeddingModelProvider(EnvConfig cfg) {
         String baseUrl = cfg.getString(EnvKey.MODEL_EMBEDDING_BASE_URL, "http://localhost:11434");
         String modelName = cfg.getString(EnvKey.MODEL_EMBEDDING_MODEL, "nomic-embed-text");
         this.dim = cfg.getInt(EnvKey.MODEL_EMBEDDING_DIM, 768);

@@ -19,7 +19,10 @@ public class AnthropicChatModelProvider implements ChatModelProvider {
     private final int timeoutSeconds;
 
     public AnthropicChatModelProvider() {
-        EnvConfig cfg = EnvConfig.get();
+        this(EnvConfig.get());
+    }
+
+    public AnthropicChatModelProvider(EnvConfig cfg) {
         this.apiKey = cfg.requireString(EnvKey.MODEL_CHAT_API_KEY);
         this.baseUrl = cfg.getString(EnvKey.MODEL_CHAT_BASE_URL, "https://api.anthropic.com");
         this.model = cfg.getString(EnvKey.MODEL_CHAT_MODEL, "claude-sonnet-4-6");

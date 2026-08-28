@@ -37,13 +37,17 @@ public class OpenAiChatModelProvider implements ChatModelProvider {
     private final AtomicBoolean responsesThinkingWarningLogged = new AtomicBoolean();
 
     public OpenAiChatModelProvider() {
-        this(OpenAiChatApiFormat.parse(EnvConfig.get().getString(
+        this(EnvConfig.get(), OpenAiChatApiFormat.parse(EnvConfig.get().getString(
                 EnvKey.MODEL_CHAT_API_FORMAT,
                 OpenAiChatApiFormat.CHAT_COMPLETIONS.configValue())));
     }
 
     public OpenAiChatModelProvider(OpenAiChatApiFormat apiFormat) {
-        EnvConfig cfg = EnvConfig.get();
+        this(EnvConfig.get(), apiFormat);
+    }
+
+    public OpenAiChatModelProvider(EnvConfig cfg, OpenAiChatApiFormat apiFormat) {
+        Objects.requireNonNull(cfg, "cfg");
         this.apiFormat = Objects.requireNonNull(apiFormat, "apiFormat");
         this.apiKey = cfg.requireString(EnvKey.MODEL_CHAT_API_KEY);
         this.baseUrl = cfg.getString(EnvKey.MODEL_CHAT_BASE_URL, "https://api.openai.com/v1");

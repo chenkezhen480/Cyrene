@@ -15,7 +15,7 @@ import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-/** Persists model settings in the project dotenv file without rewriting unrelated entries. */
+/** Persists the dedicated Web-managed model configuration using atomic replacement. */
 public final class ModelConfigurationFileStore {
 
     private static final Pattern ASSIGNMENT = Pattern.compile(
@@ -77,6 +77,19 @@ public final class ModelConfigurationFileStore {
                     updatedLines.add(key + "=" + encodeValue(value)));
         }
 
+        writeAtomically(updatedLines);
+    }
+
+    /** Replace the complete Web-managed model configuration atomically. */
+    public synchronized void replace(Map<String, String> values) throws IOException {
+        List<String> lines = values.entrySet().stream()
+                .sorted(Map.Entry.comparingByKey())
+                .map(entry -> entry.getKey() + "=" + encodeValue(entry.getValue()))
+                .toList();
+        writeAtomically(lines);
+    }
+
+    private void writeAtomically(List<String> updatedLines) throws IOException {
         Path parent = envFile.getParent();
         if (parent == null) {
             throw new IOException("Model configuration path has no parent: " + envFile);

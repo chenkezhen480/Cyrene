@@ -16,6 +16,7 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -51,6 +52,29 @@ public class ToolRegistry implements ToolCatalog {
     public synchronized void replace(Tool tool) {
         String name = requireToolName(tool);
         replaceStateEntry(state.get(), name, tool);
+    }
+
+    /** Atomically publish a set of tool replacements and removals for later runs. */
+    public synchronized void applyChanges(
+            Map<String, Tool> replacements,
+            Set<String> removals
+    ) {
+        Map<String, Tool> safeReplacements = replacements == null
+                ? Map.of()
+                : Map.copyOf(replacements);
+        Set<String> safeRemovals = removals == null ? Set.of() : Set.copyOf(removals);
+        safeReplacements.forEach((name, tool) -> {
+            String actualName = requireToolName(tool);
+            if (!name.equals(actualName)) {
+                throw new IllegalArgumentException(
+                        "Tool replacement key does not match specification: " + name);
+            }
+        });
+        Map<String, Tool> updated = new HashMap<>(state.get().tools());
+        safeRemovals.forEach(updated::remove);
+        updated.putAll(safeReplacements);
+        RegistryState current = state.get();
+        state.set(new RegistryState(current.version() + 1, Map.copyOf(updated)));
     }
 
     @Override

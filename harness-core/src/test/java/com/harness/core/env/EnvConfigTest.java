@@ -2,13 +2,19 @@ package com.harness.core.env;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class EnvConfigTest {
+
+    @TempDir
+    Path temporaryDirectory;
 
     @BeforeEach
     void setUp() {
@@ -125,5 +131,26 @@ class EnvConfigTest {
     void init_withNull_createsEmptyConfig() {
         EnvConfig.init(null);
         assertThat(EnvConfig.get().getString("any-key", "default")).isEqualTo("default");
+    }
+
+    @Test
+    void managedModelConfigurationOverridesBaseAndCanBePreviewed() throws Exception {
+        Path modelConfig = temporaryDirectory.resolve("model-config.env");
+        Files.writeString(
+                modelConfig,
+                EnvKey.MODEL_CHAT_MODEL + "=managed-model\n");
+        EnvConfig.init(Map.of(
+                EnvKey.CONFIG_MODEL_FILE, modelConfig.toString(),
+                EnvKey.MODEL_CHAT_MODEL, "base-model"));
+
+        assertThat(EnvConfig.get().getString(EnvKey.MODEL_CHAT_MODEL))
+                .isEqualTo("managed-model");
+
+        EnvConfig candidate = EnvConfig.get().previewModelOverrides(
+                Map.of(EnvKey.MODEL_CHAT_MODEL, "candidate-model"));
+        assertThat(candidate.getString(EnvKey.MODEL_CHAT_MODEL))
+                .isEqualTo("candidate-model");
+        assertThat(EnvConfig.get().getString(EnvKey.MODEL_CHAT_MODEL))
+                .isEqualTo("managed-model");
     }
 }

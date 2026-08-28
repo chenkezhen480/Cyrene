@@ -25,7 +25,10 @@ public class OpenAiClassifierModelProvider implements ClassifierModelProvider {
     private final int maxTokens;
 
     public OpenAiClassifierModelProvider() {
-        EnvConfig cfg = EnvConfig.get();
+        this(EnvConfig.get());
+    }
+
+    public OpenAiClassifierModelProvider(EnvConfig cfg) {
         this.apiKey = cfg.getString(EnvKey.MODEL_CLASSIFIER_API_KEY, "");
         this.baseUrl = cfg.getString(EnvKey.MODEL_CLASSIFIER_BASE_URL, "https://api.openai.com/v1");
         this.model = cfg.getString(EnvKey.MODEL_CLASSIFIER_MODEL, "gpt-4o-mini");

@@ -17,13 +17,22 @@ public class SemaphoreChatModelProvider implements ChatModelProvider {
     private final ChatModelProvider delegate;
     private final ChatModel chatModel;
     private final StreamingChatModel streamingModel;
+    private final int contextWindow;
 
     public SemaphoreChatModelProvider(ChatModelProvider delegate,
                                        ChatModel chatModel,
                                        StreamingChatModel streamingModel) {
+        this(delegate, chatModel, streamingModel, delegate.contextWindow());
+    }
+
+    public SemaphoreChatModelProvider(ChatModelProvider delegate,
+                                       ChatModel chatModel,
+                                       StreamingChatModel streamingModel,
+                                       int contextWindow) {
         this.delegate = delegate;
         this.chatModel = chatModel;
         this.streamingModel = streamingModel;
+        this.contextWindow = contextWindow;
     }
 
     @Override
@@ -48,7 +57,7 @@ public class SemaphoreChatModelProvider implements ChatModelProvider {
 
     @Override
     public int contextWindow() {
-        return delegate.contextWindow();
+        return contextWindow;
     }
 
     @Override

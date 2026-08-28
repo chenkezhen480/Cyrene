@@ -4,7 +4,6 @@ import com.harness.core.env.EnvConfig;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-import java.lang.reflect.Field;
 import java.util.Map;
 import java.util.Set;
 
@@ -13,13 +12,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class ModalCapabilityRegistryTest {
 
     @BeforeEach
-    void setUp() throws Exception {
-        // Reset the static userOverride field between tests
-        Field override = ModalCapabilityRegistry.class.getDeclaredField("userOverride");
-        override.setAccessible(true);
-        override.set(null, null);
-
-        // Init EnvConfig with empty capabilities
+    void setUp() {
         EnvConfig.init(Map.of("HARNESS_MODEL_CHAT_CAPABILITIES", ""));
     }
 
@@ -77,10 +70,8 @@ class ModalCapabilityRegistryTest {
     }
 
     @Test
-    void getCapabilities_userOverride_takesPriority() throws Exception {
-        Field override = ModalCapabilityRegistry.class.getDeclaredField("userOverride");
-        override.setAccessible(true);
-        override.set(null, Set.of(ModalCapability.TEXT, ModalCapability.IMAGE_INPUT));
+    void getCapabilities_userOverride_takesPriority() {
+        EnvConfig.init(Map.of("HARNESS_MODEL_CHAT_CAPABILITIES", "text,image_input"));
 
         // Even for gpt-3.5-turbo which normally has TEXT only, override wins
         Set<ModalCapability> caps = ModalCapabilityRegistry.getCapabilities("gpt-3.5-turbo");
@@ -88,12 +79,7 @@ class ModalCapabilityRegistryTest {
     }
 
     @Test
-    void getCapabilities_envOverride_parsed() throws Exception {
-        // Reset override so it reads from EnvConfig
-        Field override = ModalCapabilityRegistry.class.getDeclaredField("userOverride");
-        override.setAccessible(true);
-        override.set(null, null);
-
+    void getCapabilities_envOverride_parsed() {
         EnvConfig.init(Map.of("HARNESS_MODEL_CHAT_CAPABILITIES", "text,image_input,pdf_input"));
 
         Set<ModalCapability> caps = ModalCapabilityRegistry.getCapabilities("unknown-model");

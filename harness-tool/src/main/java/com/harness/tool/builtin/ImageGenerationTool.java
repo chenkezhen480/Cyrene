@@ -70,8 +70,11 @@ public class ImageGenerationTool implements TypedOutputTool, CancellableTool {
     private final String model;
 
     public ImageGenerationTool(ArtifactStorer storer) {
+        this(storer, EnvConfig.get());
+    }
+
+    public ImageGenerationTool(ArtifactStorer storer, EnvConfig cfg) {
         this.storer = storer;
-        EnvConfig cfg = EnvConfig.get();
         int timeoutSeconds = cfg.getInt(EnvKey.MODEL_CHAT_TIMEOUT_SECONDS, 300);
         this.http = new OkHttpClient.Builder()
                 .connectTimeout(30, TimeUnit.SECONDS)

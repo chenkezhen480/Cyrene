@@ -58,7 +58,7 @@ public final class LlmGraphDataConverter implements GraphDataConverter {
             8. Preserve the Schema relation direction. If a fact cannot be represented safely, omit it.
             """;
 
-    private final ChatModel chatModel;
+    private final ChatModelProvider chatModelProvider;
     private final KnowledgeGraphStore graphStore;
     private final GraphSchemaRegistry schemaRegistry;
     private final GraphSchemaValidator schemaValidator;
@@ -73,8 +73,9 @@ public final class LlmGraphDataConverter implements GraphDataConverter {
             GraphSettings graphSettings,
             ObjectMapper objectMapper
     ) {
-        this.chatModel = Objects.requireNonNull(chatModelProvider, "chatModelProvider").chatModel();
-        if (this.chatModel == null) {
+        this.chatModelProvider = Objects.requireNonNull(
+                chatModelProvider, "chatModelProvider");
+        if (this.chatModelProvider.chatModel() == null) {
             throw new IllegalArgumentException("chatModel is required");
         }
         this.graphStore = Objects.requireNonNull(graphStore, "graphStore");
@@ -170,6 +171,10 @@ public final class LlmGraphDataConverter implements GraphDataConverter {
 
     private String callModel(String userPrompt) {
         try {
+            ChatModel chatModel = chatModelProvider.chatModel();
+            if (chatModel == null) {
+                throw new IllegalStateException("chatModel is unavailable");
+            }
             var response = chatModel.chat(ChatRequest.builder()
                     .messages(SystemMessage.from(SYSTEM_PROMPT), UserMessage.from(userPrompt))
                     .build());

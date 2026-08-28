@@ -20,7 +20,10 @@ public class OllamaChatModelProvider implements ChatModelProvider {
     private final double temperature;
 
     public OllamaChatModelProvider() {
-        EnvConfig cfg = EnvConfig.get();
+        this(EnvConfig.get());
+    }
+
+    public OllamaChatModelProvider(EnvConfig cfg) {
         this.baseUrl = cfg.getString(EnvKey.MODEL_CHAT_BASE_URL, "http://localhost:11434");
         this.model = cfg.getString(EnvKey.MODEL_CHAT_MODEL, "llama3");
         this.temperature = cfg.getDouble(EnvKey.MODEL_CHAT_TEMPERATURE, 0.7);

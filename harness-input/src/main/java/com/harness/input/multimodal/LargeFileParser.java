@@ -36,21 +36,17 @@ public class LargeFileParser {
     private static final String SUMMARIZE_PROMPT = "请对以下文本进行摘要，保留关键信息，去除冗余内容：";
     private static final String MERGE_PROMPT = "请将以下多个摘要合并为一份连贯的最终摘要，保留所有关键信息：";
 
-    private final ChatModel noThinkingModel;
-    private final int blockTokenBudget;
+    private final ChatModelProvider chatProvider;
     private final int summaryConcurrency;
 
     public LargeFileParser(ChatModelProvider chatProvider) {
-        this.noThinkingModel = chatProvider.chatModel();
+        this.chatProvider = java.util.Objects.requireNonNull(chatProvider, "chatProvider");
 
         EnvConfig cfg = EnvConfig.get();
-        int contextWindow = chatProvider.contextWindow();
-        double ratio = cfg.getDouble(EnvKey.LARGE_FILE_CONTEXT_RATIO, 0.4);
-        this.blockTokenBudget = (int) (contextWindow * ratio);
         this.summaryConcurrency = cfg.getInt(EnvKey.LARGE_FILE_SUMMARY_CONCURRENCY, 3);
 
-        log.info("[LargeFileParser] model={}, contextWindow={}, ratio={}, blockTokenBudget={}, concurrency={}",
-                chatProvider.modelName(), contextWindow, ratio, blockTokenBudget, summaryConcurrency);
+        log.info("[LargeFileParser] model={}, contextWindow={}, concurrency={}",
+                chatProvider.modelName(), chatProvider.contextWindow(), summaryConcurrency);
     }
 
     public ParsedContent summarizeMarkdown(
@@ -64,23 +60,26 @@ public class LargeFileParser {
         log.debug("Large Markdown summarization: file={}, size={}KB",
                 fileName, fileSizeBytes / 1024);
 
+        ChatModel noThinkingModel = chatProvider.chatModel();
+        int blockTokenBudget = blockTokenBudget();
+
         // Step 1: Semantic splitting of the already converted Markdown
         List<String> chunks = TextChunker.split(markdown);
 
 
         // Step 3: Greedy merge into blocks
-        List<String> blocks = mergeIntoBlocks(chunks);
+        List<String> blocks = mergeIntoBlocks(chunks, blockTokenBudget);
 
 
         // Step 4: Summarize blocks (parallel)
-        List<String> summaries = summarizeBlocks(blocks);
+        List<String> summaries = summarizeBlocks(blocks, noThinkingModel);
 
         // Step 5: Final merge
         String finalText;
         if (summaries.size() == 1) {
             finalText = summaries.get(0);
         } else {
-            finalText = mergeSummaries(summaries);
+            finalText = mergeSummaries(summaries, noThinkingModel);
         }
 
         Map<String, Object> metadata = new HashMap<>();
@@ -97,7 +96,7 @@ public class LargeFileParser {
     /**
      * Greedily merge consecutive chunks into blocks, each up to blockTokenBudget tokens.
      */
-    private List<String> mergeIntoBlocks(List<String> chunks) {
+    private List<String> mergeIntoBlocks(List<String> chunks, int blockTokenBudget) {
         List<String> blocks = new ArrayList<>();
         StringBuilder current = new StringBuilder();
         int currentTokens = 0;
@@ -121,9 +120,9 @@ public class LargeFileParser {
     /**
      * Summarize blocks with bounded parallelism.
      */
-    private List<String> summarizeBlocks(List<String> blocks) {
+    private List<String> summarizeBlocks(List<String> blocks, ChatModel model) {
         if (blocks.size() == 1) {
-            return List.of(summarizeChunk(blocks.get(0), 1, 1));
+            return List.of(summarizeChunk(blocks.get(0), 1, 1, model));
         }
 
         ExecutorService executor = Executors.newFixedThreadPool(summaryConcurrency);
@@ -132,7 +131,8 @@ public class LargeFileParser {
             for (int i = 0; i < blocks.size(); i++) {
                 final int idx = i;
                 futures.add(CompletableFuture.supplyAsync(
-                        () -> summarizeChunk(blocks.get(idx), idx + 1, blocks.size()),
+                        () -> summarizeChunk(
+                                blocks.get(idx), idx + 1, blocks.size(), model),
                         executor));
             }
             try {
@@ -155,10 +155,10 @@ public class LargeFileParser {
         }
     }
 
-    private String summarizeChunk(String chunk, int index, int total) {
+    private String summarizeChunk(String chunk, int index, int total, ChatModel model) {
         try {
             String prompt = SUMMARIZE_PROMPT + "\n\n[" + index + "/" + total + "]\n" + chunk;
-            return noThinkingModel.chat(ChatRequest.builder()
+            return model.chat(ChatRequest.builder()
                     .messages(UserMessage.from(prompt))
                     .build()).aiMessage().text();
         } catch (Exception e) {
@@ -168,19 +168,24 @@ public class LargeFileParser {
         }
     }
 
-    private String mergeSummaries(List<String> summaries) {
+    private String mergeSummaries(List<String> summaries, ChatModel model) {
         if (summaries.size() == 1) return summaries.get(0);
         try {
             StringBuilder prompt = new StringBuilder(MERGE_PROMPT);
             for (int i = 0; i < summaries.size(); i++) {
                 prompt.append("\n\n--- 摘要 ").append(i + 1).append(" ---\n").append(summaries.get(i));
             }
-            return noThinkingModel.chat(ChatRequest.builder()
+            return model.chat(ChatRequest.builder()
                     .messages(UserMessage.from(prompt.toString()))
                     .build()).aiMessage().text();
         } catch (Exception e) {
             throw new AgentException(
                     "Failed to merge document summaries: " + e.getMessage(), e);
         }
+    }
+
+    private int blockTokenBudget() {
+        double ratio = EnvConfig.get().getDouble(EnvKey.LARGE_FILE_CONTEXT_RATIO, 0.4);
+        return (int) (chatProvider.contextWindow() * ratio);
     }
 }

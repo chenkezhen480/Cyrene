@@ -19,12 +19,9 @@ public class Reranker {
 
     private static final Logger log = LoggerFactory.getLogger(Reranker.class);
 
-    private final int topN;
     private final RerankModelProvider rerankModelProvider;
 
     public Reranker(RerankModelProvider rerankModelProvider) {
-        EnvConfig cfg = EnvConfig.get();
-        this.topN = cfg.getInt(EnvKey.RERANK_TOP_N, 3);
         this.rerankModelProvider = rerankModelProvider;
     }
 
@@ -42,6 +39,10 @@ public class Reranker {
     public RerankResult rerank(String query, List<RagRetriever.RagDocument> documents) {
         if (documents == null || documents.isEmpty()) {
             return new RerankResult(Collections.emptyList(), 0.0);
+        }
+        int topN = EnvConfig.get().getInt(EnvKey.RERANK_TOP_N, 3);
+        if (topN <= 0) {
+            throw new IllegalStateException("HARNESS_RERANK_TOP_N must be positive");
         }
 
         if (rerankModelProvider != null && rerankModelProvider.isAvailable()) {
