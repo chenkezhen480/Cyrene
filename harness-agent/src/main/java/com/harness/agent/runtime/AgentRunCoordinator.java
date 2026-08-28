@@ -39,6 +39,7 @@ import com.harness.tool.RunToolCatalog;
 import com.harness.tool.ToolExecutor;
 import com.harness.tool.ToolRegistry;
 import com.harness.tool.builtin.UpdateMemoryTool;
+import com.harness.tool.builtin.StructuredOutputTool;
 import com.harness.tool.confirmation.ConfirmationDecision;
 import com.harness.tool.confirmation.ConfirmationExecutionContext;
 import com.harness.tool.confirmation.ConfirmationRequest;
@@ -106,7 +107,8 @@ public final class AgentRunCoordinator {
         try {
             recordFinalOutputContract(trace, finalOutputContract);
             PreparedAgentRun prepared = runPreparer.prepare(toRequest(command, true), trace);
-            RunToolCatalog toolCatalog = createToolCatalog(prepared.unavailableTools());
+            RunToolCatalog toolCatalog = createToolCatalog(
+                    prepared.unavailableTools(), finalOutputContract);
             runId = openRunScope(
                     prepared.sessionId(), command.cancellationToken(), toolCatalog, trace);
 
@@ -127,8 +129,11 @@ public final class AgentRunCoordinator {
             recordReactStats(trace, result);
 
             List<MessageBlock> assistantBlocks = finishAssistantBlocks(
-                    blocks, text, result.output());
-            memoryRuntime.cacheToolMessages(
+                    blocks,
+                    text,
+                    result.output(),
+                    !(finalOutputContract instanceof FinalOutputContract.JsonSchema));
+            memoryRuntime.persistToolMessages(
                     result, prepared.sessionId(), prepared.userId());
             boolean confirmationRequired = requiresConfirmation(result);
             RiskLevel risk = determineRisk(result);
@@ -143,10 +148,12 @@ public final class AgentRunCoordinator {
                     System.currentTimeMillis() - startedAt);
             if (confirmationRequired) {
                 return AgentResult.needConfirmation(
-                        result.output(), risk, agentTrace, result.steps(), result.artifacts());
+                        result.output(), risk, agentTrace, result.steps(),
+                        result.artifacts(), assistantBlocks);
             }
             return AgentResult.success(
-                    result.output(), agentTrace, result.steps(), result.artifacts());
+                    result.output(), agentTrace, result.steps(),
+                    result.artifacts(), assistantBlocks);
         } catch (Exception e) {
             trace.recordOutput("Error: " + e.getMessage(), RiskLevel.HIGH, false);
             trace.finish();
@@ -211,8 +218,8 @@ public final class AgentRunCoordinator {
             recordReactStats(trace, result);
 
             List<MessageBlock> assistantBlocks = finishAssistantBlocks(
-                    blocks, text, result.output());
-            memoryRuntime.cacheToolMessages(
+                    blocks, text, result.output(), false);
+            memoryRuntime.persistToolMessages(
                     result, prepared.sessionId(), prepared.userId());
             boolean confirmationRequired = requiresConfirmation(result);
             ConfirmationDecision decision = confirmationDecision.get();
@@ -276,9 +283,7 @@ public final class AgentRunCoordinator {
 
             @Override
             public void onStep(ReActStep step) {
-                if (step.toolCalls() != null && !step.toolCalls().isEmpty()) {
-                    appendIfPresent(text, step.thought());
-                } else {
+                if (step.toolCalls() == null || step.toolCalls().isEmpty()) {
                     appendIfPresent(text, step.observation());
                 }
             }
@@ -287,6 +292,12 @@ public final class AgentRunCoordinator {
             public void onArtifact(List<Artifact> artifacts) {
                 flushText(blocks, text);
                 artifacts.stream().map(AgentRunCoordinator::toArtifactBlock).forEach(blocks::add);
+            }
+
+            @Override
+            public void onStructuredOutput(com.fasterxml.jackson.databind.JsonNode data) {
+                flushText(blocks, text);
+                blocks.add(toStructuredDataBlock(data));
             }
         };
     }
@@ -379,6 +390,13 @@ public final class AgentRunCoordinator {
                     callback.onEvent(StreamEvent.artifact(artifact));
                 }
             }
+
+            @Override
+            public void onStructuredOutput(com.fasterxml.jackson.databind.JsonNode data) {
+                flushText(blocks, text);
+                blocks.add(toStructuredDataBlock(data));
+                callback.onEvent(StreamEvent.structuredData(data));
+            }
         };
     }
 
@@ -422,8 +440,19 @@ public final class AgentRunCoordinator {
         AuthorizedUrlContext.clear();
     }
 
+    private RunToolCatalog createToolCatalog(
+            Set<String> unavailableTools,
+            FinalOutputContract finalOutputContract
+    ) {
+        RunToolCatalog catalog = toolRegistry.snapshot().excluding(unavailableTools);
+        if (finalOutputContract instanceof FinalOutputContract.JsonSchema jsonSchema) {
+            return catalog.replacing(StructuredOutputTool.terminal(jsonSchema));
+        }
+        return catalog;
+    }
+
     private RunToolCatalog createToolCatalog(Set<String> unavailableTools) {
-        return toolRegistry.snapshot().excluding(unavailableTools);
+        return createToolCatalog(unavailableTools, new FinalOutputContract.Text());
     }
 
     private ReActLoop createLoop(RunToolCatalog toolCatalog) {
@@ -540,19 +569,33 @@ public final class AgentRunCoordinator {
                 MessageBlock.BlockType.ARTIFACT, null, artifact.id(), metadata);
     }
 
+    private static MessageBlock toStructuredDataBlock(
+            com.fasterxml.jackson.databind.JsonNode data
+    ) {
+        return new MessageBlock(
+                MessageBlock.BlockType.STRUCTURED_DATA,
+                null,
+                null,
+                Map.of("data", data.deepCopy()));
+    }
+
     private static List<MessageBlock> finishAssistantBlocks(
             List<MessageBlock> blocks,
             StringBuilder text,
-            String fallbackOutput
+            String fallbackOutput,
+            boolean appendFallbackAfterBlocks
     ) {
         flushText(blocks, text);
-        if (!blocks.isEmpty()) {
-            return List.copyOf(blocks);
+        if (blocks.isEmpty()
+                || (appendFallbackAfterBlocks
+                && fallbackOutput != null
+                && !fallbackOutput.isBlank())) {
+            blocks.add(new MessageBlock(
+                    MessageBlock.BlockType.TEXT,
+                    fallbackOutput != null ? fallbackOutput : "",
+                    null));
         }
-        return List.of(new MessageBlock(
-                MessageBlock.BlockType.TEXT,
-                fallbackOutput != null ? fallbackOutput : "",
-                null));
+        return List.copyOf(blocks);
     }
 
     private static void flushText(List<MessageBlock> blocks, StringBuilder text) {

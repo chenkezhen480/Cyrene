@@ -31,6 +31,7 @@ public class MessageWriteWorker {
     private final BlockingQueue<WriteTask> queue = new LinkedBlockingQueue<>();
     private final List<WriteTask> deadLetterQueue = new ArrayList<>();
     private final AtomicBoolean running = new AtomicBoolean(false);
+    private final Object flushLock = new Object();
     private Thread workerThread;
 
     public record WriteTask(String sessionId, String role, List<MessageBlock> content, boolean isSummary) {}
@@ -81,11 +82,14 @@ public class MessageWriteWorker {
      * Returns the number of messages flushed.
      */
     public int flushPending() {
-        List<WriteTask> pending = new ArrayList<>();
-        queue.drainTo(pending);
-        if (pending.isEmpty()) return 0;
-        flush(pending);
-        return pending.size();
+        synchronized (flushLock) {
+            List<WriteTask> pending = new ArrayList<>();
+            queue.drainTo(pending);
+            if (!pending.isEmpty()) {
+                flushUnlocked(pending);
+            }
+            return pending.size();
+        }
     }
 
     private void run() {
@@ -119,6 +123,12 @@ public class MessageWriteWorker {
     }
 
     private void flush(List<WriteTask> batch) {
+        synchronized (flushLock) {
+            flushUnlocked(batch);
+        }
+    }
+
+    private void flushUnlocked(List<WriteTask> batch) {
         List<WriteTask> failedTasks = new ArrayList<>();
 
         // First pass: try to write each message with retry

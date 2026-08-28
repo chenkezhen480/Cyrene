@@ -6,8 +6,9 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.harness.core.exception.ToolExecutionException;
 import com.harness.core.model.Artifact;
 import com.harness.core.model.ToolResult;
+import com.harness.core.model.ToolOutput;
 import com.harness.core.model.ToolSpec;
-import com.harness.tool.ArtifactProducingTool;
+import com.harness.tool.TypedOutputTool;
 import com.harness.tool.CancellableTool;
 import com.harness.core.env.EnvConfig;
 import com.harness.core.env.EnvKey;
@@ -18,7 +19,6 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -26,7 +26,7 @@ import java.util.concurrent.TimeUnit;
  * Works with DALL-E 3, Volcengine Ark, DashScope, and other compatible providers.
  * Downloads generated images and stores them as artifacts.
  */
-public class ImageGenerationTool implements ArtifactProducingTool, CancellableTool {
+public class ImageGenerationTool implements TypedOutputTool, CancellableTool {
 
     private static final Logger log = LoggerFactory.getLogger(ImageGenerationTool.class);
     private static final MediaType JSON_TYPE = MediaType.get("application/json");
@@ -126,7 +126,7 @@ public class ImageGenerationTool implements ArtifactProducingTool, CancellableTo
     }
 
     @Override
-    public String execute(JsonNode arguments) {
+    public ToolOutput executeOutput(JsonNode arguments) {
         String prompt = arguments.has("prompt") ? arguments.get("prompt").asText() : null;
         if (prompt == null || prompt.isBlank()) {
             throw new ToolExecutionException("image_generation", "Missing required parameter: prompt");
@@ -143,22 +143,18 @@ public class ImageGenerationTool implements ArtifactProducingTool, CancellableTo
         String referenceImage = arguments.has("reference_image") ? arguments.get("reference_image").asText(null) : null;
 
         try {
-            List<Map<String, Object>> artifactList;
+            List<Artifact> artifactList;
             if (referenceImage != null && !referenceImage.isBlank()) {
                 artifactList = executeImg2Img(prompt, size, referenceImage, arguments);
             } else {
                 artifactList = executeText2Img(prompt, size, arguments);
             }
 
-            ObjectNode result = mapper.createObjectNode();
-            result.put("status", "completed");
-            result.put("model", model);
-            var artifacts = result.putArray("artifacts");
-            for (Map<String, Object> a : artifactList) {
-                artifacts.add(mapper.valueToTree(a));
-            }
             ToolResult.setCurrentStatus(ToolResult.ResultStatus.SUCCESS);
-            return mapper.writeValueAsString(result);
+            return ToolOutput.artifacts(
+                    "Image generation completed with " + artifactList.size()
+                            + " artifact(s) using model " + model + ".",
+                    artifactList);
 
         } catch (ToolExecutionException e) {
             throw e;
@@ -186,7 +182,7 @@ public class ImageGenerationTool implements ArtifactProducingTool, CancellableTo
     /**
      * Text-to-image: POST /images/generations (JSON body).
      */
-    private List<Map<String, Object>> executeText2Img(String prompt, String size, JsonNode arguments) throws Exception {
+    private List<Artifact> executeText2Img(String prompt, String size, JsonNode arguments) throws Exception {
         ObjectNode body = mapper.createObjectNode();
         body.put("model", model);
         body.put("prompt", prompt);
@@ -220,7 +216,7 @@ public class ImageGenerationTool implements ArtifactProducingTool, CancellableTo
      * Supports both OpenAI-style /images/edits and compatible providers (DashScope, Volcengine, etc.)
      * that use /images/generations with image parameter.
      */
-    private List<Map<String, Object>> executeImg2Img(String prompt, String size,
+    private List<Artifact> executeImg2Img(String prompt, String size,
                                                       String referenceImage, JsonNode arguments) throws Exception {
         // Resolve reference image bytes and convert to base64
         byte[] refBytes = loadReferenceImage(referenceImage);
@@ -320,7 +316,7 @@ public class ImageGenerationTool implements ArtifactProducingTool, CancellableTo
      * Execute request and parse response — shared by text2img and img2img.
      * Tracks active call for cancellation support.
      */
-    private List<Map<String, Object>> executeAndParseResponse(Request request) throws Exception {
+    private List<Artifact> executeAndParseResponse(Request request) throws Exception {
         Call call = http.newCall(request);
         Thread currentThread = Thread.currentThread();
         activeCalls.put(currentThread, call);
@@ -340,20 +336,14 @@ public class ImageGenerationTool implements ArtifactProducingTool, CancellableTo
                     throw new ToolExecutionException("image_generation", "Image API returned no image data");
                 }
 
-                List<Map<String, Object>> artifactList = new ArrayList<>();
+                List<Artifact> artifactList = new ArrayList<>();
                 for (JsonNode imageData : data) {
                     String imageUrl = imageData.has("url") ? imageData.get("url").asText() : null;
                     if (imageUrl == null && imageData.has("b64_json")) {
                         byte[] imageBytes = java.util.Base64.getDecoder().decode(imageData.get("b64_json").asText());
                         String fileName = "img-" + System.currentTimeMillis() + ".png";
                         Artifact artifact = storer.store(imageBytes, fileName, "image/png", null);
-                        artifactList.add(Map.of(
-                                "id", artifact.id(),
-                                "name", artifact.name(),
-                                "mimeType", artifact.mimeType(),
-                                "sizeBytes", artifact.sizeBytes(),
-                                "downloadUrl", artifact.downloadUrl()
-                        ));
+                        artifactList.add(artifact);
                         log.info("Generated image (b64): {} ({} bytes)", fileName, imageBytes.length);
                         continue;
                     }
@@ -365,13 +355,7 @@ public class ImageGenerationTool implements ArtifactProducingTool, CancellableTo
                     byte[] imageBytes = downloadImage(imageUrl);
                     String fileName = "img-" + System.currentTimeMillis() + ".png";
                     Artifact artifact = storer.store(imageBytes, fileName, "image/png", null);
-                    artifactList.add(Map.of(
-                            "id", artifact.id(),
-                            "name", artifact.name(),
-                            "mimeType", artifact.mimeType(),
-                            "sizeBytes", artifact.sizeBytes(),
-                            "downloadUrl", artifact.downloadUrl()
-                    ));
+                    artifactList.add(artifact);
                     log.info("Generated image: {} ({} bytes)", fileName, imageBytes.length);
                 }
                 return artifactList;

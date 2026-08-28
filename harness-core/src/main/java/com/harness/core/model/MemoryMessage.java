@@ -33,4 +33,12 @@ public record MemoryMessage(
     public String text() {
         return text(content);
     }
+
+    /**
+     * Deterministic representation supplied to the model and compression pipeline.
+     * Unlike {@link #text()}, this preserves artifact references and structured JSON blocks.
+     */
+    public String modelText() {
+        return ToolOutput.fromMessageBlocks(content).modelContent();
+    }
 }

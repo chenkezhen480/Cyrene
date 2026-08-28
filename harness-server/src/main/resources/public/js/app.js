@@ -33,11 +33,92 @@ function stripArtifactLinks(text) {
 const upsertToolCall = CyreneToolCalls.upsert;
 const formatToolArguments = CyreneToolCalls.formatArguments;
 
+function appendAssistantText(message, text) {
+  if (!text) return;
+  if (!Array.isArray(message.content)) {
+    message.content = `${message.content || ''}${text}`;
+    return;
+  }
+  const lastBlock = message.content[message.content.length - 1];
+  if (lastBlock && lastBlock.type === 'TEXT') {
+    lastBlock.text = `${lastBlock.text || ''}${text}`;
+  } else {
+    message.content.push({ type: 'TEXT', text });
+  }
+}
+
+function appendStructuredData(message, data) {
+  if (!Array.isArray(message.content)) {
+    const existingText = message.content;
+    message.content = existingText
+      ? [{ type: 'TEXT', text: existingText }]
+      : [];
+  }
+  message.content.push({
+    type: 'STRUCTURED_DATA',
+    text: null,
+    artifactId: null,
+    metadata: { data },
+  });
+}
+
+function appendArtifact(message, artifact) {
+  if (typeof artifact?.artifactId !== 'string' || !artifact.artifactId) {
+    throw new Error('Artifact event is missing artifactId');
+  }
+  if (!Array.isArray(message.content)) {
+    const existingText = removeArtifactLoadingPlaceholder(message.content);
+    message.content = existingText
+      ? [{ type: 'TEXT', text: existingText }]
+      : [];
+  } else {
+    message.content.forEach(block => {
+      if (block.type === 'TEXT') {
+        block.text = removeArtifactLoadingPlaceholder(block.text);
+      }
+    });
+  }
+  const block = {
+    type: 'ARTIFACT',
+    text: null,
+    artifactId: artifact.artifactId,
+    metadata: {
+      type: artifact.type,
+      mimeType: artifact.mimeType,
+      name: artifact.name,
+      sizeBytes: artifact.sizeBytes,
+      downloadUrl: artifact.downloadUrl,
+      previewUrl: artifact.previewUrl,
+    },
+  };
+  const existingIndex = message.content.findIndex(
+    item => item.type === 'ARTIFACT' && item.artifactId === artifact.artifactId
+  );
+  if (existingIndex >= 0) message.content.splice(existingIndex, 1, block);
+  else message.content.push(block);
+}
+
+function removeArtifactLoadingPlaceholder(content) {
+  if (typeof content !== 'string') return content || '';
+  return content.replace(
+    /\n?<div class="artifact-loading-canvas"[\s\S]*?<\/div>\n?/, ''
+  );
+}
+
+function formatStructuredData(data) {
+  try {
+    return JSON.stringify(data, null, 2);
+  } catch {
+    return String(data ?? '');
+  }
+}
+
 // ── SVG Icons ──
 const Icons = {
   chat: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>`,
   knowledge: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>`,
   graph: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="7" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="M8.4 6.2l7.1.5M7.4 8.1l3.4 7.6M16.7 9.1l-3.5 6.7"/></svg>`,
+  model: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M1 9h3M1 15h3M20 9h3M20 15h3"/><circle cx="12" cy="12" r="4"/><path d="M10.5 12h3M12 10.5v3"/></svg>`,
   audit: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>`,
   config: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`,
   send: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>`,
@@ -842,7 +923,6 @@ const ChatPage = {
         toolCalls: [],
         toolCallsById: new Map(),
         compressions: [],
-        artifacts: [],
       });
       const msgIdx = messages.value.length - 1;
 
@@ -881,7 +961,7 @@ const ChatPage = {
                     if (typeof messages.value[msgIdx].content === 'string' && messages.value[msgIdx].content.includes('thinking-placeholder')) {
                       messages.value[msgIdx].content = '';
                     }
-                    if (parsed.text) messages.value[msgIdx].content += parsed.text;
+                    if (parsed.text) appendAssistantText(messages.value[msgIdx], parsed.text);
                     break;
                   case 'tool_call_created':
                   case 'tool_call_start':
@@ -906,21 +986,10 @@ const ChatPage = {
                     messages.value[msgIdx].compressions.push(parsed);
                     break;
                   case 'artifact':
-                    {
-                      // Remove inline LOADING placeholder
-                      messages.value[msgIdx].content = messages.value[msgIdx].content.replace(
-                        /\n?<div class="artifact-loading-canvas"[\s\S]*?<\/div>\n?/, ''
-                      );
-                      if (typeof parsed.artifactId !== 'string' || !parsed.artifactId) {
-                        throw new Error('Artifact event is missing artifactId');
-                      }
-                      const artifacts = messages.value[msgIdx].artifacts;
-                      const existingArtifact = artifacts.find(
-                        artifact => artifact.artifactId === parsed.artifactId
-                      );
-                      if (existingArtifact) Object.assign(existingArtifact, parsed);
-                      else artifacts.push(parsed);
-                    }
+                    appendArtifact(messages.value[msgIdx], parsed);
+                    break;
+                  case 'structured_data':
+                    appendStructuredData(messages.value[msgIdx], parsed.data);
                     break;
                   case 'audio_start':
                     {
@@ -950,6 +1019,9 @@ const ChatPage = {
                     // Don't replace streamed content — tool call blocks + tokens already in place
                     if (parsed.sessionId) {
                       currentSessionId.value = parsed.sessionId;
+                    }
+                    if (Array.isArray(parsed.blocks)) {
+                      messages.value[msgIdx].content = parsed.blocks;
                     }
                     break;
                   case 'cancelled':
@@ -1046,7 +1118,7 @@ const ChatPage = {
       toggleVoiceReply, toggleVoiceInput, clearVoiceInputFlag,
       approvePendingConfirmation, rejectPendingConfirmation, formatConfirmationArguments,
       getArtifactUrl, getArtifactPreviewUrl, formatSize,
-      formatToolArguments,
+      formatToolArguments, formatStructuredData,
     };
   },
   template: `
@@ -1129,6 +1201,7 @@ const ChatPage = {
                                style="max-width:100%;border-radius:8px;margin:8px 0;"></video>
                         <a v-else :href="getArtifactUrl(block.artifactId)">📎 {{ (block.metadata && block.metadata.name) || 'file' }}</a>
                       </span>
+                      <pre v-else-if="block.type === 'STRUCTURED_DATA'" class="structured-data-block"><code>{{ formatStructuredData(block.metadata && block.metadata.data) }}</code></pre>
                     </template>
                   </div>
                   <div v-else-if="typeof msg.content === 'string' && msg.content" class="md-body" v-html="renderMarkdown(msg.content)"></div>
@@ -1139,19 +1212,7 @@ const ChatPage = {
                       <span class="compress-detail">{{ compression.detail }}</span>
                     </div>
                   </div>
-                  <div v-if="msg.artifacts && msg.artifacts.length" class="message-artifacts">
-                    <template v-for="artifact in msg.artifacts" :key="artifact.artifactId">
-                      <img v-if="artifact.type === 'IMAGE'"
-                           :src="getArtifactPreviewUrl(artifact.artifactId)"
-                           :alt="artifact.name || 'image'"
-                           style="max-width:100%;border-radius:8px;margin:8px 0;" />
-                      <video v-else-if="artifact.type === 'VIDEO'"
-                             controls :src="getArtifactPreviewUrl(artifact.artifactId)"
-                             style="max-width:100%;border-radius:8px;margin:8px 0;"></video>
-                      <a v-else :href="getArtifactUrl(artifact.artifactId)">📎 {{ artifact.name || 'file' }}</a>
-                    </template>
-                  </div>
-                  <div v-if="!msg.content && !(msg.compressions && msg.compressions.length) && !(msg.artifacts && msg.artifacts.length)"
+                  <div v-if="!msg.content && !(msg.compressions && msg.compressions.length)"
                        class="loading-dots" v-meteor><span></span><span></span><span></span></div>
                 </div>
               </div>
@@ -6736,6 +6797,287 @@ const AuditPage = {
   `
 };
 
+// ── Model Configuration Page ──
+const ModelConfigPage = {
+  setup() {
+    const Icons = inject('Icons');
+    const t = inject('t');
+    const sections = ref([]);
+    const activeSectionId = ref('chat');
+    const configurationPath = ref('');
+    const restartRequired = ref(false);
+    const loading = ref(false);
+    const saving = ref(false);
+    const error = ref('');
+    const draftValues = reactive({});
+    const originalValues = reactive({});
+    const credentialValues = reactive({});
+    const clearKeys = ref([]);
+
+    const sectionLabelKeys = {
+      global: 'modelGroupGlobal',
+      chat: 'modelGroupChat',
+      vision: 'modelGroupVision',
+      voice: 'modelGroupVoice',
+      embedding: 'modelGroupEmbedding',
+      rerank: 'modelGroupRerank',
+      realtime: 'modelGroupRealtime',
+      classifier: 'modelGroupClassifier',
+      imageGeneration: 'modelGroupImageGeneration',
+      videoGeneration: 'modelGroupVideoGeneration',
+    };
+
+    function requireModelConfiguration(data) {
+      if (!data
+          || typeof data.path !== 'string'
+          || typeof data.restartRequired !== 'boolean'
+          || !Array.isArray(data.sections)) {
+        throw new Error(t('invalidModelConfigResponse'));
+      }
+      data.sections.forEach(section => {
+        if (!section || typeof section.id !== 'string' || !Array.isArray(section.fields)) {
+          throw new Error(t('invalidModelConfigResponse'));
+        }
+        section.fields.forEach(field => {
+          if (!field
+              || typeof field.key !== 'string'
+              || typeof field.configured !== 'boolean'
+              || typeof field.sensitive !== 'boolean'
+              || typeof field.managed !== 'boolean'
+              || typeof field.effectiveConfigured !== 'boolean'
+              || typeof field.pendingRestart !== 'boolean') {
+            throw new Error(t('invalidModelConfigResponse'));
+          }
+        });
+      });
+      return data;
+    }
+
+    function resetDraft(data) {
+      Object.keys(draftValues).forEach(key => delete draftValues[key]);
+      Object.keys(originalValues).forEach(key => delete originalValues[key]);
+      Object.keys(credentialValues).forEach(key => delete credentialValues[key]);
+      clearKeys.value = [];
+      data.sections.forEach(section => {
+        section.fields.forEach(field => {
+          if (field.sensitive) {
+            credentialValues[field.key] = '';
+          } else {
+            const value = field.value == null ? '' : String(field.value);
+            draftValues[field.key] = value;
+            originalValues[field.key] = value;
+          }
+        });
+      });
+    }
+
+    function applyConfiguration(data) {
+      const configuration = requireModelConfiguration(data);
+      sections.value = configuration.sections;
+      configurationPath.value = configuration.path;
+      restartRequired.value = configuration.restartRequired;
+      if (!sections.value.some(section => section.id === activeSectionId.value)) {
+        activeSectionId.value = sections.value[0]?.id || '';
+      }
+      resetDraft(configuration);
+    }
+
+    async function loadConfiguration() {
+      loading.value = true;
+      error.value = '';
+      try {
+        const data = await CyreneAPI.getModelConfiguration();
+        applyConfiguration(data);
+      } catch (e) {
+        error.value = e.message;
+      } finally {
+        loading.value = false;
+      }
+    }
+
+    async function saveConfiguration() {
+      if (!hasChanges.value) return;
+      saving.value = true;
+      error.value = '';
+      try {
+        const values = {};
+        const removals = new Set(clearKeys.value);
+        sections.value.forEach(section => {
+          section.fields.forEach(field => {
+            if (field.sensitive) {
+              const credential = credentialValues[field.key]?.trim();
+              if (credential) values[field.key] = credential;
+              return;
+            }
+            if (draftValues[field.key] === originalValues[field.key]) return;
+            const value = draftValues[field.key]?.trim();
+            if (value) values[field.key] = value;
+            else removals.add(field.key);
+          });
+        });
+        const data = await CyreneAPI.updateModelConfiguration(values, Array.from(removals));
+        applyConfiguration(data);
+        showToast(t('modelConfigSaved'), 'success');
+      } catch (e) {
+        error.value = e.message;
+      } finally {
+        saving.value = false;
+      }
+    }
+
+    function sectionLabel(sectionId) {
+      const key = sectionLabelKeys[sectionId];
+      return key ? t(key) : sectionId;
+    }
+
+    function toggleCredentialClear(key) {
+      if (clearKeys.value.includes(key)) {
+        clearKeys.value = clearKeys.value.filter(item => item !== key);
+      } else {
+        credentialValues[key] = '';
+        clearKeys.value = [...clearKeys.value, key];
+      }
+    }
+
+    const activeSection = computed(() => sections.value.find(
+      section => section.id === activeSectionId.value
+    ) || null);
+    const configuredCount = computed(() => sections.value.reduce(
+      (count, section) => count + section.fields.filter(field => field.configured).length,
+      0
+    ));
+    const totalCount = computed(() => sections.value.reduce(
+      (count, section) => count + section.fields.length,
+      0
+    ));
+    const hasChanges = computed(() => {
+      if (clearKeys.value.length > 0) return true;
+      return sections.value.some(section => section.fields.some(field => {
+        if (field.sensitive) return Boolean(credentialValues[field.key]?.trim());
+        return draftValues[field.key] !== originalValues[field.key];
+      }));
+    });
+
+    onMounted(loadConfiguration);
+
+    return {
+      Icons,
+      t,
+      sections,
+      activeSection,
+      activeSectionId,
+      configurationPath,
+      restartRequired,
+      loading,
+      saving,
+      error,
+      draftValues,
+      credentialValues,
+      clearKeys,
+      configuredCount,
+      totalCount,
+      hasChanges,
+      loadConfiguration,
+      saveConfiguration,
+      sectionLabel,
+      toggleCredentialClear,
+    };
+  },
+  template: `
+    <div class="model-config-page">
+      <div class="card card-gold model-config-toolbar">
+        <div class="model-config-toolbar-main">
+          <div class="model-config-toolbar-copy">
+            <div class="card-title">{{ t('modelConfiguration') }}</div>
+            <div class="text-sm text-ash">{{ t('modelConfigHint') }}</div>
+          </div>
+          <div class="model-config-toolbar-actions">
+            <button class="btn btn-ghost btn-sm" @click="loadConfiguration" :disabled="loading || saving">
+              <span v-html="Icons.refresh" style="width:14px;height:14px;"></span>
+              {{ t('refresh') }}
+            </button>
+            <button class="btn btn-primary btn-sm" @click="saveConfiguration"
+                    :disabled="!hasChanges || saving || loading">
+              <span v-html="Icons.save" style="width:14px;height:14px;"></span>
+              {{ saving ? t('saving') : t('save') }}
+            </button>
+          </div>
+        </div>
+        <div class="model-config-toolbar-meta">
+          <span><strong>{{ configuredCount }}</strong> / {{ totalCount }} {{ t('configuredItems') }}</span>
+          <span class="model-config-path">{{ t('persistedFile') }}：{{ configurationPath || '.env' }}</span>
+          <span :class="['tag', restartRequired ? 'tag-gold' : 'tag-dusk']">
+            {{ restartRequired ? t('restartRequired') : t('configurationSynchronized') }}
+          </span>
+          <span class="model-config-security-note">{{ t('modelConfigSecurityHint') }}</span>
+        </div>
+        <div v-if="restartRequired" class="model-config-restart-notice">
+          {{ t('restartRequiredHint') }}
+        </div>
+        <div v-if="error" class="model-config-inline-error">
+          <span>{{ error }}</span>
+          <button class="btn btn-ghost btn-sm" @click="loadConfiguration">{{ t('retry') }}</button>
+        </div>
+      </div>
+
+      <div v-if="loading" class="model-config-loading">
+        <div class="loading-dots"><span></span><span></span><span></span></div>
+      </div>
+      <div v-else class="model-config-layout">
+        <aside class="model-config-sections">
+          <button v-for="section in sections" :key="section.id"
+                  :class="['model-config-section-button', activeSectionId === section.id ? 'active' : '']"
+                  @click="activeSectionId = section.id">
+            <span>{{ sectionLabel(section.id) }}</span>
+            <span class="model-config-section-count">
+              {{ section.fields.filter(field => field.configured).length }}/{{ section.fields.length }}
+            </span>
+          </button>
+        </aside>
+
+        <section v-if="activeSection" class="model-config-editor card">
+          <div class="model-config-editor-header">
+            <div>
+              <div class="model-config-section-title">{{ sectionLabel(activeSection.id) }}</div>
+              <div class="text-xs text-ash mt-1">{{ activeSection.fields.length }} {{ t('configurationItems') }}</div>
+            </div>
+          </div>
+          <div class="model-config-form-grid">
+            <label v-for="field in activeSection.fields" :key="field.key" class="model-config-control">
+              <span class="model-config-key-row">
+                <code class="model-config-key">{{ field.key }}</code>
+                <span v-if="field.pendingRestart" class="tag tag-gold">{{ t('pendingRestart') }}</span>
+              </span>
+
+              <template v-if="field.sensitive">
+                <div class="model-config-input-row">
+                  <input class="input" type="password" v-model="credentialValues[field.key]"
+                         :disabled="clearKeys.includes(field.key)"
+                         :placeholder="field.configured ? t('credentialPlaceholder') : t('enterCredential')" />
+                  <button v-if="field.configured" type="button" class="btn btn-ghost btn-sm"
+                          @click="toggleCredentialClear(field.key)">
+                    {{ clearKeys.includes(field.key) ? t('cancelClearCredential') : t('clearCredential') }}
+                  </button>
+                </div>
+              </template>
+              <input v-else class="input" v-model="draftValues[field.key]"
+                     :placeholder="t('notConfigured')" />
+
+              <span class="model-config-control-meta">
+                <span>{{ field.managed ? t('managedInDotenv') : t('runtimeOrUnset') }}</span>
+                <span v-if="field.pendingRestart && !field.sensitive">
+                  {{ t('runtimeCurrent') }}：{{ field.effectiveConfigured ? field.effectiveValue : t('notConfigured') }}
+                </span>
+                <span v-else-if="field.sensitive && field.configured">{{ t('credentialConfigured') }}</span>
+              </span>
+            </label>
+          </div>
+        </section>
+      </div>
+    </div>
+  `
+};
+
 // ── Config Page ──
 const ConfigPage = {
   components: { EmptyState },
@@ -6892,7 +7234,17 @@ const ConfigPage = {
 
 // ── Main App ──
 const app = createApp({
-  components: { ToastContainer, StarsBackground, PreConfigModal, ChatPage, KnowledgePage, GraphPage, AuditPage, ConfigPage },
+  components: {
+    ToastContainer,
+    StarsBackground,
+    PreConfigModal,
+    ChatPage,
+    KnowledgePage,
+    GraphPage,
+    AuditPage,
+    ModelConfigPage,
+    ConfigPage,
+  },
   setup() {
     const Icons = inject('Icons');
     const currentPage = ref('chat');
@@ -6937,6 +7289,7 @@ const app = createApp({
       { id: 'knowledge', label: t('knowledge'), icon: Icons.knowledge },
       { id: 'graph', label: t('graph'), icon: Icons.graph },
       { id: 'audit', label: t('audit'), icon: Icons.audit },
+      { id: 'model-config', label: t('modelConfiguration'), icon: Icons.model },
       { id: 'config', label: t('config'), icon: Icons.config },
     ]);
 

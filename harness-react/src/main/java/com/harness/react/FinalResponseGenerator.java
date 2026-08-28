@@ -1,10 +1,7 @@
 package com.harness.react;
 
 import com.harness.core.model.CancellationToken;
-import com.harness.core.model.FinalOutputContract;
-import com.harness.core.exception.StructuredOutputException;
 import com.harness.provider.ChatModelProvider;
-import dev.langchain4j.exception.ContentFilteredException;
 import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.SystemMessage;
 import dev.langchain4j.model.chat.ChatModel;
@@ -13,7 +10,6 @@ import dev.langchain4j.model.chat.request.ChatRequest;
 import dev.langchain4j.model.chat.request.ChatRequestParameters;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
-import dev.langchain4j.model.output.FinishReason;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -44,13 +40,12 @@ public final class FinalResponseGenerator {
         }
     }
 
-    private final ChatModelProvider chatModelProvider;
     private final ChatModel chatModel;
     private final StreamingChatModel streamingChatModel;
     private final long timeoutSeconds;
 
     public FinalResponseGenerator(ChatModelProvider chatModelProvider, long timeoutSeconds) {
-        this.chatModelProvider = Objects.requireNonNull(chatModelProvider, "chatModelProvider");
+        Objects.requireNonNull(chatModelProvider, "chatModelProvider");
         this.chatModel = Objects.requireNonNull(chatModelProvider.chatModel(), "chatModel");
         this.streamingChatModel = chatModelProvider.streamingModel();
         if (timeoutSeconds <= 0) {
@@ -131,67 +126,31 @@ public final class FinalResponseGenerator {
             String systemPrompt,
             List<ChatMessage> planningMessages,
             ChatRequestParameters requestParameters,
-            FinalOutputContract outputContract,
             CancellationToken cancellationToken
     ) {
-        Objects.requireNonNull(outputContract, "outputContract");
         if (cancellationToken != null && cancellationToken.isCancelled()) {
             throw new java.util.concurrent.CancellationException(
                     "Final answer generation cancelled");
         }
 
         List<ChatMessage> finalMessages = finalMessages(systemPrompt, planningMessages);
-        ChatRequestParameters responseFormatParameters = ChatRequestParameters.builder()
-                .responseFormat(chatModelProvider.responseFormat(outputContract))
-                .build();
-        ChatRequestParameters finalParameters = requestParameters == null
-                ? responseFormatParameters
-                : requestParameters.overrideWith(responseFormatParameters);
         ChatRequest request = ChatRequest.builder()
                 .messages(finalMessages)
-                .parameters(finalParameters)
+                .parameters(requestParameters != null
+                        ? requestParameters
+                        : ChatRequestParameters.builder().build())
                 .build();
 
         if (cancellationToken != null) {
             cancellationToken.trackCurrentThread();
         }
-        ChatModel finalModel = outputContract instanceof FinalOutputContract.JsonSchema
-                ? Objects.requireNonNull(
-                        chatModelProvider.structuredChatModel(),
-                        "structuredChatModel")
-                : chatModel;
         try {
-            ChatResponse response = finalModel.chat(request);
-            validateStructuredResponse(response, outputContract);
+            ChatResponse response = chatModel.chat(request);
             return new Result(response, finalMessages);
-        } catch (ContentFilteredException e) {
-            throw new StructuredOutputException(
-                    StructuredOutputException.Code.STRUCTURED_OUTPUT_REFUSED,
-                    "Model refused to produce structured output", java.util.Map.of(), e);
         } finally {
             if (cancellationToken != null) {
                 cancellationToken.untrackCurrentThread();
             }
-        }
-    }
-
-    private static void validateStructuredResponse(
-            ChatResponse response, FinalOutputContract outputContract) {
-        if (!(outputContract instanceof FinalOutputContract.JsonSchema)) {
-            return;
-        }
-        FinishReason finishReason = response.metadata() != null
-                ? response.metadata().finishReason()
-                : null;
-        if (finishReason == FinishReason.LENGTH) {
-            throw new StructuredOutputException(
-                    StructuredOutputException.Code.STRUCTURED_OUTPUT_TRUNCATED,
-                    "Structured output was truncated by the model token limit");
-        }
-        if (finishReason == FinishReason.CONTENT_FILTER) {
-            throw new StructuredOutputException(
-                    StructuredOutputException.Code.STRUCTURED_OUTPUT_REFUSED,
-                    "Model refused to produce structured output");
         }
     }
 

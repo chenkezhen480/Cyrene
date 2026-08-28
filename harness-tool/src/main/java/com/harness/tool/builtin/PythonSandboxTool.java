@@ -6,8 +6,9 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.harness.core.exception.ToolExecutionException;
 import com.harness.core.model.Artifact;
 import com.harness.core.model.ToolResult;
+import com.harness.core.model.ToolOutput;
 import com.harness.core.model.ToolSpec;
-import com.harness.tool.ArtifactProducingTool;
+import com.harness.tool.TypedOutputTool;
 import com.harness.core.env.EnvConfig;
 import com.harness.core.env.EnvKey;
 import org.slf4j.Logger;
@@ -26,7 +27,7 @@ import java.util.concurrent.TimeUnit;
  *
  * Security: --network=none, --read-only, --memory, --pids-limit=50, tmpfs output size limit.
  */
-public class PythonSandboxTool implements ArtifactProducingTool {
+public class PythonSandboxTool implements TypedOutputTool {
 
     private static final Logger log = LoggerFactory.getLogger(PythonSandboxTool.class);
     private static final ObjectMapper mapper = new ObjectMapper();
@@ -100,7 +101,7 @@ public class PythonSandboxTool implements ArtifactProducingTool {
     }
 
     @Override
-    public String execute(JsonNode arguments) {
+    public ToolOutput executeOutput(JsonNode arguments) {
         String script = arguments.has("script") ? arguments.get("script").asText() : null;
         if (script == null || script.isBlank()) {
             throw new ToolExecutionException("python_sandbox", "Missing required parameter: script");
@@ -199,7 +200,7 @@ public class PythonSandboxTool implements ArtifactProducingTool {
 
             // Collect output files
             Path outputDir = workDir.resolve("output");
-            List<Map<String, Object>> artifactList = new ArrayList<>();
+            List<Artifact> artifactList = new ArrayList<>();
             if (Files.exists(outputDir)) {
                 try (DirectoryStream<Path> stream = Files.newDirectoryStream(outputDir)) {
                     for (Path file : stream) {
@@ -213,13 +214,7 @@ public class PythonSandboxTool implements ArtifactProducingTool {
                             Files.copy(file, tempCopy, StandardCopyOption.REPLACE_EXISTING);
                             try {
                                 Artifact artifact = storer.storeFromPath(tempCopy, fileName, mimeType, null);
-                                artifactList.add(Map.of(
-                                        "id", artifact.id(),
-                                        "name", artifact.name(),
-                                        "mimeType", artifact.mimeType() != null ? artifact.mimeType() : "",
-                                        "sizeBytes", artifact.sizeBytes(),
-                                        "downloadUrl", artifact.downloadUrl()
-                                ));
+                                artifactList.add(artifact);
                             } catch (Exception e) {
                                 log.warn("Failed to store artifact {}: {}", fileName, e.getMessage());
                                 try { Files.deleteIfExists(tempCopy); } catch (IOException ignored) {}
@@ -243,8 +238,6 @@ public class PythonSandboxTool implements ArtifactProducingTool {
             if (!stderrStr.isBlank()) {
                 result.put("stderr", stderrStr);
             }
-            result.set("artifacts", mapper.valueToTree(artifactList));
-
             if (exitCode != 0) {
                 log.warn("Sandbox exited with code {}: stdout={}, stderr={}", exitCode, stdoutStr.length(), stderrStr.length());
             } else {
@@ -258,7 +251,7 @@ public class PythonSandboxTool implements ArtifactProducingTool {
                 ToolResult.setCurrentStatus(ToolResult.ResultStatus.SUCCESS);
             }
 
-            return mapper.writeValueAsString(result);
+            return ToolOutput.artifacts(mapper.writeValueAsString(result), artifactList);
 
         } catch (ToolExecutionException e) {
             throw e;

@@ -108,6 +108,14 @@ const CyreneAPI = (() => {
     return request('GET', '/api/audio/capabilities');
   }
 
+  function getModelConfiguration() {
+    return request('GET', '/api/model-config');
+  }
+
+  function updateModelConfiguration(values, clearKeys) {
+    return request('PUT', '/api/model-config', { values, clearKeys });
+  }
+
   function cancelChat(sessionId) {
     return request('DELETE', `/api/chat/${sessionId}`);
   }
@@ -384,7 +392,7 @@ const CyreneAPI = (() => {
     setToken, getToken, onTokenRefresh,
     login,
     chat, cancelChat, approveConfirmation, rejectConfirmation, uploadFile,
-    transcribeAudio, getAudioCapabilities,
+    transcribeAudio, getAudioCapabilities, getModelConfiguration, updateModelConfiguration,
     createSession, listSessions, getSession, getMessages, getSessionStats, closeSession,
     listCollections, uploadKnowledge, listKnowledge, getDocument, updateDocument, deleteCollection, deleteDocument,
     getGraphStatus, listGraphSchemas, getGraphSchema,

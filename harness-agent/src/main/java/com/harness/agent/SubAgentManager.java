@@ -18,6 +18,7 @@ import com.harness.core.env.EnvKey;
 import com.harness.tool.RunToolCatalog;
 import com.harness.tool.HttpApiTool;
 import com.harness.tool.ToolExecutor;
+import com.harness.tool.builtin.StructuredOutputTool;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -251,8 +252,13 @@ public class SubAgentManager {
             log.debug("[SubAgentManager] Executing task: id={}, activeTasks={}", taskId, activeTasks.get());
 
             try {
+                FinalOutputContract outputContract = finalOutputContract(record.task());
                 RunToolCatalog subAgentToolCatalog =
                         runContext.toolCatalog().allowing(record.task().tools());
+                if (outputContract instanceof FinalOutputContract.JsonSchema jsonSchema) {
+                    subAgentToolCatalog = subAgentToolCatalog.replacing(
+                            StructuredOutputTool.terminal(jsonSchema));
+                }
 
                 ReActLoop reActLoop = reActLoopFactory.create(subAgentToolCatalog, toolExecutor);
 
@@ -273,7 +279,7 @@ public class SubAgentManager {
                         taskToken,
                         null,
                         null,
-                        finalOutputContract(record.task())));
+                        outputContract));
 
                 long duration = System.currentTimeMillis() - start;
                 log.info("[SubAgentManager] Task {} completed in {}ms, steps={}", taskId, duration, result.steps().size());

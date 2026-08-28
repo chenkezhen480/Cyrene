@@ -4,8 +4,8 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * A block within a message representing either text or an artifact reference.
- * Used to preserve the relative ordering of text and artifacts across page refreshes.
+ * A block within a message representing text, an artifact reference, or structured data.
+ * Used to preserve block ordering across page refreshes.
  */
 public record MessageBlock(
         BlockType type,
@@ -13,7 +13,12 @@ public record MessageBlock(
         String artifactId,   // non-null for ARTIFACT blocks
         Map<String, Object> metadata  // optional: artifact type, mimeType, name, etc.
 ) {
-    public enum BlockType { TEXT, ARTIFACT }
+    private static final com.fasterxml.jackson.databind.ObjectMapper OBJECT_MAPPER =
+            new com.fasterxml.jackson.databind.ObjectMapper()
+                    .setSerializationInclusion(
+                            com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL);
+
+    public enum BlockType { TEXT, ARTIFACT, STRUCTURED_DATA }
 
     /** Convenience constructor without metadata. */
     public MessageBlock(BlockType type, String text, String artifactId) {
@@ -25,39 +30,11 @@ public record MessageBlock(
      */
     public static String toJson(List<MessageBlock> blocks) {
         if (blocks == null || blocks.isEmpty()) return null;
-        StringBuilder sb = new StringBuilder("[");
-        for (int i = 0; i < blocks.size(); i++) {
-            if (i > 0) sb.append(",");
-            MessageBlock b = blocks.get(i);
-            sb.append("{\"type\":\"").append(b.type().name()).append("\"");
-            if (b.text() != null) {
-                sb.append(",\"text\":\"").append(escapeJson(b.text())).append("\"");
-            }
-            if (b.artifactId() != null) {
-                sb.append(",\"artifactId\":\"").append(escapeJson(b.artifactId())).append("\"");
-            }
-            if (b.metadata() != null && !b.metadata().isEmpty()) {
-                sb.append(",\"metadata\":{");
-                boolean first = true;
-                for (Map.Entry<String, Object> e : b.metadata().entrySet()) {
-                    if (!first) sb.append(",");
-                    first = false;
-                    sb.append("\"").append(escapeJson(e.getKey())).append("\":");
-                    Object v = e.getValue();
-                    if (v == null) {
-                        sb.append("null");
-                    } else if (v instanceof Number || v instanceof Boolean) {
-                        sb.append(v);
-                    } else {
-                        sb.append("\"").append(escapeJson(v.toString())).append("\"");
-                    }
-                }
-                sb.append("}");
-            }
-            sb.append("}");
+        try {
+            return OBJECT_MAPPER.writeValueAsString(blocks);
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            throw new IllegalArgumentException("Message blocks cannot be serialized", e);
         }
-        sb.append("]");
-        return sb.toString();
     }
 
     /**
@@ -67,17 +44,18 @@ public record MessageBlock(
     public static List<MessageBlock> fromJson(String json) {
         if (json == null || json.isBlank()) return null;
         try {
-            com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
-            com.fasterxml.jackson.databind.JsonNode arr = mapper.readTree(json);
+            com.fasterxml.jackson.databind.JsonNode arr = OBJECT_MAPPER.readTree(json);
             if (!arr.isArray()) return null;
             List<MessageBlock> blocks = new java.util.ArrayList<>();
             for (com.fasterxml.jackson.databind.JsonNode node : arr) {
                 String typeStr = node.has("type") ? node.get("type").asText() : null;
-                String text = node.has("text") ? node.get("text").asText() : null;
-                String artifactId = node.has("artifactId") ? node.get("artifactId").asText() : null;
+                String text = node.hasNonNull("text") ? node.get("text").asText() : null;
+                String artifactId = node.hasNonNull("artifactId")
+                        ? node.get("artifactId").asText()
+                        : null;
                 Map<String, Object> metadata = null;
                 if (node.has("metadata") && node.get("metadata").isObject()) {
-                    metadata = mapper.convertValue(node.get("metadata"),
+                    metadata = OBJECT_MAPPER.convertValue(node.get("metadata"),
                             new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {});
                 }
                 if (typeStr != null) {
@@ -91,12 +69,4 @@ public record MessageBlock(
         }
     }
 
-    private static String escapeJson(String s) {
-        if (s == null) return "";
-        return s.replace("\\", "\\\\")
-                .replace("\"", "\\\"")
-                .replace("\n", "\\n")
-                .replace("\r", "\\r")
-                .replace("\t", "\\t");
-    }
 }

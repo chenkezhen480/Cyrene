@@ -80,6 +80,21 @@ public final class RunToolCatalog implements ToolCatalog {
         return new RunToolCatalog(version, filtered, filteredSpecifications);
     }
 
+    /**
+     * Return a request-scoped catalog with one tool added or replaced.
+     * Existing snapshots remain unchanged.
+     */
+    public RunToolCatalog replacing(Tool replacement) {
+        if (replacement == null || replacement.spec() == null
+                || replacement.spec().name() == null
+                || replacement.spec().name().isBlank()) {
+            throw new IllegalArgumentException("Replacement tool name must not be blank");
+        }
+        LinkedHashMap<String, Tool> updated = new LinkedHashMap<>(tools);
+        updated.put(replacement.spec().name(), replacement);
+        return new RunToolCatalog(version, updated);
+    }
+
     @Override
     public Tool get(String name) {
         return tools.get(name);

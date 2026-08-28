@@ -105,6 +105,57 @@ class ReActEngineTerminationTest {
     }
 
     @Test
+    void sixthConsecutiveToolFailureStopsPlanningAndGeneratesFinalAnswer() {
+        List<ChatRequest> requests = new ArrayList<>();
+        AtomicInteger planningCalls = new AtomicInteger();
+        ChatModel chatModel = new ChatModel() {
+            @Override
+            public ChatResponse doChat(ChatRequest request) {
+                requests.add(request);
+                if (request.parameters().toolSpecifications() == null
+                        || request.parameters().toolSpecifications().isEmpty()) {
+                    return ChatResponse.builder()
+                            .aiMessage(AiMessage.from("final answer after hard limit"))
+                            .build();
+                }
+                int callNumber = planningCalls.incrementAndGet();
+                ToolExecutionRequest toolRequest = ToolExecutionRequest.builder()
+                        .id("call-" + callNumber)
+                        .name("test_tool")
+                        .arguments("{\"invalid\":true}")
+                        .build();
+                return ChatResponse.builder()
+                        .aiMessage(AiMessage.from("planning", List.of(toolRequest)))
+                        .build();
+            }
+        };
+        ToolExecutor executor = mock(ToolExecutor.class);
+        AtomicInteger executions = new AtomicInteger();
+        when(executor.executeAuthorized(any(), any(), isNull()))
+                .thenAnswer(invocation -> {
+                    ToolCall call = invocation.getArgument(0);
+                    executions.incrementAndGet();
+                    return ToolResult.fail(
+                            call.id(), call.toolName(), "invalid graph parameters", 1);
+                });
+
+        ReActResult result = new ReActEngine(
+                provider(chatModel), catalog(), executor, null, null, 10)
+                .execute(new ReActRequest(
+                        "system", "must use the tool", List.of(), RunTrace.noop(),
+                        null, null, false, null));
+
+        assertThat(executions).hasValue(6);
+        assertThat(planningCalls).hasValue(6);
+        assertThat(requests).hasSize(7);
+        assertThat(requests.getLast().parameters().toolSpecifications()).isEmpty();
+        assertThat(result.output()).isEqualTo("final answer after hard limit");
+        assertThat(result.loopStats().outcome()).isEqualTo("tool_failure_limit");
+        assertThat(result.steps().get(5).inspection().status())
+                .isEqualTo(com.harness.core.model.ReActStep.InspectionResult.InspectionStatus.LOOP_DETECTED);
+    }
+
+    @Test
     void cancelledRequestThrowsInsteadOfReturningDoneResult() {
         ChatModel chatModel = mock(ChatModel.class);
         CancellationToken cancellationToken = new CancellationToken();
@@ -126,7 +177,6 @@ class ReActEngineTerminationTest {
         when(provider.chatModel()).thenReturn(chatModel);
         when(provider.planningRequestParameters(nullable(Boolean.class), anyList()))
                 .thenCallRealMethod();
-        when(provider.responseFormat(any())).thenCallRealMethod();
         when(provider.modelUsage(any(), anyLong())).thenAnswer(invocation ->
                 new ModelUsage(null, null, null, null, null,
                         invocation.getArgument(1), null, null));

@@ -21,9 +21,9 @@ import java.util.Map;
  * The prompt adapts based on whether the tool keeps being called with the
  * same arguments (stuck) or different arguments (struggling).
  *
- * Instead of forcing an exit, reflection guides the LLM to adjust strategy.
- * The loop continues until the LLM naturally outputs a final answer or
- * max iterations is reached.
+ * Reflection gives the model one final opportunity to adjust strategy. If the
+ * same tool fails once more after reflection, a hard-limit signal terminates
+ * further tool planning for the run.
  */
 public class AdaptiveReflector {
 
@@ -73,11 +73,17 @@ public class AdaptiveReflector {
             }
         }
 
-        // Check if any tool hit the threshold
+        // The threshold triggers reflection; one additional failure triggers a hard stop.
         for (Map.Entry<String, Integer> entry : toolFailureCounts.entrySet()) {
-            if (entry.getValue() >= threshold) {
-                String toolName = entry.getKey();
-                toolFailureCounts.put(toolName, 0); // reset after triggering
+            String toolName = entry.getKey();
+            int failureCount = entry.getValue();
+            if (failureCount >= threshold + 1) {
+                String prompt = buildHardLimitPrompt(toolName, failureCount, userInput);
+                log.warn("[AdaptiveReflector] Hard failure limit reached: tool '{}' failed {} consecutive times",
+                        toolName, failureCount);
+                return new ReflectionSignal(prompt, true);
+            }
+            if (failureCount == threshold) {
 
                 // Determine if it's the same args or different args each time
                 boolean stuckOnSameArgs = detectStuckOnSameArgs(toolName, allSteps, threshold);
@@ -85,7 +91,7 @@ public class AdaptiveReflector {
 
                 log.info("[AdaptiveReflector] Reflection triggered: tool '{}' hit {} consecutive non-PASS (stuck={})",
                         toolName, threshold, stuckOnSameArgs);
-                return new ReflectionSignal(prompt);
+                return new ReflectionSignal(prompt, false);
             }
         }
 
@@ -179,6 +185,18 @@ public class AdaptiveReflector {
                 """, toolName, threshold, toolName, toolSummary, userInput);
     }
 
+    private String buildHardLimitPrompt(String toolName, int failureCount, String userInput) {
+        return String.format("""
+                [System Tool Failure Limit]
+                Tool '%s' has failed %d consecutive times. The fifth failure already triggered
+                reflection, and the permitted final retry also failed.
+
+                Do not call any more tools. Produce the best final answer possible from the
+                information already gathered, and clearly state what could not be completed.
+                Original task: %s
+                """, toolName, failureCount, userInput);
+    }
+
     private String summarizeToolsUsed(List<ReActStep> allSteps) {
         if (allSteps == null || allSteps.isEmpty()) return "(none)";
         java.util.Set<String> seen = new java.util.LinkedHashSet<>();
@@ -198,9 +216,10 @@ public class AdaptiveReflector {
     }
 
     /**
-     * Signal returned by shouldReflect() when reflection is needed.
+     * Signal returned when reflection or the post-reflection hard limit is reached.
      *
      * @param prompt the reflection prompt to inject
+     * @param hardLimit whether the Tool loop must terminate immediately
      */
-    public record ReflectionSignal(String prompt) {}
+    public record ReflectionSignal(String prompt, boolean hardLimit) {}
 }

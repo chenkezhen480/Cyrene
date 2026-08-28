@@ -9,10 +9,11 @@ import com.harness.core.model.*;
 import com.harness.core.runtime.RunTrace;
 import com.harness.core.env.EnvConfig;
 import com.harness.core.env.EnvKey;
-import com.harness.tool.ArtifactProducingTool;
+import com.harness.core.exception.StructuredOutputException;
 import com.harness.tool.Tool;
 import com.harness.tool.ToolExecutor;
 import com.harness.tool.ToolCatalog;
+import com.harness.tool.builtin.StructuredOutputTool;
 import com.harness.tool.confirmation.ConfirmationExecutionContext;
 import dev.langchain4j.data.message.*;
 import dev.langchain4j.model.chat.ChatModel;
@@ -52,6 +53,14 @@ public class ReActEngine implements ReActLoop {
             do not compose the user-facing final answer. Call the tools still required, or respond
             with only READY_FOR_FINAL when no more tools are needed.
             </tool_planning_phase>
+            """;
+
+    private static final String STRUCTURED_OUTPUT_INSTRUCTION = """
+            <structured_output_phase>
+            Complete any information-gathering tool calls first. Then call structured_output
+            with the final response matching its argument schema. The structured_output call
+            must be the only tool call in that round. Do not return the final value as prose.
+            </structured_output_phase>
             """;
 
     private static final Logger log = LoggerFactory.getLogger(ReActEngine.class);
@@ -144,15 +153,11 @@ public class ReActEngine implements ReActLoop {
                 maxIterations, historyMessages.size(), toolCatalog.size(), enableThinking);
 
         boolean structuredOutput = finalOutputContract instanceof FinalOutputContract.JsonSchema;
-        if (structuredOutput) {
-            // Fail before any tool side effect when the provider cannot honor the contract.
-            chatModelProvider.responseFormat(finalOutputContract);
-        }
 
         List<ToolSpecification> toolSpecs = toToolSpecifications(toolCatalog.getAll());
         List<ChatMessage> messages = new ArrayList<>();
-        messages.add(SystemMessage.from(structuredOutput && !toolSpecs.isEmpty()
-                ? systemPrompt + "\n\n" + TOOL_PLANNING_INSTRUCTION
+        messages.add(SystemMessage.from(structuredOutput
+                ? systemPrompt + "\n\n" + STRUCTURED_OUTPUT_INSTRUCTION
                 : systemPrompt));
         messages.addAll(historyMessages);
         messages.add(UserMessage.from(userMessage));
@@ -171,20 +176,6 @@ public class ReActEngine implements ReActLoop {
         // 设置 ThreadLocal，整个 ReAct 循环期间工具都可读取步骤历史
         ReActStep.setCurrentSteps(allSteps);
         try {
-            if (structuredOutput && toolSpecs.isEmpty()) {
-                GeneratedFinalResponse finalResponse = generateBlockingFinalResponse(
-                        systemPrompt, messages, finalRequestParameters, finalOutputContract,
-                        cancellationToken, trace);
-                AiMessage finalMessage = finalResponse.response().aiMessage();
-                ModelUsage usage = finalResponse.usage();
-                buildFinalStep(1, finalMessage.text(), allSteps, messages, finalMessage, listener);
-                ReActLoopStats stats = new ReActLoopStats(
-                        "completed", 1, 0, 0,
-                        observedTokens(usage.inputTokens()),
-                        observedTokens(usage.outputTokens()), 1, 0);
-                return new ReActResult(finalMessage.text(), allSteps, allArtifacts, stats);
-            }
-
             for (int i = 1; i <= maxIterations; i++) {
                 log.debug("[L3-ReAct] Iteration {}/{}", i, maxIterations);
 
@@ -234,15 +225,9 @@ public class ReActEngine implements ReActLoop {
                 // Final answer (no tool calls)
                 if (aiMessage.toolExecutionRequests() == null || aiMessage.toolExecutionRequests().isEmpty()) {
                     if (structuredOutput) {
-                        GeneratedFinalResponse finalResponse = generateBlockingFinalResponse(
-                                systemPrompt, messages, finalRequestParameters, finalOutputContract,
-                                cancellationToken, trace);
-                        response = finalResponse.response();
-                        aiMessage = response.aiMessage();
-                        llmCalls++;
-                        ModelUsage finalUsage = finalResponse.usage();
-                        totalInputTokens += observedTokens(finalUsage.inputTokens());
-                        totalOutputTokens += observedTokens(finalUsage.outputTokens());
+                        throw new StructuredOutputException(
+                                StructuredOutputException.Code.STRUCTURED_OUTPUT_EMPTY,
+                                "Model did not submit the final response through structured_output");
                     }
                     String answer = aiMessage.text();
                     long totalMs = System.currentTimeMillis() - loopStart;
@@ -256,6 +241,7 @@ public class ReActEngine implements ReActLoop {
                 // Tool execution round
                 List<ToolExecutionRequest> toolReqs = normalizeToolRequests(
                         aiMessage.toolExecutionRequests());
+                validateStructuredOutputRound(toolReqs, structuredOutput);
                 if (!toolReqs.equals(aiMessage.toolExecutionRequests())) {
                     aiMessage = AiMessage.from(
                             aiMessage.text() != null ? aiMessage.text() : "", toolReqs);
@@ -270,13 +256,53 @@ public class ReActEngine implements ReActLoop {
                 ToolExecutionOutput toolOutput = executeToolCalls(
                         toolReqs, messages, allArtifacts, listener, cancellationToken, confirmationContext);
 
+                if (structuredOutput && isStructuredOutputRound(toolReqs)) {
+                    buildStructuredOutputStep(
+                            i, aiMessage, toolOutput, allSteps, listener);
+                    ToolResult submitted = toolOutput.toolResults().get(0);
+                    if (!submitted.success()) {
+                        throw new StructuredOutputException(
+                                StructuredOutputException.Code.STRUCTURED_OUTPUT_SCHEMA_MISMATCH,
+                                "structured_output rejected the submitted value",
+                                java.util.Map.of("error", submitted.error() != null
+                                        ? submitted.error() : "Unknown validation error"));
+                    }
+                    ReActLoopStats stats = new ReActLoopStats(
+                            "completed", i, totalToolCalls, reflectionChecks,
+                            totalInputTokens, totalOutputTokens, llmCalls, toolRetries);
+                    return new ReActResult(
+                            submitted.output(), allSteps, allArtifacts, stats);
+                }
+
                 // Post-tool processing: inspection, hints, adaptive reflection
                 RoundOutcome outcome = processToolRound(i, aiMessage, toolReqs,
                         toolOutput.toolCalls(), toolOutput.toolResults(),
                         allSteps, allArtifacts, messages, listener, userMessage);
                 if (outcome.reflected()) reflectionChecks++;
-                if (outcome.inspectionStatus() == ReActStep.InspectionResult.InspectionStatus.TOOL_ERROR) {
+                if (outcome.inspectionStatus() == ReActStep.InspectionResult.InspectionStatus.TOOL_ERROR
+                        || outcome.inspectionStatus() == ReActStep.InspectionResult.InspectionStatus.LOOP_DETECTED) {
                     toolRetries++;
+                }
+                if (outcome.action() == RoundAction.GENERATE_FINAL) {
+                    if (structuredOutput) {
+                        throw new StructuredOutputException(
+                                StructuredOutputException.Code.STRUCTURED_OUTPUT_EMPTY,
+                                "Tool failure limit reached before structured_output was submitted");
+                    }
+                    GeneratedFinalResponse finalResponse = generateBlockingFinalResponse(
+                            systemPrompt, messages, finalRequestParameters,
+                            cancellationToken, trace);
+                    AiMessage finalMessage = finalResponse.response().aiMessage();
+                    llmCalls++;
+                    ModelUsage finalUsage = finalResponse.usage();
+                    totalInputTokens += observedTokens(finalUsage.inputTokens());
+                    totalOutputTokens += observedTokens(finalUsage.outputTokens());
+                    buildFinalStep(
+                            i + 1, finalMessage.text(), allSteps, messages, finalMessage, listener);
+                    ReActLoopStats stats = new ReActLoopStats(
+                            "tool_failure_limit", i, totalToolCalls, reflectionChecks,
+                            totalInputTokens, totalOutputTokens, llmCalls, toolRetries);
+                    return new ReActResult(finalMessage.text(), allSteps, allArtifacts, stats);
                 }
                 if (outcome.action() == RoundAction.RETURN_RESULT) {
                     ReActResult r = outcome.result();
@@ -290,8 +316,13 @@ public class ReActEngine implements ReActLoop {
                 }
             }
 
+            if (structuredOutput) {
+                throw new StructuredOutputException(
+                        StructuredOutputException.Code.STRUCTURED_OUTPUT_EMPTY,
+                        "Iteration limit reached before structured_output was submitted");
+            }
             GeneratedFinalResponse finalResponse = generateBlockingFinalResponse(
-                    systemPrompt, messages, finalRequestParameters, finalOutputContract,
+                    systemPrompt, messages, finalRequestParameters,
                     cancellationToken, trace);
             AiMessage finalMessage = finalResponse.response().aiMessage();
             llmCalls++;
@@ -485,8 +516,29 @@ public class ReActEngine implements ReActLoop {
                         toolOutput.toolCalls(), toolOutput.toolResults(),
                         allSteps, allArtifacts, messages, listener, userMessage);
                 if (outcome.reflected()) reflectionChecks++;
-                if (outcome.inspectionStatus() == ReActStep.InspectionResult.InspectionStatus.TOOL_ERROR) {
+                if (outcome.inspectionStatus() == ReActStep.InspectionResult.InspectionStatus.TOOL_ERROR
+                        || outcome.inspectionStatus() == ReActStep.InspectionResult.InspectionStatus.LOOP_DETECTED) {
                     toolRetries++;
+                }
+                if (outcome.action() == RoundAction.GENERATE_FINAL) {
+                    GeneratedFinalResponse finalResponse = generateFinalResponse(
+                            systemPrompt,
+                            messages,
+                            finalRequestParameters,
+                            listener,
+                            cancellationToken,
+                            trace);
+                    AiMessage finalMessage = finalResponse.response().aiMessage();
+                    llmCalls++;
+                    ModelUsage finalUsage = finalResponse.usage();
+                    totalInputTokens += observedTokens(finalUsage.inputTokens());
+                    totalOutputTokens += observedTokens(finalUsage.outputTokens());
+                    buildFinalStep(
+                            i + 1, finalMessage.text(), allSteps, messages, finalMessage, listener);
+                    ReActLoopStats stats = new ReActLoopStats(
+                            "tool_failure_limit", i, totalToolCalls, reflectionChecks,
+                            totalInputTokens, totalOutputTokens, llmCalls, toolRetries);
+                    return new ReActResult(finalMessage.text(), allSteps, allArtifacts, stats);
                 }
                 if (outcome.action() == RoundAction.RETURN_RESULT) {
                     ReActResult r = outcome.result();
@@ -695,7 +747,6 @@ public class ReActEngine implements ReActLoop {
             String systemPrompt,
             List<ChatMessage> messages,
             ChatRequestParameters requestParameters,
-            FinalOutputContract outputContract,
             com.harness.core.model.CancellationToken cancellationToken,
             RunTrace trace) {
         long startedAt = System.currentTimeMillis();
@@ -703,7 +754,6 @@ public class ReActEngine implements ReActLoop {
                 systemPrompt,
                 messages,
                 requestParameters,
-                outputContract,
                 cancellationToken);
         ModelUsage usage = recordModelUsage(
                 generated.response(),
@@ -716,7 +766,7 @@ public class ReActEngine implements ReActLoop {
 
     // ── Shared helpers to deduplicate execute() / streamExecute() ──────────
 
-    private enum RoundAction { CONTINUE, RETURN_RESULT }
+    private enum RoundAction { CONTINUE, GENERATE_FINAL, RETURN_RESULT }
 
     /** Build and register a final step (final_answer / summary). */
     private ReActStep buildFinalStep(int iteration, String answer, List<ReActStep> allSteps,
@@ -738,6 +788,50 @@ public class ReActEngine implements ReActLoop {
      * Handles cancellation checks, onToolCallStart notification, artifact detection.
      */
     private record ToolExecutionOutput(List<ToolCall> toolCalls, List<ToolResult> toolResults) {}
+
+    private static boolean isStructuredOutputRound(List<ToolExecutionRequest> requests) {
+        return requests.size() == 1
+                && StructuredOutputTool.TOOL_NAME.equals(requests.get(0).name());
+    }
+
+    private static void validateStructuredOutputRound(
+            List<ToolExecutionRequest> requests,
+            boolean structuredOutput
+    ) {
+        if (!structuredOutput) {
+            return;
+        }
+        boolean containsSubmission = requests.stream()
+                .anyMatch(request -> StructuredOutputTool.TOOL_NAME.equals(request.name()));
+        if (containsSubmission && !isStructuredOutputRound(requests)) {
+            throw new StructuredOutputException(
+                    StructuredOutputException.Code.STRUCTURED_OUTPUT_SCHEMA_MISMATCH,
+                    "structured_output must be the only tool call in its round");
+        }
+    }
+
+    private void buildStructuredOutputStep(
+            int iteration,
+            AiMessage aiMessage,
+            ToolExecutionOutput output,
+            List<ReActStep> allSteps,
+            ReActListener listener
+    ) {
+        ReActStep step = new ReActStep(
+                iteration,
+                aiMessage.text(),
+                StructuredOutputTool.TOOL_NAME,
+                output.toolCalls(),
+                output.toolResults(),
+                output.toolResults().get(0).output(),
+                new ReActStep.InspectionResult(
+                        ReActStep.InspectionResult.InspectionStatus.PASS,
+                        "structured output submitted"));
+        allSteps.add(step);
+        if (listener != null) {
+            listener.onStep(step);
+        }
+    }
 
     private ToolExecutionOutput executeToolCalls(List<ToolExecutionRequest> toolReqs,
                                                  List<ChatMessage> messages,
@@ -800,10 +894,15 @@ public class ReActEngine implements ReActLoop {
                 throw new CancellationException("Request cancelled");
             }
 
-            if (result.success() && result.output() != null) {
-                Tool tool = toolCatalog.get(tc.toolName());
-                if (tool instanceof ArtifactProducingTool) {
-                    parseArtifacts(result.output(), allArtifacts, OBJECT_MAPPER, listener);
+            if (result.success() && result.content() != null) {
+                if (!result.content().artifacts().isEmpty()) {
+                    allArtifacts.addAll(result.content().artifacts());
+                    if (listener != null) {
+                        listener.onArtifact(result.content().artifacts());
+                    }
+                }
+                if (result.content().json() != null && listener != null) {
+                    listener.onStructuredOutput(result.content().json());
                 }
             }
 
@@ -903,11 +1002,11 @@ public class ReActEngine implements ReActLoop {
                 toolResults.stream().map(r -> r.output() != null ? r.output() : "").reduce((a, b) -> a + "\n" + b).orElse(""),
                 inspection);
         allSteps.add(step);
-        if (listener != null) listener.onStep(step);
 
         if (inspection.status() == ReActStep.InspectionResult.InspectionStatus.CONFIRMATION_REQUIRED
                 || inspection.status() == ReActStep.InspectionResult.InspectionStatus.CONFIRMATION_REJECTED
                 || inspection.status() == ReActStep.InspectionResult.InspectionStatus.CONFIRMATION_EXPIRED) {
+            if (listener != null) listener.onStep(step);
             return new RoundOutcome(
                     RoundAction.RETURN_RESULT,
                     new ReActResult(inspection.reason(), allSteps, allArtifacts),
@@ -931,10 +1030,29 @@ public class ReActEngine implements ReActLoop {
                 inspection, toolCalls, toolResults, allSteps, userMessage);
         if (signal != null) {
             messages.add(UserMessage.from(signal.prompt()));
+            if (signal.hardLimit()) {
+                ReActStep.InspectionResult hardLimitInspection =
+                        new ReActStep.InspectionResult(
+                                ReActStep.InspectionResult.InspectionStatus.LOOP_DETECTED,
+                                signal.prompt());
+                step = new ReActStep(
+                        step.stepNumber(), step.thought(), step.action(),
+                        step.toolCalls(), step.toolResults(), step.observation(),
+                        hardLimitInspection);
+                allSteps.set(allSteps.size() - 1, step);
+                if (listener != null) listener.onStep(step);
+                log.warn("[L3-ReAct] Tool failure hard limit reached at step {}", iteration);
+                return new RoundOutcome(
+                        RoundAction.GENERATE_FINAL,
+                        null,
+                        false,
+                        hardLimitInspection.status());
+            }
             reflected = true;
             log.debug("[L3-ReAct] Adaptive reflection triggered at step {}", iteration);
         }
 
+        if (listener != null) listener.onStep(step);
         return new RoundOutcome(RoundAction.CONTINUE, null, reflected, inspection.status());
     }
 
@@ -985,63 +1103,6 @@ public class ReActEngine implements ReActLoop {
             return HexFormat.of().formatHex(digest.digest());
         } catch (NoSuchAlgorithmException e) {
             throw new IllegalStateException("SHA-256 is unavailable", e);
-        }
-    }
-
-    /**
-     * Parse artifacts from an ArtifactProducingTool's output.
-     * Tries JSON format first ({"artifacts": [{id, name, mimeType, sizeBytes, downloadUrl}]}),
-     * falls back to markdown link parsing (![name](/api/artifacts/{id}/preview)).
-     */
-    private void parseArtifacts(String toolOutput, List<Artifact> allArtifacts,
-                                com.fasterxml.jackson.databind.ObjectMapper mapper,
-                                ReActListener listener) {
-        try {
-            List<Artifact> parsed = new ArrayList<>();
-
-            // Try JSON format first (PythonSandbox, VideoGeneration)
-            try {
-                com.fasterxml.jackson.databind.JsonNode root = mapper.readTree(toolOutput);
-                com.fasterxml.jackson.databind.JsonNode artifactsNode = root.get("artifacts");
-                if (artifactsNode != null && artifactsNode.isArray()) {
-                    for (com.fasterxml.jackson.databind.JsonNode a : artifactsNode) {
-                        String id = a.has("id") ? a.get("id").asText() : null;
-                        String name = a.has("name") ? a.get("name").asText() : "artifact";
-                        String mimeType = a.has("mimeType") ? a.get("mimeType").asText() : null;
-                        long sizeBytes = a.has("sizeBytes") ? a.get("sizeBytes").asLong() : 0;
-                        if (id != null) {
-                            parsed.add(new Artifact(id, null, name,
-                                    Artifact.inferType(mimeType), mimeType, sizeBytes, "",
-                                    java.time.Instant.now()));
-                        }
-                    }
-                }
-            } catch (com.fasterxml.jackson.core.JsonProcessingException ignored) {
-                // Not JSON — fall through to regex
-            }
-
-            // Fallback: parse markdown links ![name](/api/artifacts/{id}/preview)
-            if (parsed.isEmpty()) {
-                java.util.regex.Matcher m = java.util.regex.Pattern
-                        .compile("!\\[(.+?)\\]\\(/api/artifacts/([^/]+)/preview\\)").matcher(toolOutput);
-                while (m.find()) {
-                    String name = m.group(1);
-                    String id = m.group(2);
-                    parsed.add(new Artifact(id, null, name,
-                            Artifact.ArtifactType.IMAGE, "image/png", 0, "",
-                            java.time.Instant.now()));
-                }
-            }
-
-            if (!parsed.isEmpty()) {
-                allArtifacts.addAll(parsed);
-                log.info("[L3-ReAct] Collected {} artifacts from tool output", parsed.size());
-                if (listener != null) {
-                    listener.onArtifact(parsed);
-                }
-            }
-        } catch (Exception e) {
-            log.warn("[L3-ReAct] Failed to parse artifacts from tool output: {}", e.getMessage());
         }
     }
 

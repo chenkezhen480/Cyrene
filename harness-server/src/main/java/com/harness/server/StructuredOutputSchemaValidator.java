@@ -14,7 +14,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.regex.Pattern;
 
-/** Validates the bounded JSON Schema subset supported by structured output providers. */
+/** Validates the bounded JSON Schema subset exposed by the terminal structured-output tool. */
 public final class StructuredOutputSchemaValidator {
 
     private static final Pattern NAME_PATTERN =

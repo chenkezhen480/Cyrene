@@ -149,6 +149,25 @@ class MysqlMessageStoreIT {
     }
 
     @Test
+    void deleteToolMessages_removesOnlyToolContext() {
+        String sid = createTestSession();
+        store.save(sid, "user", blocks("query"), false);
+        store.save(sid, "assistant_tool_call", blocks("[Tool call] lookup({})"), false);
+        store.save(sid, "tool", blocks("tool result"), false);
+        store.save(sid, "assistant", blocks("final answer"), false);
+
+        int deleted = store.deleteToolMessages(sid);
+
+        assertThat(deleted).isEqualTo(2);
+        assertThat(store.loadForContext(sid))
+                .extracting(MemoryMessage::role)
+                .containsExactly("user", "assistant");
+        assertThat(store.loadPage(sid, 0, 10, true))
+                .extracting(MemoryMessage::role)
+                .containsExactly("user", "assistant");
+    }
+
+    @Test
     void avgAssistantReplyLength_computesAverage() {
         String sid = createTestSession();
         store.save(sid, "assistant", blocks("Hello"), false);      // 5 chars

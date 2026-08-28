@@ -181,6 +181,23 @@ class ToolRegistryTest {
     }
 
     @Test
+    void runCatalog_replacingCreatesAnIndependentRequestScopedCatalog() {
+        Tool original = createTool("structured_output", "chat block");
+        Tool terminal = createTool("structured_output", "terminal contract");
+        registry.register(original);
+        RunToolCatalog snapshot = registry.snapshot();
+
+        RunToolCatalog replaced = snapshot.replacing(terminal);
+
+        assertThat(snapshot.get("structured_output")).isSameAs(original);
+        assertThat(replaced.get("structured_output")).isSameAs(terminal);
+        assertThat(replaced.getAll())
+                .extracting(ToolSpec::description)
+                .containsExactly("terminal contract");
+        assertThat(replaced.version()).isEqualTo(snapshot.version());
+    }
+
+    @Test
     void allowlist_doesNotAdmitToolsRegisteredAfterSnapshot() {
         registry.register(createTool("allowed", "Allowed tool"));
         RunToolCatalog allowed = registry.snapshot().allowing(Set.of("allowed", "late"));

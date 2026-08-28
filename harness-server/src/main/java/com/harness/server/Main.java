@@ -29,6 +29,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
+import java.nio.file.Path;
 
 /**
  * HTTP API server entry point for Harness Agent.
@@ -146,6 +147,13 @@ public class Main {
 
         // Health check
         app.get("/api/health", ctx -> ctx.json(Map.of("status", "ok", "version", VERSION)));
+
+        ModelConfigurationHandler modelConfigurationHandler = new ModelConfigurationHandler(
+                new ModelConfigurationService(
+                        EnvConfig.get(),
+                        new ModelConfigurationFileStore(Path.of(".env"))));
+        app.get("/api/model-config", modelConfigurationHandler::get);
+        app.put("/api/model-config", modelConfigurationHandler::update);
 
         // Auth token endpoint
         if ("jwt".equals(authMode)) {

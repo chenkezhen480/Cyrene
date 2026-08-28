@@ -185,10 +185,12 @@ public class MysqlMessageStore implements MessageStore {
 
         if (cursor > 0) {
             sql = "SELECT id, session_id, role, content, is_summary, created_at FROM messages " +
-                    "WHERE session_id = ? AND id " + operator + " ? ORDER BY id " + direction + " LIMIT ?";
+                    "WHERE session_id = ? AND role IN ('user', 'assistant') AND id "
+                    + operator + " ? ORDER BY id " + direction + " LIMIT ?";
         } else {
             sql = "SELECT id, session_id, role, content, is_summary, created_at FROM messages " +
-                    "WHERE session_id = ? ORDER BY id " + direction + " LIMIT ?";
+                    "WHERE session_id = ? AND role IN ('user', 'assistant') "
+                    + "ORDER BY id " + direction + " LIMIT ?";
         }
 
         try (Connection conn = MysqlConnectionPool.getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
@@ -285,6 +287,19 @@ public class MysqlMessageStore implements MessageStore {
         } catch (SQLException e) {
             log.error("Failed to delete messages for session {}: {}", sessionId, e.getMessage(), e);
             return 0;
+        }
+    }
+
+    @Override
+    public int deleteToolMessages(String sessionId) {
+        String sql = "DELETE FROM messages WHERE session_id = ? "
+                + "AND role IN ('assistant_tool_call', 'tool')";
+        try (Connection conn = getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, sessionId);
+            return ps.executeUpdate();
+        } catch (SQLException e) {
+            throw new MemoryStoreException(
+                    "Failed to delete Tool messages for session " + sessionId, e);
         }
     }
 

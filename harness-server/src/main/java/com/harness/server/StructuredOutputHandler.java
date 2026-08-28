@@ -8,6 +8,7 @@ import com.harness.core.model.AgentContext;
 import com.harness.core.model.AgentResult;
 import com.harness.core.model.CancellationToken;
 import com.harness.core.model.FinalOutputContract;
+import com.harness.core.structured.StructuredOutputValueValidator;
 import com.harness.input.multimodal.MultimodalParser;
 import com.harness.provider.impl.CancellableHttpClient;
 import com.harness.server.api.ApiErrorCode;

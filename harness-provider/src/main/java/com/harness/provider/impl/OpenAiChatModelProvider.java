@@ -1,8 +1,6 @@
 package com.harness.provider.impl;
 
 import com.harness.provider.ChatModelProvider;
-import com.harness.provider.LangChainJsonSchemaMapper;
-import com.harness.core.model.FinalOutputContract;
 import com.harness.core.env.EnvConfig;
 import com.harness.core.env.EnvKey;
 import dev.langchain4j.agent.tool.ToolSpecification;
@@ -10,9 +8,6 @@ import dev.langchain4j.http.client.HttpClientBuilder;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.StreamingChatModel;
 import dev.langchain4j.model.chat.request.ChatRequestParameters;
-import dev.langchain4j.model.chat.request.ResponseFormat;
-import dev.langchain4j.model.chat.request.ResponseFormatType;
-import dev.langchain4j.model.chat.request.json.JsonSchema;
 import dev.langchain4j.model.openai.OpenAiChatModel;
 import dev.langchain4j.model.openai.OpenAiChatRequestParameters;
 import dev.langchain4j.model.openai.OpenAiResponsesChatModel;
@@ -66,15 +61,10 @@ public class OpenAiChatModelProvider implements ChatModelProvider {
 
     @Override
     public ChatModel chatModel() {
-        return new RetryingChatModel(createRawChatModel(false));
+        return new RetryingChatModel(createRawChatModel());
     }
 
-    @Override
-    public ChatModel structuredChatModel() {
-        return new RetryingChatModel(createRawChatModel(true));
-    }
-
-    ChatModel createRawChatModel(boolean strictJsonSchema) {
+    ChatModel createRawChatModel() {
         if (apiFormat == OpenAiChatApiFormat.RESPONSES) {
             return OpenAiResponsesChatModel.builder()
                     .httpClientBuilder(cancellableHttpClientBuilder())
@@ -86,7 +76,6 @@ public class OpenAiChatModelProvider implements ChatModelProvider {
                     .store(false)
                     .logRequests(true)
                     .logResponses(true)
-                    .strictJsonSchema(strictJsonSchema)
                     .build();
         }
         return OpenAiChatModel.builder()
@@ -99,7 +88,6 @@ public class OpenAiChatModelProvider implements ChatModelProvider {
                 .timeout(Duration.ofSeconds(timeoutSeconds))
                 .logRequests(true)
                 .logResponses(true)
-                .strictJsonSchema(strictJsonSchema)
                 .customParameters(Map.of("enable_thinking", thinking))
                 .build();
     }
@@ -177,25 +165,4 @@ public class OpenAiChatModelProvider implements ChatModelProvider {
     @Override
     public String modelName() { return model; }
 
-    @Override
-    public boolean supportsStructuredOutput() {
-        return true;
-    }
-
-    @Override
-    public ResponseFormat responseFormat(FinalOutputContract outputContract) {
-        if (outputContract instanceof FinalOutputContract.Text) {
-            return ResponseFormat.TEXT;
-        }
-        FinalOutputContract.JsonSchema contract =
-                (FinalOutputContract.JsonSchema) outputContract;
-        JsonSchema schema = JsonSchema.builder()
-                .name(contract.name())
-                .rootElement(LangChainJsonSchemaMapper.toSchemaElement(contract.schema()))
-                .build();
-        return ResponseFormat.builder()
-                .type(ResponseFormatType.JSON)
-                .jsonSchema(schema)
-                .build();
-    }
 }

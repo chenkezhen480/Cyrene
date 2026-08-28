@@ -3,6 +3,7 @@ package com.harness.tool;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.harness.core.exception.ToolExecutionException;
 import com.harness.core.model.ToolCall;
+import com.harness.core.model.ToolOutput;
 import com.harness.core.model.ToolResult;
 import com.harness.core.env.EnvConfig;
 import com.harness.core.env.EnvKey;
@@ -128,13 +129,13 @@ public class ToolExecutor {
                 argsStr.length() > 200 ? argsStr.substring(0, 200) + "..." : argsStr);
         ToolResult.clearCurrentStatus();
         try {
-            String output = tool.execute(toolCall.arguments());
+            ToolOutput output = tool.executeOutput(toolCall.arguments());
             long duration = System.currentTimeMillis() - start;
             // Consume explicit status set by tool via ThreadLocal (null if tool didn't set one)
             ToolResult.ResultStatus status = ToolResult.consumeCurrentStatus();
             log.debug("[L3-Tool] [{}] executed in {}ms", name, duration);
             log.debug("[L3-Tool] [{}] result: {}", name,
-                    output != null && output.length() > 200 ? output.substring(0, 200) + "..." : output);
+                    summarize(output));
             return ToolResult.ok(toolCall.id(), name, output, duration, status);
         } catch (ToolExecutionException e) {
             long duration = System.currentTimeMillis() - start;
@@ -147,6 +148,14 @@ public class ToolExecutor {
         } finally {
             ToolResult.clearCurrentStatus();
         }
+    }
+
+    private static String summarize(ToolOutput output) {
+        if (output == null) {
+            return "null";
+        }
+        String content = output.modelContent();
+        return content.length() > 200 ? content.substring(0, 200) + "..." : content;
     }
 
     private boolean requiresConfirmation(Tool tool, JsonNode arguments) {

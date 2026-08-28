@@ -22,6 +22,7 @@ public record StreamEvent(
         CONFIRMATION_RESOLVED,
         COMPRESS,
         ARTIFACT,
+        STRUCTURED_DATA,
         AUDIO_START,
         AUDIO_DELTA,
         AUDIO_CHUNK_DONE,
@@ -183,6 +184,10 @@ public record StreamEvent(
                 "downloadUrl", artifact.downloadUrl(),
                 "previewUrl", artifact.previewUrl()
         ));
+    }
+
+    public static StreamEvent structuredData(Object data) {
+        return new StreamEvent(Type.STRUCTURED_DATA, "", Map.of("data", data));
     }
 
     public static StreamEvent audioStart(long sequence, String mimeType) {

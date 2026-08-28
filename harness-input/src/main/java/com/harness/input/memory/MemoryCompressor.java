@@ -109,7 +109,8 @@ public class MemoryCompressor {
         for (int i = 0; i < total; i++) {
             MemoryMessage msg = messages.get(i);
             String recency = getTimeDecayLabel(i, total);
-            conversation.append(String.format("[%s] %s: %s\n", recency, msg.role(), msg.text()));
+            conversation.append(String.format(
+                    "[%s] %s: %s\n", recency, msg.role(), msg.modelText()));
         }
 
         int targetChars = targetTokens * 3;
@@ -177,11 +178,14 @@ public class MemoryCompressor {
         StringBuilder sb = new StringBuilder("[Conversation summary]\n");
         for (int i = messages.size() - 1; i >= 0; i--) {
             MemoryMessage msg = messages.get(i);
-            String line = msg.role() + ": " + msg.text() + "\n";
+            String modelText = msg.modelText();
+            String line = msg.role() + ": " + modelText + "\n";
             if (sb.length() + line.length() > targetChars) {
                 int remaining = targetChars - sb.length() - 3;
                 if (remaining > 0) {
-                    sb.insert(0, msg.role() + ": " + msg.text().substring(0, Math.min(remaining, msg.text().length())) + "...\n");
+                    sb.insert(0, msg.role() + ": "
+                            + modelText.substring(0, Math.min(remaining, modelText.length()))
+                            + "...\n");
                 }
                 break;
             }

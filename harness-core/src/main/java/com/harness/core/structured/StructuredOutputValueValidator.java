@@ -1,4 +1,4 @@
-package com.harness.server;
+package com.harness.core.structured;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -12,7 +12,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-/** Parses and validates a model response against the accepted schema subset. */
+/** Parses and validates a structured value against the accepted schema subset. */
 public final class StructuredOutputValueValidator {
 
     private static final int MAX_VIOLATIONS = 20;
@@ -39,6 +39,18 @@ public final class StructuredOutputValueValidator {
                     Map.of("location", e.getLocation() != null
                             ? e.getLocation().getCharOffset() : -1L), e);
         }
+        return validate(value, schema);
+    }
+
+    public JsonNode validate(JsonNode value, JsonNode schema) {
+        if (value == null || value.isNull()) {
+            throw new StructuredOutputException(
+                    StructuredOutputException.Code.STRUCTURED_OUTPUT_EMPTY,
+                    "Structured output is empty");
+        }
+        if (schema == null || !schema.isObject()) {
+            throw new IllegalArgumentException("schema must be a JSON object");
+        }
 
         List<String> violations = new ArrayList<>();
         validateNode(value, schema, "$", violations);
@@ -48,7 +60,7 @@ public final class StructuredOutputValueValidator {
                     "Structured output does not match the requested schema",
                     Map.of("violations", List.copyOf(violations)));
         }
-        return value;
+        return value.deepCopy();
     }
 
     private void validateNode(

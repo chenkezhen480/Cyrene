@@ -3,12 +3,9 @@ package com.harness.provider;
 import com.harness.core.env.EnvConfig;
 import com.harness.core.env.EnvKey;
 import com.harness.core.model.ModelUsage;
-import com.harness.core.model.FinalOutputContract;
-import com.harness.core.exception.StructuredOutputException;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.StreamingChatModel;
 import dev.langchain4j.model.chat.request.ChatRequestParameters;
-import dev.langchain4j.model.chat.request.ResponseFormat;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.agent.tool.ToolSpecification;
 
@@ -53,25 +50,6 @@ public interface ChatModelProvider {
         return ChatRequestParameters.builder()
                 .toolSpecifications(toolSpecifications)
                 .build();
-    }
-
-    default boolean supportsStructuredOutput() {
-        return false;
-    }
-
-    default ChatModel structuredChatModel() {
-        throw new StructuredOutputException(
-                StructuredOutputException.Code.STRUCTURED_OUTPUT_UNSUPPORTED,
-                "Provider does not support strict structured output: " + providerName());
-    }
-
-    default ResponseFormat responseFormat(FinalOutputContract outputContract) {
-        if (outputContract instanceof FinalOutputContract.Text) {
-            return ResponseFormat.TEXT;
-        }
-        throw new StructuredOutputException(
-                StructuredOutputException.Code.STRUCTURED_OUTPUT_UNSUPPORTED,
-                "Provider does not support strict structured output: " + providerName());
     }
 
     /**

@@ -2,6 +2,7 @@ package com.harness.server;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.harness.core.exception.StructuredOutputException;
+import com.harness.core.structured.StructuredOutputValueValidator;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;

@@ -21,4 +21,5 @@ public class NoOpMessageStore implements MessageStore {
     @Override public int countByRole(String sessionId, String role) { return 0; }
     @Override public SessionStats loadSessionStats(String sessionId) { return new SessionStats(0, 0, 0, 0, 0, false); }
     @Override public int deleteBySession(String sessionId) { return 0; }
+    @Override public int deleteToolMessages(String sessionId) { return 0; }
 }

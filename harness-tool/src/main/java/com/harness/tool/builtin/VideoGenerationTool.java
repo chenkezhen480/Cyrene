@@ -6,8 +6,9 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.harness.core.exception.ToolExecutionException;
 import com.harness.core.model.Artifact;
 import com.harness.core.model.ToolResult;
+import com.harness.core.model.ToolOutput;
 import com.harness.core.model.ToolSpec;
-import com.harness.tool.ArtifactProducingTool;
+import com.harness.tool.TypedOutputTool;
 import com.harness.core.env.EnvConfig;
 import com.harness.core.env.EnvKey;
 import okhttp3.*;
@@ -16,7 +17,6 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.*;
 
 /**
@@ -28,7 +28,7 @@ import java.util.concurrent.*;
  *
  * Background polling thread monitors submitted tasks and stores completed videos as artifacts.
  */
-public class VideoGenerationTool implements ArtifactProducingTool {
+public class VideoGenerationTool implements TypedOutputTool {
 
     private static final Logger log = LoggerFactory.getLogger(VideoGenerationTool.class);
     private static final MediaType JSON_TYPE = MediaType.get("application/json");
@@ -109,7 +109,7 @@ public class VideoGenerationTool implements ArtifactProducingTool {
     }
 
     @Override
-    public String execute(JsonNode arguments) {
+    public ToolOutput executeOutput(JsonNode arguments) {
         String action = arguments.has("action") ? arguments.get("action").asText() : null;
         if (action == null || action.isBlank()) {
             throw new ToolExecutionException("video_generation", "Missing required parameter: action");
@@ -129,7 +129,7 @@ public class VideoGenerationTool implements ArtifactProducingTool {
         };
     }
 
-    private String handleSubmit(JsonNode arguments) {
+    private ToolOutput handleSubmit(JsonNode arguments) {
         String prompt = arguments.has("prompt") ? arguments.get("prompt").asText() : null;
         if (prompt == null || prompt.isBlank()) {
             throw new ToolExecutionException("video_generation", "Missing required parameter for submit: prompt");
@@ -182,7 +182,7 @@ public class VideoGenerationTool implements ArtifactProducingTool {
                 result.put("task_id", taskId);
                 result.put("message", "视频正在生成中，完成后会自动通知。可稍后使用 action='check', task_id='" + taskId + "' 查询状态。");
                 ToolResult.setCurrentStatus(ToolResult.ResultStatus.SUCCESS);
-                return mapper.writeValueAsString(result);
+                return ToolOutput.text(mapper.writeValueAsString(result));
             }
 
         } catch (ToolExecutionException e) {
@@ -192,7 +192,7 @@ public class VideoGenerationTool implements ArtifactProducingTool {
         }
     }
 
-    private String handleCheck(JsonNode arguments) {
+    private ToolOutput handleCheck(JsonNode arguments) {
         String taskId = arguments.has("task_id") ? arguments.get("task_id").asText() : null;
         if (taskId == null || taskId.isBlank()) {
             throw new ToolExecutionException("video_generation", "Missing required parameter for check: task_id");
@@ -214,16 +214,10 @@ public class VideoGenerationTool implements ArtifactProducingTool {
             ObjectNode result = mapper.createObjectNode();
             result.put("status", "completed");
             result.put("task_id", taskId);
-            result.set("artifacts", mapper.valueToTree(List.of(Map.of(
-                    "id", state.artifact.id(),
-                    "name", state.artifact.name(),
-                    "mimeType", state.artifact.mimeType(),
-                    "sizeBytes", state.artifact.sizeBytes(),
-                    "downloadUrl", state.artifact.downloadUrl()
-            ))));
             try {
                 ToolResult.setCurrentStatus(ToolResult.ResultStatus.SUCCESS);
-                return mapper.writeValueAsString(result);
+                return ToolOutput.artifacts(
+                        mapper.writeValueAsString(result), List.of(state.artifact));
             } catch (Exception e) {
                 throw new ToolExecutionException("video_generation", "Serialization failed: " + e.getMessage(), e);
             }
@@ -235,7 +229,7 @@ public class VideoGenerationTool implements ArtifactProducingTool {
         result.put("message", "视频仍在生成中，请稍后再试。");
         try {
             ToolResult.setCurrentStatus(ToolResult.ResultStatus.EMPTY);
-            return mapper.writeValueAsString(result);
+            return ToolOutput.text(mapper.writeValueAsString(result));
         } catch (Exception e) {
             throw new ToolExecutionException("video_generation", "Serialization failed: " + e.getMessage(), e);
         }
@@ -244,19 +238,19 @@ public class VideoGenerationTool implements ArtifactProducingTool {
     private void startPolling(String taskId) {
         scheduler.scheduleAtFixedRate(() -> {
             try {
-                String resultJson = pollTaskStatus(taskId);
-                JsonNode result = mapper.readTree(resultJson);
+                ToolOutput output = pollTaskStatus(taskId);
+                JsonNode result = mapper.readTree(output.text());
                 String status = result.has("status") ? result.get("status").asText() : "unknown";
 
                 TaskState state = tasks.get(taskId);
                 if (state == null) return;
                 state.status = status;
 
-                if ("completed".equals(status) && result.has("artifacts")) {
+                if ("completed".equals(status) && !output.artifacts().isEmpty()) {
                     // Video is done — artifact already stored by pollTaskStatus
-                    JsonNode artifacts = result.get("artifacts");
-                    if (artifacts.isArray() && !artifacts.isEmpty()) {
-                        String artifactId = artifacts.get(0).get("id").asText();
+                    Artifact artifact = output.artifacts().get(0);
+                    if (artifact != null) {
+                        String artifactId = artifact.id();
                         log.info("Video generation completed: taskId={}, artifactId={}", taskId, artifactId);
                         // Mark as done, stop polling
                         tasks.remove(taskId);
@@ -277,7 +271,7 @@ public class VideoGenerationTool implements ArtifactProducingTool {
      * Poll the video generation API for task status.
      * Returns JSON with status, and artifacts if completed.
      */
-    private String pollTaskStatus(String taskId) {
+    private ToolOutput pollTaskStatus(String taskId) {
         String statusUrl = baseUrl + statusPath + "/" + taskId;
         Request request = new Request.Builder()
                 .url(statusUrl)
@@ -297,6 +291,7 @@ public class VideoGenerationTool implements ArtifactProducingTool {
             ObjectNode result = mapper.createObjectNode();
             result.put("status", status);
             result.put("task_id", taskId);
+            List<Artifact> artifacts = new java.util.ArrayList<>();
 
             if ("completed".equals(status)) {
                 // Download video
@@ -311,18 +306,11 @@ public class VideoGenerationTool implements ArtifactProducingTool {
                         state.artifact = artifact;
                         state.status = "completed";
                     }
-
-                    result.set("artifacts", mapper.valueToTree(List.of(Map.of(
-                            "id", artifact.id(),
-                            "name", artifact.name(),
-                            "mimeType", artifact.mimeType(),
-                            "sizeBytes", artifact.sizeBytes(),
-                            "downloadUrl", artifact.downloadUrl()
-                    ))));
+                    artifacts.add(artifact);
                 }
             }
 
-            return mapper.writeValueAsString(result);
+            return ToolOutput.artifacts(mapper.writeValueAsString(result), artifacts);
         } catch (Exception e) {
             throw new RuntimeException("Poll failed: " + e.getMessage(), e);
         }

@@ -59,14 +59,11 @@ public final class ModelProviderFactory {
         Semaphore semaphore = new Semaphore(maxConcurrent, true);
         log.info("[Semaphore] LLM API concurrency limit={}, fair=true", maxConcurrent);
         ChatModel chatModel = new SemaphoreChatModel(chatProvider.chatModel(), semaphore);
-        ChatModel structuredChatModel = chatProvider.supportsStructuredOutput()
-                ? new SemaphoreChatModel(chatProvider.structuredChatModel(), semaphore)
-                : null;
         StreamingChatModel streamingRaw = chatProvider.streamingModel();
         StreamingChatModel streamingModel = streamingRaw != null
                 ? new SemaphoreStreamingChatModel(streamingRaw, semaphore) : null;
         return new SemaphoreChatModelProvider(
-                chatProvider, chatModel, structuredChatModel, streamingModel);
+                chatProvider, chatModel, streamingModel);
     }
 
     static OpenAiChatApiFormat validateChatApiFormat(

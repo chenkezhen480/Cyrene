@@ -4,7 +4,6 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.harness.core.env.EnvConfig;
 import com.harness.core.env.EnvKey;
-import com.harness.core.model.FinalOutputContract;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
@@ -19,7 +18,6 @@ import dev.langchain4j.model.chat.request.ChatRequest;
 import dev.langchain4j.model.chat.request.json.JsonObjectSchema;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
-import dev.langchain4j.model.openai.OpenAiResponsesChatRequestParameters;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
@@ -38,7 +36,7 @@ class OpenAiResponsesProtocolTest {
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     @Test
-    void sendsCompleteStatelessHistoryToolResultsAndStructuredOutputToResponsesEndpoint()
+    void sendsCompleteStatelessHistoryAndToolResultsToResponsesEndpoint()
             throws Exception {
         List<CapturedRequest> requests = new CopyOnWriteArrayList<>();
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
@@ -57,8 +55,7 @@ class OpenAiResponsesProtocolTest {
             ));
             OpenAiChatModelProvider provider =
                     new OpenAiChatModelProvider(OpenAiChatApiFormat.RESPONSES);
-            ChatModel model = provider.createRawChatModel(false);
-            ChatModel structuredModel = provider.createRawChatModel(true);
+            ChatModel model = provider.createRawChatModel();
 
             ToolExecutionRequest toolCall = ToolExecutionRequest.builder()
                     .id("call-person-1")
@@ -73,24 +70,6 @@ class OpenAiResponsesProtocolTest {
                             ToolExecutionResultMessage.from(
                                     toolCall,
                                     "{\"name\":\"Cyrene\"}")))
-                    .build());
-
-            JsonNode schema = MAPPER.readTree("""
-                    {
-                      "type":"object",
-                      "properties":{"name":{"type":"string"}},
-                      "required":["name"],
-                      "additionalProperties":false
-                    }
-                    """);
-            structuredModel.chat(ChatRequest.builder()
-                    .messages(List.of(UserMessage.from("Return the person object")))
-                    .parameters(OpenAiResponsesChatRequestParameters.builder()
-                            .responseFormat(provider.responseFormat(
-                                    new FinalOutputContract.JsonSchema(
-                                            "personResult", schema, true)))
-                            .store(false)
-                            .build())
                     .build());
 
             StreamingChatModel streamingModel = provider.streamingModel();
@@ -149,7 +128,7 @@ class OpenAiResponsesProtocolTest {
                     });
             ChatResponse toolStreamResponse = completedToolResponse.get(2, TimeUnit.SECONDS);
 
-            assertThat(requests).hasSize(4);
+            assertThat(requests).hasSize(3);
             assertThat(requests).allSatisfy(request -> {
                 assertThat(request.path()).isEqualTo("/v1/responses");
                 assertThat(request.body().path("store").asBoolean()).isFalse();
@@ -165,17 +144,11 @@ class OpenAiResponsesProtocolTest {
                     .contains("function_call_output")
                     .contains("Cyrene");
 
-            JsonNode textFormat = requests.get(1).body().path("text").path("format");
-            assertThat(textFormat.path("type").asText()).isEqualTo("json_schema");
-            assertThat(textFormat.path("name").asText()).isEqualTo("personResult");
-            assertThat(textFormat.path("strict").asBoolean()).isTrue();
-            assertThat(textFormat.path("schema").path("required").get(0).asText())
-                    .isEqualTo("name");
-            assertThat(requests.get(2).body().path("stream").asBoolean()).isTrue();
+            assertThat(requests.get(1).body().path("stream").asBoolean()).isTrue();
             assertThat(partialResponses).containsExactly("Cyrene");
             assertThat(streamResponse.aiMessage().text()).isEqualTo("Cyrene");
             assertThat(streamResponse.metadata().tokenUsage().inputTokenCount()).isEqualTo(10);
-            assertThat(requests.get(3).body().path("tools").get(0).path("name").asText())
+            assertThat(requests.get(2).body().path("tools").get(0).path("name").asText())
                     .isEqualTo("lookupPerson");
             assertThat(toolStreamResponse.aiMessage().toolExecutionRequests()).singleElement()
                     .satisfies(toolRequest -> {

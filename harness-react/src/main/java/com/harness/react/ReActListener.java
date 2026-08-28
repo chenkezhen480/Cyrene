@@ -1,5 +1,6 @@
 package com.harness.react;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.harness.core.model.Artifact;
 import com.harness.core.model.ReActStep;
 import com.harness.core.model.ToolCallStatus;
@@ -90,4 +91,7 @@ public interface ReActListener {
      * Default is no-op for backward compatibility.
      */
     default void onArtifact(List<Artifact> artifacts) {}
+
+    /** Called when structured data is accepted for direct user-visible rendering. */
+    default void onStructuredOutput(JsonNode data) {}
 }

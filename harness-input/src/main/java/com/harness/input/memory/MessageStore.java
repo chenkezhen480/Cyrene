@@ -75,4 +75,7 @@ public interface MessageStore {
      * @return number of deleted messages
      */
     int deleteBySession(String sessionId);
+
+    /** Delete Tool calls/results when minor compression strips Tool context. */
+    int deleteToolMessages(String sessionId);
 }

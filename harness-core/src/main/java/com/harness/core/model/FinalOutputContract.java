@@ -4,7 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 
 import java.util.Objects;
 
-/** Provider-neutral contract applied only to the final model call. */
+/** Provider-neutral contract for an agent run's final output. */
 public sealed interface FinalOutputContract {
 
     record Text() implements FinalOutputContract {}

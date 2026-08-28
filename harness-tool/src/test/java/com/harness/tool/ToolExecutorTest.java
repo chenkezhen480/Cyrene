@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.harness.core.exception.ToolExecutionException;
 import com.harness.core.model.ToolCall;
 import com.harness.core.model.ToolResult;
+import com.harness.core.model.ToolOutput;
 import com.harness.core.model.ToolSpec;
 import com.harness.core.env.EnvConfig;
 import com.harness.tool.confirmation.ConfirmationManager;
@@ -64,6 +65,29 @@ class ToolExecutorTest {
         assertThat(result.output()).isEqualTo("results found");
         assertThat(result.toolName()).isEqualTo("search");
         assertThat(result.durationMs()).isGreaterThanOrEqualTo(0);
+    }
+
+    @Test
+    void execute_preservesTypedJsonOutput() {
+        Tool tool = new Tool() {
+            @Override public ToolSpec spec() {
+                return new ToolSpec("structured", "desc", MAPPER.createObjectNode());
+            }
+
+            @Override public String execute(JsonNode args) {
+                throw new AssertionError("typed execution path expected");
+            }
+
+            @Override public ToolOutput executeOutput(JsonNode args) {
+                return ToolOutput.json(MAPPER.createObjectNode().put("value", 1));
+            }
+        };
+
+        ToolResult result = executor.executeAuthorized(toolCall("structured"), tool, null);
+
+        assertThat(result.success()).isTrue();
+        assertThat(result.content().json().get("value").asInt()).isEqualTo(1);
+        assertThat(result.output()).isEqualTo("{\"value\":1}");
     }
 
     @Test

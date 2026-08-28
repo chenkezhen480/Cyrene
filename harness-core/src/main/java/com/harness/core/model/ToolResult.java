@@ -10,8 +10,29 @@ public record ToolResult(
         String output,
         String error,
         long durationMs,
-        ResultStatus status
+        ResultStatus status,
+        ToolOutput content
 ) {
+
+    public ToolResult {
+        if (success && content == null) {
+            content = ToolOutput.text(output);
+        }
+    }
+
+    /** Source-compatible constructor for callers that do not yet provide typed content. */
+    public ToolResult(
+            String toolCallId,
+            String toolName,
+            boolean success,
+            String output,
+            String error,
+            long durationMs,
+            ResultStatus status
+    ) {
+        this(toolCallId, toolName, success, output, error, durationMs, status,
+                success ? ToolOutput.text(output) : null);
+    }
 
     /**
      * Structured result status that tools can explicitly declare.
@@ -70,34 +91,53 @@ public record ToolResult(
     // --- Factory methods ---
 
     public static ToolResult ok(String toolCallId, String toolName, String output, long durationMs) {
-        return new ToolResult(toolCallId, toolName, true, output, null, durationMs, null);
+        return ok(toolCallId, toolName, ToolOutput.text(output), durationMs, null);
     }
 
     public static ToolResult ok(String toolCallId, String toolName, String output, long durationMs, ResultStatus status) {
-        return new ToolResult(toolCallId, toolName, true, output, null, durationMs, status);
+        return ok(toolCallId, toolName, ToolOutput.text(output), durationMs, status);
+    }
+
+    public static ToolResult ok(
+            String toolCallId,
+            String toolName,
+            ToolOutput content,
+            long durationMs,
+            ResultStatus status
+    ) {
+        ToolOutput normalized = content == null ? ToolOutput.empty() : content;
+        return new ToolResult(
+                toolCallId,
+                toolName,
+                true,
+                normalized.modelContent(),
+                null,
+                durationMs,
+                status,
+                normalized);
     }
 
     public static ToolResult fail(String toolCallId, String toolName, String error, long durationMs) {
-        return new ToolResult(toolCallId, toolName, false, null, error, durationMs, null);
+        return new ToolResult(toolCallId, toolName, false, null, error, durationMs, null, null);
     }
 
     public static ToolResult confirmationRequired(String toolCallId, String toolName, String message) {
         return new ToolResult(toolCallId, toolName, false, null, message, 0,
-                ResultStatus.CONFIRMATION_REQUIRED);
+                ResultStatus.CONFIRMATION_REQUIRED, null);
     }
 
     public static ToolResult confirmationRejected(String toolCallId, String toolName, String message) {
         return new ToolResult(toolCallId, toolName, false, null, message, 0,
-                ResultStatus.CONFIRMATION_REJECTED);
+                ResultStatus.CONFIRMATION_REJECTED, null);
     }
 
     public static ToolResult confirmationExpired(String toolCallId, String toolName, String message) {
         return new ToolResult(toolCallId, toolName, false, null, message, 0,
-                ResultStatus.CONFIRMATION_EXPIRED);
+                ResultStatus.CONFIRMATION_EXPIRED, null);
     }
 
     public static ToolResult confirmationCancelled(String toolCallId, String toolName, String message) {
         return new ToolResult(toolCallId, toolName, false, null, message, 0,
-                ResultStatus.CONFIRMATION_CANCELLED);
+                ResultStatus.CONFIRMATION_CANCELLED, null);
     }
 }

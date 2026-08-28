@@ -162,6 +162,10 @@ public class ChatHandler {
                                                         "detail", event.data())));
                                         case ARTIFACT -> writeSseEvent(out, "artifact",
                                                 mapper.writeValueAsString(event.metadata()));
+                                        case STRUCTURED_DATA -> writeSseEvent(
+                                                out,
+                                                "structured_data",
+                                                mapper.writeValueAsString(event.metadata()));
                                         case AUDIO_START -> writeSseEvent(out, "audio_start",
                                                 mapper.writeValueAsString(event.metadata()));
                                         case AUDIO_DELTA -> {
@@ -232,6 +236,7 @@ public class ChatHandler {
                     doneData.put("traceId", result.trace().traceId());
                     doneData.put("steps", result.steps().size());
                     doneData.put("sessionId", resolvedSessionId);
+                    doneData.put("blocks", result.blocks());
                     if (!result.artifacts().isEmpty()) {
                         doneData.put("artifacts", result.artifacts().stream().map(a -> Map.of(
                                 "id", a.id(),

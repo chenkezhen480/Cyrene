@@ -22,6 +22,7 @@ import com.harness.tool.artifact.ArtifactStorageService;
 import com.harness.tool.builtin.FfmpegTool;
 import com.harness.tool.builtin.ImageGenerationTool;
 import com.harness.tool.builtin.PythonSandboxTool;
+import com.harness.tool.builtin.StructuredOutputTool;
 import com.harness.tool.builtin.VideoGenerationTool;
 import com.harness.tool.builtin.WebSearchTool;
 import com.harness.tool.discovery.CodeGlobTool;
@@ -121,6 +122,7 @@ public final class AgentToolRuntime {
             ArtifactStorageService artifactStorageService
     ) {
         EnvConfig config = EnvConfig.get();
+        toolRegistry.register(StructuredOutputTool.chatBlock());
         if (config.getBool(EnvKey.TOOL_WEB_SEARCH_ENABLED, true)) {
             toolRegistry.register(new WebSearchTool());
         }

@@ -1,6 +1,7 @@
 package com.harness.tool;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.harness.core.model.ToolOutput;
 import com.harness.core.model.ToolSpec;
 
 /**
@@ -22,4 +23,12 @@ public interface Tool {
      * @throws com.harness.core.exception.ToolExecutionException on failure
      */
     String execute(JsonNode arguments);
+
+    /**
+     * Execute the Tool using the unified optional text/artifact/JSON output contract.
+     * Existing external Tools remain source-compatible and are represented as text-only output.
+     */
+    default ToolOutput executeOutput(JsonNode arguments) {
+        return ToolOutput.text(execute(arguments));
+    }
 }

@@ -1,11 +1,9 @@
 package com.harness.provider.impl;
 
 import com.harness.provider.ChatModelProvider;
-import com.harness.core.model.FinalOutputContract;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.StreamingChatModel;
 import dev.langchain4j.model.chat.request.ChatRequestParameters;
-import dev.langchain4j.model.chat.request.ResponseFormat;
 import dev.langchain4j.agent.tool.ToolSpecification;
 
 import java.util.List;
@@ -18,16 +16,13 @@ public class SemaphoreChatModelProvider implements ChatModelProvider {
 
     private final ChatModelProvider delegate;
     private final ChatModel chatModel;
-    private final ChatModel structuredChatModel;
     private final StreamingChatModel streamingModel;
 
     public SemaphoreChatModelProvider(ChatModelProvider delegate,
                                        ChatModel chatModel,
-                                       ChatModel structuredChatModel,
                                        StreamingChatModel streamingModel) {
         this.delegate = delegate;
         this.chatModel = chatModel;
-        this.structuredChatModel = structuredChatModel;
         this.streamingModel = streamingModel;
     }
 
@@ -64,18 +59,4 @@ public class SemaphoreChatModelProvider implements ChatModelProvider {
         return delegate.planningRequestParameters(enableThinking, toolSpecifications);
     }
 
-    @Override
-    public boolean supportsStructuredOutput() {
-        return delegate.supportsStructuredOutput();
-    }
-
-    @Override
-    public ChatModel structuredChatModel() {
-        return structuredChatModel;
-    }
-
-    @Override
-    public ResponseFormat responseFormat(FinalOutputContract outputContract) {
-        return delegate.responseFormat(outputContract);
-    }
 }

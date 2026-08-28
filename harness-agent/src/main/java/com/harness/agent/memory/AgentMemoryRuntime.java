@@ -25,9 +25,7 @@ import com.harness.react.ReActResult;
 import com.harness.tool.ToolRegistry;
 import com.harness.tool.builtin.UpdateMemoryTool;
 import com.harness.tool.skill.SkillRegistry;
-import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.ChatMessage;
-import dev.langchain4j.data.message.UserMessage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -249,7 +247,7 @@ public final class AgentMemoryRuntime {
         }
     }
 
-    public void cacheToolMessages(ReActResult result, String sessionId, String userId) {
+    public void persistToolMessages(ReActResult result, String sessionId, String userId) {
         if (sessionId == null || userId == null) {
             return;
         }
@@ -257,49 +255,26 @@ public final class AgentMemoryRuntime {
             if (step.toolCalls() == null || step.toolCalls().isEmpty()) {
                 continue;
             }
-            String toolCallDescription = step.toolCalls().stream()
-                    .map(call -> call.toolName() + "(" + call.arguments() + ")")
-                    .reduce((left, right) -> left + ", " + right)
-                    .orElse("");
-            appendCachedMessage(
+            appendContextMessage(
                     sessionId,
                     userId,
-                    "assistant",
-                    "[Tool call] " + toolCallDescription);
+                    ToolMemoryCodec.TOOL_CALL_ROLE,
+                    ToolMemoryCodec.encodeCalls(step.toolCalls()));
             if (step.toolResults() == null) {
                 continue;
             }
             for (ToolResult toolResult : step.toolResults()) {
-                String content = toolResult.success()
-                        ? toolResult.output()
-                        : "ERROR: " + toolResult.error();
-                appendCachedMessage(
+                appendContextMessage(
                         sessionId,
                         userId,
-                        "tool",
-                        "[" + toolResult.toolName() + "] " + content);
+                        ToolMemoryCodec.TOOL_RESULT_ROLE,
+                        ToolMemoryCodec.encodeResult(toolResult));
             }
         }
     }
 
     public List<ChatMessage> toChatMessages(List<MemoryMessage> memoryMessages) {
-        List<ChatMessage> chatMessages = new ArrayList<>();
-        for (MemoryMessage message : memoryMessages) {
-            String text = message.text();
-            if (message.isSummary()) {
-                chatMessages.add(AiMessage.from("[Previous conversation summary]\n" + text));
-                continue;
-            }
-            switch (message.role()) {
-                case "user" -> chatMessages.add(UserMessage.from(text));
-                case "assistant" -> chatMessages.add(AiMessage.from(text));
-                case "system", "tool" -> {
-                    // System and tool messages are represented by the compressed context.
-                }
-                default -> log.debug("Ignoring unsupported memory role: {}", message.role());
-            }
-        }
-        return chatMessages;
+        return ToolMemoryCodec.toChatMessages(memoryMessages);
     }
 
     public List<MemoryMessage> loadMessages(String sessionId, String userId) {
@@ -403,14 +378,15 @@ public final class AgentMemoryRuntime {
         }
     }
 
-    private void appendCachedMessage(
+    private void appendContextMessage(
             String sessionId,
             String userId,
             String role,
-            String text
+            List<MessageBlock> blocks
     ) {
-        List<MessageBlock> blocks = List.of(
-                new MessageBlock(MessageBlock.BlockType.TEXT, text, null));
+        if (messageWriteWorker != null) {
+            messageWriteWorker.submit(sessionId, role, blocks, false);
+        }
         messageCache.append(
                 sessionId,
                 userId,
@@ -418,12 +394,19 @@ public final class AgentMemoryRuntime {
     }
 
     private int stripToolMessages(String sessionId, String userId) {
+        if (messageWriteWorker != null) {
+            messageWriteWorker.flushPending();
+        }
+        int persistedRemoved = messageStore == null
+                ? 0
+                : messageStore.deleteToolMessages(sessionId);
         List<MemoryMessage> cached = messageCache.getIfPresent(sessionId);
         if (cached == null || cached.isEmpty()) {
-            return 0;
+            return persistedRemoved;
         }
         List<MemoryMessage> stripped = cached.stream()
-                .filter(message -> !"tool".equals(message.role()))
+                .filter(message -> !ToolMemoryCodec.TOOL_RESULT_ROLE.equals(message.role()))
+                .filter(message -> !ToolMemoryCodec.TOOL_CALL_ROLE.equals(message.role()))
                 .filter(message -> !("assistant".equals(message.role())
                         && message.text().startsWith("[Tool call]")))
                 .toList();
@@ -431,11 +414,13 @@ public final class AgentMemoryRuntime {
         if (removed > 0) {
             messageCache.put(sessionId, userId, stripped);
         }
-        return removed;
+        return Math.max(removed, persistedRemoved);
     }
 
     private static int estimateTokens(List<MemoryMessage> messages) {
-        return messages.stream().mapToInt(message -> TextChunker.estimateTokens(message.text())).sum();
+        return messages.stream()
+                .mapToInt(message -> TextChunker.estimateTokens(message.modelText()))
+                .sum();
     }
 
     public record MemoryContext(
