@@ -13,10 +13,10 @@ from document_converter import ConversionRequest, DocumentConversionError
 
 
 DISABLED_ENVIRONMENT = {
-    "HARNESS_MODEL_CHAT_PROVIDER": "none",
     "HARNESS_DOCUMENT_PARSER_TIMEOUT_SECONDS": "1",
     "HARNESS_DOCUMENT_PARSER_MAX_CONCURRENT": "1",
 }
+DISABLED_MODEL = {"chat.provider": "none"}
 
 
 class SlowConverter:
@@ -64,7 +64,7 @@ class MultipartTest(unittest.TestCase):
 class DocumentParserRuntimeTest(unittest.TestCase):
 
     def test_rejects_work_above_concurrency_limit(self):
-        config = ParserConfig.fromEnvironment(DISABLED_ENVIRONMENT)
+        config = ParserConfig.fromEnvironment(DISABLED_ENVIRONMENT, DISABLED_MODEL)
         runtime = DocumentParserRuntime(config, SlowConverter(0.1))
         request = ConversionRequest(b"x", "x.txt", "text/plain")
         runtime._capacity.acquire()
@@ -78,7 +78,7 @@ class DocumentParserRuntimeTest(unittest.TestCase):
 
     def test_returns_timeout_without_releasing_running_capacity(self):
         config = replace(
-            ParserConfig.fromEnvironment(DISABLED_ENVIRONMENT),
+            ParserConfig.fromEnvironment(DISABLED_ENVIRONMENT, DISABLED_MODEL),
             timeoutSeconds=0.01,
         )
         runtime = DocumentParserRuntime(config, SlowConverter(0.05))

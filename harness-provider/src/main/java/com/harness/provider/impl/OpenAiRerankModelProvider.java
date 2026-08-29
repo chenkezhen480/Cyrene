@@ -1,8 +1,8 @@
 package com.harness.provider.impl;
 
 import com.harness.provider.RerankModelProvider;
-import com.harness.core.env.EnvConfig;
-import com.harness.core.env.EnvKey;
+import com.harness.core.modelconfig.ModelConfig;
+import com.harness.core.modelconfig.ModelConfigKey;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -24,17 +24,15 @@ public class OpenAiRerankModelProvider implements RerankModelProvider {
     private final String apiKey;
     private final String baseUrl;
     private final String model;
+    private final int topN;
     private volatile OkHttpClient client;
     private volatile ObjectMapper mapper;
 
-    public OpenAiRerankModelProvider() {
-        this(EnvConfig.get());
-    }
-
-    public OpenAiRerankModelProvider(EnvConfig cfg) {
-        this.apiKey = cfg.requireString(EnvKey.MODEL_RERANK_API_KEY);
-        this.baseUrl = cfg.getString(EnvKey.MODEL_RERANK_BASE_URL, "https://api.openai.com/v1");
-        this.model = cfg.getString(EnvKey.MODEL_RERANK_MODEL, "rerank-english-v3.0");
+    public OpenAiRerankModelProvider(ModelConfig cfg) {
+        this.apiKey = cfg.requireString(ModelConfigKey.RERANK_API_KEY);
+        this.baseUrl = cfg.getString(ModelConfigKey.RERANK_BASE_URL, "https://api.openai.com/v1");
+        this.model = cfg.getString(ModelConfigKey.RERANK_MODEL, "rerank-english-v3.0");
+        this.topN = cfg.getInt(ModelConfigKey.RERANK_TOP_N, 3);
     }
 
     private OkHttpClient getClient() {
@@ -61,6 +59,9 @@ public class OpenAiRerankModelProvider implements RerankModelProvider {
         }
         return mapper;
     }
+
+    @Override
+    public int defaultTopN() { return topN; }
 
     @Override
     public double score(String query, String document) {

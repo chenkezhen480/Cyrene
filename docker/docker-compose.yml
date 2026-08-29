@@ -25,8 +25,8 @@ services:
     volumes:
       # 挂载 .env 配置文件
       - ../.env:/app/.env:ro
-      # Web 管理的模型配置（独立可写并持久化）
-      - model-config-data:/app/data
+      # Web 管理的 model.conf；目录挂载允许原子替换并持久化到宿主机。
+      - ../data:/app/data
       # 知识库上传目录
       - knowledge-uploads:/app/knowledge-uploads
       # 产物存储
@@ -108,6 +108,9 @@ services:
     container_name: cyrene-document-parser
     env_file:
       - ../.env
+    volumes:
+      # 与主服务共享同一个 model.conf；解析器不再读取模型环境变量。
+      - ../data:/app/data:ro
     init: true
     read_only: true
     tmpfs:
@@ -122,6 +125,7 @@ services:
     environment:
       - HARNESS_DOCUMENT_PARSER_HOST=0.0.0.0
       - HARNESS_DOCUMENT_PARSER_PORT=8082
+      - HARNESS_CONFIG_MODEL_FILE=/app/data/model.conf
     restart: unless-stopped
     logging: *default-logging
     networks:
@@ -339,7 +343,6 @@ volumes:
   redis-data:
   knowledge-uploads:
   artifacts:
-  model-config-data:
 
 networks:
   cyrene-net:

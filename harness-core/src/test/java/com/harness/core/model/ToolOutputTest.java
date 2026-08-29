@@ -50,6 +50,26 @@ class ToolOutputTest {
     }
 
     @Test
+    void traceJsonOmitsDerivedEmptyPropertyAndReadsExistingRowsThatContainIt()
+            throws Exception {
+        String serialized = MAPPER.writeValueAsString(ToolOutput.empty());
+        ToolOutput restored = MAPPER.readValue(
+                """
+                        {
+                          "text": "legacy trace result",
+                          "artifacts": [],
+                          "json": null,
+                          "empty": false
+                        }
+                        """,
+                ToolOutput.class);
+
+        assertThat(serialized).doesNotContain("\"empty\"");
+        assertThat(restored.text()).isEqualTo("legacy trace result");
+        assertThat(restored.isEmpty()).isFalse();
+    }
+
+    @Test
     void memoryModelTextIncludesStructuredDataInsteadOfDroppingIt() throws Exception {
         MemoryMessage message = new MemoryMessage(
                 1,

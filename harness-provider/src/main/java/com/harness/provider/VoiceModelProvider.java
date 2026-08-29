@@ -60,5 +60,11 @@ public interface VoiceModelProvider {
      */
     default boolean isSynthesizeAvailable() { return false; }
 
+    default int timeoutSeconds() { return 120; }
+
+    default long maxTranscriptionSizeBytes() { return 20L * 1024 * 1024; }
+
+    default String defaultVoice() { return "alloy"; }
+
     String providerName();
 }

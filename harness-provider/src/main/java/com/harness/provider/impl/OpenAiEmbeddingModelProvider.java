@@ -4,8 +4,8 @@ import com.harness.provider.EmbeddingModelProvider;
 import com.harness.provider.OpenAiTextTokenEstimator;
 import com.harness.core.text.TextTokenEstimator;
 import com.harness.core.text.UnicodeAwareTextTokenEstimator;
-import com.harness.core.env.EnvConfig;
-import com.harness.core.env.EnvKey;
+import com.harness.core.modelconfig.ModelConfig;
+import com.harness.core.modelconfig.ModelConfigKey;
 import dev.langchain4j.data.embedding.Embedding;
 import dev.langchain4j.data.segment.TextSegment;
 import dev.langchain4j.model.openai.OpenAiEmbeddingModel;
@@ -25,15 +25,11 @@ public class OpenAiEmbeddingModelProvider implements EmbeddingModelProvider {
     private final TextTokenEstimator tokenEstimator;
     private volatile OpenAiEmbeddingModel model;
 
-    public OpenAiEmbeddingModelProvider() {
-        this(EnvConfig.get());
-    }
-
-    public OpenAiEmbeddingModelProvider(EnvConfig cfg) {
-        this.apiKey = cfg.requireString(EnvKey.MODEL_EMBEDDING_API_KEY);
-        this.baseUrl = cfg.getString(EnvKey.MODEL_EMBEDDING_BASE_URL, "https://api.openai.com/v1");
-        this.modelName = cfg.getString(EnvKey.MODEL_EMBEDDING_MODEL, "text-embedding-3-small");
-        this.dim = cfg.getInt(EnvKey.MODEL_EMBEDDING_DIM, EnvKey.MODEL_EMBEDDING_DIM_DEFAULT);
+    public OpenAiEmbeddingModelProvider(ModelConfig cfg) {
+        this.apiKey = cfg.requireString(ModelConfigKey.EMBEDDING_API_KEY);
+        this.baseUrl = cfg.getString(ModelConfigKey.EMBEDDING_BASE_URL, "https://api.openai.com/v1");
+        this.modelName = cfg.getString(ModelConfigKey.EMBEDDING_MODEL, "text-embedding-3-small");
+        this.dim = cfg.getInt(ModelConfigKey.EMBEDDING_DIMENSION, ModelConfigKey.EMBEDDING_DIMENSION_DEFAULT);
         this.tokenEstimator = createTokenEstimator(modelName);
     }
 

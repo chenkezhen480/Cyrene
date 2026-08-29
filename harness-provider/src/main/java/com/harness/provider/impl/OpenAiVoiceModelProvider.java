@@ -8,8 +8,8 @@ import com.harness.provider.SynthesisRequest;
 import com.harness.provider.VoiceCapabilities;
 import com.harness.provider.VoiceModelProvider;
 import com.harness.core.model.CancellationToken;
-import com.harness.core.env.EnvConfig;
-import com.harness.core.env.EnvKey;
+import com.harness.core.modelconfig.ModelConfig;
+import com.harness.core.modelconfig.ModelConfigKey;
 import okhttp3.Call;
 import okhttp3.MediaType;
 import okhttp3.MultipartBody;
@@ -54,13 +54,13 @@ public class OpenAiVoiceModelProvider implements VoiceModelProvider {
     private final int maxAsrBytes;
     private final OkHttpClient http;
     private final ObjectMapper mapper;
+    private String defaultVoice = "alloy";
+    private int timeoutSeconds = 120;
 
-    public OpenAiVoiceModelProvider() {
-        this(configurationFrom(EnvConfig.get()));
-    }
-
-    public OpenAiVoiceModelProvider(EnvConfig config) {
+    public OpenAiVoiceModelProvider(ModelConfig config) {
         this(configurationFrom(config));
+        this.defaultVoice = config.getString(ModelConfigKey.VOICE_DEFAULT_VOICE, "alloy");
+        this.timeoutSeconds = config.getInt(ModelConfigKey.VOICE_TIMEOUT_SECONDS, 120);
     }
 
     private OpenAiVoiceModelProvider(ProviderConfiguration configuration) {
@@ -240,6 +240,15 @@ public class OpenAiVoiceModelProvider implements VoiceModelProvider {
     public String providerName() {
         return "openai";
     }
+
+    @Override
+    public int timeoutSeconds() { return timeoutSeconds; }
+
+    @Override
+    public long maxTranscriptionSizeBytes() { return maxAsrBytes; }
+
+    @Override
+    public String defaultVoice() { return defaultVoice; }
 
     private Request buildSpeechRequest(SynthesisRequest request) {
         try {
@@ -431,9 +440,9 @@ public class OpenAiVoiceModelProvider implements VoiceModelProvider {
         return value;
     }
 
-    private static ProviderConfiguration configurationFrom(EnvConfig config) {
-        int timeoutSeconds = config.getInt(EnvKey.MODEL_VOICE_TIMEOUT_SECONDS, 120);
-        int maxAsrSizeMb = config.getInt(EnvKey.MODEL_VOICE_ASR_MAX_SIZE_MB, 20);
+    private static ProviderConfiguration configurationFrom(ModelConfig config) {
+        int timeoutSeconds = config.getInt(ModelConfigKey.VOICE_TIMEOUT_SECONDS, 120);
+        int maxAsrSizeMb = config.getInt(ModelConfigKey.VOICE_ASR_MAX_SIZE_MB, 20);
         if (timeoutSeconds <= 0 || maxAsrSizeMb <= 0) {
             throw new IllegalStateException("Voice timeout and ASR size limit must be positive");
         }
@@ -442,10 +451,10 @@ public class OpenAiVoiceModelProvider implements VoiceModelProvider {
                 .readTimeout(timeoutSeconds, TimeUnit.SECONDS)
                 .build();
         return new ProviderConfiguration(
-                config.requireString(EnvKey.MODEL_VOICE_API_KEY),
-                config.getString(EnvKey.MODEL_VOICE_BASE_URL, "https://api.openai.com/v1"),
-                config.getString(EnvKey.MODEL_VOICE_ASR_MODEL, "whisper-1"),
-                config.getString(EnvKey.MODEL_VOICE_TTS_MODEL, "tts-1"),
+                config.requireString(ModelConfigKey.VOICE_API_KEY),
+                config.getString(ModelConfigKey.VOICE_BASE_URL, "https://api.openai.com/v1"),
+                config.getString(ModelConfigKey.VOICE_ASR_MODEL, "whisper-1"),
+                config.getString(ModelConfigKey.VOICE_TTS_MODEL, "tts-1"),
                 Math.multiplyExact(maxAsrSizeMb, 1024 * 1024),
                 client);
     }

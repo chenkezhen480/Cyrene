@@ -99,7 +99,12 @@ public class ReActEngine implements ReActLoop {
         this.chatModelProvider = chatModelProvider;
         ChatModel rawModel = chatModelProvider.chatModel();
         if (visionProvider != null || voiceProvider != null) {
-            this.chatModel = new FallbackChatModel(rawModel, visionProvider, voiceProvider, chatModelProvider.modelName());
+            this.chatModel = new FallbackChatModel(
+                    rawModel,
+                    visionProvider,
+                    voiceProvider,
+                    chatModelProvider.modalCapabilities(),
+                    chatModelProvider.modelName());
         } else {
             this.chatModel = rawModel;
         }
@@ -111,16 +116,20 @@ public class ReActEngine implements ReActLoop {
         int globalMax = cfg.getInt(EnvKey.REACT_MAX_ITERATIONS, 10);
         this.maxIterations = maxIterationsOverride > 0 ? maxIterationsOverride : globalMax;
         this.adaptiveReflector = new AdaptiveReflector(cfg.getInt(EnvKey.REACT_REFLECTION_THRESHOLD, 5));
-        this.llmTimeoutSeconds = cfg.getInt(EnvKey.MODEL_CHAT_TIMEOUT_SECONDS, 300);
+        this.llmTimeoutSeconds = timeoutSeconds(chatModelProvider);
         this.finalResponseGenerator = java.util.Objects.requireNonNull(
                 finalResponseGenerator, "finalResponseGenerator");
     }
 
     private static FinalResponseGenerator defaultFinalResponseGenerator(
             ChatModelProvider chatModelProvider) {
-        long timeoutSeconds = EnvConfig.get().getInt(
-                EnvKey.MODEL_CHAT_TIMEOUT_SECONDS, 300);
-        return new FinalResponseGenerator(chatModelProvider, timeoutSeconds);
+        return new FinalResponseGenerator(
+                chatModelProvider, timeoutSeconds(chatModelProvider));
+    }
+
+    private static int timeoutSeconds(ChatModelProvider provider) {
+        int configured = provider.timeoutSeconds();
+        return configured > 0 ? configured : 300;
     }
 
     @Override

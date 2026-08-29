@@ -1,7 +1,5 @@
 package com.harness.provider;
 
-import com.harness.core.env.EnvConfig;
-import com.harness.core.env.EnvKey;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -9,7 +7,7 @@ import java.util.*;
 
 /**
  * Registry of known model modal capabilities.
- * Priority: user env override > static table.
+ * Explicit {@code model.conf} capabilities take precedence over the static table.
  */
 public final class ModalCapabilityRegistry {
 
@@ -31,7 +29,14 @@ public final class ModalCapabilityRegistry {
      * Get capabilities for a model name. Checks user override first, then static table.
      */
     public static Set<ModalCapability> getCapabilities(String modelName) {
-        Set<ModalCapability> override = getUserOverride();
+        return getCapabilities(modelName, List.of());
+    }
+
+    public static Set<ModalCapability> getCapabilities(
+            String modelName,
+            List<String> configuredCapabilities
+    ) {
+        Set<ModalCapability> override = parseOverride(configuredCapabilities);
         if (override != null) {
             log.debug("Using user-overridden capabilities for model '{}': {}", modelName, override);
             return override;
@@ -53,17 +58,15 @@ public final class ModalCapabilityRegistry {
         return Set.of(ModalCapability.TEXT);
     }
 
-    private static Set<ModalCapability> getUserOverride() {
-        String envVal = EnvConfig.get().getString(EnvKey.MODEL_CHAT_CAPABILITIES, "");
-        if (envVal.isBlank()) return null;
-
+    private static Set<ModalCapability> parseOverride(List<String> configuredCapabilities) {
+        if (configuredCapabilities == null || configuredCapabilities.isEmpty()) return null;
         Set<ModalCapability> caps = EnumSet.noneOf(ModalCapability.class);
-        for (String part : envVal.split(",")) {
+        for (String part : configuredCapabilities) {
             String trimmed = part.trim().toUpperCase();
             try {
                 caps.add(ModalCapability.valueOf(trimmed));
             } catch (IllegalArgumentException e) {
-                log.warn("Unknown modal capability in env override: {}", trimmed);
+                log.warn("Unknown modal capability in model.conf: {}", trimmed);
             }
         }
         return caps.isEmpty() ? null : Set.copyOf(caps);

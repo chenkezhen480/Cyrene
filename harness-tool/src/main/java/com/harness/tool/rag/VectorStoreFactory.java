@@ -33,7 +33,8 @@ public final class VectorStoreFactory {
             }
             case "milvus" -> {
                 MilvusConnectionPool.init();
-                MilvusCollectionInitializer.ensureCollection();
+                MilvusCollectionInitializer.ensureCollection(
+                        requireEmbeddingDimension(embeddingProvider));
                 yield new MilvusVectorStore(embeddingProvider);
             }
             case "none" -> {
@@ -42,5 +43,14 @@ public final class VectorStoreFactory {
             }
             default -> throw new IllegalArgumentException("Unknown RAG provider: " + provider);
         };
+    }
+
+    private static int requireEmbeddingDimension(EmbeddingModelProvider provider) {
+        int dimension = provider != null ? provider.dimension() : 0;
+        if (dimension <= 0) {
+            throw new IllegalStateException(
+                    "An available embedding model with a positive dimension is required");
+        }
+        return dimension;
     }
 }

@@ -12,8 +12,6 @@ import com.harness.agent.runtime.AgentRunPreparer.PreparedAgentRun;
 import com.harness.agent.voice.VoiceOutputCoordinator;
 import com.harness.agent.voice.VoiceOutputSettings;
 import com.harness.core.concurrent.BlockingTaskExecutor;
-import com.harness.core.env.EnvConfig;
-import com.harness.core.env.EnvKey;
 import com.harness.core.model.AgentContext;
 import com.harness.core.model.AgentResult;
 import com.harness.core.model.AgentTrace;
@@ -180,7 +178,7 @@ public final class AgentRunCoordinator {
                             runtime.providers().voice(),
                             callback,
                             command.cancellationToken(),
-                            VoiceOutputSettings.fromEnvironment())
+                            VoiceOutputSettings.fromProvider(runtime.providers().voice()))
                     : null;
 
             RunToolCatalog toolCatalog = createToolCatalog(prepared.unavailableTools());
@@ -214,7 +212,7 @@ public final class AgentRunCoordinator {
                     effectiveThinking(command, prepared),
                     confirmationContext));
             result.steps().forEach(trace::addStep);
-            finishVoice(voiceCoordinator);
+            finishVoice(voiceCoordinator, runtime.providers().voice().timeoutSeconds());
             recordReactStats(trace, result);
 
             List<MessageBlock> assistantBlocks = finishAssistantBlocks(
@@ -504,11 +502,13 @@ public final class AgentRunCoordinator {
         }
     }
 
-    private static void finishVoice(VoiceOutputCoordinator voiceCoordinator) {
+    private static void finishVoice(
+            VoiceOutputCoordinator voiceCoordinator,
+            int timeoutSeconds
+    ) {
         if (voiceCoordinator == null) {
             return;
         }
-        int timeoutSeconds = EnvConfig.get().getInt(EnvKey.MODEL_VOICE_TIMEOUT_SECONDS, 120);
         voiceCoordinator.finishAndAwait(Duration.ofSeconds(timeoutSeconds));
     }
 

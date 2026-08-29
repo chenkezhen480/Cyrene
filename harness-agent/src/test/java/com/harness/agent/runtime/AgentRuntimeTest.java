@@ -4,7 +4,7 @@ import com.harness.core.runtime.RunTrace;
 import com.harness.core.runtime.RunTraceFactory;
 import com.harness.input.InputStage;
 import com.harness.provider.ChatModelProvider;
-import com.harness.provider.ClassifierModelProvider;
+import com.harness.provider.SmallTaskModelProvider;
 import com.harness.provider.EmbeddingModelProvider;
 import com.harness.provider.ModelProviders;
 import com.harness.provider.RealtimeModelProvider;
@@ -33,7 +33,7 @@ class AgentRuntimeTest {
                 mock(EmbeddingModelProvider.class),
                 mock(RerankModelProvider.class),
                 mock(RealtimeModelProvider.class),
-                mock(ClassifierModelProvider.class));
+                mock(SmallTaskModelProvider.class));
         ReActLoopFactory loopFactory = mock(ReActLoopFactory.class);
         RunTraceFactory traceFactory = mock(RunTraceFactory.class);
         ToolCatalog catalog = mock(ToolCatalog.class);

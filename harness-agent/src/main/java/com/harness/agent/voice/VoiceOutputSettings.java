@@ -1,7 +1,6 @@
 package com.harness.agent.voice;
 
-import com.harness.core.env.EnvConfig;
-import com.harness.core.env.EnvKey;
+import com.harness.provider.VoiceModelProvider;
 
 /**
  * Validated per-process settings for phrase-level streamed voice replies.
@@ -52,12 +51,11 @@ public record VoiceOutputSettings(
         }
     }
 
-    public static VoiceOutputSettings fromEnvironment() {
-        EnvConfig config = EnvConfig.get();
+    public static VoiceOutputSettings fromProvider(VoiceModelProvider provider) {
         return new VoiceOutputSettings(
                 DEFAULT_STREAM_FORMAT,
                 DEFAULT_RESPONSE_FORMAT,
-                config.getString(EnvKey.MODEL_VOICE_TTS_DEFAULT_VOICE, DEFAULT_VOICE),
+                provider != null ? provider.defaultVoice() : DEFAULT_VOICE,
                 DEFAULT_SPEED,
                 DEFAULT_MIN_CHARS,
                 DEFAULT_SOFT_CHARS,

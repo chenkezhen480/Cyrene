@@ -40,11 +40,13 @@ public class MilvusCollectionInitializer {
      * 确保 collection 存在且 schema 正确。
      * 不存在则创建（含 BM25 function + 双索引），已存在则跳过。
      */
-    public static void ensureCollection() {
+    public static void ensureCollection(int embedDim) {
+        if (embedDim <= 0) {
+            throw new IllegalArgumentException("embedDim must be positive");
+        }
         MilvusClientV2 client = MilvusConnectionPool.getClient();
         EnvConfig cfg = EnvConfig.get();
         String collectionName = cfg.getString(EnvKey.RAG_COLLECTION, "knowledge_documents"); // 与 MilvusVectorStore 保持一致
-        int embedDim = cfg.getInt(EnvKey.MODEL_EMBEDDING_DIM, EnvKey.MODEL_EMBEDDING_DIM_DEFAULT);
 
         try {
             boolean exists = client.hasCollection(

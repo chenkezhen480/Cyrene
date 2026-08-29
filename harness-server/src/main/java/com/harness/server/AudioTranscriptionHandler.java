@@ -2,8 +2,6 @@ package com.harness.server;
 
 import com.harness.provider.VoiceCapabilities;
 import com.harness.provider.VoiceModelProvider;
-import com.harness.core.env.EnvConfig;
-import com.harness.core.env.EnvKey;
 import com.harness.server.api.ApiErrorCode;
 import com.harness.server.api.ApiResponses;
 import io.javalin.http.Context;
@@ -27,7 +25,7 @@ public final class AudioTranscriptionHandler {
     public AudioTranscriptionHandler(VoiceModelProvider voiceModelProvider) {
         this(
                 voiceModelProvider,
-                EnvConfig.get().getInt(EnvKey.MODEL_VOICE_ASR_MAX_SIZE_MB, 20) * 1024L * 1024L);
+                voiceModelProvider.maxTranscriptionSizeBytes());
     }
 
     AudioTranscriptionHandler(VoiceModelProvider voiceModelProvider, long maxAudioBytes) {

@@ -1,8 +1,8 @@
 package com.harness.provider;
 
 import com.harness.provider.impl.*;
-import com.harness.core.env.EnvConfig;
-import com.harness.core.env.EnvKey;
+import com.harness.core.modelconfig.ModelConfig;
+import com.harness.core.modelconfig.ModelConfigKey;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.StreamingChatModel;
 import java.util.Locale;
@@ -11,8 +11,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Factory for creating all 6 model type providers.
- * Each model type is independently configured via environment variables.
+ * Factory for creating model providers from one immutable {@code model.conf} snapshot.
  */
 public final class ModelProviderFactory {
 
@@ -20,13 +19,8 @@ public final class ModelProviderFactory {
 
     private ModelProviderFactory() {}
 
-    /** Create the complete provider set once for the application runtime. */
-    public static ModelProviders createAll() {
-        return createAll(EnvConfig.get());
-    }
-
     /** Create and validate a complete provider set from an isolated configuration snapshot. */
-    public static ModelProviders createAll(EnvConfig config) {
+    public static ModelProviders createAll(ModelConfig config) {
         return new ModelProviders(
                 createChat(config),
                 createVision(config),
@@ -34,23 +28,26 @@ public final class ModelProviderFactory {
                 createEmbedding(config),
                 createRerank(config),
                 createRealtime(config),
-                createClassifier(config));
+                createSmallTask(config));
     }
 
     /**
-     * 1. General Chat Model (required)
+     * 1. General Chat Model.
+     *
+     * <p>The process may start without this provider so an administrator can
+     * complete the initial configuration through the Web console. Agent calls
+     * remain unavailable until a concrete provider is activated.</p>
      */
-    public static ChatModelProvider createChat() {
-        return createChat(EnvConfig.get());
-    }
-
-    public static ChatModelProvider createChat(EnvConfig config) {
-        String provider = config.getString(EnvKey.MODEL_CHAT_PROVIDER, "openai")
-                .trim().toLowerCase(Locale.ROOT);
+    public static ChatModelProvider createChat(ModelConfig config) {
+        String provider = normalizedProvider(config, ModelConfigKey.CHAT_PROVIDER);
+        if (provider.isBlank() || "none".equals(provider)) {
+            log.info("[Model] Chat model not configured; Agent execution is disabled until configured");
+            return new NoOpChatModelProvider();
+        }
         OpenAiChatApiFormat apiFormat = validateChatApiFormat(
                 provider,
                 config.getString(
-                        EnvKey.MODEL_CHAT_API_FORMAT,
+                        ModelConfigKey.CHAT_API_FORMAT,
                         OpenAiChatApiFormat.CHAT_COMPLETIONS.configValue()));
         log.info("Creating chat model provider: {}", provider);
         ChatModelProvider chatProvider = switch (provider) {
@@ -63,9 +60,9 @@ public final class ModelProviderFactory {
 
         // Wrap with Semaphore for LLM API concurrency control
         // 同一个 provider 的 chat/streaming 共享一个 Semaphore（同一个 API 端点）
-        int maxConcurrent = config.getInt(EnvKey.MODEL_API_MAX_CONCURRENT, 10);
+        int maxConcurrent = config.getInt(ModelConfigKey.API_MAX_CONCURRENT, 10);
         if (maxConcurrent <= 0) {
-            throw new IllegalStateException("HARNESS_MODEL_API_MAX_CONCURRENT must be positive");
+            throw new IllegalStateException(ModelConfigKey.API_MAX_CONCURRENT + " must be positive");
         }
         Semaphore semaphore = new Semaphore(maxConcurrent, true);
         log.info("[Semaphore] LLM API concurrency limit={}, fair=true", maxConcurrent);
@@ -75,7 +72,10 @@ public final class ModelProviderFactory {
                 ? new SemaphoreStreamingChatModel(streamingRaw, semaphore) : null;
         return new SemaphoreChatModelProvider(
                 chatProvider, chatModel, streamingModel,
-                configuredContextWindow(config, chatProvider.modelName()));
+                configuredContextWindow(config, chatProvider.modelName()),
+                ModalCapabilityRegistry.getCapabilities(
+                        chatProvider.modelName(),
+                        config.getCommaList(ModelConfigKey.CHAT_CAPABILITIES)));
     }
 
     static OpenAiChatApiFormat validateChatApiFormat(
@@ -86,8 +86,8 @@ public final class ModelProviderFactory {
         boolean openAiCompatible = "openai".equals(provider) || "dashscope".equals(provider);
         if (apiFormat == OpenAiChatApiFormat.RESPONSES && !openAiCompatible) {
             throw new IllegalStateException(
-                    "HARNESS_MODEL_CHAT_API_FORMAT=responses requires an OpenAI-compatible "
-                            + "chat provider, but HARNESS_MODEL_CHAT_PROVIDER=" + provider);
+                    ModelConfigKey.CHAT_API_FORMAT + "=responses requires an OpenAI-compatible "
+                            + "chat provider, but " + ModelConfigKey.CHAT_PROVIDER + "=" + provider);
         }
         return apiFormat;
     }
@@ -95,14 +95,10 @@ public final class ModelProviderFactory {
     /**
      * 2. Vision Model (optional, falls back to chat model if not configured)
      */
-    public static VisionModelProvider createVision() {
-        return createVision(EnvConfig.get());
-    }
-
-    public static VisionModelProvider createVision(EnvConfig config) {
-        String provider = normalizedProvider(config, EnvKey.MODEL_VISION_PROVIDER);
+    public static VisionModelProvider createVision(ModelConfig config) {
+        String provider = normalizedProvider(config, ModelConfigKey.VISION_PROVIDER);
         if (provider.isBlank()) {
-            provider = normalizedProvider(config, EnvKey.MODEL_CHAT_PROVIDER);
+            provider = normalizedProvider(config, ModelConfigKey.CHAT_PROVIDER);
             if (provider.isBlank()) {
                 return new NoOpVisionModelProvider();
             }
@@ -120,12 +116,8 @@ public final class ModelProviderFactory {
     /**
      * 3. Voice Model (optional, ASR + TTS)
      */
-    public static VoiceModelProvider createVoice() {
-        return createVoice(EnvConfig.get());
-    }
-
-    public static VoiceModelProvider createVoice(EnvConfig config) {
-        String provider = normalizedProvider(config, EnvKey.MODEL_VOICE_PROVIDER);
+    public static VoiceModelProvider createVoice(ModelConfig config) {
+        String provider = normalizedProvider(config, ModelConfigKey.VOICE_PROVIDER);
         if (provider.isBlank()) {
             return new NoOpVoiceModelProvider();
         }
@@ -140,12 +132,8 @@ public final class ModelProviderFactory {
     /**
      * 4. Embedding Model (optional, needed for pgvector RAG)
      */
-    public static EmbeddingModelProvider createEmbedding() {
-        return createEmbedding(EnvConfig.get());
-    }
-
-    public static EmbeddingModelProvider createEmbedding(EnvConfig config) {
-        String provider = normalizedProvider(config, EnvKey.MODEL_EMBEDDING_PROVIDER);
+    public static EmbeddingModelProvider createEmbedding(ModelConfig config) {
+        String provider = normalizedProvider(config, ModelConfigKey.EMBEDDING_PROVIDER);
         if (provider.isBlank()) {
             return new NoOpEmbeddingModelProvider();
         }
@@ -161,19 +149,22 @@ public final class ModelProviderFactory {
     /**
      * 5. Rerank Model (optional)
      */
-    public static RerankModelProvider createRerank() {
-        return createRerank(EnvConfig.get());
-    }
-
-    public static RerankModelProvider createRerank(EnvConfig config) {
-        String provider = normalizedProvider(config, EnvKey.MODEL_RERANK_PROVIDER);
+    public static RerankModelProvider createRerank(ModelConfig config) {
+        int topN = config.getInt(ModelConfigKey.RERANK_TOP_N, 3);
+        if (topN <= 0) {
+            throw new IllegalStateException(ModelConfigKey.RERANK_TOP_N + " must be positive");
+        }
+        if (!config.getBool(ModelConfigKey.RERANK_ENABLED, true)) {
+            return new NoOpRerankModelProvider(topN);
+        }
+        String provider = normalizedProvider(config, ModelConfigKey.RERANK_PROVIDER);
         if (provider.isBlank()) {
-            return new NoOpRerankModelProvider();
+            return new NoOpRerankModelProvider(topN);
         }
         log.info("Creating rerank model provider: {}", provider);
         return switch (provider) {
             case "openai", "dashscope" -> new OpenAiRerankModelProvider(config);
-            case "none" -> new NoOpRerankModelProvider();
+            case "none" -> new NoOpRerankModelProvider(topN);
             default -> throw unsupportedProvider("rerank", provider);
         };
     }
@@ -181,12 +172,8 @@ public final class ModelProviderFactory {
     /**
      * 6. Realtime Model (optional, reserved)
      */
-    public static RealtimeModelProvider createRealtime() {
-        return createRealtime(EnvConfig.get());
-    }
-
-    public static RealtimeModelProvider createRealtime(EnvConfig config) {
-        String provider = normalizedProvider(config, EnvKey.MODEL_REALTIME_PROVIDER);
+    public static RealtimeModelProvider createRealtime(ModelConfig config) {
+        String provider = normalizedProvider(config, ModelConfigKey.REALTIME_PROVIDER);
         if (provider.isBlank() || "none".equals(provider)) {
             return new NoOpRealtimeModelProvider();
         }
@@ -194,27 +181,23 @@ public final class ModelProviderFactory {
     }
 
     /**
-     * 7. Classifier Model (optional, for GapAnalyzer Tier 2 LLM classification)
+     * 7. Small-task Model (optional, currently used by GapAnalyzer Tier 2)
      */
-    public static ClassifierModelProvider createClassifier() {
-        return createClassifier(EnvConfig.get());
-    }
-
-    public static ClassifierModelProvider createClassifier(EnvConfig config) {
-        String provider = normalizedProvider(config, EnvKey.MODEL_CLASSIFIER_PROVIDER);
+    public static SmallTaskModelProvider createSmallTask(ModelConfig config) {
+        String provider = normalizedProvider(config, ModelConfigKey.SMALL_TASK_PROVIDER);
         if (provider.isBlank()) {
-            log.info("[Model] Classifier model not configured, Tier 2 disabled");
-            return new NoOpClassifierModelProvider();
+            log.info("[Model] Small-task model not configured, Tier 2 disabled");
+            return new NoOpSmallTaskModelProvider();
         }
-        log.info("Creating classifier model provider: {}", provider);
+        log.info("Creating small-task model provider: {}", provider);
         return switch (provider) {
-            case "openai", "dashscope" -> new OpenAiClassifierModelProvider(config);
-            case "none" -> new NoOpClassifierModelProvider();
-            default -> throw unsupportedProvider("classifier", provider);
+            case "openai", "dashscope" -> new OpenAiSmallTaskModelProvider(config);
+            case "none" -> new NoOpSmallTaskModelProvider();
+            default -> throw unsupportedProvider("small-task", provider);
         };
     }
 
-    private static String normalizedProvider(EnvConfig config, String key) {
+    private static String normalizedProvider(ModelConfig config, String key) {
         return config.getString(key, "").trim().toLowerCase(Locale.ROOT);
     }
 
@@ -223,10 +206,10 @@ public final class ModelProviderFactory {
                 "Unsupported " + capability + " model provider: " + provider);
     }
 
-    private static int configuredContextWindow(EnvConfig config, String modelName) {
-        int configured = config.getInt(EnvKey.MODEL_CHAT_CONTEXT_WINDOW, 0);
+    private static int configuredContextWindow(ModelConfig config, String modelName) {
+        int configured = config.getInt(ModelConfigKey.CHAT_CONTEXT_WINDOW, 0);
         if (configured < 0) {
-            throw new IllegalStateException("HARNESS_MODEL_CHAT_CONTEXT_WINDOW cannot be negative");
+            throw new IllegalStateException(ModelConfigKey.CHAT_CONTEXT_WINDOW + " cannot be negative");
         }
         return configured > 0
                 ? configured

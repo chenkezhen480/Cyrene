@@ -1,20 +1,13 @@
 package com.harness.provider;
 
-import com.harness.core.env.EnvConfig;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-import java.util.Map;
+import java.util.List;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 class ModalCapabilityRegistryTest {
-
-    @BeforeEach
-    void setUp() {
-        EnvConfig.init(Map.of("HARNESS_MODEL_CHAT_CAPABILITIES", ""));
-    }
 
     @Test
     void getCapabilities_gpt4o_returnsFull() {
@@ -71,18 +64,16 @@ class ModalCapabilityRegistryTest {
 
     @Test
     void getCapabilities_userOverride_takesPriority() {
-        EnvConfig.init(Map.of("HARNESS_MODEL_CHAT_CAPABILITIES", "text,image_input"));
-
         // Even for gpt-3.5-turbo which normally has TEXT only, override wins
-        Set<ModalCapability> caps = ModalCapabilityRegistry.getCapabilities("gpt-3.5-turbo");
+        Set<ModalCapability> caps = ModalCapabilityRegistry.getCapabilities(
+                "gpt-3.5-turbo", List.of("text", "image_input"));
         assertThat(caps).containsExactlyInAnyOrder(ModalCapability.TEXT, ModalCapability.IMAGE_INPUT);
     }
 
     @Test
-    void getCapabilities_envOverride_parsed() {
-        EnvConfig.init(Map.of("HARNESS_MODEL_CHAT_CAPABILITIES", "text,image_input,pdf_input"));
-
-        Set<ModalCapability> caps = ModalCapabilityRegistry.getCapabilities("unknown-model");
+    void getCapabilities_modelConfigOverride_parsed() {
+        Set<ModalCapability> caps = ModalCapabilityRegistry.getCapabilities(
+                "unknown-model", List.of("text", "image_input", "pdf_input"));
         assertThat(caps).containsExactlyInAnyOrder(
                 ModalCapability.TEXT, ModalCapability.IMAGE_INPUT, ModalCapability.PDF_INPUT);
     }

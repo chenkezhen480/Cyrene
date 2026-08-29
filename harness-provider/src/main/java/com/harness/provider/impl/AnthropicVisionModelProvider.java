@@ -1,8 +1,8 @@
 package com.harness.provider.impl;
 
 import com.harness.provider.VisionModelProvider;
-import com.harness.core.env.EnvConfig;
-import com.harness.core.env.EnvKey;
+import com.harness.core.modelconfig.ModelConfig;
+import com.harness.core.modelconfig.ModelConfigKey;
 import dev.langchain4j.data.image.Image;
 import dev.langchain4j.data.message.*;
 import dev.langchain4j.model.anthropic.AnthropicChatModel;
@@ -19,20 +19,16 @@ public class AnthropicVisionModelProvider implements VisionModelProvider {
     private final String model;
     private final ChatModel chatModel;
 
-    public AnthropicVisionModelProvider() {
-        this(EnvConfig.get());
-    }
-
-    public AnthropicVisionModelProvider(EnvConfig cfg) {
-        boolean dedicatedVision = !cfg.getString(EnvKey.MODEL_VISION_PROVIDER, "").isBlank();
+    public AnthropicVisionModelProvider(ModelConfig cfg) {
+        boolean dedicatedVision = !cfg.getString(ModelConfigKey.VISION_PROVIDER, "").isBlank();
         this.apiKey = cfg.requireString(dedicatedVision
-                ? EnvKey.MODEL_VISION_API_KEY
-                : EnvKey.MODEL_CHAT_API_KEY);
+                ? ModelConfigKey.VISION_API_KEY
+                : ModelConfigKey.CHAT_API_KEY);
         this.baseUrl = cfg.getString(
-                dedicatedVision ? EnvKey.MODEL_VISION_BASE_URL : EnvKey.MODEL_CHAT_BASE_URL,
+                dedicatedVision ? ModelConfigKey.VISION_BASE_URL : ModelConfigKey.CHAT_BASE_URL,
                 "https://api.anthropic.com");
         this.model = cfg.getString(
-                dedicatedVision ? EnvKey.MODEL_VISION_MODEL : EnvKey.MODEL_CHAT_MODEL,
+                dedicatedVision ? ModelConfigKey.VISION_MODEL : ModelConfigKey.CHAT_MODEL,
                 "claude-sonnet-4-6");
         this.chatModel = AnthropicChatModel.builder()
                 .apiKey(apiKey).baseUrl(baseUrl).modelName(this.model).build();

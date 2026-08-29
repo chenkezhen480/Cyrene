@@ -2,6 +2,7 @@ package com.harness.provider;
 
 import com.harness.core.model.CancellationToken;
 import com.harness.core.model.ModelUsage;
+import com.harness.core.modelconfig.ModelConfig;
 import com.harness.core.text.TextTokenEstimator;
 import dev.langchain4j.agent.tool.ToolSpecification;
 import dev.langchain4j.data.embedding.Embedding;
@@ -27,13 +28,14 @@ import java.util.function.Function;
  */
 public final class ModelProviderRuntime {
 
-    private final AtomicReference<ModelProviders> active;
+    private final AtomicReference<Generation> active;
     private final ReentrantReadWriteLock lifecycleLock = new ReentrantReadWriteLock(true);
     private final ModelProviders delegates;
 
-    public ModelProviderRuntime(ModelProviders initialProviders) {
-        this.active = new AtomicReference<>(Objects.requireNonNull(
-                initialProviders, "initialProviders"));
+    public ModelProviderRuntime(ModelProviders initialProviders, ModelConfig initialConfiguration) {
+        this.active = new AtomicReference<>(new Generation(
+                Objects.requireNonNull(initialProviders, "initialProviders"),
+                Objects.requireNonNull(initialConfiguration, "initialConfiguration")));
         this.delegates = new ModelProviders(
                 new ChatDelegate(),
                 new VisionDelegate(),
@@ -41,7 +43,7 @@ public final class ModelProviderRuntime {
                 new EmbeddingDelegate(),
                 new RerankDelegate(),
                 new RealtimeDelegate(),
-                new ClassifierDelegate());
+                new SmallTaskDelegate());
     }
 
     /** Stable providers suitable for injection into long-lived components. */
@@ -50,15 +52,17 @@ public final class ModelProviderRuntime {
     }
 
     public ModelProviders current() {
-        return active.get();
+        return active.get().providers();
     }
+
+    public ModelConfig currentConfiguration() { return active.get().configuration(); }
 
     public <T> T withCurrent(Function<ModelProviders, T> action) {
         Objects.requireNonNull(action, "action");
         ReentrantReadWriteLock.ReadLock readLock = lifecycleLock.readLock();
         readLock.lock();
         try {
-            return action.apply(active.get());
+            return action.apply(active.get().providers());
         } finally {
             readLock.unlock();
         }
@@ -72,14 +76,14 @@ public final class ModelProviderRuntime {
     }
 
     /** Publish a fully built provider generation after persistent configuration succeeds. */
-    public void activate(ModelProviders providers, Runnable beforePublish) {
+    public void activate(ModelProviders providers, ModelConfig configuration, Runnable beforePublish) {
         Objects.requireNonNull(providers, "providers");
         Objects.requireNonNull(beforePublish, "beforePublish");
         ReentrantReadWriteLock.WriteLock writeLock = lifecycleLock.writeLock();
         writeLock.lock();
         try {
             beforePublish.run();
-            active.set(providers);
+            active.set(new Generation(providers, configuration));
         } finally {
             writeLock.unlock();
         }
@@ -101,6 +105,10 @@ public final class ModelProviderRuntime {
         @Override public String providerName() { return current().chat().providerName(); }
         @Override public String modelName() { return current().chat().modelName(); }
         @Override public int contextWindow() { return current().chat().contextWindow(); }
+        @Override public int timeoutSeconds() { return current().chat().timeoutSeconds(); }
+        @Override public java.util.Set<ModalCapability> modalCapabilities() {
+            return current().chat().modalCapabilities();
+        }
         @Override public ModelUsage modelUsage(ChatResponse response, long latencyMs) {
             return current().chat().modelUsage(response, latencyMs);
         }
@@ -150,6 +158,11 @@ public final class ModelProviderRuntime {
             return current().voice().isSynthesizeAvailable();
         }
         @Override public String providerName() { return current().voice().providerName(); }
+        @Override public int timeoutSeconds() { return current().voice().timeoutSeconds(); }
+        @Override public long maxTranscriptionSizeBytes() {
+            return current().voice().maxTranscriptionSizeBytes();
+        }
+        @Override public String defaultVoice() { return current().voice().defaultVoice(); }
     }
 
     private final class EmbeddingDelegate implements EmbeddingModelProvider {
@@ -182,6 +195,7 @@ public final class ModelProviderRuntime {
         @Override public boolean isAvailable() { return current().rerank().isAvailable(); }
         @Override public String providerName() { return current().rerank().providerName(); }
         @Override public String modelName() { return current().rerank().modelName(); }
+        @Override public int defaultTopN() { return current().rerank().defaultTopN(); }
     }
 
     private final class RealtimeDelegate implements RealtimeModelProvider {
@@ -198,20 +212,22 @@ public final class ModelProviderRuntime {
         @Override public String providerName() { return current().realtime().providerName(); }
     }
 
-    private final class ClassifierDelegate implements ClassifierModelProvider {
+    private final class SmallTaskDelegate implements SmallTaskModelProvider {
         private final ChatModel chatModel = new ChatModel() {
             @Override
             public ChatResponse chat(ChatRequest request) {
                 return withCurrent(providers ->
-                        providers.classifier().chatModel().chat(request));
+                        providers.smallTask().chatModel().chat(request));
             }
         };
 
         @Override public ChatModel chatModel() {
             return isAvailable() ? chatModel : null;
         }
-        @Override public String providerName() { return current().classifier().providerName(); }
-        @Override public String modelName() { return current().classifier().modelName(); }
-        @Override public boolean isAvailable() { return current().classifier().isAvailable(); }
+        @Override public String providerName() { return current().smallTask().providerName(); }
+        @Override public String modelName() { return current().smallTask().modelName(); }
+        @Override public boolean isAvailable() { return current().smallTask().isAvailable(); }
     }
+
+    private record Generation(ModelProviders providers, ModelConfig configuration) {}
 }

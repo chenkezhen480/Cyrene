@@ -1,5 +1,7 @@
 package com.harness.tool.builtin;
 
+import com.harness.core.env.EnvConfig;
+
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -10,8 +12,8 @@ import com.harness.core.model.ToolOutput;
 import com.harness.core.model.ToolSpec;
 import com.harness.tool.TypedOutputTool;
 import com.harness.tool.CancellableTool;
-import com.harness.core.env.EnvConfig;
-import com.harness.core.env.EnvKey;
+import com.harness.core.modelconfig.ModelConfig;
+import com.harness.core.modelconfig.ModelConfigKey;
 import okhttp3.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -69,24 +71,20 @@ public class ImageGenerationTool implements TypedOutputTool, CancellableTool {
     private final String baseUrl;
     private final String model;
 
-    public ImageGenerationTool(ArtifactStorer storer) {
-        this(storer, EnvConfig.get());
-    }
-
-    public ImageGenerationTool(ArtifactStorer storer, EnvConfig cfg) {
+    public ImageGenerationTool(ArtifactStorer storer, ModelConfig cfg) {
         this.storer = storer;
-        int timeoutSeconds = cfg.getInt(EnvKey.MODEL_CHAT_TIMEOUT_SECONDS, 300);
+        int timeoutSeconds = cfg.getInt(ModelConfigKey.CHAT_TIMEOUT_SECONDS, 300);
         this.http = new OkHttpClient.Builder()
                 .connectTimeout(30, TimeUnit.SECONDS)
                 .readTimeout(timeoutSeconds, TimeUnit.SECONDS)
                 .build();
-        this.apiKey = cfg.getString(EnvKey.TOOL_IMAGE_GEN_API_KEY, "");
-        String rawBaseUrl = cfg.getString(EnvKey.TOOL_IMAGE_GEN_BASE_URL, "https://api.openai.com/v1");
+        this.apiKey = cfg.getString(ModelConfigKey.IMAGE_API_KEY, "");
+        String rawBaseUrl = cfg.getString(ModelConfigKey.IMAGE_BASE_URL, "https://api.openai.com/v1");
         // Normalize: strip trailing slash only. Version path (e.g. /v1, /v3) is part of the base URL.
         this.baseUrl = rawBaseUrl.endsWith("/")
                 ? rawBaseUrl.substring(0, rawBaseUrl.length() - 1)
                 : rawBaseUrl;
-        this.model = cfg.getString(EnvKey.TOOL_IMAGE_GEN_MODEL, "dall-e-3");
+        this.model = cfg.getString(ModelConfigKey.IMAGE_MODEL, "dall-e-3");
     }
 
     @Override
@@ -139,7 +137,7 @@ public class ImageGenerationTool implements TypedOutputTool, CancellableTool {
         size = validateSize(size);
 
         if (apiKey == null || apiKey.isBlank()) {
-            throw new ToolExecutionException("image_generation", "No API key configured. Set HARNESS_TOOL_IMAGE_GEN_API_KEY");
+            throw new ToolExecutionException("image_generation", "No API key configured. Set imageGeneration.apiKey in model.conf");
         }
 
         // Check for image-to-image mode

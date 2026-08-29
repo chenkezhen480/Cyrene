@@ -31,7 +31,7 @@ import java.util.concurrent.CompletableFuture;
  *   HARNESS_RAG_COLLECTION — Filter by collection name
  *   HARNESS_RAG_TOP_K — Max results
  *   HARNESS_RAG_SCORE_THRESHOLD — Min similarity score
- *   HARNESS_MODEL_EMBEDDING_DIM — Embedding dimension
+ *   embedding.dimension in model.conf — Embedding dimension
  *   HARNESS_RAG_PG_TABLE — Table name (default: knowledge_documents)
  */
 public class PgVectorStore implements VectorStore {
@@ -57,9 +57,11 @@ public class PgVectorStore implements VectorStore {
         this.collection = cfg.getString(EnvKey.RAG_COLLECTION, "default");
         this.topK = cfg.getInt(EnvKey.RAG_TOP_K, 5);
         this.scoreThreshold = cfg.getDouble(EnvKey.RAG_SCORE_THRESHOLD, 0.7);
-        this.embedDim = cfg.getInt(EnvKey.MODEL_EMBEDDING_DIM,
-                cfg.getInt(EnvKey.RAG_PG_EMBED_DIM, EnvKey.MODEL_EMBEDDING_DIM_DEFAULT));
         this.embeddingProvider = embeddingProvider;
+        int providerDimension = embeddingProvider != null ? embeddingProvider.dimension() : 0;
+        this.embedDim = providerDimension > 0
+                ? providerDimension
+                : 1024;
     }
 
     // ==================== VectorStore 接口实现 ====================
@@ -470,7 +472,7 @@ public class PgVectorStore implements VectorStore {
     public SearchResult searchTextWithEvidence(String collection, String query, int topK) {
         if (embeddingProvider == null || !embeddingProvider.isAvailable()) {
             throw new IllegalStateException(
-                    "searchText() requires an embedding provider. Set HARNESS_MODEL_EMBEDDING_PROVIDER.");
+                    "searchText() requires an embedding provider. Set embedding.provider in model.conf.");
         }
         Embedding embedding;
         try {

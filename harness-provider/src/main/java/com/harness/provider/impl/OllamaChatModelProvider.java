@@ -1,8 +1,8 @@
 package com.harness.provider.impl;
 
 import com.harness.provider.ChatModelProvider;
-import com.harness.core.env.EnvConfig;
-import com.harness.core.env.EnvKey;
+import com.harness.core.modelconfig.ModelConfig;
+import com.harness.core.modelconfig.ModelConfigKey;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.StreamingChatModel;
 import dev.langchain4j.model.ollama.OllamaChatModel;
@@ -18,15 +18,13 @@ public class OllamaChatModelProvider implements ChatModelProvider {
     private final String baseUrl;
     private final String model;
     private final double temperature;
+    private final int timeoutSeconds;
 
-    public OllamaChatModelProvider() {
-        this(EnvConfig.get());
-    }
-
-    public OllamaChatModelProvider(EnvConfig cfg) {
-        this.baseUrl = cfg.getString(EnvKey.MODEL_CHAT_BASE_URL, "http://localhost:11434");
-        this.model = cfg.getString(EnvKey.MODEL_CHAT_MODEL, "llama3");
-        this.temperature = cfg.getDouble(EnvKey.MODEL_CHAT_TEMPERATURE, 0.7);
+    public OllamaChatModelProvider(ModelConfig cfg) {
+        this.baseUrl = cfg.getString(ModelConfigKey.CHAT_BASE_URL, "http://localhost:11434");
+        this.model = cfg.getString(ModelConfigKey.CHAT_MODEL, "llama3");
+        this.temperature = cfg.getDouble(ModelConfigKey.CHAT_TEMPERATURE, 0.7);
+        this.timeoutSeconds = cfg.getInt(ModelConfigKey.CHAT_TIMEOUT_SECONDS, 120);
         log.info("[Model] Ollama Chat initialized: model={}, baseUrl={}, temp={}", model, baseUrl, temperature);
     }
 
@@ -36,7 +34,7 @@ public class OllamaChatModelProvider implements ChatModelProvider {
                 .baseUrl(baseUrl)
                 .modelName(model)
                 .temperature(temperature)
-                .timeout(Duration.ofSeconds(120))
+                .timeout(Duration.ofSeconds(timeoutSeconds))
                 .build());
     }
 
@@ -54,4 +52,7 @@ public class OllamaChatModelProvider implements ChatModelProvider {
 
     @Override
     public String modelName() { return model; }
+
+    @Override
+    public int timeoutSeconds() { return timeoutSeconds; }
 }

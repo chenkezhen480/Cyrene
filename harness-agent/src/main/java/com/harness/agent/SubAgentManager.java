@@ -15,6 +15,7 @@ import com.harness.core.runtime.RunTrace;
 import com.harness.core.runtime.RunTraceFactory;
 import com.harness.core.env.EnvConfig;
 import com.harness.core.env.EnvKey;
+import com.harness.provider.ChatModelProvider;
 import com.harness.tool.RunToolCatalog;
 import com.harness.tool.HttpApiTool;
 import com.harness.tool.ToolExecutor;
@@ -55,7 +56,7 @@ public class SubAgentManager {
     private final int maxConcurrent;
     private final int maxTasksPerRun;
     private final long scopeTtlMinutes;
-    private final long taskTimeoutSeconds;
+    private final ChatModelProvider chatModelProvider;
 
     // Per-run scopes, keyed by runId
     private final ConcurrentHashMap<String, SubAgentRunScope> scopes = new ConcurrentHashMap<>();
@@ -74,12 +75,15 @@ public class SubAgentManager {
                            ToolExecutor toolExecutor,
                            ArtifactStore artifactStore,
                            SessionInbox sessionInbox,
-                           SessionResumeDispatcher resumeDispatcher) {
+                           SessionResumeDispatcher resumeDispatcher,
+                           ChatModelProvider chatModelProvider) {
         this.reActLoopFactory = java.util.Objects.requireNonNull(reActLoopFactory, "reActLoopFactory");
         this.traceFactory = java.util.Objects.requireNonNull(traceFactory, "traceFactory");
         this.toolExecutor = toolExecutor;
         this.sessionInbox = sessionInbox;
         this.resumeDispatcher = resumeDispatcher;
+        this.chatModelProvider = java.util.Objects.requireNonNull(
+                chatModelProvider, "chatModelProvider");
         this.completionContractValidator = new SubAgentCompletionContractValidator(
                 artifactStore, new ObjectMapper());
 
@@ -87,7 +91,6 @@ public class SubAgentManager {
         this.maxConcurrent = EnvConfig.get().getInt(EnvKey.AGENT_MAX_SUBAGENTS, 3);
         this.maxTasksPerRun = EnvConfig.get().getInt(EnvKey.AGENT_MAX_TASKS_PER_RUN, 16);
         this.scopeTtlMinutes = EnvConfig.get().getLong(EnvKey.AGENT_SCOPE_TTL_MINUTES, 30);
-        this.taskTimeoutSeconds = EnvConfig.get().getLong(EnvKey.MODEL_CHAT_TIMEOUT_SECONDS, 300);
 
         // Schedule TTL cleanup every 5 minutes
         this.cleanupScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
@@ -97,8 +100,8 @@ public class SubAgentManager {
         });
         this.cleanupScheduler.scheduleAtFixedRate(this::cleanupExpiredScopes, 5, 5, TimeUnit.MINUTES);
 
-        log.info("[SubAgentManager] Initialized: maxConcurrent={}, maxTasksPerRun={}, scopeTtlMinutes={}, taskTimeoutSeconds={}",
-                maxConcurrent, maxTasksPerRun, scopeTtlMinutes, taskTimeoutSeconds);
+        log.info("[SubAgentManager] Initialized: maxConcurrent={}, maxTasksPerRun={}, scopeTtlMinutes={}",
+                maxConcurrent, maxTasksPerRun, scopeTtlMinutes);
     }
 
     private ExecutorService getOrCreateExecutor() {
@@ -335,6 +338,7 @@ public class SubAgentManager {
         }, getOrCreateExecutor());
 
         // Apply task-level timeout
+        long taskTimeoutSeconds = chatModelProvider.timeoutSeconds();
         if (taskTimeoutSeconds > 0) {
             future.orTimeout(taskTimeoutSeconds, TimeUnit.SECONDS)
                   .exceptionally(ex -> {

@@ -5,6 +5,11 @@ import java.util.ArrayList;
 import java.util.List;
 
 public class NoOpRerankModelProvider implements RerankModelProvider {
+    private final int topN;
+
+    public NoOpRerankModelProvider() { this(3); }
+
+    public NoOpRerankModelProvider(int topN) { this.topN = topN; }
     @Override public double score(String query, String document) { return 0; }
     @Override public List<RankedResult> rerank(String query, List<String> documents, int topN) {
         List<RankedResult> result = new ArrayList<>();
@@ -17,4 +22,5 @@ public class NoOpRerankModelProvider implements RerankModelProvider {
     @Override public boolean isAvailable() { return false; }
     @Override public String providerName() { return "none"; }
     @Override public String modelName() { return "none"; }
+    @Override public int defaultTopN() { return topN; }
 }

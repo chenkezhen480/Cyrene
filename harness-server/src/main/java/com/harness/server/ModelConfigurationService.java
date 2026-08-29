@@ -1,13 +1,11 @@
 package com.harness.server;
 
-import com.harness.core.env.EnvConfig;
-import com.harness.core.env.EnvKey;
+import com.harness.core.modelconfig.ModelConfig;
+import com.harness.core.modelconfig.ModelConfigFile;
+import com.harness.core.modelconfig.ModelConfigKey;
 import com.harness.core.runtime.ModelConfigurationRuntime;
 
-import java.lang.reflect.Field;
-import java.lang.reflect.Modifier;
 import java.io.IOException;
-import java.util.Arrays;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -15,83 +13,57 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 
-/** Reads, validates, and persists model configuration managed by the Web console. */
+/** Validates, persists, and activates the standalone {@code model.conf}. */
 public final class ModelConfigurationService {
 
-    private static final List<String> SECTION_ORDER = List.of(
-            "global",
-            "chat",
-            "vision",
-            "voice",
-            "embedding",
-            "rerank",
-            "realtime",
-            "classifier",
-            "imageGeneration",
-            "videoGeneration"
-    );
-
-    private final EnvConfig config;
-    private final ModelConfigurationFileStore fileStore;
+    private final ModelConfigFile configFile;
     private final ModelConfigurationRuntime runtime;
 
     public ModelConfigurationService(
-            EnvConfig config,
-            ModelConfigurationFileStore fileStore
-    ) {
-        this(config, fileStore, candidate -> () ->
-                config.replaceManagedModelOverrides(
-                        candidate.managedModelOverrides()));
-    }
-
-    public ModelConfigurationService(
-            EnvConfig config,
-            ModelConfigurationFileStore fileStore,
+            ModelConfigFile configFile,
             ModelConfigurationRuntime runtime
     ) {
-        this.config = Objects.requireNonNull(config, "config");
-        this.fileStore = Objects.requireNonNull(fileStore, "fileStore");
+        this.configFile = Objects.requireNonNull(configFile, "configFile");
         this.runtime = Objects.requireNonNull(runtime, "runtime");
     }
 
     public ModelConfigurationResponse current() throws IOException {
-        Map<String, String> managedValues = readManagedValues();
-        Map<String, List<ModelConfigurationField>> fieldsBySection = modelKeys().stream()
-                .map(key -> toField(key, managedValues))
+        ModelConfig persisted = configFile.read();
+        ModelConfig active = runtime.currentConfiguration();
+        List<ModelConfigurationSection> sections = ModelConfigKey.DEFINITIONS.stream()
                 .collect(java.util.stream.Collectors.groupingBy(
-                        field -> sectionId(field.key()),
+                        ModelConfigKey.Definition::section,
                         LinkedHashMap::new,
-                        java.util.stream.Collectors.toList()));
-
-        List<ModelConfigurationSection> sections = SECTION_ORDER.stream()
-                .map(sectionId -> new ModelConfigurationSection(
-                        sectionId,
-                        fieldsBySection.getOrDefault(sectionId, List.of())))
-                .filter(section -> !section.fields().isEmpty())
+                        java.util.stream.Collectors.toList()))
+                .entrySet().stream()
+                .map(entry -> new ModelConfigurationSection(
+                        entry.getKey(),
+                        entry.getValue().stream()
+                                .map(definition -> toField(definition, persisted, active))
+                                .toList()))
                 .toList();
         return new ModelConfigurationResponse(
-                fileStore.path().toString(),
-                managedValues.equals(config.managedModelOverrides()),
+                configFile.path().toString(),
+                persisted.values().equals(active.values()),
                 sections);
     }
 
     public synchronized ModelConfigurationResponse update(ModelConfigurationUpdateRequest request)
             throws IOException {
         Objects.requireNonNull(request, "request");
-        Map<String, String> values = request.values() == null
-                ? Map.of()
-                : request.values();
+        Map<String, String> values = request.values() == null ? Map.of() : request.values();
         Set<String> clearKeys = request.clearKeys() == null
                 ? Set.of()
                 : Set.copyOf(request.clearKeys());
-        Set<String> allowedKeys = Set.copyOf(modelKeys());
 
         Set<String> requestedKeys = new HashSet<>(values.keySet());
         requestedKeys.addAll(clearKeys);
-        if (!allowedKeys.containsAll(requestedKeys)) {
-            requestedKeys.removeAll(allowedKeys);
+        Set<String> unknownKeys = requestedKeys.stream()
+                .filter(key -> !ModelConfigKey.isKnown(key))
+                .collect(java.util.stream.Collectors.toSet());
+        if (!unknownKeys.isEmpty()) {
             throw new IllegalArgumentException(
-                    "Unsupported model configuration keys: " + requestedKeys);
+                    "Unsupported model configuration keys: " + unknownKeys);
         }
         Set<String> conflictingKeys = new HashSet<>(values.keySet());
         conflictingKeys.retainAll(clearKeys);
@@ -113,20 +85,20 @@ public final class ModelConfigurationService {
             normalizedValues.put(key, value.trim());
         });
 
-        Map<String, String> previousValues = readManagedValues();
-        Map<String, String> candidateValues = new LinkedHashMap<>(previousValues);
+        ModelConfig previous = configFile.read();
+        Map<String, String> candidateValues = new LinkedHashMap<>(previous.values());
         clearKeys.forEach(candidateValues::remove);
         candidateValues.putAll(normalizedValues);
+        ModelConfig candidate = ModelConfig.of(candidateValues);
+        ModelConfigurationRuntime.PreparedUpdate preparedUpdate = runtime.prepare(candidate);
 
-        EnvConfig candidateConfiguration = config.previewModelOverrides(candidateValues);
-        ModelConfigurationRuntime.PreparedUpdate preparedUpdate =
-                runtime.prepare(candidateConfiguration);
-        fileStore.replace(candidateValues);
+        // Persist first so a published provider generation always has a durable source.
+        configFile.replace(candidate);
         try {
             preparedUpdate.activate();
         } catch (RuntimeException activationFailure) {
             try {
-                fileStore.replace(previousValues);
+                configFile.replace(previous);
             } catch (IOException rollbackFailure) {
                 activationFailure.addSuppressed(rollbackFailure);
             }
@@ -135,78 +107,21 @@ public final class ModelConfigurationService {
         return current();
     }
 
-    private Map<String, String> readManagedValues() throws IOException {
-        Set<String> allowedKeys = Set.copyOf(modelKeys());
-        Map<String, String> managedValues = new LinkedHashMap<>();
-        fileStore.read().forEach((key, value) -> {
-            if (allowedKeys.contains(key)) {
-                managedValues.put(key, value);
-            }
-        });
-        return Map.copyOf(managedValues);
-    }
-
-    private ModelConfigurationField toField(String key, Map<String, String> managedValues) {
-        boolean managed = managedValues.containsKey(key);
-        String managedValue = managedValues.get(key);
-        String effectiveValue = config.all().get(key);
-        String displayedValue = managed ? managedValue : effectiveValue;
-        boolean configured = displayedValue != null && !displayedValue.isBlank();
-        boolean effectiveConfigured = effectiveValue != null && !effectiveValue.isBlank();
-        boolean sensitive = key.endsWith("_API_KEY");
-        boolean runtimeSynchronized = managed
-                ? Objects.equals(managedValue, effectiveValue)
-                : !config.managedModelOverrides().containsKey(key);
+    private static ModelConfigurationField toField(
+            ModelConfigKey.Definition definition,
+            ModelConfig persisted,
+            ModelConfig active
+    ) {
+        String persistedValue = persisted.getString(definition.key());
+        String activeValue = active.getString(definition.key());
+        boolean configured = persistedValue != null;
         return new ModelConfigurationField(
-                key,
-                sensitive ? null : displayedValue,
+                definition.key(),
+                definition.label(),
+                definition.sensitive() ? null : persistedValue,
                 configured,
-                sensitive,
-                managed,
-                sensitive ? null : effectiveValue,
-                effectiveConfigured,
-                runtimeSynchronized);
-    }
-
-    static List<String> modelKeys() {
-        return Arrays.stream(EnvKey.class.getFields())
-                .filter(field -> field.getType() == String.class)
-                .filter(field -> Modifier.isStatic(field.getModifiers()))
-                .map(ModelConfigurationService::readStringConstant)
-                .filter(ModelConfigurationService::isModelKey)
-                .distinct()
-                .sorted()
-                .toList();
-    }
-
-    private static String readStringConstant(Field field) {
-        try {
-            return (String) field.get(null);
-        } catch (IllegalAccessException e) {
-            throw new IllegalStateException("Unable to read environment key " + field.getName(), e);
-        }
-    }
-
-    private static boolean isModelKey(String key) {
-        return key.startsWith("HARNESS_MODEL_")
-                || key.startsWith("HARNESS_RERANK_")
-                || key.startsWith("HARNESS_TOOL_IMAGE_GEN_")
-                || key.startsWith("HARNESS_TOOL_VIDEO_GEN_");
-    }
-
-    private static String sectionId(String key) {
-        if (key.startsWith("HARNESS_MODEL_CHAT_")) return "chat";
-        if (key.startsWith("HARNESS_MODEL_VISION_")) return "vision";
-        if (key.startsWith("HARNESS_MODEL_VOICE_")) return "voice";
-        if (key.startsWith("HARNESS_MODEL_EMBEDDING_")) return "embedding";
-        if (key.startsWith("HARNESS_MODEL_RERANK_") || key.startsWith("HARNESS_RERANK_")) {
-            return "rerank";
-        }
-        if (key.startsWith("HARNESS_MODEL_REALTIME_")) return "realtime";
-        if (key.startsWith("HARNESS_MODEL_CLASSIFIER_")) return "classifier";
-        if (key.startsWith("HARNESS_TOOL_IMAGE_GEN_")) return "imageGeneration";
-        if (key.startsWith("HARNESS_TOOL_VIDEO_GEN_")) return "videoGeneration";
-        return "global";
+                definition.sensitive(),
+                Objects.equals(persistedValue, activeValue));
     }
 
     public record ModelConfigurationResponse(
@@ -227,18 +142,18 @@ public final class ModelConfigurationService {
         }
     }
 
+    /** Label is returned by the backend so every client uses the same Chinese annotation. */
     public record ModelConfigurationField(
             String key,
+            String label,
             String value,
             boolean configured,
             boolean sensitive,
-            boolean managed,
-            String effectiveValue,
-            boolean effectiveConfigured,
             boolean runtimeSynchronized
     ) {
         public ModelConfigurationField {
             Objects.requireNonNull(key, "key");
+            Objects.requireNonNull(label, "label");
         }
     }
 

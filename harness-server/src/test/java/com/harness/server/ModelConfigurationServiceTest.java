@@ -1,9 +1,10 @@
 package com.harness.server;
 
-import com.harness.core.env.EnvConfig;
-import com.harness.core.env.EnvKey;
+import com.harness.core.modelconfig.ModelConfig;
+import com.harness.core.modelconfig.ModelConfigFile;
+import com.harness.core.modelconfig.ModelConfigKey;
+import com.harness.core.runtime.ModelConfigurationRuntime;
 import io.javalin.http.Context;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.mockito.ArgumentCaptor;
@@ -25,183 +26,112 @@ class ModelConfigurationServiceTest {
     @TempDir
     Path temporaryDirectory;
 
-    @AfterEach
-    void resetConfiguration() {
-        EnvConfig.init(Map.of());
-    }
-
     @Test
-    void returnsEveryModelSectionAndRedactsApiKeys() throws Exception {
-        EnvConfig.init(Map.of(
-                EnvKey.MODEL_CHAT_PROVIDER, "openai",
-                EnvKey.MODEL_CHAT_API_KEY, "secret-chat-key",
-                EnvKey.MODEL_CHAT_MODEL, "gpt-test",
-                EnvKey.MODEL_API_MAX_CONCURRENT, "12",
-                EnvKey.RERANK_ENABLED, "true",
-                EnvKey.TOOL_IMAGE_GEN_MODEL, "image-test"
-        ));
+    void returnsEverySectionWithChineseLabelsAndRedactsCredentials() throws Exception {
+        ModelConfig config = ModelConfig.of(Map.of(
+                ModelConfigKey.CHAT_PROVIDER, "openai",
+                ModelConfigKey.CHAT_API_KEY, "secret-chat-key",
+                ModelConfigKey.CHAT_MODEL, "gpt-test"));
+        ModelConfigurationService service = service(config, new TestRuntime(config));
 
-        ModelConfigurationService.ModelConfigurationResponse response =
-                service().current();
+        ModelConfigurationService.ModelConfigurationResponse response = service.current();
 
         assertThat(response.sections())
                 .extracting(ModelConfigurationService.ModelConfigurationSection::id)
-                .containsExactly(
-                        "global",
-                        "chat",
-                        "vision",
-                        "voice",
-                        "embedding",
-                        "rerank",
-                        "realtime",
-                        "classifier",
-                        "imageGeneration",
+                .containsExactly("global", "chat", "vision", "voice", "embedding",
+                        "rerank", "realtime", "smallTask", "imageGeneration",
                         "videoGeneration");
+        ModelConfigurationService.ModelConfigurationField model = field(
+                response, ModelConfigKey.CHAT_MODEL);
+        assertThat(model.label()).isEqualTo("对话模型名称");
+        assertThat(model.value()).isEqualTo("gpt-test");
 
-        ModelConfigurationService.ModelConfigurationField apiKey = response.sections().stream()
-                .flatMap(section -> section.fields().stream())
-                .filter(field -> EnvKey.MODEL_CHAT_API_KEY.equals(field.key()))
-                .findFirst()
-                .orElseThrow();
+        ModelConfigurationService.ModelConfigurationField apiKey = field(
+                response, ModelConfigKey.CHAT_API_KEY);
+        assertThat(apiKey.label()).isEqualTo("对话模型密钥");
         assertThat(apiKey.sensitive()).isTrue();
         assertThat(apiKey.configured()).isTrue();
         assertThat(apiKey.value()).isNull();
-        assertThat(apiKey.effectiveValue()).isNull();
-
-        assertThat(response.sections().stream()
-                .flatMap(section -> section.fields().stream()))
-                .noneMatch(field -> "secret-chat-key".equals(field.value()));
     }
 
     @Test
-    void distinguishesConfiguredValuesFromUnsetValues() throws Exception {
-        EnvConfig.init(Map.of(EnvKey.MODEL_CHAT_MODEL, "gpt-test"));
-
-        ModelConfigurationService.ModelConfigurationResponse response =
-                service().current();
-
-        ModelConfigurationService.ModelConfigurationSection chat = response.sections().stream()
-                .filter(section -> "chat".equals(section.id()))
-                .findFirst()
-                .orElseThrow();
-        assertThat(chat.fields())
-                .anySatisfy(field -> {
-                    assertThat(field.key()).isEqualTo(EnvKey.MODEL_CHAT_MODEL);
-                    assertThat(field.value()).isEqualTo("gpt-test");
-                    assertThat(field.configured()).isTrue();
-                })
-                .anySatisfy(field -> {
-                    assertThat(field.key()).isEqualTo(EnvKey.MODEL_CHAT_BASE_URL);
-                    assertThat(field.value()).isNull();
-                    assertThat(field.configured()).isFalse();
-                });
-    }
-
-    @Test
-    void persistsAndActivatesUpdatesWhileClearsRestoreBaseValues() throws Exception {
-        Path envFile = temporaryDirectory.resolve("model-config.env");
-        Files.writeString(envFile, String.join(System.lineSeparator(),
-                EnvKey.MODEL_CHAT_MODEL + "=old-model",
-                EnvKey.MODEL_CHAT_PROVIDER + "=openai",
-                ""));
-        EnvConfig.init(Map.of(
-                EnvKey.MODEL_CHAT_MODEL, "old-model",
-                EnvKey.MODEL_CHAT_PROVIDER, "openai"));
-        ModelConfigurationService service = new ModelConfigurationService(
-                EnvConfig.get(),
-                new ModelConfigurationFileStore(envFile));
+    void persistsAndActivatesUpdatesFromTheSingleModelConfigSource() throws Exception {
+        ModelConfig initial = ModelConfig.of(Map.of(
+                ModelConfigKey.CHAT_MODEL, "old-model",
+                ModelConfigKey.CHAT_PROVIDER, "openai"));
+        TestRuntime runtime = new TestRuntime(initial);
+        ModelConfigurationService service = service(initial, runtime);
 
         ModelConfigurationService.ModelConfigurationResponse response = service.update(
                 new ModelConfigurationService.ModelConfigurationUpdateRequest(
                         Map.of(
-                                EnvKey.MODEL_CHAT_MODEL, "new model",
-                                EnvKey.MODEL_CHAT_API_KEY, "secret-key"),
-                        List.of(EnvKey.MODEL_CHAT_PROVIDER)));
+                                ModelConfigKey.CHAT_MODEL, "new model",
+                                ModelConfigKey.CHAT_API_KEY, "secret-key"),
+                        List.of(ModelConfigKey.CHAT_PROVIDER)));
 
-        String saved = Files.readString(envFile);
+        String saved = Files.readString(configPath());
         assertThat(saved)
-                .contains(EnvKey.MODEL_CHAT_MODEL + "=\"new model\"")
-                .contains(EnvKey.MODEL_CHAT_API_KEY + "=secret-key")
-                .doesNotContain(EnvKey.MODEL_CHAT_PROVIDER + "=");
-        assertThat(response.runtimeSynchronized()).isTrue();
-        ModelConfigurationService.ModelConfigurationField provider = response.sections().stream()
-                .flatMap(section -> section.fields().stream())
-                .filter(field -> EnvKey.MODEL_CHAT_PROVIDER.equals(field.key()))
-                .findFirst()
-                .orElseThrow();
-        assertThat(provider.value()).isEqualTo("openai");
-        assertThat(provider.configured()).isTrue();
-        assertThat(provider.managed()).isFalse();
-        assertThat(provider.effectiveValue()).isEqualTo("openai");
-        ModelConfigurationService.ModelConfigurationField apiKey = response.sections().stream()
-                .flatMap(section -> section.fields().stream())
-                .filter(field -> EnvKey.MODEL_CHAT_API_KEY.equals(field.key()))
-                .findFirst()
-                .orElseThrow();
-        assertThat(apiKey.value()).isNull();
-        assertThat(apiKey.configured()).isTrue();
-        assertThat(apiKey.managed()).isTrue();
-        assertThat(EnvConfig.get().getString(EnvKey.MODEL_CHAT_MODEL))
+                .contains("chat.model=\"new model\"")
+                .contains("chat.apiKey=secret-key")
+                .doesNotContain("chat.provider=");
+        assertThat(runtime.currentConfiguration().getString(ModelConfigKey.CHAT_MODEL))
                 .isEqualTo("new model");
+        assertThat(response.runtimeSynchronized()).isTrue();
+        assertThat(field(response, ModelConfigKey.CHAT_PROVIDER).configured()).isFalse();
     }
 
     @Test
     void rollsBackPersistentFileWhenRuntimeActivationFails() throws Exception {
-        Path configFile = temporaryDirectory.resolve("model-config.env");
-        Files.writeString(configFile, EnvKey.MODEL_CHAT_MODEL + "=old-model\n");
-        EnvConfig.init(Map.of(EnvKey.MODEL_CHAT_MODEL, "old-model"));
-        ModelConfigurationService service = new ModelConfigurationService(
-                EnvConfig.get(),
-                new ModelConfigurationFileStore(configFile),
-                candidate -> () -> {
-                    throw new IllegalStateException("activation failed");
-                });
+        ModelConfig initial = ModelConfig.of(Map.of(ModelConfigKey.CHAT_MODEL, "old-model"));
+        ModelConfigurationRuntime failingRuntime = new ModelConfigurationRuntime() {
+            @Override public ModelConfig currentConfiguration() { return initial; }
+            @Override public PreparedUpdate prepare(ModelConfig candidateConfiguration) {
+                return () -> { throw new IllegalStateException("activation failed"); };
+            }
+        };
+        ModelConfigurationService service = service(initial, failingRuntime);
 
         assertThatThrownBy(() -> service.update(
                 new ModelConfigurationService.ModelConfigurationUpdateRequest(
-                        Map.of(EnvKey.MODEL_CHAT_MODEL, "new-model"),
-                        List.of())))
+                        Map.of(ModelConfigKey.CHAT_MODEL, "new-model"), List.of())))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("activation failed");
 
-        assertThat(Files.readString(configFile))
-                .contains(EnvKey.MODEL_CHAT_MODEL + "=old-model")
+        assertThat(Files.readString(configPath()))
+                .contains("chat.model=old-model")
                 .doesNotContain("new-model");
-        assertThat(EnvConfig.get().getString(EnvKey.MODEL_CHAT_MODEL))
-                .isEqualTo("old-model");
     }
 
     @Test
-    void rejectsUnknownKeysMultilineValuesAndConflictingOperations() {
-        ModelConfigurationService service = service();
+    void rejectsUnknownKeysMultilineValuesAndConflictingOperations() throws Exception {
+        ModelConfig initial = ModelConfig.of(Map.of(ModelConfigKey.CHAT_MODEL, "old-model"));
+        ModelConfigurationService service = service(initial, new TestRuntime(initial));
 
         assertThatThrownBy(() -> service.update(
                 new ModelConfigurationService.ModelConfigurationUpdateRequest(
-                        Map.of("HARNESS_UNKNOWN_MODEL", "value"),
-                        List.of())))
+                        Map.of("legacy.model", "value"), List.of())))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("Unsupported");
         assertThatThrownBy(() -> service.update(
                 new ModelConfigurationService.ModelConfigurationUpdateRequest(
-                        Map.of(EnvKey.MODEL_CHAT_MODEL, "first\nsecond"),
-                        List.of())))
+                        Map.of(ModelConfigKey.CHAT_MODEL, "first\nsecond"), List.of())))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("single line");
         assertThatThrownBy(() -> service.update(
                 new ModelConfigurationService.ModelConfigurationUpdateRequest(
-                        Map.of(EnvKey.MODEL_CHAT_MODEL, "model"),
-                        List.of(EnvKey.MODEL_CHAT_MODEL))))
+                        Map.of(ModelConfigKey.CHAT_MODEL, "model"),
+                        List.of(ModelConfigKey.CHAT_MODEL))))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("updated and cleared");
     }
 
     @Test
     void handlerReturnsTheTypedConfigurationResponse() throws Exception {
-        EnvConfig.init(Map.of(EnvKey.MODEL_CHAT_PROVIDER, "openai"));
+        ModelConfig config = ModelConfig.of(Map.of(ModelConfigKey.CHAT_PROVIDER, "openai"));
         Context context = mock(Context.class);
         when(context.json(any())).thenReturn(context);
         ModelConfigurationHandler handler = new ModelConfigurationHandler(
-                service());
+                service(config, new TestRuntime(config)));
 
         handler.get(context);
 
@@ -211,9 +141,39 @@ class ModelConfigurationServiceTest {
                 .isInstanceOf(ModelConfigurationService.ModelConfigurationResponse.class);
     }
 
-    private ModelConfigurationService service() {
-        return new ModelConfigurationService(
-                EnvConfig.get(),
-                new ModelConfigurationFileStore(temporaryDirectory.resolve(".env")));
+    private ModelConfigurationService service(
+            ModelConfig config,
+            ModelConfigurationRuntime runtime
+    ) throws Exception {
+        ModelConfigFile file = new ModelConfigFile(configPath());
+        file.replace(config);
+        return new ModelConfigurationService(file, runtime);
+    }
+
+    private Path configPath() {
+        return temporaryDirectory.resolve("model.conf");
+    }
+
+    private static ModelConfigurationService.ModelConfigurationField field(
+            ModelConfigurationService.ModelConfigurationResponse response,
+            String key
+    ) {
+        return response.sections().stream()
+                .flatMap(section -> section.fields().stream())
+                .filter(field -> key.equals(field.key()))
+                .findFirst()
+                .orElseThrow();
+    }
+
+    private static final class TestRuntime implements ModelConfigurationRuntime {
+        private ModelConfig active;
+
+        private TestRuntime(ModelConfig active) { this.active = active; }
+
+        @Override public ModelConfig currentConfiguration() { return active; }
+
+        @Override public PreparedUpdate prepare(ModelConfig candidateConfiguration) {
+            return () -> active = candidateConfiguration;
+        }
     }
 }

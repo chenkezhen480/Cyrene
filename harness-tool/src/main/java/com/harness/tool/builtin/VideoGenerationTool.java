@@ -9,8 +9,8 @@ import com.harness.core.model.ToolResult;
 import com.harness.core.model.ToolOutput;
 import com.harness.core.model.ToolSpec;
 import com.harness.tool.TypedOutputTool;
-import com.harness.core.env.EnvConfig;
-import com.harness.core.env.EnvKey;
+import com.harness.core.modelconfig.ModelConfig;
+import com.harness.core.modelconfig.ModelConfigKey;
 import okhttp3.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -56,29 +56,25 @@ public class VideoGenerationTool implements TypedOutputTool {
     private final ScheduledExecutorService scheduler;
     private final ConcurrentHashMap<String, TaskState> tasks = new ConcurrentHashMap<>();
 
-    public VideoGenerationTool(ArtifactStorer storer, ArtifactCallback callback) {
-        this(storer, callback, EnvConfig.get());
-    }
-
     public VideoGenerationTool(
             ArtifactStorer storer,
             ArtifactCallback callback,
-            EnvConfig cfg
+            ModelConfig cfg
     ) {
         this.storer = storer;
         this.callback = callback;
-        int timeoutSeconds = cfg.getInt(EnvKey.MODEL_CHAT_TIMEOUT_SECONDS, 300);
+        int timeoutSeconds = cfg.getInt(ModelConfigKey.CHAT_TIMEOUT_SECONDS, 300);
         this.http = new OkHttpClient.Builder()
                 .connectTimeout(30, TimeUnit.SECONDS)
                 .readTimeout(timeoutSeconds, TimeUnit.SECONDS)
                 .build();
-        this.provider = cfg.getString(EnvKey.TOOL_VIDEO_GEN_PROVIDER, "");
-        this.apiKey = cfg.getString(EnvKey.TOOL_VIDEO_GEN_API_KEY, "");
-        String rawBaseUrl = cfg.getString(EnvKey.TOOL_VIDEO_GEN_BASE_URL, "");
+        this.provider = cfg.getString(ModelConfigKey.VIDEO_PROVIDER, "");
+        this.apiKey = cfg.getString(ModelConfigKey.VIDEO_API_KEY, "");
+        String rawBaseUrl = cfg.getString(ModelConfigKey.VIDEO_BASE_URL, "");
         this.baseUrl = rawBaseUrl.endsWith("/") ? rawBaseUrl.substring(0, rawBaseUrl.length() - 1) : rawBaseUrl;
-        this.model = cfg.getString(EnvKey.TOOL_VIDEO_GEN_MODEL, "");
-        this.submitPath = cfg.getString(EnvKey.TOOL_VIDEO_GEN_SUBMIT_PATH, "/submit");
-        this.statusPath = cfg.getString(EnvKey.TOOL_VIDEO_GEN_STATUS_PATH, "/status");
+        this.model = cfg.getString(ModelConfigKey.VIDEO_MODEL, "");
+        this.submitPath = cfg.getString(ModelConfigKey.VIDEO_SUBMIT_PATH, "/submit");
+        this.statusPath = cfg.getString(ModelConfigKey.VIDEO_STATUS_PATH, "/status");
         this.scheduler = Executors.newScheduledThreadPool(2, r -> {
             Thread t = new Thread(r, "video-gen-poller");
             t.setDaemon(true);
@@ -124,8 +120,8 @@ public class VideoGenerationTool implements TypedOutputTool {
 
         if (apiKey == null || apiKey.isBlank() || baseUrl == null || baseUrl.isBlank()) {
             throw new ToolExecutionException("video_generation",
-                    "Video generation not configured. Set HARNESS_TOOL_VIDEO_GEN_PROVIDER, " +
-                    "HARNESS_TOOL_VIDEO_GEN_API_KEY, and HARNESS_TOOL_VIDEO_GEN_BASE_URL");
+                    "Video generation not configured. Set videoGeneration.provider, " +
+                    "videoGeneration.apiKey, and videoGeneration.baseUrl in model.conf");
         }
 
         return switch (action) {

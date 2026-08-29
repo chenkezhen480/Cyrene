@@ -9,6 +9,7 @@ class EntrypointEnvironmentTest(unittest.TestCase):
     def test_removes_unrelated_application_secrets(self):
         environment = {
             "HARNESS_DOCUMENT_PARSER_TOKEN": "parser-token",
+            "HARNESS_CONFIG_MODEL_FILE": "/app/data/model.conf",
             "HARNESS_MODEL_CHAT_API_KEY": "chat-key",
             "HARNESS_MODEL_VISION_API_KEY": "vision-key",
             "HARNESS_DB_PASS": "database-secret",
@@ -21,8 +22,10 @@ class EntrypointEnvironmentTest(unittest.TestCase):
         result = sanitizedEnvironment(environment)
 
         self.assertEqual("parser-token", result["HARNESS_DOCUMENT_PARSER_TOKEN"])
-        self.assertEqual("chat-key", result["HARNESS_MODEL_CHAT_API_KEY"])
-        self.assertEqual("vision-key", result["HARNESS_MODEL_VISION_API_KEY"])
+        self.assertEqual(
+            "/app/data/model.conf", result["HARNESS_CONFIG_MODEL_FILE"])
+        self.assertNotIn("HARNESS_MODEL_CHAT_API_KEY", result)
+        self.assertNotIn("HARNESS_MODEL_VISION_API_KEY", result)
         self.assertNotIn("HARNESS_DB_PASS", result)
         self.assertNotIn("HARNESS_AUDIT_DB_PASS", result)
         self.assertNotIn("HARNESS_MEMORY_REDIS_URL", result)
@@ -39,6 +42,7 @@ class EntrypointEnvironmentTest(unittest.TestCase):
             "NO_PROXY": "document-parser,localhost",
             "REQUESTS_CA_BUNDLE": "/certs/internal.pem",
             "HARNESS_DOCUMENT_PARSER_VISION_TIMEOUT_SECONDS": "60",
+            "HARNESS_CONFIG_MODEL_FILE": "/app/data/model.conf",
             "HARNESS_MODEL_CHAT_PROVIDER": "openai",
             "HARNESS_MODEL_CHAT_BASE_URL": "https://llm.internal/v1",
             "PYTHONPATH": "/untrusted/modules",
@@ -54,14 +58,16 @@ class EntrypointEnvironmentTest(unittest.TestCase):
             environment["REQUESTS_CA_BUNDLE"], result["REQUESTS_CA_BUNDLE"])
         self.assertEqual(
             "60", result["HARNESS_DOCUMENT_PARSER_VISION_TIMEOUT_SECONDS"])
-        self.assertEqual("openai", result["HARNESS_MODEL_CHAT_PROVIDER"])
+        self.assertEqual(
+            "/app/data/model.conf", result["HARNESS_CONFIG_MODEL_FILE"])
+        self.assertNotIn("HARNESS_MODEL_CHAT_PROVIDER", result)
         self.assertNotIn("PYTHONPATH", result)
 
     def test_executes_app_with_only_sanitized_environment(self):
         environment = {
             "PATH": "/usr/local/bin:/usr/bin",
             "HARNESS_DOCUMENT_PARSER_PORT": "8082",
-            "HARNESS_MODEL_CHAT_API_KEY": "chat-key",
+            "HARNESS_CONFIG_MODEL_FILE": "/app/data/model.conf",
             "HARNESS_DB_PASS": "database-secret",
         }
 
@@ -72,7 +78,9 @@ class EntrypointEnvironmentTest(unittest.TestCase):
         executable, arguments, childEnvironment = execve.call_args.args
         self.assertEqual(executable, arguments[0])
         self.assertTrue(arguments[1].endswith("app.py"))
-        self.assertEqual("chat-key", childEnvironment["HARNESS_MODEL_CHAT_API_KEY"])
+        self.assertEqual(
+            "/app/data/model.conf", childEnvironment["HARNESS_CONFIG_MODEL_FILE"])
+        self.assertNotIn("HARNESS_MODEL_CHAT_API_KEY", childEnvironment)
         self.assertNotIn("HARNESS_DB_PASS", childEnvironment)
 
 

@@ -3,6 +3,7 @@ package com.harness.tool.rag;
 import com.harness.provider.EmbeddingModelProvider;
 import com.harness.core.env.EnvConfig;
 import com.harness.core.env.EnvKey;
+import com.harness.core.modelconfig.ModelConfigKey;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -50,7 +51,7 @@ public class RagRetriever {
         if (embeddingProvider == null || !embeddingProvider.isAvailable()) {
             throw new IllegalStateException(
                     "RAG retrieve requires an embedding provider. Set "
-                            + EnvKey.MODEL_EMBEDDING_PROVIDER + ".");
+                            + ModelConfigKey.EMBEDDING_PROVIDER + " in model.conf.");
         }
 
         log.debug("RAG retrieve: provider={}, collection={}, topK={}, query={}", provider, collection, topK, query);

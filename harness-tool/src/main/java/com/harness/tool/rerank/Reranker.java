@@ -1,8 +1,6 @@
 package com.harness.tool.rerank;
 
 import com.harness.provider.RerankModelProvider;
-import com.harness.core.env.EnvConfig;
-import com.harness.core.env.EnvKey;
 import com.harness.tool.rag.RagRetriever;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -40,9 +38,11 @@ public class Reranker {
         if (documents == null || documents.isEmpty()) {
             return new RerankResult(Collections.emptyList(), 0.0);
         }
-        int topN = EnvConfig.get().getInt(EnvKey.RERANK_TOP_N, 3);
+        int topN = rerankModelProvider != null
+                ? rerankModelProvider.defaultTopN()
+                : 3;
         if (topN <= 0) {
-            throw new IllegalStateException("HARNESS_RERANK_TOP_N must be positive");
+            throw new IllegalStateException("rerank.topN in model.conf must be positive");
         }
 
         if (rerankModelProvider != null && rerankModelProvider.isAvailable()) {

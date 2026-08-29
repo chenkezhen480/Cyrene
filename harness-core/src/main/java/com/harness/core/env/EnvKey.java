@@ -15,104 +15,17 @@ public final class EnvKey {
 
     private EnvKey() {}
 
-    /** Web 管理的模型配置持久化文件。内容作为显式模型覆盖，高于进程环境变量。 */
+    /** 独立模型配置文件路径；文件内容不参与环境变量覆盖。 */
     public static final String CONFIG_MODEL_FILE = "HARNESS_CONFIG_MODEL_FILE";
 
     // ==================== Gap Analysis / 动态路由 ====================
     /**
      * 功能总开关，默认 true。关闭后所有字段回退全局静态配置。
-     * <p>三级判定漏斗：Tier 0 显式覆盖 → Tier 1 规则引擎（&lt;1ms）→ Tier 2 LLM 分类。
+     * <p>三级判定漏斗：Tier 0 显式覆盖 → Tier 1 规则引擎（&lt;1ms）→ Tier 2 小任务模型分析。
      * 三个独立字段：needsThinking / needsKnowledgeBase / needsWebSearch。
      * 判定结果写入 trace metadata（gap_source = explicit/rule/llm/default）。
      */
     public static final String GAP_ANALYSIS_ENABLED = "HARNESS_GAP_ANALYSIS_ENABLED";
-
-    // ==================== 1. Chat Model (通用对话+工具调用) ====================
-    public static final String MODEL_CHAT_PROVIDER    = "HARNESS_MODEL_CHAT_PROVIDER";
-    public static final String MODEL_CHAT_API_KEY     = "HARNESS_MODEL_CHAT_API_KEY";
-    public static final String MODEL_CHAT_BASE_URL    = "HARNESS_MODEL_CHAT_BASE_URL";
-    public static final String MODEL_CHAT_MODEL       = "HARNESS_MODEL_CHAT_MODEL";
-    /** 上游 OpenAI-compatible 协议：chat_completions | responses */
-    public static final String MODEL_CHAT_API_FORMAT  = "HARNESS_MODEL_CHAT_API_FORMAT";
-    public static final String MODEL_CHAT_MAX_TOKENS  = "HARNESS_MODEL_CHAT_MAX_TOKENS";
-    public static final String MODEL_CHAT_TEMPERATURE = "HARNESS_MODEL_CHAT_TEMPERATURE";
-    /** 是否开启思考/推理模式（影响 DashScope 等支持思考模式的 API），默认 true */
-    public static final String MODEL_CHAT_THINKING   = "HARNESS_MODEL_CHAT_THINKING";
-    /** LLM API 超时时间（秒），默认 300（5分钟） */
-    public static final String MODEL_CHAT_TIMEOUT_SECONDS = "HARNESS_MODEL_CHAT_TIMEOUT_SECONDS";
-
-    // ==================== 2. Vision Model (图片识别/视频分析) ====================
-    public static final String MODEL_VISION_PROVIDER  = "HARNESS_MODEL_VISION_PROVIDER";
-    public static final String MODEL_VISION_API_KEY   = "HARNESS_MODEL_VISION_API_KEY";
-    public static final String MODEL_VISION_BASE_URL  = "HARNESS_MODEL_VISION_BASE_URL";
-    public static final String MODEL_VISION_MODEL     = "HARNESS_MODEL_VISION_MODEL";
-
-    // ==================== 3. Voice Model (ASR语音识别 + TTS语音合成) ====================
-    public static final String MODEL_VOICE_PROVIDER   = "HARNESS_MODEL_VOICE_PROVIDER";
-    public static final String MODEL_VOICE_API_KEY    = "HARNESS_MODEL_VOICE_API_KEY";
-    public static final String MODEL_VOICE_BASE_URL   = "HARNESS_MODEL_VOICE_BASE_URL";
-    public static final String MODEL_VOICE_ASR_MODEL  = "HARNESS_MODEL_VOICE_ASR_MODEL";
-    public static final String MODEL_VOICE_TTS_MODEL  = "HARNESS_MODEL_VOICE_TTS_MODEL";
-    public static final String MODEL_VOICE_TIMEOUT_SECONDS = "HARNESS_MODEL_VOICE_TIMEOUT_SECONDS";
-    public static final String MODEL_VOICE_ASR_MAX_SIZE_MB = "HARNESS_MODEL_VOICE_ASR_MAX_SIZE_MB";
-    public static final String MODEL_VOICE_TTS_DEFAULT_VOICE = "HARNESS_MODEL_VOICE_TTS_DEFAULT_VOICE";
-
-    // ==================== 4. Embedding Model (多模态向量化) ====================
-    public static final String MODEL_EMBEDDING_PROVIDER = "HARNESS_MODEL_EMBEDDING_PROVIDER";
-    public static final String MODEL_EMBEDDING_API_KEY  = "HARNESS_MODEL_EMBEDDING_API_KEY";
-    public static final String MODEL_EMBEDDING_BASE_URL = "HARNESS_MODEL_EMBEDDING_BASE_URL";
-    public static final String MODEL_EMBEDDING_MODEL    = "HARNESS_MODEL_EMBEDDING_MODEL";
-    public static final String MODEL_EMBEDDING_DIM      = "HARNESS_MODEL_EMBEDDING_DIM";
-    /** Embedding 向量维度默认值 */
-    public static final int MODEL_EMBEDDING_DIM_DEFAULT = 1024;
-
-    // ==================== 5. Rerank Model (向量检索结果排序) ====================
-    public static final String MODEL_RERANK_PROVIDER  = "HARNESS_MODEL_RERANK_PROVIDER";
-    public static final String MODEL_RERANK_API_KEY   = "HARNESS_MODEL_RERANK_API_KEY";
-    public static final String MODEL_RERANK_BASE_URL  = "HARNESS_MODEL_RERANK_BASE_URL";
-    public static final String MODEL_RERANK_MODEL     = "HARNESS_MODEL_RERANK_MODEL";
-    /** 是否启用 rerank，默认 false */
-    public static final String RERANK_ENABLED        = "HARNESS_RERANK_ENABLED";
-    /** Rerank 取 top N 个结果，默认 3 */
-    public static final String RERANK_TOP_N          = "HARNESS_RERANK_TOP_N";
-
-    // ==================== 6. Realtime Model (实时多模态-预留) ====================
-    public static final String MODEL_REALTIME_PROVIDER = "HARNESS_MODEL_REALTIME_PROVIDER";
-    public static final String MODEL_REALTIME_API_KEY  = "HARNESS_MODEL_REALTIME_API_KEY";
-    public static final String MODEL_REALTIME_BASE_URL = "HARNESS_MODEL_REALTIME_BASE_URL";
-
-    // ==================== 7. Classifier Model (意图分类/路由 / GapAnalyzer Tier 2) ====================
-    /** 分类器 Provider，留空则禁用 Tier 2（仅 Tier 0+1 生效）。支持 openai 兼容 API */
-    public static final String MODEL_CLASSIFIER_PROVIDER   = "HARNESS_MODEL_CLASSIFIER_PROVIDER";
-    public static final String MODEL_CLASSIFIER_API_KEY    = "HARNESS_MODEL_CLASSIFIER_API_KEY";
-    public static final String MODEL_CLASSIFIER_BASE_URL   = "HARNESS_MODEL_CLASSIFIER_BASE_URL";
-    public static final String MODEL_CLASSIFIER_MODEL      = "HARNESS_MODEL_CLASSIFIER_MODEL";
-    /** 分类器最大输出 token，默认 50（只够输出压缩 JSON） */
-    public static final String MODEL_CLASSIFIER_MAX_TOKENS = "HARNESS_MODEL_CLASSIFIER_MAX_TOKENS";
-
-    // ==================== 8. Image Generation Model (图片生成) ====================
-    /** 图片生成 provider（如 openai/azure），默认 openai */
-    public static final String TOOL_IMAGE_GEN_PROVIDER   = "HARNESS_TOOL_IMAGE_GEN_PROVIDER";
-    /** 图片生成 API key */
-    public static final String TOOL_IMAGE_GEN_API_KEY    = "HARNESS_TOOL_IMAGE_GEN_API_KEY";
-    /** 图片生成 API base URL，默认 https://api.openai.com/v1 */
-    public static final String TOOL_IMAGE_GEN_BASE_URL   = "HARNESS_TOOL_IMAGE_GEN_BASE_URL";
-    /** 图片生成模型名，默认 dall-e-3 */
-    public static final String TOOL_IMAGE_GEN_MODEL      = "HARNESS_TOOL_IMAGE_GEN_MODEL";
-
-    // ==================== 9. Video Generation Model (视频生成) ====================
-    /** 视频生成 provider（如 kling/runway/sora） */
-    public static final String TOOL_VIDEO_GEN_PROVIDER   = "HARNESS_TOOL_VIDEO_GEN_PROVIDER";
-    /** 视频生成 API key */
-    public static final String TOOL_VIDEO_GEN_API_KEY    = "HARNESS_TOOL_VIDEO_GEN_API_KEY";
-    /** 视频生成 API base URL（含版本路径，如 https://api.kling.ai/v1） */
-    public static final String TOOL_VIDEO_GEN_BASE_URL   = "HARNESS_TOOL_VIDEO_GEN_BASE_URL";
-    /** 视频生成模型名 */
-    public static final String TOOL_VIDEO_GEN_MODEL      = "HARNESS_TOOL_VIDEO_GEN_MODEL";
-    /** 视频提交 endpoint 路径（拼接在 BASE_URL 后），默认 /submit */
-    public static final String TOOL_VIDEO_GEN_SUBMIT_PATH = "HARNESS_TOOL_VIDEO_GEN_SUBMIT_PATH";
-    /** 视频状态查询 endpoint 路径（拼接在 BASE_URL 后 + /{taskId}），默认 /status */
-    public static final String TOOL_VIDEO_GEN_STATUS_PATH = "HARNESS_TOOL_VIDEO_GEN_STATUS_PATH";
 
     // ==================== Log Storage ====================
     /** 日志存储目录，默认 ./logs */
@@ -177,12 +90,6 @@ public final class EnvKey {
      * PG 表名，默认 knowledge_documents
      */
     @Deprecated public static final String RAG_PG_TABLE     = "HARNESS_RAG_PG_TABLE";
-    /**
-     * @deprecated Use {@link #MODEL_EMBEDDING_DIM} instead.
-     * PG 向量维度
-     */
-    @Deprecated public static final String RAG_PG_EMBED_DIM = "HARNESS_RAG_PG_EMBED_DIM";
-
     // ==================== RAG (Milvus 专用) ====================
     /** Milvus 距离度量类型：COSINE | L2 | IP，默认 COSINE */
     public static final String RAG_MILVUS_METRIC_TYPE = "HARNESS_RAG_MILVUS_METRIC_TYPE";
@@ -284,10 +191,6 @@ public final class EnvKey {
     /** await_subagents 共享超时（秒），默认 120；超时后未完成任务转为 Session Resume */
     public static final String AGENT_AWAIT_TIMEOUT_SECONDS = "HARNESS_AGENT_AWAIT_TIMEOUT_SECONDS";
 
-    // ==================== LLM API 并发保护 ====================
-    /** LLM API 最大并发调用数（Semaphore 保护上游 RPM/TPM 限制），默认 10 */
-    public static final String MODEL_API_MAX_CONCURRENT  = "HARNESS_MODEL_API_MAX_CONCURRENT";
-
     // ==================== Storage（统一存储配置，记忆 + Trace 共享） ====================
     /** 存储类型：mysql | sqlite | none（默认）。同时控制记忆和 Trace 存储后端 */
     public static final String AUDIT_STORE           = "HARNESS_AUDIT_STORE";
@@ -346,16 +249,10 @@ public final class EnvKey {
     public static final String DOCUMENT_PARSER_PORT             = "HARNESS_DOCUMENT_PARSER_PORT";
     /** Internal bind host used by the document parser container. */
     public static final String DOCUMENT_PARSER_HOST             = "HARNESS_DOCUMENT_PARSER_HOST";
-    /** 模型上下文窗口大小 (token)，根据模型名称自动检测，仅在需要覆盖时设置 */
-    public static final String MODEL_CHAT_CONTEXT_WINDOW       = "HARNESS_MODEL_CHAT_CONTEXT_WINDOW";
     /** 每个摘要块使用的上下文窗口比例，默认 0.4 */
     public static final String LARGE_FILE_CONTEXT_RATIO        = "HARNESS_LARGE_FILE_CONTEXT_RATIO";
     /** 大文件解析的最大并行摘要线程数，默认 3 */
     public static final String LARGE_FILE_SUMMARY_CONCURRENCY  = "HARNESS_LARGE_FILE_SUMMARY_CONCURRENCY";
-
-    // ==================== AI Fallback ====================
-    /** 手动声明模型多模态能力（覆盖自动检测），逗号分隔: text, image_input, audio_input */
-    public static final String MODEL_CHAT_CAPABILITIES  = "HARNESS_MODEL_CHAT_CAPABILITIES";
 
     // ==================== Memory (会话记忆管理) ====================
     /** 会话超时时间（分钟），默认 30 */

@@ -1,8 +1,8 @@
 package com.harness.provider.impl;
 
 import com.harness.provider.EmbeddingModelProvider;
-import com.harness.core.env.EnvConfig;
-import com.harness.core.env.EnvKey;
+import com.harness.core.modelconfig.ModelConfig;
+import com.harness.core.modelconfig.ModelConfigKey;
 import dev.langchain4j.data.embedding.Embedding;
 import dev.langchain4j.data.segment.TextSegment;
 import dev.langchain4j.model.ollama.OllamaEmbeddingModel;
@@ -14,14 +14,10 @@ public class OllamaEmbeddingModelProvider implements EmbeddingModelProvider {
     private final OllamaEmbeddingModel model;
     private final int dim;
 
-    public OllamaEmbeddingModelProvider() {
-        this(EnvConfig.get());
-    }
-
-    public OllamaEmbeddingModelProvider(EnvConfig cfg) {
-        String baseUrl = cfg.getString(EnvKey.MODEL_EMBEDDING_BASE_URL, "http://localhost:11434");
-        String modelName = cfg.getString(EnvKey.MODEL_EMBEDDING_MODEL, "nomic-embed-text");
-        this.dim = cfg.getInt(EnvKey.MODEL_EMBEDDING_DIM, 768);
+    public OllamaEmbeddingModelProvider(ModelConfig cfg) {
+        String baseUrl = cfg.getString(ModelConfigKey.EMBEDDING_BASE_URL, "http://localhost:11434");
+        String modelName = cfg.getString(ModelConfigKey.EMBEDDING_MODEL, "nomic-embed-text");
+        this.dim = cfg.getInt(ModelConfigKey.EMBEDDING_DIMENSION, 768);
 
         this.model = OllamaEmbeddingModel.builder()
                 .baseUrl(baseUrl)

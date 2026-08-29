@@ -1,6 +1,7 @@
 package com.harness.provider;
 
 import org.junit.jupiter.api.Test;
+import com.harness.core.modelconfig.ModelConfig;
 
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
@@ -17,7 +18,10 @@ class ModelProviderRuntimeTest {
             throws Exception {
         ModelProviders first = providers("first-model");
         ModelProviders second = providers("second-model");
-        ModelProviderRuntime runtime = new ModelProviderRuntime(first);
+        ModelConfig firstConfig = ModelConfig.empty();
+        ModelConfig secondConfig = ModelConfig.of(java.util.Map.of(
+                com.harness.core.modelconfig.ModelConfigKey.CHAT_MODEL, "second-model"));
+        ModelProviderRuntime runtime = new ModelProviderRuntime(first, firstConfig);
         CountDownLatch leaseAcquired = new CountDownLatch(1);
         CountDownLatch releaseLease = new CountDownLatch(1);
 
@@ -36,7 +40,7 @@ class ModelProviderRuntimeTest {
         assertThat(leaseAcquired.await(5, TimeUnit.SECONDS)).isTrue();
 
         CompletableFuture<Void> activation = CompletableFuture.runAsync(() ->
-                runtime.activate(second, () -> {}));
+                runtime.activate(second, secondConfig, () -> {}));
         Thread.sleep(50);
         assertThat(activation.isDone()).isFalse();
         assertThat(runtime.delegates().chat().modelName()).isEqualTo("first-model");
@@ -58,6 +62,6 @@ class ModelProviderRuntimeTest {
                 mock(EmbeddingModelProvider.class),
                 mock(RerankModelProvider.class),
                 mock(RealtimeModelProvider.class),
-                mock(ClassifierModelProvider.class));
+                mock(SmallTaskModelProvider.class));
     }
 }

@@ -1,8 +1,8 @@
 package com.harness.provider.impl;
 
 import com.harness.provider.ChatModelProvider;
-import com.harness.core.env.EnvConfig;
-import com.harness.core.env.EnvKey;
+import com.harness.core.modelconfig.ModelConfig;
+import com.harness.core.modelconfig.ModelConfigKey;
 import dev.langchain4j.agent.tool.ToolSpecification;
 import dev.langchain4j.http.client.HttpClientBuilder;
 import dev.langchain4j.model.chat.ChatModel;
@@ -36,30 +36,20 @@ public class OpenAiChatModelProvider implements ChatModelProvider {
     private final int timeoutSeconds;
     private final AtomicBoolean responsesThinkingWarningLogged = new AtomicBoolean();
 
-    public OpenAiChatModelProvider() {
-        this(EnvConfig.get(), OpenAiChatApiFormat.parse(EnvConfig.get().getString(
-                EnvKey.MODEL_CHAT_API_FORMAT,
-                OpenAiChatApiFormat.CHAT_COMPLETIONS.configValue())));
-    }
-
-    public OpenAiChatModelProvider(OpenAiChatApiFormat apiFormat) {
-        this(EnvConfig.get(), apiFormat);
-    }
-
-    public OpenAiChatModelProvider(EnvConfig cfg, OpenAiChatApiFormat apiFormat) {
+    public OpenAiChatModelProvider(ModelConfig cfg, OpenAiChatApiFormat apiFormat) {
         Objects.requireNonNull(cfg, "cfg");
         this.apiFormat = Objects.requireNonNull(apiFormat, "apiFormat");
-        this.apiKey = cfg.requireString(EnvKey.MODEL_CHAT_API_KEY);
-        this.baseUrl = cfg.getString(EnvKey.MODEL_CHAT_BASE_URL, "https://api.openai.com/v1");
-        this.model = cfg.getString(EnvKey.MODEL_CHAT_MODEL, "gpt-4o");
-        this.maxTokens = cfg.getInt(EnvKey.MODEL_CHAT_MAX_TOKENS, 12288);
-        this.temperature = cfg.getDouble(EnvKey.MODEL_CHAT_TEMPERATURE, 0.7);
-        this.thinking = cfg.getBool(EnvKey.MODEL_CHAT_THINKING, true);
-        this.timeoutSeconds = cfg.getInt(EnvKey.MODEL_CHAT_TIMEOUT_SECONDS, 300);
+        this.apiKey = cfg.requireString(ModelConfigKey.CHAT_API_KEY);
+        this.baseUrl = cfg.getString(ModelConfigKey.CHAT_BASE_URL, "https://api.openai.com/v1");
+        this.model = cfg.getString(ModelConfigKey.CHAT_MODEL, "gpt-4o");
+        this.maxTokens = cfg.getInt(ModelConfigKey.CHAT_MAX_TOKENS, 12288);
+        this.temperature = cfg.getDouble(ModelConfigKey.CHAT_TEMPERATURE, 0.7);
+        this.thinking = cfg.getBool(ModelConfigKey.CHAT_THINKING, true);
+        this.timeoutSeconds = cfg.getInt(ModelConfigKey.CHAT_TIMEOUT_SECONDS, 300);
         log.info("[Model] OpenAI Chat initialized: model={}, baseUrl={}, apiFormat={}, maxTokens={}, temp={}, thinking={}, timeout={}s",
                 model, baseUrl, apiFormat.configValue(), maxTokens, temperature, thinking, timeoutSeconds);
         if (apiFormat == OpenAiChatApiFormat.RESPONSES && thinking) {
-            log.warn("[Model] HARNESS_MODEL_CHAT_THINKING is not sent as enable_thinking with the Responses API; model defaults apply");
+            log.warn("[Model] chat.thinking is not sent with the Responses API; model defaults apply");
         }
     }
 
@@ -168,5 +158,8 @@ public class OpenAiChatModelProvider implements ChatModelProvider {
 
     @Override
     public String modelName() { return model; }
+
+    @Override
+    public int timeoutSeconds() { return timeoutSeconds; }
 
 }

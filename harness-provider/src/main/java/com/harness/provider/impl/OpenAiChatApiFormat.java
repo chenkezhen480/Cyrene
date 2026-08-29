@@ -25,7 +25,7 @@ public enum OpenAiChatApiFormat {
                 .filter(format -> format.configValue.equals(normalized))
                 .findFirst()
                 .orElseThrow(() -> new IllegalStateException(
-                        "Invalid HARNESS_MODEL_CHAT_API_FORMAT '" + value
+                        "Invalid chat.apiFormat '" + value
                                 + "'. Allowed values: " + allowedValues()));
     }
 

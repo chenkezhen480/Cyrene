@@ -1,7 +1,8 @@
 package com.harness.provider;
 
-import com.harness.core.env.EnvConfig;
-import com.harness.core.env.EnvKey;
+import com.harness.core.modelconfig.ModelConfig;
+import com.harness.core.modelconfig.ModelConfigKey;
+import com.harness.provider.impl.NoOpChatModelProvider;
 import com.harness.provider.impl.OpenAiChatApiFormat;
 import org.junit.jupiter.api.Test;
 
@@ -11,6 +12,29 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class ModelProviderFactoryTest {
+
+    @Test
+    void emptyConfigurationStartsWithUnavailableChatProvider() {
+        ChatModelProvider chat = ModelProviderFactory.createChat(ModelConfig.empty());
+
+        assertThat(chat).isInstanceOf(NoOpChatModelProvider.class);
+        assertThat(chat.providerName()).isEqualTo("none");
+        assertThatThrownBy(() -> chat.chatModel().chat("hello"))
+                .isInstanceOf(UnsupportedOperationException.class)
+                .hasMessageContaining("Chat model not configured")
+                .hasMessageContaining(ModelConfigKey.CHAT_PROVIDER);
+
+        assertThat(ModelProviderFactory.createAll(ModelConfig.empty()).chat())
+                .isInstanceOf(NoOpChatModelProvider.class);
+    }
+
+    @Test
+    void explicitNoneDisablesChatUntilWebConfigurationIsSaved() {
+        ModelConfig config = ModelConfig.of(Map.of(ModelConfigKey.CHAT_PROVIDER, "none"));
+
+        assertThat(ModelProviderFactory.createChat(config))
+                .isInstanceOf(NoOpChatModelProvider.class);
+    }
 
     @Test
     void validateChatApiFormat_allowsResponsesForOpenAiCompatibleProviders() {
@@ -40,21 +64,22 @@ class ModelProviderFactoryTest {
     void validateChatApiFormat_rejectsUnknownValues() {
         assertThatThrownBy(() -> ModelProviderFactory.validateChatApiFormat("openai", "response"))
                 .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("HARNESS_MODEL_CHAT_API_FORMAT")
+                .hasMessageContaining(ModelConfigKey.CHAT_API_FORMAT)
                 .hasMessageContaining("chat_completions, responses");
     }
 
     @Test
     void optionalProvidersRequireKnownProviderOrExplicitNone() {
-        EnvConfig.init(Map.of(EnvKey.MODEL_VOICE_PROVIDER, "unknown-provider"));
+        ModelConfig unknown = ModelConfig.of(Map.of(
+                ModelConfigKey.VOICE_PROVIDER, "unknown-provider"));
 
-        assertThatThrownBy(() -> ModelProviderFactory.createVoice(EnvConfig.get()))
+        assertThatThrownBy(() -> ModelProviderFactory.createVoice(unknown))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("Unsupported voice model provider")
                 .hasMessageContaining("unknown-provider");
 
-        EnvConfig.init(Map.of(EnvKey.MODEL_VOICE_PROVIDER, "none"));
-        assertThat(ModelProviderFactory.createVoice(EnvConfig.get()).isTranscribeAvailable())
+        ModelConfig none = ModelConfig.of(Map.of(ModelConfigKey.VOICE_PROVIDER, "none"));
+        assertThat(ModelProviderFactory.createVoice(none).isTranscribeAvailable())
                 .isFalse();
     }
 }

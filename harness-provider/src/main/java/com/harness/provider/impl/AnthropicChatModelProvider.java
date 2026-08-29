@@ -1,8 +1,8 @@
 package com.harness.provider.impl;
 
 import com.harness.provider.ChatModelProvider;
-import com.harness.core.env.EnvConfig;
-import com.harness.core.env.EnvKey;
+import com.harness.core.modelconfig.ModelConfig;
+import com.harness.core.modelconfig.ModelConfigKey;
 import dev.langchain4j.model.anthropic.AnthropicChatModel;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.StreamingChatModel;
@@ -18,17 +18,13 @@ public class AnthropicChatModelProvider implements ChatModelProvider {
     private final double temperature;
     private final int timeoutSeconds;
 
-    public AnthropicChatModelProvider() {
-        this(EnvConfig.get());
-    }
-
-    public AnthropicChatModelProvider(EnvConfig cfg) {
-        this.apiKey = cfg.requireString(EnvKey.MODEL_CHAT_API_KEY);
-        this.baseUrl = cfg.getString(EnvKey.MODEL_CHAT_BASE_URL, "https://api.anthropic.com");
-        this.model = cfg.getString(EnvKey.MODEL_CHAT_MODEL, "claude-sonnet-4-6");
-        this.maxTokens = cfg.getInt(EnvKey.MODEL_CHAT_MAX_TOKENS, 12288);
-        this.temperature = cfg.getDouble(EnvKey.MODEL_CHAT_TEMPERATURE, 0.7);
-        this.timeoutSeconds = cfg.getInt(EnvKey.MODEL_CHAT_TIMEOUT_SECONDS, 300);
+    public AnthropicChatModelProvider(ModelConfig cfg) {
+        this.apiKey = cfg.requireString(ModelConfigKey.CHAT_API_KEY);
+        this.baseUrl = cfg.getString(ModelConfigKey.CHAT_BASE_URL, "https://api.anthropic.com");
+        this.model = cfg.getString(ModelConfigKey.CHAT_MODEL, "claude-sonnet-4-6");
+        this.maxTokens = cfg.getInt(ModelConfigKey.CHAT_MAX_TOKENS, 12288);
+        this.temperature = cfg.getDouble(ModelConfigKey.CHAT_TEMPERATURE, 0.7);
+        this.timeoutSeconds = cfg.getInt(ModelConfigKey.CHAT_TIMEOUT_SECONDS, 300);
     }
 
     @Override
@@ -55,4 +51,7 @@ public class AnthropicChatModelProvider implements ChatModelProvider {
 
     @Override
     public String modelName() { return model; }
+
+    @Override
+    public int timeoutSeconds() { return timeoutSeconds; }
 }

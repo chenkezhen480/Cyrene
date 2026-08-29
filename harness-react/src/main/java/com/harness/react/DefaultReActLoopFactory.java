@@ -1,7 +1,5 @@
 package com.harness.react;
 
-import com.harness.core.env.EnvConfig;
-import com.harness.core.env.EnvKey;
 import com.harness.provider.ModelProviders;
 import com.harness.provider.ModelProviderRuntime;
 import com.harness.tool.ToolCatalog;
@@ -59,7 +57,7 @@ public final class DefaultReActLoopFactory implements ReActLoopFactory {
     ) {
         FinalResponseGenerator finalResponseGenerator = new FinalResponseGenerator(
                 providers.chat(),
-                EnvConfig.get().getInt(EnvKey.MODEL_CHAT_TIMEOUT_SECONDS, 300));
+                positiveTimeout(providers.chat().timeoutSeconds()));
         return new ReActEngine(
                 providers.chat(),
                 toolCatalog,
@@ -68,5 +66,9 @@ public final class DefaultReActLoopFactory implements ReActLoopFactory {
                 providers.voice(),
                 maxIterations,
                 finalResponseGenerator);
+    }
+
+    private static int positiveTimeout(int configured) {
+        return configured > 0 ? configured : 300;
     }
 }

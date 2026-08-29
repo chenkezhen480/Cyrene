@@ -13,8 +13,8 @@ from llm_clients import VisionObservation
 
 
 DISABLED_ENVIRONMENT = {
-    "HARNESS_MODEL_CHAT_PROVIDER": "none",
 }
+DISABLED_MODEL = {"chat.provider": "none"}
 
 
 class FakeMarkItDown:
@@ -94,14 +94,15 @@ class MarkItDownDocumentConverterTest(unittest.TestCase):
 
     def test_passes_independent_vision_timeout_to_client_factory(self):
         environment = {
-            "HARNESS_MODEL_CHAT_PROVIDER": "openai",
-            "HARNESS_MODEL_CHAT_API_KEY": "key",
-            "HARNESS_MODEL_CHAT_BASE_URL": "https://example.test/v1",
-            "HARNESS_MODEL_CHAT_MODEL": "vision",
             "HARNESS_DOCUMENT_PARSER_TIMEOUT_SECONDS": "300",
             "HARNESS_DOCUMENT_PARSER_VISION_TIMEOUT_SECONDS": "45",
         }
-        config = ParserConfig.fromEnvironment(environment)
+        config = ParserConfig.fromEnvironment(environment, {
+            "chat.provider": "openai",
+            "chat.apiKey": "key",
+            "chat.baseUrl": "https://example.test/v1",
+            "chat.model": "vision",
+        })
         captured = {}
 
         def clientFactory(vision, timeoutSeconds, maxTokens):
@@ -119,7 +120,7 @@ class MarkItDownDocumentConverterTest(unittest.TestCase):
         self.assertEqual(45, captured["timeoutSeconds"])
 
     def test_returns_stable_diagnostics_when_vision_is_disabled(self):
-        config = ParserConfig.fromEnvironment(DISABLED_ENVIRONMENT)
+        config = ParserConfig.fromEnvironment(DISABLED_ENVIRONMENT, DISABLED_MODEL)
         converter = MarkItDownDocumentConverter(
             config,
             markitdownFactory=FakeMarkItDown,
@@ -141,7 +142,7 @@ class MarkItDownDocumentConverterTest(unittest.TestCase):
         self.assertEqual(3, result["diagnostics"]["inputBytes"])
 
     def test_detected_mime_type_overrides_generic_client_hint(self):
-        config = ParserConfig.fromEnvironment(DISABLED_ENVIRONMENT)
+        config = ParserConfig.fromEnvironment(DISABLED_ENVIRONMENT, DISABLED_MODEL)
         captured = {}
         converter = MarkItDownDocumentConverter(
             config,
@@ -162,12 +163,13 @@ class MarkItDownDocumentConverterTest(unittest.TestCase):
 
     def test_surfaces_vision_failure_even_if_converter_returns_partial_text(self):
         environment = {
-            "HARNESS_MODEL_CHAT_PROVIDER": "openai",
-            "HARNESS_MODEL_CHAT_API_KEY": "key",
-            "HARNESS_MODEL_CHAT_BASE_URL": "https://example.test/v1",
-            "HARNESS_MODEL_CHAT_MODEL": "vision",
         }
-        config = ParserConfig.fromEnvironment(environment)
+        config = ParserConfig.fromEnvironment(environment, {
+            "chat.provider": "openai",
+            "chat.apiKey": "key",
+            "chat.baseUrl": "https://example.test/v1",
+            "chat.model": "vision",
+        })
         converter = MarkItDownDocumentConverter(
             config,
             markitdownFactory=FakeMarkItDown,
@@ -187,7 +189,7 @@ class MarkItDownDocumentConverterTest(unittest.TestCase):
         self.assertEqual("VISION_REQUEST_FAILED", raised.exception.code)
 
     def test_empty_markdown_is_a_worker_error(self):
-        config = ParserConfig.fromEnvironment(DISABLED_ENVIRONMENT)
+        config = ParserConfig.fromEnvironment(DISABLED_ENVIRONMENT, DISABLED_MODEL)
         emptyFactory = lambda **kwargs: FakeMarkItDown(SimpleNamespace(
             markdown=" \n", title=None))
         converter = MarkItDownDocumentConverter(
@@ -210,12 +212,13 @@ class MarkItDownDocumentConverterTest(unittest.TestCase):
 
     def test_direct_image_vision_failure_keeps_vision_error_contract(self):
         environment = {
-            "HARNESS_MODEL_CHAT_PROVIDER": "openai",
-            "HARNESS_MODEL_CHAT_API_KEY": "key",
-            "HARNESS_MODEL_CHAT_BASE_URL": "https://example.test/v1",
-            "HARNESS_MODEL_CHAT_MODEL": "vision",
         }
-        config = ParserConfig.fromEnvironment(environment)
+        config = ParserConfig.fromEnvironment(environment, {
+            "chat.provider": "openai",
+            "chat.apiKey": "key",
+            "chat.baseUrl": "https://example.test/v1",
+            "chat.model": "vision",
+        })
         converter = MarkItDownDocumentConverter(
             config,
             markitdownFactory=FailedMarkItDown,

@@ -13,7 +13,7 @@ import org.slf4j.LoggerFactory;
  * <ol>
  *   <li>显式覆盖 — 客户端在 context 里传了就直接用</li>
  *   <li>规则引擎（Tier 1）— 纯 Java 正则/关键词匹配，&lt;1ms</li>
- *   <li>LLM 分类（Tier 2）— 调用分类模型兜底</li>
+ *   <li>模型分析（Tier 2）— 调用小任务模型补全路由判断</li>
  * </ol>
  * <p>
  * 每级只填充上一级为 null 的字段。四级全部确定后短路返回。
@@ -23,20 +23,20 @@ public class GapAnalyzer {
     private static final Logger log = LoggerFactory.getLogger(GapAnalyzer.class);
     private final boolean enabled;
     private final GapRuleEngine ruleEngine;
-    private final GapClassifier classifier;
+    private final GapModelAnalyzer modelAnalyzer;
 
-    public GapAnalyzer(GapRuleEngine ruleEngine, GapClassifier classifier) {
+    public GapAnalyzer(GapRuleEngine ruleEngine, GapModelAnalyzer modelAnalyzer) {
         this.enabled = EnvConfig.get().getBool(EnvKey.GAP_ANALYSIS_ENABLED, true);
         this.ruleEngine = ruleEngine;
-        this.classifier = classifier;
-        log.info("[GapAnalyzer] enabled={}, ruleEngine={}, classifier={}",
-                enabled, ruleEngine != null, classifier != null);
+        this.modelAnalyzer = modelAnalyzer;
+        log.info("[GapAnalyzer] enabled={}, ruleEngine={}, smallTaskModel={}",
+                enabled, ruleEngine != null, modelAnalyzer != null);
     }
 
     /**
      * 分析查询，返回 GapAnalysis。
      * <p>
-     * 三级漏斗：显式覆盖 → 规则引擎 → LLM 分类，每级只填 null 字段。
+     * 三级漏斗：显式覆盖 → 规则引擎 → 小任务模型分析，每级只填 null 字段。
      *
      * @param query   用户查询文本
      * @param context 请求上下文（含显式覆盖字段）
@@ -66,8 +66,8 @@ public class GapAnalyzer {
             return merged;
         }
 
-        // Tier 2: LLM 分类（仅填充仍为 null 的字段）
-        GapAnalysis llmResult = classifier.classify(query);
+        // Tier 2: 小任务模型分析（仅填充仍为 null 的字段）
+        GapAnalysis llmResult = modelAnalyzer.infer(query);
         GapAnalysis final_ = GapAnalysis.merge(merged, llmResult);
 
         log.info("[GapAnalyzer] query=\"{}\" → source={}, result={}", truncate(query, 50), final_.source(), final_);

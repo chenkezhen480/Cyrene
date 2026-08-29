@@ -2,8 +2,8 @@ package com.harness.provider.impl;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.harness.core.env.EnvConfig;
-import com.harness.core.env.EnvKey;
+import com.harness.core.modelconfig.ModelConfig;
+import com.harness.core.modelconfig.ModelConfigKey;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
@@ -43,18 +43,18 @@ class OpenAiResponsesProtocolTest {
         server.createContext("/v1/responses", exchange -> handleResponse(exchange, requests));
         server.start();
         try {
-            EnvConfig.init(Map.of(
-                    EnvKey.MODEL_CHAT_API_KEY, "test-key",
-                    EnvKey.MODEL_CHAT_BASE_URL,
+            ModelConfig config = ModelConfig.of(Map.of(
+                    ModelConfigKey.CHAT_API_KEY, "test-key",
+                    ModelConfigKey.CHAT_BASE_URL,
                     "http://127.0.0.1:" + server.getAddress().getPort() + "/v1",
-                    EnvKey.MODEL_CHAT_MODEL, "test-model",
-                    EnvKey.MODEL_CHAT_MAX_TOKENS, "512",
-                    EnvKey.MODEL_CHAT_TEMPERATURE, "0.2",
-                    EnvKey.MODEL_CHAT_THINKING, "false",
-                    EnvKey.MODEL_CHAT_TIMEOUT_SECONDS, "2"
+                    ModelConfigKey.CHAT_MODEL, "test-model",
+                    ModelConfigKey.CHAT_MAX_TOKENS, "512",
+                    ModelConfigKey.CHAT_TEMPERATURE, "0.2",
+                    ModelConfigKey.CHAT_THINKING, "false",
+                    ModelConfigKey.CHAT_TIMEOUT_SECONDS, "2"
             ));
             OpenAiChatModelProvider provider =
-                    new OpenAiChatModelProvider(OpenAiChatApiFormat.RESPONSES);
+                    new OpenAiChatModelProvider(config, OpenAiChatApiFormat.RESPONSES);
             ChatModel model = provider.createRawChatModel();
 
             ToolExecutionRequest toolCall = ToolExecutionRequest.builder()

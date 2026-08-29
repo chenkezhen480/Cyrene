@@ -9,6 +9,8 @@ import com.harness.agent.graph.GraphSpaceAccessService;
 import com.harness.core.concurrent.BlockingTaskExecutor;
 import com.harness.core.env.EnvConfig;
 import com.harness.core.env.EnvKey;
+import com.harness.core.modelconfig.ModelConfig;
+import com.harness.core.modelconfig.ModelConfigKey;
 import com.harness.core.model.Artifact;
 import com.harness.core.model.ArtifactStore;
 import com.harness.core.model.ProjectApiConfig;
@@ -66,7 +68,8 @@ public final class AgentToolRuntime {
             GraphKnowledgeRetriever graphKnowledgeRetriever,
             GraphSpaceAccessService graphSpaceAccessService,
             ArtifactStore artifactStore,
-            ArtifactStorageService artifactStorageService
+            ArtifactStorageService artifactStorageService,
+            ModelConfig modelConfig
     ) {
         this.toolRegistry = new ToolRegistry();
         this.skillRegistry = new SkillRegistry();
@@ -81,7 +84,8 @@ public final class AgentToolRuntime {
                 graphKnowledgeRetriever,
                 graphSpaceAccessService,
                 artifactStore,
-                artifactStorageService);
+                artifactStorageService,
+                modelConfig);
         registerMcpTools();
         initializeSkills();
         reloadProjectApiConfig();
@@ -126,7 +130,8 @@ public final class AgentToolRuntime {
             GraphKnowledgeRetriever graphKnowledgeRetriever,
             GraphSpaceAccessService graphSpaceAccessService,
             ArtifactStore artifactStore,
-            ArtifactStorageService artifactStorageService
+            ArtifactStorageService artifactStorageService,
+            ModelConfig modelConfig
     ) {
         EnvConfig config = EnvConfig.get();
         toolRegistry.register(StructuredOutputTool.chatBlock());
@@ -171,14 +176,14 @@ public final class AgentToolRuntime {
                         artifactStorageService.storeFromPath(source, name, mimeType, sessionId),
                 artifactStore::get));
 
-        PreparedModelTools modelTools = prepareModelTools(config);
+        PreparedModelTools modelTools = prepareModelTools(modelConfig);
         modelTools.replacements().values().forEach(toolRegistry::register);
 
         registerDiscoveryTools(resolveConfiguredProjectRoot());
     }
 
     /** Build model-backed tools without publishing them to request snapshots. */
-    public PreparedModelTools prepareModelTools(EnvConfig config) {
+    public PreparedModelTools prepareModelTools(ModelConfig config) {
         Map<String, com.harness.tool.Tool> replacements = new LinkedHashMap<>();
         Set<String> removals = new java.util.HashSet<>();
 
@@ -189,38 +194,38 @@ public final class AgentToolRuntime {
 
     /** Build only tools whose effective configuration changes. */
     public PreparedModelTools prepareModelToolChanges(
-            EnvConfig current,
-            EnvConfig candidate
+            ModelConfig current,
+            ModelConfig candidate
     ) {
         Map<String, com.harness.tool.Tool> replacements = new LinkedHashMap<>();
         Set<String> removals = new java.util.HashSet<>();
         if (!sameValues(current, candidate, List.of(
-                EnvKey.TOOL_IMAGE_GEN_PROVIDER,
-                EnvKey.TOOL_IMAGE_GEN_API_KEY,
-                EnvKey.TOOL_IMAGE_GEN_BASE_URL,
-                EnvKey.TOOL_IMAGE_GEN_MODEL,
-                EnvKey.MODEL_CHAT_TIMEOUT_SECONDS))) {
+                ModelConfigKey.IMAGE_PROVIDER,
+                ModelConfigKey.IMAGE_API_KEY,
+                ModelConfigKey.IMAGE_BASE_URL,
+                ModelConfigKey.IMAGE_MODEL,
+                ModelConfigKey.CHAT_TIMEOUT_SECONDS))) {
             prepareImageTool(candidate, replacements, removals);
         }
         if (!sameValues(current, candidate, List.of(
-                EnvKey.TOOL_VIDEO_GEN_PROVIDER,
-                EnvKey.TOOL_VIDEO_GEN_API_KEY,
-                EnvKey.TOOL_VIDEO_GEN_BASE_URL,
-                EnvKey.TOOL_VIDEO_GEN_MODEL,
-                EnvKey.TOOL_VIDEO_GEN_SUBMIT_PATH,
-                EnvKey.TOOL_VIDEO_GEN_STATUS_PATH,
-                EnvKey.MODEL_CHAT_TIMEOUT_SECONDS))) {
+                ModelConfigKey.VIDEO_PROVIDER,
+                ModelConfigKey.VIDEO_API_KEY,
+                ModelConfigKey.VIDEO_BASE_URL,
+                ModelConfigKey.VIDEO_MODEL,
+                ModelConfigKey.VIDEO_SUBMIT_PATH,
+                ModelConfigKey.VIDEO_STATUS_PATH,
+                ModelConfigKey.CHAT_TIMEOUT_SECONDS))) {
             prepareVideoTool(candidate, replacements, removals);
         }
         return new PreparedModelTools(replacements, removals);
     }
 
     private void prepareImageTool(
-            EnvConfig config,
+            ModelConfig config,
             Map<String, com.harness.tool.Tool> replacements,
             Set<String> removals
     ) {
-        String imageApiKey = config.getString(EnvKey.TOOL_IMAGE_GEN_API_KEY, "");
+        String imageApiKey = config.getString(ModelConfigKey.IMAGE_API_KEY, "");
         if (!imageApiKey.isBlank()) {
             ImageGenerationTool imageTool = new ImageGenerationTool(
                     new ImageGenerationTool.ArtifactStorer() {
@@ -251,12 +256,12 @@ public final class AgentToolRuntime {
     }
 
     private void prepareVideoTool(
-            EnvConfig config,
+            ModelConfig config,
             Map<String, com.harness.tool.Tool> replacements,
             Set<String> removals
     ) {
-        String videoApiKey = config.getString(EnvKey.TOOL_VIDEO_GEN_API_KEY, "");
-        String videoBaseUrl = config.getString(EnvKey.TOOL_VIDEO_GEN_BASE_URL, "");
+        String videoApiKey = config.getString(ModelConfigKey.VIDEO_API_KEY, "");
+        String videoBaseUrl = config.getString(ModelConfigKey.VIDEO_BASE_URL, "");
         if (!videoApiKey.isBlank() && !videoBaseUrl.isBlank()) {
             VideoGenerationTool videoTool = new VideoGenerationTool(
                     artifactStorageService::store,
@@ -271,8 +276,8 @@ public final class AgentToolRuntime {
     }
 
     private static boolean sameValues(
-            EnvConfig first,
-            EnvConfig second,
+            ModelConfig first,
+            ModelConfig second,
             List<String> keys
     ) {
         return keys.stream().allMatch(key -> java.util.Objects.equals(

@@ -30,10 +30,18 @@ public class FallbackChatModel implements ChatModel {
 
     public FallbackChatModel(ChatModel delegate, VisionModelProvider visionProvider,
                              VoiceModelProvider voiceProvider, String modelName) {
+        this(delegate, visionProvider, voiceProvider,
+                ModalCapabilityRegistry.getCapabilities(modelName), modelName);
+    }
+
+    public FallbackChatModel(ChatModel delegate, VisionModelProvider visionProvider,
+                             VoiceModelProvider voiceProvider,
+                             Set<ModalCapability> capabilities,
+                             String modelName) {
         this.delegate = delegate;
         this.visionProvider = visionProvider;
         this.voiceProvider = voiceProvider;
-        this.capabilities = ModalCapabilityRegistry.getCapabilities(modelName);
+        this.capabilities = Set.copyOf(capabilities);
         log.info("FallbackChatModel initialized: model={}, capabilities={}", modelName, capabilities);
     }
 

@@ -6822,7 +6822,7 @@ const ModelConfigPage = {
       embedding: 'modelGroupEmbedding',
       rerank: 'modelGroupRerank',
       realtime: 'modelGroupRealtime',
-      classifier: 'modelGroupClassifier',
+      smallTask: 'modelGroupSmallTask',
       imageGeneration: 'modelGroupImageGeneration',
       videoGeneration: 'modelGroupVideoGeneration',
     };
@@ -6841,10 +6841,9 @@ const ModelConfigPage = {
         section.fields.forEach(field => {
           if (!field
               || typeof field.key !== 'string'
+              || typeof field.label !== 'string'
               || typeof field.configured !== 'boolean'
               || typeof field.sensitive !== 'boolean'
-              || typeof field.managed !== 'boolean'
-              || typeof field.effectiveConfigured !== 'boolean'
               || typeof field.runtimeSynchronized !== 'boolean') {
             throw new Error(t('invalidModelConfigResponse'));
           }
@@ -6951,6 +6950,7 @@ const ModelConfigPage = {
       0
     ));
     const hasChanges = computed(() => {
+      if (!runtimeSynchronized.value) return true;
       if (clearKeys.value.length > 0) return true;
       return sections.value.some(section => section.fields.some(field => {
         if (field.sensitive) return Boolean(credentialValues[field.key]?.trim());
@@ -7005,7 +7005,7 @@ const ModelConfigPage = {
         </div>
         <div class="model-config-toolbar-meta">
           <span><strong>{{ configuredCount }}</strong> / {{ totalCount }} {{ t('configuredItems') }}</span>
-          <span class="model-config-path">{{ t('persistedFile') }}：{{ configurationPath || 'data/model-config.env' }}</span>
+          <span class="model-config-path">{{ t('persistedFile') }}：{{ configurationPath || 'data/model.conf' }}</span>
           <span :class="['tag', runtimeSynchronized ? 'tag-dusk' : 'tag-gold']">
             {{ runtimeSynchronized ? t('configurationSynchronized') : t('configurationSwitching') }}
           </span>
@@ -7042,11 +7042,12 @@ const ModelConfigPage = {
           <div class="model-config-form-grid">
             <label v-for="field in activeSection.fields" :key="field.key" class="model-config-control">
               <span class="model-config-key-row">
-                <code class="model-config-key">{{ field.key }}</code>
+                <span class="model-config-label">{{ field.label }}</span>
                 <span v-if="!field.runtimeSynchronized" class="tag tag-gold">
                   {{ t('configurationOutOfSync') }}
                 </span>
               </span>
+              <code class="model-config-key">{{ field.key }}</code>
 
               <template v-if="field.sensitive">
                 <div class="model-config-input-row">
@@ -7062,12 +7063,8 @@ const ModelConfigPage = {
               <input v-else class="input" v-model="draftValues[field.key]"
                      :placeholder="t('notConfigured')" />
 
-              <span class="model-config-control-meta">
-                <span>{{ field.managed ? t('managedInModelConfig') : t('runtimeOrUnset') }}</span>
-                <span v-if="!field.runtimeSynchronized && !field.sensitive">
-                  {{ t('runtimeCurrent') }}：{{ field.effectiveConfigured ? field.effectiveValue : t('notConfigured') }}
-                </span>
-                <span v-if="field.sensitive && field.configured">{{ t('credentialConfigured') }}</span>
+              <span v-if="field.sensitive && field.configured" class="model-config-control-meta">
+                <span>{{ t('credentialConfigured') }}</span>
               </span>
             </label>
           </div>

@@ -1,5 +1,6 @@
 import hmac
 import json
+from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from email.parser import BytesParser
 from email.policy import default
@@ -23,14 +24,18 @@ class DocumentParserRuntime:
     def __init__(self, config: ParserConfig, converter=None):
         self.config = config
         self.converter = converter or MarkItDownDocumentConverter(config)
+        self._managedConverter = converter is None
+        import threading
+        self._configurationLock = threading.Lock()
+        self._modelConfigSignature = self._configurationSignature()
         self._executor = ThreadPoolExecutor(
             max_workers=config.maxConcurrent,
             thread_name_prefix="document-parser",
         )
-        import threading
         self._capacity = threading.BoundedSemaphore(config.maxConcurrent)
 
     def convert(self, request: ConversionRequest):
+        self._refreshModelConfiguration()
         if not self._capacity.acquire(blocking=False):
             raise DocumentConversionError(
                 429,
@@ -50,6 +55,7 @@ class DocumentParserRuntime:
             ) from error
 
     def health(self):
+        self._refreshModelConfiguration()
         return {
             "status": "ok",
             "converter": "markitdown",
@@ -66,6 +72,30 @@ class DocumentParserRuntime:
             return self.converter.convert(request)
         finally:
             self._capacity.release()
+
+    def _configurationSignature(self):
+        path = Path(self.config.modelConfigPath)
+        try:
+            stat = path.stat()
+            return stat.st_mtime_ns, stat.st_size
+        except FileNotFoundError:
+            return None
+
+    def _refreshModelConfiguration(self):
+        if not self._managedConverter:
+            return
+        signature = self._configurationSignature()
+        if signature == self._modelConfigSignature:
+            return
+        with self._configurationLock:
+            signature = self._configurationSignature()
+            if signature == self._modelConfigSignature:
+                return
+            # Web saves model.conf atomically, so every reload sees one complete generation.
+            updated = ParserConfig.fromEnvironment()
+            self.config = updated
+            self.converter = MarkItDownDocumentConverter(updated)
+            self._modelConfigSignature = signature
 
 
 class DocumentParserHandler(BaseHTTPRequestHandler):

@@ -3,6 +3,7 @@ package com.harness.tool.knowledge;
 import com.harness.provider.EmbeddingModelProvider;
 import com.harness.core.env.EnvConfig;
 import com.harness.core.env.EnvKey;
+import com.harness.core.modelconfig.ModelConfigKey;
 import com.harness.input.document.DocumentConversionDiagnostics;
 import com.harness.input.document.DocumentConversionResult;
 import com.harness.input.document.DocumentConversionService;
@@ -57,7 +58,8 @@ public class KnowledgeIngestService {
 
         // Pre-flight: embedding provider must be available
         if (!embeddingProvider.isAvailable()) {
-            throw new IllegalStateException("Embedding model not configured. Set " + EnvKey.MODEL_EMBEDDING_PROVIDER + ".");
+            throw new IllegalStateException("Embedding model not configured. Set "
+                    + ModelConfigKey.EMBEDDING_PROVIDER + " in model.conf.");
         }
 
         // Validate file size

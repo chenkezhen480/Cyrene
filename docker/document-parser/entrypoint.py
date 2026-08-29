@@ -11,11 +11,7 @@ PARSER_ENVIRONMENT_KEYS = {
     "HARNESS_DOCUMENT_PARSER_TIMEOUT_SECONDS",
     "HARNESS_DOCUMENT_PARSER_VISION_TIMEOUT_SECONDS",
     "HARNESS_DOCUMENT_PARSER_MAX_CONCURRENT",
-}
-MODEL_ENVIRONMENT_KEYS = {
-    f"HARNESS_MODEL_{capability}_{field}"
-    for capability in ("CHAT", "VISION")
-    for field in ("PROVIDER", "API_KEY", "BASE_URL", "MODEL")
+    "HARNESS_CONFIG_MODEL_FILE",
 }
 SYSTEM_ENVIRONMENT_KEYS = {
     "PATH",
@@ -64,7 +60,6 @@ SYSTEM_ENVIRONMENT_KEYS = {
 def sanitizedEnvironment(environment: Mapping[str, str]) -> dict[str, str]:
     allowedKeys = (
         PARSER_ENVIRONMENT_KEYS
-        | MODEL_ENVIRONMENT_KEYS
         | SYSTEM_ENVIRONMENT_KEYS
     )
     return {

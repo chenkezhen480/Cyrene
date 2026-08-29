@@ -9,6 +9,7 @@ import com.harness.core.model.AgentTrace;
 import com.harness.core.model.CancellationToken;
 import com.harness.core.env.EnvConfig;
 import com.harness.core.env.EnvKey;
+import com.harness.core.modelconfig.ModelConfigFile;
 import com.harness.graph.build.GraphBuildService;
 import com.harness.agent.graph.LlmGraphDataConverter;
 import com.harness.graph.build.GraphDataConverterRegistry;
@@ -150,11 +151,10 @@ public class Main {
 
         ModelConfigurationHandler modelConfigurationHandler = new ModelConfigurationHandler(
                 new ModelConfigurationService(
-                        EnvConfig.get(),
-                        new ModelConfigurationFileStore(Path.of(
+                        new ModelConfigFile(Path.of(
                                 EnvConfig.get().getString(
                                         EnvKey.CONFIG_MODEL_FILE,
-                                        "./data/model-config.env"))),
+                                        "./data/model.conf"))),
                         agent));
         app.get("/api/model-config", modelConfigurationHandler::get);
         app.put("/api/model-config", modelConfigurationHandler::update);

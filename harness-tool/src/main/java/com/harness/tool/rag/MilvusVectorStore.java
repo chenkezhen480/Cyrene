@@ -424,7 +424,8 @@ public class MilvusVectorStore implements VectorStore {
         if (embeddingProvider == null || !embeddingProvider.isAvailable()) {
             throw new IllegalStateException(
                     "searchText() requires an embedding provider. Set "
-                            + EnvKey.MODEL_EMBEDDING_PROVIDER + ".");
+                            + com.harness.core.modelconfig.ModelConfigKey.EMBEDDING_PROVIDER
+                            + " in model.conf.");
         }
         Embedding embedding;
         try {

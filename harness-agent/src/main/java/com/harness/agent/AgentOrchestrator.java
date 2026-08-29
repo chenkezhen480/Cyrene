@@ -17,6 +17,10 @@ import com.harness.trace.store.TraceStoreFactory;
 import com.harness.core.model.*;
 import com.harness.core.runtime.RunTrace;
 import com.harness.core.runtime.ModelConfigurationRuntime;
+import com.harness.core.modelconfig.ModelConfig;
+import com.harness.core.modelconfig.ModelConfigFile;
+import com.harness.core.modelconfig.ModelConfigKey;
+import com.harness.core.modelconfig.ModelConfigInitializer;
 import com.harness.core.env.EnvConfig;
 import com.harness.core.env.EnvKey;
 import com.harness.core.env.MysqlConnectionPool;
@@ -42,7 +46,7 @@ import com.harness.tool.artifact.ArtifactStorageService;
 import com.harness.tool.artifact.FilesystemArtifactStore;
 import com.harness.input.gap.GapAnalysis;
 import com.harness.input.gap.GapAnalyzer;
-import com.harness.input.gap.GapClassifier;
+import com.harness.input.gap.GapModelAnalyzer;
 import com.harness.input.gap.GapRuleEngine;
 import com.harness.input.memory.*;
 import com.harness.tool.RunToolCatalog;
@@ -123,6 +127,9 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
     private final ArtifactStorageService artifactStorageService;
 
     public AgentOrchestrator() {
+        // Create or migrate model.conf before initializing external infrastructure.
+        ModelConfig initialModelConfig = loadModelConfiguration();
+
         // Database connections (主动建立，按需连接)
         if (MemoryStoreFactory.isEnabled()) {
             MysqlConnectionPool.init();
@@ -131,8 +138,9 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
             RedisConnectionPool.init();
         }
 
-        ModelProviders initialModelProviders = ModelProviderFactory.createAll();
-        this.modelProviderRuntime = new ModelProviderRuntime(initialModelProviders);
+        ModelProviders initialModelProviders = ModelProviderFactory.createAll(initialModelConfig);
+        this.modelProviderRuntime = new ModelProviderRuntime(
+                initialModelProviders, initialModelConfig);
         ModelProviders modelProviders = modelProviderRuntime.delegates();
         this.documentConversionService = MarkItDownDocumentConversionService.fromEnvironment();
 
@@ -181,7 +189,8 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
                 graphKnowledgeRetriever,
                 graphSpaceAccessService,
                 artifactStore,
-                artifactStorageService);
+                artifactStorageService,
+                initialModelConfig);
         this.toolRegistry = toolRuntime.tools();
         this.skillRegistry = toolRuntime.skills();
         this.promptBuilder = new AgentPromptBuilder(
@@ -203,7 +212,8 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
         // Sub-agent manager (initialized before ReActEngine so spawn_subagent is available)
         this.subAgentManager = new SubAgentManager(
                 runtime.reActLoops(), runtime.traces(), toolExecutor,
-                artifactStore, sessionInbox, resumeDispatcher);
+                artifactStore, sessionInbox, resumeDispatcher,
+                runtime.providers().chat());
         // Register sub-agent tools
         toolRegistry.register(new SpawnSubAgentTool(subAgentManager));
         toolRegistry.register(new AwaitSubAgentsTool(subAgentManager));
@@ -212,7 +222,7 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
 
         // GapAnalyzer (动态路由)
         this.gapAnalyzer = new GapAnalyzer(
-                new GapRuleEngine(), new GapClassifier(runtime.providers().classifier()));
+                new GapRuleEngine(), new GapModelAnalyzer(runtime.providers().smallTask()));
 
         this.memoryRuntime = new AgentMemoryRuntime(
                 runtime.providers().chat(), skillRegistry, toolRegistry);
@@ -231,13 +241,13 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
                 subAgentManager,
                 replyAuditor);
 
-        log.info("Agent initialized: chat={}, vision={}, voice={}, embedding={}, rerank={}, classifier={}, tools={}, memory={}",
+        log.info("Agent initialized: chat={}, vision={}, voice={}, embedding={}, rerank={}, smallTask={}, tools={}, memory={}",
                 runtime.providers().chat().providerName(),
                 runtime.providers().vision().providerName(),
                 runtime.providers().voice().providerName(),
                 runtime.providers().embedding().providerName(),
                 runtime.providers().rerank().providerName(),
-                runtime.providers().classifier().providerName(),
+                runtime.providers().smallTask().providerName(),
                 toolRegistry.size(),
                 memoryRuntime.enabled() ? "enabled" : "none");
     }
@@ -368,9 +378,15 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
     }
 
     @Override
-    public PreparedUpdate prepare(EnvConfig candidateConfiguration) {
+    public ModelConfig currentConfiguration() {
+        return modelProviderRuntime.currentConfiguration();
+    }
+
+    @Override
+    public PreparedUpdate prepare(ModelConfig candidateConfiguration) {
         java.util.Objects.requireNonNull(candidateConfiguration, "candidateConfiguration");
-        EmbeddingIdentity currentEmbedding = embeddingIdentity(EnvConfig.get());
+        ModelConfig currentConfiguration = modelProviderRuntime.currentConfiguration();
+        EmbeddingIdentity currentEmbedding = embeddingIdentity(currentConfiguration);
         EmbeddingIdentity candidateEmbedding = embeddingIdentity(candidateConfiguration);
         if (!currentEmbedding.equals(candidateEmbedding)) {
             throw new IllegalArgumentException(
@@ -382,24 +398,43 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
                 candidateConfiguration);
         AgentToolRuntime.PreparedModelTools candidateTools =
                 toolRuntime.prepareModelToolChanges(
-                        EnvConfig.get(), candidateConfiguration);
-        Map<String, String> managedValues = candidateConfiguration.managedModelOverrides();
-        return () -> modelProviderRuntime.activate(candidateProviders, () -> {
-            EnvConfig.get().replaceManagedModelOverrides(managedValues);
+                        currentConfiguration, candidateConfiguration);
+        return () -> modelProviderRuntime.activate(
+                candidateProviders, candidateConfiguration, () -> {
             toolRuntime.applyModelTools(candidateTools);
             log.info("Model configuration activated: chat={}, vision={}, voice={}, "
-                            + "embedding={}, rerank={}, classifier={}",
+                            + "embedding={}, rerank={}, smallTask={}",
                     candidateProviders.chat().modelName(),
                     candidateProviders.vision().modelName(),
                     candidateProviders.voice().providerName(),
                     candidateProviders.embedding().modelName(),
                     candidateProviders.rerank().modelName(),
-                    candidateProviders.classifier().modelName());
+                    candidateProviders.smallTask().modelName());
         });
     }
 
-    private static EmbeddingIdentity embeddingIdentity(EnvConfig config) {
-        String provider = config.getString(EnvKey.MODEL_EMBEDDING_PROVIDER, "")
+    private static ModelConfig loadModelConfiguration() {
+        Path path = Path.of(EnvConfig.get().getString(
+                EnvKey.CONFIG_MODEL_FILE, "./data/model.conf"));
+        try {
+            ModelConfigFile configFile = new ModelConfigFile(path);
+            ModelConfigInitializer.InitializationResult initialization =
+                    ModelConfigInitializer.initializeIfMissing(
+                            configFile, EnvConfig.get().all());
+            if (initialization == ModelConfigInitializer.InitializationResult.MIGRATED_LEGACY) {
+                log.info("Migrated legacy model settings to {}", path);
+            } else if (initialization
+                    == ModelConfigInitializer.InitializationResult.CREATED_EMPTY) {
+                log.info("Created empty model configuration at {}", path);
+            }
+            return configFile.read();
+        } catch (java.io.IOException | IllegalArgumentException e) {
+            throw new IllegalStateException("Failed to load model configuration from " + path, e);
+        }
+    }
+
+    private static EmbeddingIdentity embeddingIdentity(ModelConfig config) {
+        String provider = config.getString(ModelConfigKey.EMBEDDING_PROVIDER, "")
                 .trim().toLowerCase(java.util.Locale.ROOT);
         String defaultBaseUrl = "ollama".equals(provider)
                 ? "http://localhost:11434"
@@ -409,12 +444,12 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
                 : "text-embedding-3-small";
         int defaultDimension = "ollama".equals(provider)
                 ? 768
-                : EnvKey.MODEL_EMBEDDING_DIM_DEFAULT;
+                : ModelConfigKey.EMBEDDING_DIMENSION_DEFAULT;
         return new EmbeddingIdentity(
                 provider,
-                config.getString(EnvKey.MODEL_EMBEDDING_BASE_URL, defaultBaseUrl).trim(),
-                config.getString(EnvKey.MODEL_EMBEDDING_MODEL, defaultModel).trim(),
-                config.getInt(EnvKey.MODEL_EMBEDDING_DIM, defaultDimension));
+                config.getString(ModelConfigKey.EMBEDDING_BASE_URL, defaultBaseUrl).trim(),
+                config.getString(ModelConfigKey.EMBEDDING_MODEL, defaultModel).trim(),
+                config.getInt(ModelConfigKey.EMBEDDING_DIMENSION, defaultDimension));
     }
 
     private record EmbeddingIdentity(

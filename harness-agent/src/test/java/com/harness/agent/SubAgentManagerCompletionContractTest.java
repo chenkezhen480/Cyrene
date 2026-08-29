@@ -45,7 +45,8 @@ class SubAgentManagerCompletionContractTest {
         when(artifactStore.get(any())).thenReturn(Optional.empty());
         SubAgentManager manager = new SubAgentManager(
                 loopFactory, traceFactory, mock(ToolExecutor.class), artifactStore,
-                new SessionInbox(), mock(SessionResumeDispatcher.class));
+                new SessionInbox(), mock(SessionResumeDispatcher.class),
+                mock(com.harness.provider.ChatModelProvider.class));
 
         try {
             ToolRegistry registry = new ToolRegistry();

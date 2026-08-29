@@ -1,7 +1,7 @@
 package com.harness.provider.impl;
 
-import com.harness.core.env.EnvConfig;
-import com.harness.core.env.EnvKey;
+import com.harness.core.modelconfig.ModelConfig;
+import com.harness.core.modelconfig.ModelConfigKey;
 import dev.langchain4j.agent.tool.ToolSpecification;
 import dev.langchain4j.model.chat.request.ChatRequestParameters;
 import dev.langchain4j.model.chat.request.json.JsonObjectSchema;
@@ -11,7 +11,6 @@ import dev.langchain4j.model.openai.OpenAiResponsesChatModel;
 import dev.langchain4j.model.openai.OpenAiResponsesChatRequestParameters;
 import dev.langchain4j.model.openai.OpenAiResponsesStreamingChatModel;
 import dev.langchain4j.model.openai.OpenAiStreamingChatModel;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -21,23 +20,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class OpenAiChatModelProviderTest {
 
-    @BeforeEach
-    void configureProvider() {
-        EnvConfig.init(Map.of(
-                EnvKey.MODEL_CHAT_API_KEY, "test-key",
-                EnvKey.MODEL_CHAT_BASE_URL, "http://127.0.0.1:1/v1",
-                EnvKey.MODEL_CHAT_MODEL, "test-model",
-                EnvKey.MODEL_CHAT_MAX_TOKENS, "512",
-                EnvKey.MODEL_CHAT_TEMPERATURE, "0.2",
-                EnvKey.MODEL_CHAT_THINKING, "false",
-                EnvKey.MODEL_CHAT_TIMEOUT_SECONDS, "2"
-        ));
-    }
-
     @Test
     void responsesFormat_buildsResponsesModelsForBlockingStructuredAndStreamingCalls() {
         OpenAiChatModelProvider provider =
-                new OpenAiChatModelProvider(OpenAiChatApiFormat.RESPONSES);
+                new OpenAiChatModelProvider(config(), OpenAiChatApiFormat.RESPONSES);
 
         assertThat(provider.createRawChatModel())
                 .isInstanceOf(OpenAiResponsesChatModel.class);
@@ -48,7 +34,7 @@ class OpenAiChatModelProviderTest {
     @Test
     void chatCompletionsFormat_keepsExistingModels() {
         OpenAiChatModelProvider provider =
-                new OpenAiChatModelProvider(OpenAiChatApiFormat.CHAT_COMPLETIONS);
+                new OpenAiChatModelProvider(config(), OpenAiChatApiFormat.CHAT_COMPLETIONS);
 
         assertThat(provider.createRawChatModel()).isInstanceOf(OpenAiChatModel.class);
         assertThat(provider.streamingModel()).isInstanceOf(OpenAiStreamingChatModel.class);
@@ -59,7 +45,7 @@ class OpenAiChatModelProviderTest {
     @Test
     void responsesPlanningParameters_areStatelessAndCarryToolDefinitions() {
         OpenAiChatModelProvider provider =
-                new OpenAiChatModelProvider(OpenAiChatApiFormat.RESPONSES);
+                new OpenAiChatModelProvider(config(), OpenAiChatApiFormat.RESPONSES);
 
         ChatRequestParameters parameters = provider.planningRequestParameters(
                 null,
@@ -77,7 +63,7 @@ class OpenAiChatModelProviderTest {
     @Test
     void responsesPlanningParameters_doNotSendUnsupportedThinkingParameter() {
         OpenAiChatModelProvider provider =
-                new OpenAiChatModelProvider(OpenAiChatApiFormat.RESPONSES);
+                new OpenAiChatModelProvider(config(), OpenAiChatApiFormat.RESPONSES);
 
         assertThat(provider.planningRequestParameters(true, List.of())).isNull();
         OpenAiResponsesChatRequestParameters parameters =
@@ -96,5 +82,16 @@ class OpenAiChatModelProviderTest {
                         .additionalProperties(false)
                         .build())
                 .build();
+    }
+
+    private static ModelConfig config() {
+        return ModelConfig.of(Map.of(
+                ModelConfigKey.CHAT_API_KEY, "test-key",
+                ModelConfigKey.CHAT_BASE_URL, "http://127.0.0.1:1/v1",
+                ModelConfigKey.CHAT_MODEL, "test-model",
+                ModelConfigKey.CHAT_MAX_TOKENS, "512",
+                ModelConfigKey.CHAT_TEMPERATURE, "0.2",
+                ModelConfigKey.CHAT_THINKING, "false",
+                ModelConfigKey.CHAT_TIMEOUT_SECONDS, "2"));
     }
 }

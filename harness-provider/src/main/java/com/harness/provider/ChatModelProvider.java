@@ -1,7 +1,5 @@
 package com.harness.provider;
 
-import com.harness.core.env.EnvConfig;
-import com.harness.core.env.EnvKey;
 import com.harness.core.model.ModelUsage;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.StreamingChatModel;
@@ -11,6 +9,7 @@ import dev.langchain4j.agent.tool.ToolSpecification;
 
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 
 /**
  * 1. General Chat Model Provider
@@ -30,6 +29,12 @@ public interface ChatModelProvider {
 
     String providerName();
     String modelName();
+
+    default int timeoutSeconds() { return 300; }
+
+    default Set<ModalCapability> modalCapabilities() {
+        return ModalCapabilityRegistry.getCapabilities(modelName());
+    }
 
     default ModelUsage modelUsage(ChatResponse response, long llmLatencyMs) {
         return ChatModelUsageMapper.map(response, llmLatencyMs);
@@ -54,11 +59,9 @@ public interface ChatModelProvider {
 
     /**
      * Returns the model's context window size in tokens.
-     * Tries HARNESS_MODEL_CHAT_CONTEXT_WINDOW env var first; falls back to known model defaults.
+     * Providers may override this with the value captured from {@code model.conf}.
      */
     default int contextWindow() {
-        int envOverride = EnvConfig.get().getInt(EnvKey.MODEL_CHAT_CONTEXT_WINDOW, 0);
-        if (envOverride > 0) return envOverride;
         return resolveContextWindow(modelName());
     }
 

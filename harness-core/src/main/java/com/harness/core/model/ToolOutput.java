@@ -1,5 +1,6 @@
 package com.harness.core.model;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -52,6 +53,7 @@ public record ToolOutput(
         return new ToolOutput(text, artifacts, null);
     }
 
+    @JsonIgnore
     public boolean isEmpty() {
         return text == null && artifacts.isEmpty() && json == null;
     }

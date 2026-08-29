@@ -35,13 +35,12 @@ class MilvusDocumentContextIntegrationTest {
         EnvConfig.init(Map.of(
                 EnvKey.RAG_URL, System.getProperty("milvus.url", "http://localhost:19530"),
                 EnvKey.RAG_COLLECTION, PHYSICAL_COLLECTION,
-                EnvKey.MODEL_EMBEDDING_DIM, "4",
                 EnvKey.RAG_SCORE_THRESHOLD, "0.0"
         ));
         MilvusConnectionPool.init();
         client = MilvusConnectionPool.getClient();
         dropTestCollection();
-        MilvusCollectionInitializer.ensureCollection();
+        MilvusCollectionInitializer.ensureCollection(4);
         store = new MilvusVectorStore();
         store.upsert(LOGICAL_COLLECTION, fixedCorpus());
         client.flush(FlushReq.builder().collectionNames(List.of(PHYSICAL_COLLECTION)).build());

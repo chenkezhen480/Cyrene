@@ -35,5 +35,7 @@ public interface RerankModelProvider {
     String providerName();
     String modelName();
 
+    default int defaultTopN() { return 3; }
+
     record RankedResult(int index, String document, double score) {}
 }
