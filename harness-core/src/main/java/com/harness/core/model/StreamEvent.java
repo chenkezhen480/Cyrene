@@ -18,16 +18,10 @@ public record StreamEvent(
         TOOL_CALL_CREATED,
         TOOL_CALL_START,
         TOOL_CALL_DONE,
+        TOOL_OUTPUT,
         CONFIRMATION_REQUIRED,
         CONFIRMATION_RESOLVED,
         COMPRESS,
-        ARTIFACT,
-        STRUCTURED_DATA,
-        AUDIO_START,
-        AUDIO_DELTA,
-        AUDIO_CHUNK_DONE,
-        AUDIO_DONE,
-        AUDIO_ERROR,
         DONE,
         CANCELLED,
         ERROR
@@ -85,6 +79,18 @@ public record StreamEvent(
         metadata.put("durationMs", durationMs);
         metadata.put("errorSummary", errorSummary != null ? errorSummary : "");
         return new StreamEvent(Type.TOOL_CALL_DONE, "", Map.copyOf(metadata));
+    }
+
+    public static StreamEvent toolOutput(
+            String toolCallId, String toolName, ToolOutput output) {
+        if (output == null) {
+            throw new IllegalArgumentException("output must not be null");
+        }
+        return new StreamEvent(Type.TOOL_OUTPUT, "", Map.of(
+                "toolCallId", requiredToolCallId(toolCallId),
+                "toolName", toolName != null ? toolName : "",
+                "output", output
+        ));
     }
 
     public static StreamEvent confirmationRequired(
@@ -174,47 +180,4 @@ public record StreamEvent(
         return new StreamEvent(Type.COMPRESS, detail, Map.of("mode", mode));
     }
 
-    public static StreamEvent artifact(Artifact artifact) {
-        return new StreamEvent(Type.ARTIFACT, artifact.name(), Map.of(
-                "artifactId", artifact.id(),
-                "name", artifact.name(),
-                "type", artifact.type().name(),
-                "mimeType", artifact.mimeType() != null ? artifact.mimeType() : "",
-                "sizeBytes", artifact.sizeBytes(),
-                "downloadUrl", artifact.downloadUrl(),
-                "previewUrl", artifact.previewUrl()
-        ));
-    }
-
-    public static StreamEvent structuredData(Object data) {
-        return new StreamEvent(Type.STRUCTURED_DATA, "", Map.of("data", data));
-    }
-
-    public static StreamEvent audioStart(long sequence, String mimeType) {
-        return new StreamEvent(Type.AUDIO_START, "", Map.of(
-                "sequence", sequence,
-                "mimeType", mimeType != null ? mimeType : "application/octet-stream"
-        ));
-    }
-
-    public static StreamEvent audioDelta(long sequence, String mimeType, String base64Data) {
-        return new StreamEvent(Type.AUDIO_DELTA, base64Data != null ? base64Data : "", Map.of(
-                "sequence", sequence,
-                "mimeType", mimeType != null ? mimeType : "application/octet-stream"
-        ));
-    }
-
-    public static StreamEvent audioChunkDone(long sequence) {
-        return new StreamEvent(Type.AUDIO_CHUNK_DONE, "", Map.of("sequence", sequence));
-    }
-
-    public static StreamEvent audioDone() {
-        return new StreamEvent(Type.AUDIO_DONE, "", Map.of());
-    }
-
-    public static StreamEvent audioError(String code, String message) {
-        return new StreamEvent(Type.AUDIO_ERROR, message != null ? message : "Voice output failed", Map.of(
-                "code", code != null ? code : "VOICE_OUTPUT_FAILED"
-        ));
-    }
 }

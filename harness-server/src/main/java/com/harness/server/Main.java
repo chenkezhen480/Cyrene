@@ -174,13 +174,6 @@ public class Main {
         FileUploadHandler fileUploadHandler = new FileUploadHandler(knowledgeUploadDir);
         app.post("/api/files/upload", fileUploadHandler::handle);
 
-        AudioTranscriptionHandler audioTranscriptionHandler =
-                new AudioTranscriptionHandler(agent.voiceModel());
-        AudioCapabilityHandler audioCapabilityHandler =
-                new AudioCapabilityHandler(agent.voiceModel());
-        app.post("/api/audio/transcriptions", audioTranscriptionHandler::handle);
-        app.get("/api/audio/capabilities", audioCapabilityHandler::handle);
-
         // Knowledge base management endpoints
         KnowledgeManagementHandler knowledgeMgmtHandler = new KnowledgeManagementHandler(
                 agent.vectorStore(), agent.embeddingModel(), fileStorageService);

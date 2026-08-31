@@ -67,7 +67,15 @@ public class FileUploadHandler {
                 return;
             }
 
-            String uniqueName = UUID.randomUUID() + (ext.isEmpty() ? "" : "." + ext);
+            String mediaMarker = "webm".equals(ext)
+                    && file.contentType() != null
+                    && file.contentType().toLowerCase(java.util.Locale.ROOT)
+                            .startsWith("audio/")
+                    ? ".audio"
+                    : "";
+            String uniqueName = UUID.randomUUID()
+                    + mediaMarker
+                    + (ext.isEmpty() ? "" : "." + ext);
 
             // 保存文件
             Path targetPath = uploadDir.resolve(uniqueName);

@@ -1,6 +1,5 @@
 package com.harness.provider;
 
-import com.harness.core.model.CancellationToken;
 import com.harness.core.model.ModelUsage;
 import com.harness.core.modelconfig.ModelConfig;
 import com.harness.core.text.TextTokenEstimator;
@@ -139,14 +138,6 @@ public final class ModelProviderRuntime {
         }
         @Override public byte[] synthesize(String text, String voice) {
             return withCurrent(providers -> providers.voice().synthesize(text, voice));
-        }
-        @Override public void streamSynthesize(
-                SynthesisRequest request,
-                AudioStreamCallback callback,
-                CancellationToken cancellationToken
-        ) {
-            withCurrentVoid(providers -> providers.voice().streamSynthesize(
-                    request, callback, cancellationToken));
         }
         @Override public VoiceCapabilities capabilities() {
             return current().voice().capabilities();

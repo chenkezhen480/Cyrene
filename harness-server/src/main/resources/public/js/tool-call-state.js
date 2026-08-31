@@ -40,6 +40,9 @@
         status: payload.status,
         durationMs: payload.durationMs,
         errorSummary: payload.errorSummary,
+        outputText: payload.text,
+        outputTextLength: payload.textLength,
+        outputTruncated: payload.truncated,
       };
       message.toolCallsById.set(payload.toolCallId, toolCall);
       message.toolCalls.push(toolCall);
@@ -53,6 +56,9 @@
     }
     if (payload.durationMs !== undefined) toolCall.durationMs = payload.durationMs;
     if (payload.errorSummary !== undefined) toolCall.errorSummary = payload.errorSummary;
+    if (payload.text !== undefined) toolCall.outputText = payload.text;
+    if (payload.textLength !== undefined) toolCall.outputTextLength = payload.textLength;
+    if (payload.truncated !== undefined) toolCall.outputTruncated = payload.truncated;
     return toolCall;
   }
 

@@ -1,7 +1,5 @@
 package com.harness.provider;
 
-import com.harness.core.model.CancellationToken;
-
 import java.io.InputStream;
 
 /**
@@ -29,23 +27,10 @@ public interface VoiceModelProvider {
      */
     byte[] synthesize(String text, String voice);
 
-    /**
-     * Stream one complete phrase from the remote TTS API.
-     */
-    default void streamSynthesize(
-            SynthesisRequest request,
-            AudioStreamCallback callback,
-            CancellationToken cancellationToken
-    ) {
-        throw new UnsupportedOperationException(
-                "Streaming TTS is not supported by provider: " + providerName());
-    }
-
     default VoiceCapabilities capabilities() {
         return new VoiceCapabilities(
                 isTranscribeAvailable(),
                 isSynthesizeAvailable(),
-                false,
                 java.util.List.of(),
                 java.util.List.of());
     }

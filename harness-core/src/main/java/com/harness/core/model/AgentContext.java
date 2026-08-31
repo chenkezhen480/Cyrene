@@ -7,7 +7,7 @@ import java.util.Set;
 
 /**
  * Context passed through the agent pipeline.
- * Contains caller metadata that influences behavior (e.g., outputMode).
+ * Contains caller metadata that influences behavior.
  */
 public record AgentContext(
         Map<String, Object> data
@@ -29,7 +29,6 @@ public record AgentContext(
     public static final String KEY_NEEDS_WEB_SEARCH = "needsWebSearch";
     public static final String VALUE_MODE_BLOCKING = "blocking";
     public static final String VALUE_MODE_STREAMING = "streaming";
-    public static final String VALUE_MODE_AUDIO = "audio";
 
     public static AgentContext of(Map<String, Object> data) {
         return new AgentContext(data != null ? data : Map.of());
@@ -45,14 +44,7 @@ public record AgentContext(
     }
 
     public boolean isStreaming() {
-        return VALUE_MODE_STREAMING.equals(outputMode()) || isVoiceOutput();
-    }
-
-    /**
-     * Whether this request expects streamed synthesized speech in addition to text.
-     */
-    public boolean isVoiceOutput() {
-        return VALUE_MODE_AUDIO.equals(outputMode());
+        return VALUE_MODE_STREAMING.equals(outputMode());
     }
 
     public String userId() {

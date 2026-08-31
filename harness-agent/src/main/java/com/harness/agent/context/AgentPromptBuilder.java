@@ -52,16 +52,24 @@ public final class AgentPromptBuilder {
 
         boolean hasReferenceHeader = false;
         for (String filePath : contextFilePaths(agentContext)) {
-            String extracted = extractContextFileContent(filePath);
+            Path diskPath = resolveContextFile(filePath);
             if (!hasReferenceHeader) {
                 enhancedText.append("\n\n[参考文件 / Reference Files]");
                 hasReferenceHeader = true;
             }
-            String name = Path.of(filePath).getFileName().toString();
-            enhancedText.append("\n\n[File: ")
-                    .append(name)
-                    .append("]\n")
-                    .append(extracted);
+            String name = diskPath.getFileName().toString();
+            if (isAudioFile(diskPath)) {
+                enhancedText.append("\n\n[Audio File: ")
+                        .append(name)
+                        .append("]\nReference: ")
+                        .append(filePath)
+                        .append("\nUse the transcribe_audio tool to read this audio file.");
+            } else {
+                enhancedText.append("\n\n[File: ")
+                        .append(name)
+                        .append("]\n")
+                        .append(extractContextFileContent(filePath, diskPath));
+            }
         }
         return enhancedText.toString();
     }
@@ -193,7 +201,7 @@ public final class AgentPromptBuilder {
                 .toList();
     }
 
-    private String extractContextFileContent(String filePath) {
+    private static Path resolveContextFile(String filePath) {
         try {
             String uploadDir = EnvConfig.get().getString(
                     EnvKey.KNOWLEDGE_UPLOAD_DIR, "./knowledge-uploads");
@@ -208,7 +216,17 @@ public final class AgentPromptBuilder {
             if (!Files.exists(diskPath)) {
                 throw new AgentException("context.File not found: " + filePath);
             }
+            return diskPath;
+        } catch (AgentException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new AgentException(
+                    "Failed to resolve context.File " + filePath + ": " + e.getMessage(), e);
+        }
+    }
 
+    private String extractContextFileContent(String filePath, Path diskPath) {
+        try {
             String fileName = diskPath.getFileName().toString();
             String mimeType = Files.probeContentType(diskPath);
             return documentConversionService.convert(
@@ -219,5 +237,23 @@ public final class AgentPromptBuilder {
             throw new AgentException(
                     "Failed to convert context.File " + filePath + ": " + e.getMessage(), e);
         }
+    }
+
+    private static boolean isAudioFile(Path path) {
+        try {
+            String mimeType = Files.probeContentType(path);
+            if (mimeType != null && mimeType.toLowerCase(java.util.Locale.ROOT)
+                    .startsWith("audio/")) {
+                return true;
+            }
+        } catch (java.io.IOException e) {
+            log.debug("Unable to probe context file type for {}: {}", path, e.getMessage());
+        }
+        String fileName = path.getFileName().toString().toLowerCase(java.util.Locale.ROOT);
+        return fileName.endsWith(".mp3")
+                || fileName.endsWith(".m4a")
+                || fileName.endsWith(".wav")
+                || fileName.endsWith(".audio.webm")
+                || fileName.endsWith(".ogg");
     }
 }

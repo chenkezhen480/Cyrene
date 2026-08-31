@@ -95,13 +95,16 @@ class StreamEventTest {
     }
 
     @Test
-    void audioDelta_containsOrderedAudioPayload() {
-        var event = StreamEvent.audioDelta(2, "audio/mpeg", "AQID");
+    void toolOutput_keepsTypedOutputForServerMapping() {
+        ToolOutput output = ToolOutput.text("tool result");
 
-        assertThat(event.type()).isEqualTo(StreamEvent.Type.AUDIO_DELTA);
-        assertThat(event.data()).isEqualTo("AQID");
+        var event = StreamEvent.toolOutput("call-8", "search", output);
+
+        assertThat(event.type()).isEqualTo(StreamEvent.Type.TOOL_OUTPUT);
         assertThat(event.metadata())
-                .containsEntry("sequence", 2L)
-                .containsEntry("mimeType", "audio/mpeg");
+                .containsEntry("toolCallId", "call-8")
+                .containsEntry("toolName", "search")
+                .containsEntry("output", output);
     }
+
 }

@@ -23,6 +23,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 class AgentPromptBuilderTest {
@@ -70,6 +71,27 @@ class AgentPromptBuilderTest {
                 AgentContext.of(Map.of("File", "../outside.txt"))))
                 .isInstanceOf(AgentException.class)
                 .hasMessageContaining("outside the upload directory");
+    }
+
+    @Test
+    void audioContextFileIsExposedToTranscriptionToolWithoutDocumentConversion()
+            throws Exception {
+        Files.write(uploadDir.resolve("voice.audio.webm"), new byte[]{1, 2, 3});
+        EnvConfig.init(Map.of(EnvKey.KNOWLEDGE_UPLOAD_DIR, uploadDir.toString()));
+        DocumentConversionService converter = mock(DocumentConversionService.class);
+        AgentPromptBuilder builder = new AgentPromptBuilder(
+                mock(SkillRegistry.class), converter);
+
+        String enhanced = builder.enhanceUserText(
+                "Handle this recording.",
+                List.of(),
+                AgentContext.of(Map.of("File", "/files/voice.audio.webm")));
+
+        assertThat(enhanced)
+                .contains("[Audio File: voice.audio.webm]")
+                .contains("Reference: /files/voice.audio.webm")
+                .contains("transcribe_audio");
+        verifyNoInteractions(converter);
     }
 
     @Test

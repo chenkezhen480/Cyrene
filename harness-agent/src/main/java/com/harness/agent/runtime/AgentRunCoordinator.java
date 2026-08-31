@@ -9,8 +9,6 @@ import com.harness.agent.memory.AgentMemoryRuntime;
 import com.harness.agent.memory.AgentMemoryRuntime.CompressionOutcome;
 import com.harness.agent.runtime.AgentRunPreparer.AgentRunRequest;
 import com.harness.agent.runtime.AgentRunPreparer.PreparedAgentRun;
-import com.harness.agent.voice.VoiceOutputCoordinator;
-import com.harness.agent.voice.VoiceOutputSettings;
 import com.harness.core.concurrent.BlockingTaskExecutor;
 import com.harness.core.model.AgentContext;
 import com.harness.core.model.AgentResult;
@@ -24,6 +22,7 @@ import com.harness.core.model.RiskLevel;
 import com.harness.core.model.StreamCallback;
 import com.harness.core.model.StreamEvent;
 import com.harness.core.model.ToolCallStatus;
+import com.harness.core.model.ToolOutput;
 import com.harness.core.model.ToolResult;
 import com.harness.core.model.ToolSpec;
 import com.harness.core.runtime.RunTrace;
@@ -48,7 +47,6 @@ import dev.langchain4j.data.message.ChatMessage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -171,16 +169,6 @@ public final class AgentRunCoordinator {
             emitCompressionEvents(compression, callback);
             callback.onEvent(StreamEvent.start(prepared.sessionId()));
 
-            boolean voiceOutput = command.agentContext() != null
-                    && command.agentContext().isVoiceOutput();
-            VoiceOutputCoordinator voiceCoordinator = voiceOutput
-                    ? new VoiceOutputCoordinator(
-                            runtime.providers().voice(),
-                            callback,
-                            command.cancellationToken(),
-                            VoiceOutputSettings.fromProvider(runtime.providers().voice()))
-                    : null;
-
             RunToolCatalog toolCatalog = createToolCatalog(prepared.unavailableTools());
             runId = openRunScope(
                     prepared.sessionId(), command.cancellationToken(), toolCatalog, trace);
@@ -188,7 +176,7 @@ public final class AgentRunCoordinator {
             StringBuilder text = new StringBuilder();
             AtomicReference<ConfirmationDecision> confirmationDecision = new AtomicReference<>();
             ReActListener listener = streamingListener(
-                    callback, trace, blocks, text, voiceCoordinator, confirmationDecision);
+                    callback, trace, blocks, text, confirmationDecision);
             ConfirmationExecutionContext confirmationContext = new ConfirmationExecutionContext(
                     prepared.userId(),
                     prepared.sessionId(),
@@ -212,7 +200,6 @@ public final class AgentRunCoordinator {
                     effectiveThinking(command, prepared),
                     confirmationContext));
             result.steps().forEach(trace::addStep);
-            finishVoice(voiceCoordinator, runtime.providers().voice().timeoutSeconds());
             recordReactStats(trace, result);
 
             List<MessageBlock> assistantBlocks = finishAssistantBlocks(
@@ -305,7 +292,6 @@ public final class AgentRunCoordinator {
             RunTrace trace,
             List<MessageBlock> blocks,
             StringBuilder text,
-            VoiceOutputCoordinator voiceCoordinator,
             AtomicReference<ConfirmationDecision> confirmationDecision
     ) {
         return new ReActListener() {
@@ -318,9 +304,6 @@ public final class AgentRunCoordinator {
             public void onToken(String token) {
                 text.append(token);
                 callback.onEvent(StreamEvent.token(token));
-                if (voiceCoordinator != null) {
-                    voiceCoordinator.accept(token);
-                }
             }
 
             @Override
@@ -346,6 +329,15 @@ public final class AgentRunCoordinator {
                     String errorSummary) {
                 callback.onEvent(StreamEvent.toolCallDone(
                         toolCallId, toolName, status, durationMs, errorSummary));
+            }
+
+            @Override
+            public void onToolOutput(
+                    String toolCallId,
+                    String toolName,
+                    ToolOutput output
+            ) {
+                callback.onEvent(StreamEvent.toolOutput(toolCallId, toolName, output));
             }
 
             @Override
@@ -385,7 +377,6 @@ public final class AgentRunCoordinator {
                 flushText(blocks, text);
                 for (Artifact artifact : artifacts) {
                     blocks.add(toArtifactBlock(artifact));
-                    callback.onEvent(StreamEvent.artifact(artifact));
                 }
             }
 
@@ -393,7 +384,6 @@ public final class AgentRunCoordinator {
             public void onStructuredOutput(com.fasterxml.jackson.databind.JsonNode data) {
                 flushText(blocks, text);
                 blocks.add(toStructuredDataBlock(data));
-                callback.onEvent(StreamEvent.structuredData(data));
             }
         };
     }
@@ -500,16 +490,6 @@ public final class AgentRunCoordinator {
                             + compression.majorResult().messagesAfter()
                             + " 条消息已压缩"));
         }
-    }
-
-    private static void finishVoice(
-            VoiceOutputCoordinator voiceCoordinator,
-            int timeoutSeconds
-    ) {
-        if (voiceCoordinator == null) {
-            return;
-        }
-        voiceCoordinator.finishAndAwait(Duration.ofSeconds(timeoutSeconds));
     }
 
     private static Boolean effectiveThinking(

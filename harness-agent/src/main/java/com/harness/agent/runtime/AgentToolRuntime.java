@@ -19,11 +19,15 @@ import com.harness.graph.retrieval.GraphKnowledgeRetriever;
 import com.harness.graph.schema.GraphSchemaRegistry;
 import com.harness.graph.store.KnowledgeGraphStore;
 import com.harness.provider.ModelProviders;
+import com.harness.provider.VoiceCapabilities;
+import com.harness.provider.VoiceModelProvider;
 import com.harness.tool.ToolRegistry;
 import com.harness.tool.artifact.ArtifactStorageService;
+import com.harness.tool.builtin.AudioTranscriptionTool;
 import com.harness.tool.builtin.FfmpegTool;
 import com.harness.tool.builtin.ImageGenerationTool;
 import com.harness.tool.builtin.PythonSandboxTool;
+import com.harness.tool.builtin.SpeechSynthesisTool;
 import com.harness.tool.builtin.StructuredOutputTool;
 import com.harness.tool.builtin.VideoGenerationTool;
 import com.harness.tool.builtin.WebSearchTool;
@@ -43,6 +47,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.LinkedHashMap;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
@@ -59,6 +64,7 @@ public final class AgentToolRuntime {
     private final SkillRegistry skillRegistry;
     private final ArtifactStore artifactStore;
     private final ArtifactStorageService artifactStorageService;
+    private final VoiceModelProvider voiceProvider;
 
     public AgentToolRuntime(
             ModelProviders providers,
@@ -76,6 +82,8 @@ public final class AgentToolRuntime {
         this.artifactStore = java.util.Objects.requireNonNull(artifactStore, "artifactStore");
         this.artifactStorageService = java.util.Objects.requireNonNull(
                 artifactStorageService, "artifactStorageService");
+        this.voiceProvider = java.util.Objects.requireNonNull(
+                providers.voice(), "voiceProvider");
         registerBuiltins(
                 providers,
                 graphSettings,
@@ -189,13 +197,15 @@ public final class AgentToolRuntime {
 
         prepareImageTool(config, replacements, removals);
         prepareVideoTool(config, replacements, removals);
+        prepareVoiceTools(config, voiceProvider, replacements, removals);
         return new PreparedModelTools(replacements, removals);
     }
 
     /** Build only tools whose effective configuration changes. */
     public PreparedModelTools prepareModelToolChanges(
             ModelConfig current,
-            ModelConfig candidate
+            ModelConfig candidate,
+            VoiceModelProvider candidateVoiceProvider
     ) {
         Map<String, com.harness.tool.Tool> replacements = new LinkedHashMap<>();
         Set<String> removals = new java.util.HashSet<>();
@@ -216,6 +226,22 @@ public final class AgentToolRuntime {
                 ModelConfigKey.VIDEO_STATUS_PATH,
                 ModelConfigKey.CHAT_TIMEOUT_SECONDS))) {
             prepareVideoTool(candidate, replacements, removals);
+        }
+        if (!sameValues(current, candidate, List.of(
+                ModelConfigKey.VOICE_PROVIDER,
+                ModelConfigKey.VOICE_API_KEY,
+                ModelConfigKey.VOICE_BASE_URL,
+                ModelConfigKey.VOICE_ASR_MODEL,
+                ModelConfigKey.VOICE_TTS_MODEL,
+                ModelConfigKey.VOICE_TIMEOUT_SECONDS,
+                ModelConfigKey.VOICE_ASR_MAX_SIZE_MB,
+                ModelConfigKey.VOICE_DEFAULT_VOICE))) {
+            prepareVoiceTools(
+                    candidate,
+                    java.util.Objects.requireNonNull(
+                            candidateVoiceProvider, "candidateVoiceProvider"),
+                    replacements,
+                    removals);
         }
         return new PreparedModelTools(replacements, removals);
     }
@@ -275,6 +301,36 @@ public final class AgentToolRuntime {
         }
     }
 
+    private void prepareVoiceTools(
+            ModelConfig config,
+            VoiceModelProvider capabilitySource,
+            Map<String, com.harness.tool.Tool> replacements,
+            Set<String> removals
+    ) {
+        String voiceProviderName = config.getString(ModelConfigKey.VOICE_PROVIDER, "none");
+        if ("none".equalsIgnoreCase(voiceProviderName)) {
+            removals.add(AudioTranscriptionTool.TOOL_NAME);
+            removals.add(SpeechSynthesisTool.TOOL_NAME);
+            return;
+        }
+
+        VoiceCapabilities capabilities = capabilitySource.capabilities();
+        if (capabilities.asrAvailable()) {
+            AudioTranscriptionTool transcriptionTool = new AudioTranscriptionTool(
+                    voiceProvider, this::loadAudioSource);
+            replacements.put(transcriptionTool.spec().name(), transcriptionTool);
+        } else {
+            removals.add(AudioTranscriptionTool.TOOL_NAME);
+        }
+        if (capabilities.ttsAvailable()) {
+            SpeechSynthesisTool synthesisTool = new SpeechSynthesisTool(
+                    voiceProvider, artifactStorageService::store);
+            replacements.put(synthesisTool.spec().name(), synthesisTool);
+        } else {
+            removals.add(SpeechSynthesisTool.TOOL_NAME);
+        }
+    }
+
     private static boolean sameValues(
             ModelConfig first,
             ModelConfig second,
@@ -307,6 +363,73 @@ public final class AgentToolRuntime {
         } catch (Exception e) {
             throw new IllegalStateException("Failed to read artifact file: " + artifactId, e);
         }
+    }
+
+    private AudioTranscriptionTool.AudioSource loadAudioSource(String reference) {
+        String normalizedReference = reference != null ? reference.trim() : "";
+        if (normalizedReference.startsWith("/api/artifacts/")) {
+            String artifactId = normalizedReference.substring("/api/artifacts/".length());
+            int separator = artifactId.indexOf('/');
+            if (separator >= 0) {
+                artifactId = artifactId.substring(0, separator);
+            }
+            int query = artifactId.indexOf('?');
+            if (query >= 0) {
+                artifactId = artifactId.substring(0, query);
+            }
+            String resolvedArtifactId = artifactId;
+            Artifact artifact = artifactStore.get(resolvedArtifactId)
+                    .orElseThrow(() -> new IllegalArgumentException(
+                            "Artifact not found: " + resolvedArtifactId));
+            return new AudioTranscriptionTool.AudioSource(
+                    readArtifact(resolvedArtifactId, artifact),
+                    artifact.name(),
+                    artifact.mimeType());
+        }
+        if (!normalizedReference.startsWith("/files/")) {
+            throw new IllegalArgumentException(
+                    "Audio reference must use /files/ or /api/artifacts/: " + reference);
+        }
+
+        String relativePath = normalizedReference.substring("/files/".length());
+        Path uploadRoot = Path.of(EnvConfig.get().getString(
+                EnvKey.KNOWLEDGE_UPLOAD_DIR, "./knowledge-uploads"))
+                .toAbsolutePath()
+                .normalize();
+        Path audioPath = uploadRoot.resolve(relativePath).normalize();
+        if (!audioPath.startsWith(uploadRoot)) {
+            throw new IllegalArgumentException(
+                    "Audio reference resolves outside the upload directory: " + reference);
+        }
+        if (!Files.isRegularFile(audioPath)) {
+            throw new IllegalArgumentException("Audio file not found: " + reference);
+        }
+        try {
+            return new AudioTranscriptionTool.AudioSource(
+                    Files.readAllBytes(audioPath),
+                    audioPath.getFileName().toString(),
+                    detectAudioMimeType(audioPath));
+        } catch (Exception e) {
+            throw new IllegalStateException("Failed to read audio file: " + reference, e);
+        }
+    }
+
+    private static String detectAudioMimeType(Path path) throws java.io.IOException {
+        String detected = Files.probeContentType(path);
+        if (detected != null && detected.toLowerCase(Locale.ROOT).startsWith("audio/")) {
+            return detected;
+        }
+        String name = path.getFileName().toString().toLowerCase(Locale.ROOT);
+        int extensionIndex = name.lastIndexOf('.');
+        String extension = extensionIndex >= 0 ? name.substring(extensionIndex + 1) : "";
+        return switch (extension) {
+            case "mp3" -> "audio/mpeg";
+            case "m4a", "mp4" -> "audio/mp4";
+            case "wav" -> "audio/wav";
+            case "webm" -> "audio/webm";
+            case "ogg" -> "audio/ogg";
+            default -> "application/octet-stream";
+        };
     }
 
     private void registerMcpTools() {

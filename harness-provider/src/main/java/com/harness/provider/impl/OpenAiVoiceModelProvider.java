@@ -2,50 +2,33 @@ package com.harness.provider.impl;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.harness.provider.AudioChunk;
-import com.harness.provider.AudioStreamCallback;
-import com.harness.provider.SynthesisRequest;
 import com.harness.provider.VoiceCapabilities;
 import com.harness.provider.VoiceModelProvider;
-import com.harness.core.model.CancellationToken;
 import com.harness.core.modelconfig.ModelConfig;
 import com.harness.core.modelconfig.ModelConfigKey;
-import okhttp3.Call;
 import okhttp3.MediaType;
 import okhttp3.MultipartBody;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.RequestBody;
 import okhttp3.Response;
-import okhttp3.ResponseBody;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.nio.charset.StandardCharsets;
-import java.util.Base64;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.concurrent.CancellationException;
 import java.util.concurrent.TimeUnit;
 
 public class OpenAiVoiceModelProvider implements VoiceModelProvider {
 
-    private static final Logger log = LoggerFactory.getLogger(OpenAiVoiceModelProvider.class);
     private static final MediaType JSON_TYPE = MediaType.get("application/json");
-    private static final int AUDIO_BUFFER_SIZE = 8 * 1024;
     private static final int MAX_ERROR_BODY_CHARS = 2_048;
 
     private static final List<String> INPUT_MIME_TYPES = List.of(
             "audio/mpeg", "audio/mp3", "audio/mp4", "audio/wav", "audio/x-wav",
             "audio/webm", "audio/ogg");
-    private static final List<String> OUTPUT_FORMATS = List.of(
-            "mp3", "opus", "aac", "flac", "wav", "pcm");
+    private static final List<String> OUTPUT_FORMATS = List.of("mp3");
 
     private final String apiKey;
     private final String baseUrl;
@@ -146,14 +129,11 @@ public class OpenAiVoiceModelProvider implements VoiceModelProvider {
 
     @Override
     public byte[] synthesize(String text, String voice) {
-        SynthesisRequest synthesisRequest = new SynthesisRequest(
-                1,
-                text,
-                voice != null ? voice : "alloy",
-                1.0,
-                "mp3",
-                "audio");
-        Request request = buildSpeechRequest(synthesisRequest);
+        if (text == null || text.isBlank()) {
+            throw new IllegalArgumentException("text must not be blank");
+        }
+        String selectedVoice = voice == null || voice.isBlank() ? defaultVoice : voice;
+        Request request = buildSpeechRequest(text, selectedVoice);
         try (Response response = http.newCall(request).execute()) {
             if (!response.isSuccessful()) {
                 throw remoteError("TTS", response);
@@ -165,61 +145,8 @@ public class OpenAiVoiceModelProvider implements VoiceModelProvider {
     }
 
     @Override
-    public void streamSynthesize(
-            SynthesisRequest request,
-            AudioStreamCallback callback,
-            CancellationToken cancellationToken
-    ) {
-        java.util.Objects.requireNonNull(request, "request");
-        java.util.Objects.requireNonNull(callback, "callback");
-        if (cancellationToken != null && cancellationToken.isCancelled()) {
-            throw new CancellationException("TTS request cancelled before start");
-        }
-
-        Call call = http.newCall(buildSpeechRequest(request));
-        Runnable cancelCall = call::cancel;
-        if (cancellationToken != null) {
-            cancellationToken.addCancelCallback(cancelCall);
-        }
-
-        try (Response response = call.execute()) {
-            if (!response.isSuccessful()) {
-                throw remoteError("TTS", response);
-            }
-            ResponseBody body = response.body();
-            if (body == null) {
-                throw new IllegalStateException("TTS response body is empty");
-            }
-            String mimeType = responseMimeType(response, request.responseFormat());
-            callback.onStart(request.sequence(), mimeType);
-            if ("sse".equalsIgnoreCase(request.streamFormat())) {
-                readSseAudio(body.byteStream(), request.sequence(), mimeType, callback, cancellationToken);
-            } else if ("audio".equalsIgnoreCase(request.streamFormat())) {
-                readRawAudio(body.byteStream(), request.sequence(), mimeType, callback, cancellationToken);
-            } else {
-                throw new IllegalArgumentException(
-                        "Unsupported TTS stream format: " + request.streamFormat());
-            }
-            callback.onComplete(request.sequence());
-        } catch (CancellationException e) {
-            notifyError(callback, request.sequence(), e);
-            throw e;
-        } catch (Exception e) {
-            notifyError(callback, request.sequence(), e);
-            throw e instanceof RuntimeException runtimeException
-                    ? runtimeException
-                    : new IllegalStateException("Streaming TTS request failed", e);
-        } finally {
-            if (cancellationToken != null) {
-                cancellationToken.removeCancelCallback(cancelCall);
-            }
-        }
-    }
-
-    @Override
     public VoiceCapabilities capabilities() {
         return new VoiceCapabilities(
-                true,
                 true,
                 true,
                 INPUT_MIME_TYPES,
@@ -250,17 +177,14 @@ public class OpenAiVoiceModelProvider implements VoiceModelProvider {
     @Override
     public String defaultVoice() { return defaultVoice; }
 
-    private Request buildSpeechRequest(SynthesisRequest request) {
+    private Request buildSpeechRequest(String text, String voice) {
         try {
             Map<String, Object> payload = new HashMap<>();
             payload.put("model", ttsModel);
-            payload.put("input", request.text());
-            payload.put("voice", request.voice());
-            payload.put("speed", request.speed());
-            payload.put("response_format", request.responseFormat());
-            if ("sse".equalsIgnoreCase(request.streamFormat())) {
-                payload.put("stream_format", "sse");
-            }
+            payload.put("input", text);
+            payload.put("voice", voice);
+            payload.put("speed", 1.0);
+            payload.put("response_format", "mp3");
             return authorizedRequest(baseUrl + "/audio/speech")
                     .post(RequestBody.create(mapper.writeValueAsBytes(payload), JSON_TYPE))
                     .build();
@@ -273,109 +197,6 @@ public class OpenAiVoiceModelProvider implements VoiceModelProvider {
         return new Request.Builder()
                 .url(url)
                 .header("Authorization", "Bearer " + apiKey);
-    }
-
-    private void readRawAudio(
-            InputStream input,
-            long sequence,
-            String mimeType,
-            AudioStreamCallback callback,
-            CancellationToken cancellationToken
-    ) throws IOException {
-        byte[] buffer = new byte[AUDIO_BUFFER_SIZE];
-        int read;
-        while ((read = input.read(buffer)) >= 0) {
-            requireNotCancelled(cancellationToken);
-            if (read == 0) {
-                continue;
-            }
-            callback.onChunk(new AudioChunk(
-                    sequence,
-                    java.util.Arrays.copyOf(buffer, read),
-                    mimeType));
-        }
-    }
-
-    private void readSseAudio(
-            InputStream input,
-            long sequence,
-            String mimeType,
-            AudioStreamCallback callback,
-            CancellationToken cancellationToken
-    ) throws IOException {
-        boolean receivedAudio = false;
-        try (BufferedReader reader = new BufferedReader(
-                new InputStreamReader(input, StandardCharsets.UTF_8))) {
-            String line;
-            while ((line = reader.readLine()) != null) {
-                requireNotCancelled(cancellationToken);
-                if (!line.startsWith("data:")) {
-                    continue;
-                }
-                String data = line.substring(5).trim();
-                if (data.isEmpty() || "[DONE]".equals(data)) {
-                    continue;
-                }
-                JsonNode event = mapper.readTree(data);
-                String type = event.path("type").asText("");
-                if (!type.isEmpty() && !"speech.audio.delta".equals(type)) {
-                    continue;
-                }
-                String encoded = firstText(event, "delta", "audio");
-                if (encoded == null || encoded.isBlank()) {
-                    continue;
-                }
-                callback.onChunk(new AudioChunk(
-                        sequence,
-                        Base64.getDecoder().decode(encoded),
-                        mimeType));
-                receivedAudio = true;
-            }
-        }
-        if (!receivedAudio) {
-            throw new IllegalStateException("Streaming TTS SSE response contained no audio data");
-        }
-    }
-
-    private static String firstText(JsonNode node, String... fieldNames) {
-        for (String fieldName : fieldNames) {
-            JsonNode value = node.get(fieldName);
-            if (value != null && value.isTextual()) {
-                return value.asText();
-            }
-        }
-        return null;
-    }
-
-    private static void requireNotCancelled(CancellationToken cancellationToken) {
-        if (cancellationToken != null && cancellationToken.isCancelled()) {
-            throw new CancellationException("TTS request cancelled");
-        }
-    }
-
-    private static void notifyError(AudioStreamCallback callback, long sequence, Throwable error) {
-        try {
-            callback.onError(sequence, error);
-        } catch (RuntimeException callbackError) {
-            log.debug("[Voice] Audio error callback failed: {}", callbackError.getMessage());
-        }
-    }
-
-    private static String responseMimeType(Response response, String responseFormat) {
-        String contentType = response.header("Content-Type");
-        if (contentType != null && !contentType.isBlank()
-                && !contentType.toLowerCase(Locale.ROOT).startsWith("text/event-stream")) {
-            int semicolon = contentType.indexOf(';');
-            return semicolon >= 0 ? contentType.substring(0, semicolon).trim() : contentType.trim();
-        }
-        return switch (responseFormat.toLowerCase(Locale.ROOT)) {
-            case "wav" -> "audio/wav";
-            case "opus" -> "audio/ogg; codecs=opus";
-            case "aac" -> "audio/aac";
-            case "flac" -> "audio/flac";
-            case "pcm" -> "audio/pcm";
-            default -> "audio/mpeg";
-        };
     }
 
     private static String normalizeInputMimeType(String mimeType) {

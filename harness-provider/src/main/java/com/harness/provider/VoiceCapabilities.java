@@ -8,7 +8,6 @@ import java.util.List;
 public record VoiceCapabilities(
         boolean asrAvailable,
         boolean ttsAvailable,
-        boolean ttsStreamingAvailable,
         List<String> acceptedInputMimeTypes,
         List<String> outputFormats
 ) {
@@ -20,6 +19,6 @@ public record VoiceCapabilities(
     }
 
     public static VoiceCapabilities unavailable() {
-        return new VoiceCapabilities(false, false, false, List.of(), List.of());
+        return new VoiceCapabilities(false, false, List.of(), List.of());
     }
 }

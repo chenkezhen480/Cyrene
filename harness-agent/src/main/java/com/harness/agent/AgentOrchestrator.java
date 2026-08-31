@@ -398,7 +398,9 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
                 candidateConfiguration);
         AgentToolRuntime.PreparedModelTools candidateTools =
                 toolRuntime.prepareModelToolChanges(
-                        currentConfiguration, candidateConfiguration);
+                        currentConfiguration,
+                        candidateConfiguration,
+                        candidateProviders.voice());
         return () -> modelProviderRuntime.activate(
                 candidateProviders, candidateConfiguration, () -> {
             toolRuntime.applyModelTools(candidateTools);
@@ -577,11 +579,10 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
         toolRuntime.reloadProjectApiConfig();
     }
 
-    // Expose model providers for external use (e.g., direct vision/voice calls)
+    // Expose model providers required by direct non-tool integrations.
     public ChatModelProvider chatModel() { return runtime.providers().chat(); }
     public VisionModelProvider visionModel() { return runtime.providers().vision(); }
     public DocumentConversionService documentConversionService() { return documentConversionService; }
-    public VoiceModelProvider voiceModel() { return runtime.providers().voice(); }
     public EmbeddingModelProvider embeddingModel() { return runtime.providers().embedding(); }
     public RerankModelProvider rerankModel() { return runtime.providers().rerank(); }
     public RealtimeModelProvider realtimeModel() { return runtime.providers().realtime(); }

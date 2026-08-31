@@ -885,6 +885,21 @@ public class ReActEngine implements ReActLoop {
             ToolResult result = executeWithRetry(tc, listener, cancellationToken, confirmationContext);
             toolResults.add(result);
 
+            if (result.success() && result.content() != null) {
+                if (listener != null && !result.content().isEmpty()) {
+                    listener.onToolOutput(tc.id(), tc.toolName(), result.content());
+                }
+                if (!result.content().artifacts().isEmpty()) {
+                    allArtifacts.addAll(result.content().artifacts());
+                    if (listener != null) {
+                        listener.onArtifact(result.content().artifacts());
+                    }
+                }
+                if (result.content().json() != null && listener != null) {
+                    listener.onStructuredOutput(result.content().json());
+                }
+            }
+
             if (listener != null) {
                 ToolCallStatus status = terminalStatus(result, cancellationToken);
                 listener.onToolCallDone(
@@ -901,18 +916,6 @@ public class ReActEngine implements ReActLoop {
                 emitCancelledCalls(
                         plannedCalls.subList(callIndex + 1, plannedCalls.size()), listener);
                 throw new CancellationException("Request cancelled");
-            }
-
-            if (result.success() && result.content() != null) {
-                if (!result.content().artifacts().isEmpty()) {
-                    allArtifacts.addAll(result.content().artifacts());
-                    if (listener != null) {
-                        listener.onArtifact(result.content().artifacts());
-                    }
-                }
-                if (result.content().json() != null && listener != null) {
-                    listener.onStructuredOutput(result.content().json());
-                }
             }
 
             messages.add(ToolExecutionResultMessage.from(toolReq,

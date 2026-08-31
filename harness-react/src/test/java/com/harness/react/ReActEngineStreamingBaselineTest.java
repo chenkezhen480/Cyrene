@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.harness.core.model.ModelUsage;
 import com.harness.core.model.ToolCall;
 import com.harness.core.model.ToolCallStatus;
+import com.harness.core.model.ToolOutput;
 import com.harness.core.model.ToolResult;
 import com.harness.core.model.ToolSpec;
 import com.harness.core.runtime.RunTrace;
@@ -134,6 +135,12 @@ class ReActEngineStreamingBaselineTest {
                     String errorSummary) {
                 toolEvents.add(status.name() + ":" + toolCallId);
             }
+
+            @Override
+            public void onToolOutput(
+                    String toolCallId, String toolName, ToolOutput output) {
+                toolEvents.add("OUTPUT:" + toolCallId + ":" + output.text());
+            }
         };
         ReActEngine engine = new ReActEngine(provider, catalog, executor, null, null, 3);
         ReActRequest request = new ReActRequest(
@@ -154,8 +161,10 @@ class ReActEngineStreamingBaselineTest {
                 "CREATED:call-1",
                 "CREATED:call-2",
                 "RUNNING:call-1",
+                "OUTPUT:call-1:tool result",
                 "SUCCEEDED:call-1",
                 "RUNNING:call-2",
+                "OUTPUT:call-2:tool result",
                 "SUCCEEDED:call-2");
     }
 

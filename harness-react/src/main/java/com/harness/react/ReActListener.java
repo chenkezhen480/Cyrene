@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.harness.core.model.Artifact;
 import com.harness.core.model.ReActStep;
 import com.harness.core.model.ToolCallStatus;
+import com.harness.core.model.ToolOutput;
 import com.harness.tool.confirmation.ConfirmationDecision;
 import com.harness.tool.confirmation.ConfirmationRequest;
 
@@ -75,6 +76,11 @@ public interface ReActListener {
             String errorSummary) {
         onToolCallDone(toolName, status == ToolCallStatus.SUCCEEDED, durationMs);
     }
+
+    /**
+     * Called when a successful tool execution produces typed output.
+     */
+    default void onToolOutput(String toolCallId, String toolName, ToolOutput output) {}
 
     /**
      * Called when execution is paused for explicit user approval.
