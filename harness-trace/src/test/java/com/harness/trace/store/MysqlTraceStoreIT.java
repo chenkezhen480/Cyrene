@@ -25,7 +25,7 @@ class MysqlTraceStoreIT {
     @BeforeAll
     static void initEnv() {
         EnvConfig.init(Map.of(
-                "HARNESS_AUDIT_DB_URL", "jdbc:mysql://localhost:3306/agent?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai",
+                "HARNESS_AUDIT_DB_URL", "jdbc:mysql://localhost:3306/zhi_du_yuan?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai",
                 "HARNESS_AUDIT_DB_USER", "root",
                 "HARNESS_AUDIT_DB_PASS", "1234"
         ));
@@ -178,9 +178,10 @@ class MysqlTraceStoreIT {
         // We test with a very large number first (should not delete ours)
         store.save(buildTrace(testTraceId));
 
-        int deleted = store.cleanup(99999);
+        TraceStore.CleanupResult result = store.cleanup(99999, traceId -> false);
 
         // Our trace should still exist (not old enough)
+        assertThat(result.deleted()).isZero();
         assertThat(store.findById(testTraceId)).isPresent();
     }
 }

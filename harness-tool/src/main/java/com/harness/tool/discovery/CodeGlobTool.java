@@ -3,7 +3,9 @@ package com.harness.tool.discovery;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.harness.core.exception.ToolExecutionException;
-import com.harness.core.model.ToolResult;
+import com.harness.core.model.ResultStatus;
+import com.harness.core.model.ToolExecutionOutcome;
+import com.harness.core.model.ToolOutput;
 import com.harness.core.model.ToolSpec;
 import com.harness.core.env.EnvConfig;
 import com.harness.core.env.EnvKey;
@@ -64,15 +66,22 @@ public class CodeGlobTool implements Tool {
                                                         .put("type", "string")
                                                         .put("description", "Glob pattern, e.g. '**/*.java', '**/controller*.*'")))
                         .<com.fasterxml.jackson.databind.node.ObjectNode>set("required",
-                                mapper.createArrayNode().add("pattern"))
+                                mapper.createArrayNode().add("pattern")),
+                com.harness.core.model.ToolCapability.RETRIEVAL
         );
     }
 
     @Override
     public String execute(JsonNode arguments) {
-        String pattern = arguments.has("pattern") ? arguments.get("pattern").asText().trim() : null;
+        return executeOutcome(arguments).content().modelContent();
+    }
+
+    @Override
+    public ToolExecutionOutcome executeOutcome(JsonNode arguments) {
+        String pattern = arguments != null && arguments.has("pattern")
+                ? arguments.get("pattern").asText().trim() : null;
         if (pattern == null || pattern.isEmpty()) {
-            return "ERROR: 'pattern' is required";
+            throw new ToolExecutionException("code_glob", "Missing required parameter: pattern");
         }
 
         // Project not initialized — rootDir is still the default "."
@@ -126,11 +135,9 @@ public class CodeGlobTool implements Tool {
             });
 
             if (matches.isEmpty()) {
-                ToolResult.setCurrentStatus(ToolResult.ResultStatus.EMPTY);
-                return "No files found matching pattern: " + pattern;
+                return outcome("No files found matching pattern: " + pattern, ResultStatus.EMPTY);
             }
 
-            ToolResult.setCurrentStatus(ToolResult.ResultStatus.SUCCESS);
             StringBuilder sb = new StringBuilder();
             sb.append("Found ").append(matches.size()).append(" files");
             if (matches.size() >= maxResults) {
@@ -140,12 +147,16 @@ public class CodeGlobTool implements Tool {
             for (String m : matches) {
                 sb.append(m).append("\n");
             }
-            return sb.toString();
+            return outcome(sb.toString(), ResultStatus.AVAILABLE);
 
         } catch (IOException e) {
             log.error("[CodeGlob] IO error: {}", e.getMessage());
-            return "ERROR: " + e.getMessage();
+            throw new ToolExecutionException("code_glob", e.getMessage(), e);
         }
+    }
+
+    private static ToolExecutionOutcome outcome(String text, ResultStatus status) {
+        return ToolExecutionOutcome.succeeded(ToolOutput.text(text), status);
     }
 
     private boolean isSensitiveFile(String relativePath) {

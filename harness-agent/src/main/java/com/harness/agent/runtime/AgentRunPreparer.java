@@ -1,13 +1,17 @@
 package com.harness.agent.runtime;
 
-import com.harness.agent.KnowledgeBaseTool;
-import com.harness.agent.KnowledgeContextReadTool;
 import com.harness.agent.KnowledgeGraphTool;
 import com.harness.agent.context.AgentPromptBuilder;
 import com.harness.agent.context.KnowledgeAccessService;
+import com.harness.agent.knowledge.KnowledgeReadTool;
+import com.harness.agent.knowledge.KnowledgeSearchTool;
+import com.harness.agent.knowledge.KnowledgeToolRuntimeContext;
 import com.harness.agent.memory.AgentMemoryRuntime;
 import com.harness.agent.memory.AgentMemoryRuntime.CompressionOutcome;
 import com.harness.agent.memory.AgentMemoryRuntime.MemoryContext;
+import com.harness.agent.memory.LongTermKnowledgeRetriever;
+import com.harness.agent.memory.PreferenceActivationContextBuilder;
+import com.harness.core.knowledge.LongTermKnowledgeBudgetAllocator;
 import com.harness.core.model.AgentContext;
 import com.harness.core.model.AgentMessage;
 import com.harness.core.model.GraphRequestContext;
@@ -17,8 +21,8 @@ import com.harness.input.ProcessedInput;
 import com.harness.input.gap.GapAnalysis;
 import com.harness.input.gap.GapAnalyzer;
 import com.harness.input.multimodal.MultimodalParser;
-import com.harness.tool.builtin.UpdateMemoryTool;
 import com.harness.tool.builtin.WebSearchTool;
+import com.harness.tool.RunToolCatalog;
 import com.harness.tool.skill.LoadSkillTool;
 import com.harness.tool.web.AuthorizedUrlContext;
 import org.slf4j.Logger;
@@ -40,19 +44,26 @@ public final class AgentRunPreparer {
     private final GapAnalyzer gapAnalyzer;
     private final AgentMemoryRuntime memoryRuntime;
     private final boolean knowledgeGraphToolEnabled;
+    private final LongTermKnowledgeRetriever longTermKnowledgeRetriever;
+    private final PreferenceActivationContextBuilder preferenceActivationBuilder;
 
     public AgentRunPreparer(
             AgentRuntime runtime,
             AgentPromptBuilder promptBuilder,
             GapAnalyzer gapAnalyzer,
             AgentMemoryRuntime memoryRuntime,
-            boolean knowledgeGraphToolEnabled
+            boolean knowledgeGraphToolEnabled,
+            LongTermKnowledgeRetriever longTermKnowledgeRetriever,
+            PreferenceActivationContextBuilder preferenceActivationBuilder
     ) {
         this.runtime = runtime;
         this.promptBuilder = promptBuilder;
         this.gapAnalyzer = gapAnalyzer;
         this.memoryRuntime = memoryRuntime;
         this.knowledgeGraphToolEnabled = knowledgeGraphToolEnabled;
+        this.longTermKnowledgeRetriever = longTermKnowledgeRetriever;
+        this.preferenceActivationBuilder = java.util.Objects.requireNonNull(
+                preferenceActivationBuilder, "preferenceActivationBuilder");
     }
 
     public PreparedAgentRun prepare(AgentRunRequest request, RunTrace trace) {
@@ -74,16 +85,16 @@ public final class AgentRunPreparer {
         AgentContext agentContext = request.agentContext() != null
                 ? request.agentContext()
                 : AgentContext.empty();
+        MemoryContext memoryContext = memoryRuntime.resolve(
+                input.userId(), agentContext.optionalTenantId().orElse(null),
+                request.requestedSessionId(), request.text(), trace);
+        activateRequestContexts(agentContext, memoryContext);
+
         GapAnalysis gapAnalysis = gapAnalyzer.analyze(enhancedText, agentContext);
         GraphRequestContext graphRequestContext = agentContext.graphRequestContext();
         trace.putMetadata(gapMetadata(gapAnalysis, trace.snapshot().metadata()));
 
-        MemoryContext memoryContext = memoryRuntime.resolve(
-                input.userId(), request.requestedSessionId(), request.text(), trace);
-        activateRequestContexts(agentContext, memoryContext);
-
         String systemPrompt = promptBuilder.buildSystemPrompt(
-                memoryContext.longtermPreferences(),
                 request.systemPromptOverride(),
                 memoryContext.sessionId(),
                 Boolean.TRUE.equals(gapAnalysis.needsKnowledgeBase()),
@@ -92,33 +103,88 @@ public final class AgentRunPreparer {
                 Boolean.TRUE.equals(gapAnalysis.needsWebSearch()));
         trace.recordLlmMeta(runtime.providers().chat().modelName(), "v1");
 
-        CompressionOutcome compressionOutcome = memoryRuntime.compress(
-                memoryContext.sessionId(),
-                memoryContext.userId(),
-                memoryContext.shorttermMessages(),
-                enhancedText,
-                systemPrompt);
-        memoryRuntime.recordCompressionMetadata(trace, compressionOutcome);
-        memoryRuntime.persistUserMessage(
-                memoryContext.sessionId(),
-                memoryContext.userId(),
-                enhancedText,
-                request.updateActivityAfterUserMessage());
-
         log.debug("Prepared run: sessionId={}, userId={}, history={}, unavailableTools={}",
                 memoryContext.sessionId(),
                 memoryContext.userId(),
-                compressionOutcome.finalMessages().size(),
+                memoryContext.shorttermMessages().size(),
                 requestUnavailableTools(agentContext));
         return new PreparedAgentRun(
                 memoryContext.sessionId(),
                 memoryContext.userId(),
+                memoryContext.tenantId(),
                 enhancedText,
                 systemPrompt,
-                compressionOutcome.finalMessages(),
+                memoryContext.shorttermMessages(),
                 gapAnalysis,
                 requestUnavailableTools(agentContext),
-                compressionOutcome);
+                null,
+                null,
+                agentContext,
+                request.updateActivityAfterUserMessage());
+    }
+
+    /** Completes preparation only after the immutable request Tool Catalog exists. */
+    public PreparedAgentRun complete(
+            PreparedAgentRun prepared,
+            RunToolCatalog toolCatalog,
+            RunTrace trace
+    ) {
+        java.util.Objects.requireNonNull(prepared, "prepared");
+        java.util.Objects.requireNonNull(toolCatalog, "toolCatalog");
+        KnowledgeToolRuntimeContext.activate(
+                prepared.tenantId(),
+                prepared.userId(),
+                prepared.agentContext().knowledgeRequestContext(),
+                prepared.agentContext().graphRequestContext(),
+                toolCatalog);
+
+        String dynamicKnowledgeContext = null;
+        if (longTermKnowledgeRetriever != null) {
+            var activationContext = preferenceActivationBuilder.build(
+                    prepared.enhancedText(), prepared.gapAnalysis(), toolCatalog);
+            LongTermKnowledgeBudgetAllocator.Allocation allocation =
+                    longTermKnowledgeRetriever.retrieve(
+                            activationContext,
+                            KnowledgeToolRuntimeContext.requireCurrent(
+                                    KnowledgeSearchTool.TOOL_NAME),
+                            runtime.providers().chat().contextWindow(),
+                            trace);
+            if (!allocation.selectedBlocks().isEmpty()) {
+                dynamicKnowledgeContext = "<dynamic-knowledge-context role=\"evidence\">\n"
+                        + allocation.renderedContext()
+                        + "\n</dynamic-knowledge-context>";
+            }
+        }
+
+        String budgetedCurrentInput = dynamicKnowledgeContext == null
+                ? prepared.enhancedText()
+                : dynamicKnowledgeContext + "\n\n" + prepared.enhancedText();
+        CompressionOutcome compressionOutcome = memoryRuntime.compress(
+                prepared.sessionId(),
+                prepared.userId(),
+                prepared.shorttermMessages(),
+                budgetedCurrentInput,
+                prepared.systemPrompt());
+        memoryRuntime.recordCompressionMetadata(trace, compressionOutcome);
+        memoryRuntime.persistUserMessage(
+                prepared.sessionId(),
+                prepared.userId(),
+                trace.traceId(),
+                prepared.enhancedText(),
+                prepared.updateActivityAfterUserMessage());
+        return new PreparedAgentRun(
+                prepared.sessionId(),
+                prepared.userId(),
+                prepared.tenantId(),
+                prepared.enhancedText(),
+                prepared.systemPrompt(),
+                compressionOutcome.finalMessages(),
+                prepared.gapAnalysis(),
+                prepared.unavailableTools(),
+                compressionOutcome,
+                dynamicKnowledgeContext,
+                prepared.agentContext(),
+                prepared.updateActivityAfterUserMessage());
     }
 
     private void activateRequestContexts(
@@ -134,8 +200,6 @@ public final class AgentRunPreparer {
         KnowledgeAccessService.setCurrentContext(
                 agentContext.tenantId(), agentContext.knowledgeRequestContext());
         LoadSkillTool.setCurrentSession(memoryContext.sessionId());
-        UpdateMemoryTool.setCurrentUserId(memoryContext.userId());
-        UpdateMemoryTool.setCurrentSessionId(memoryContext.sessionId());
     }
 
     private static Map<String, String> gapMetadata(
@@ -153,8 +217,8 @@ public final class AgentRunPreparer {
     private static Set<String> requestUnavailableTools(AgentContext context) {
         Set<String> unavailable = new HashSet<>();
         if (Boolean.FALSE.equals(context.needsKnowledgeBase())) {
-            unavailable.add(KnowledgeBaseTool.TOOL_NAME);
-            unavailable.add(KnowledgeContextReadTool.TOOL_NAME);
+            unavailable.add(KnowledgeSearchTool.TOOL_NAME);
+            unavailable.add(KnowledgeReadTool.TOOL_NAME);
         }
         if (Boolean.FALSE.equals(context.needsWebSearch())) {
             unavailable.add(WebSearchTool.TOOL_NAME);
@@ -177,12 +241,16 @@ public final class AgentRunPreparer {
     public record PreparedAgentRun(
             String sessionId,
             String userId,
+            String tenantId,
             String enhancedText,
             String systemPrompt,
             List<MemoryMessage> shorttermMessages,
             GapAnalysis gapAnalysis,
             Set<String> unavailableTools,
-            CompressionOutcome compressionOutcome
+            CompressionOutcome compressionOutcome,
+            String dynamicKnowledgeContext,
+            AgentContext agentContext,
+            boolean updateActivityAfterUserMessage
     ) {
     }
 }

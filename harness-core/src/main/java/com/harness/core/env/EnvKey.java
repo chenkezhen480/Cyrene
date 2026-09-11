@@ -6,8 +6,7 @@ package com.harness.core.env;
  *
  * <p>变量命名规范：
  * <ul>
- *   <li>通用变量（PG/Milvus 共用）：HARNESS_RAG_*</li>
- *   <li>PG 专用变量（已废弃）：HARNESS_RAG_PG_*</li>
+ *   <li>通用变量：HARNESS_RAG_*</li>
  *   <li>Milvus 专用变量：HARNESS_RAG_MILVUS_*</li>
  * </ul>
  */
@@ -41,55 +40,24 @@ public final class EnvKey {
     /** JWT 滑动窗口刷新：剩余有效期小于此阈值时刷新 token（分钟），默认 60 */
     public static final String AUTH_JWT_REFRESH_THRESHOLD_MINUTES = "HARNESS_AUTH_JWT_REFRESH_THRESHOLD_MINUTES";
 
-    // ==================== RAG (通用 — PG/Milvus 共用) ====================
-    /** 向量存储 provider：pgvector | milvus | none，默认 pgvector */
+    // ==================== RAG (通用) ====================
+    /** 向量存储 provider：milvus | none，默认 milvus */
     public static final String RAG_PROVIDER          = "HARNESS_RAG_PROVIDER";
-    /** 连接地址（PG: jdbc:postgresql://...; Milvus: http://...） */
+    /** 连接地址（Milvus: http://...） */
     public static final String RAG_URL               = "HARNESS_RAG_URL";
-    /** API Key（Milvus token 认证用，PG 不需要） */
+    /** API Key（Milvus token 认证用） */
     public static final String RAG_API_KEY           = "HARNESS_RAG_API_KEY";
-    /** 集合/表名过滤，默认 default */
+    /** 集合过滤，默认 default */
     public static final String RAG_COLLECTION        = "HARNESS_RAG_COLLECTION";
-    /** Milvus 数据库名，默认 default（PG 不使用） */
+    /** Milvus 数据库名，默认 default */
     public static final String RAG_DATABASE          = "HARNESS_RAG_DATABASE";
     /** 检索返回最大文档数，默认 5 */
     public static final String RAG_TOP_K             = "HARNESS_RAG_TOP_K";
     /** 最低相似度阈值，默认 0.7 */
     public static final String RAG_SCORE_THRESHOLD   = "HARNESS_RAG_SCORE_THRESHOLD";
-    /** 允许触发一次隐式查询改写的最低候选分，默认 0.3 */
-    public static final String RAG_REWRITE_MIN_SCORE = "HARNESS_RAG_REWRITE_MIN_SCORE";
-    /** 数据库用户名（PG 用，Milvus 不需要） */
-    public static final String RAG_USER              = "HARNESS_RAG_USER";
-    /** 数据库密码（PG 用，Milvus 不需要） */
-    public static final String RAG_PASS              = "HARNESS_RAG_PASS";
     /** BM25/全文检索在混合检索中的权重（0.0-1.0），默认 0.3 */
     public static final String RAG_BM25_WEIGHT       = "HARNESS_RAG_BM25_WEIGHT";
 
-
-    /** 全文检索语言配置，默认 english，中文场景用 simple */
-    public static final String RAG_LANG              = "HARNESS_RAG_LANG";
-
-    // ==================== RAG (PG 专用 — 已废弃，保留兼容) ====================
-    /**
-     * @deprecated Use {@link #RAG_URL} instead.
-     * PG JDBC URL，如 jdbc:postgresql://localhost:5432/agent
-     */
-    @Deprecated public static final String RAG_PG_URL       = "HARNESS_RAG_PG_URL";
-    /**
-     * @deprecated Use {@link #RAG_USER} instead.
-     * PG 数据库用户名
-     */
-    @Deprecated public static final String RAG_PG_USER      = "HARNESS_RAG_PG_USER";
-    /**
-     * @deprecated Use {@link #RAG_PASS} instead.
-     * PG 数据库密码
-     */
-    @Deprecated public static final String RAG_PG_PASS      = "HARNESS_RAG_PG_PASS";
-    /**
-     * @deprecated Use {@link #RAG_COLLECTION} instead.
-     * PG 表名，默认 knowledge_documents
-     */
-    @Deprecated public static final String RAG_PG_TABLE     = "HARNESS_RAG_PG_TABLE";
     // ==================== RAG (Milvus 专用) ====================
     /** Milvus 距离度量类型：COSINE | L2 | IP，默认 COSINE */
     public static final String RAG_MILVUS_METRIC_TYPE = "HARNESS_RAG_MILVUS_METRIC_TYPE";
@@ -97,16 +65,6 @@ public final class EnvKey {
     // ==================== RAG (显式上下文窗口) ====================
     /** readContext 的 before/after 单侧最大 chunk 数，默认 2 */
     public static final String RAG_CONTEXT_WINDOW_MAX      = "HARNESS_RAG_CONTEXT_WINDOW_MAX";
-
-    // ==================== RAG (多路召回 — 已废弃，检索策略由 Provider 内聚) ====================
-    /** @deprecated 多路召回已废弃，全文检索和混合检索现在由 VectorStore provider 内部处理 */
-    @Deprecated public static final String RAG_MULTI_ROUTE             = "HARNESS_RAG_MULTI_ROUTE";
-    /** @deprecated 全文检索已内聚到 PgVectorStore.searchKeyword() */
-    @Deprecated public static final String RAG_FULLTEXT_ENABLED        = "HARNESS_RAG_FULLTEXT_ENABLED";
-    /** @deprecated 全文检索语言配置已内聚到 PgVectorStore */
-    @Deprecated public static final String RAG_FULLTEXT_LANG           = "HARNESS_RAG_FULLTEXT_LANG";
-    /** @deprecated Use {@link #GRAPH_PROVIDER}; retained for migration diagnostics only. */
-    @Deprecated public static final String RAG_KNOWLEDGE_GRAPH_ENABLED = "HARNESS_RAG_KNOWLEDGE_GRAPH_ENABLED";
 
     // ==================== Knowledge Graph ====================
     /** 图存储 Provider：none | neo4j，默认 none */
@@ -139,6 +97,14 @@ public final class EnvKey {
     public static final String TOOL_WEB_SEARCH_ENGINES       = "HARNESS_TOOL_WEB_SEARCH_ENGINES";
     /** web_search 最多返回的去重结果数，默认 8 */
     public static final String TOOL_WEB_SEARCH_RESULT_LIMIT  = "HARNESS_TOOL_WEB_SEARCH_RESULT_LIMIT";
+    /** web_search 默认搜索语言（如 zh-CN / en），随请求发给 SearXNG 并作为 Accept-Language 头；留空/all/auto = 不限语言（中英混合）。工具参数 language 优先于该默认值 */
+    public static final String TOOL_WEB_SEARCH_LANGUAGE       = "HARNESS_TOOL_WEB_SEARCH_LANGUAGE";
+    /** web_search 域名黑名单（逗号分隔主域名后缀，如 pinterest.com,quora.com），命中的结果直接丢弃；留空不过滤 */
+    public static final String TOOL_WEB_SEARCH_BLOCKED_DOMAINS = "HARNESS_TOOL_WEB_SEARCH_BLOCKED_DOMAINS";
+    /** 结果至少被 N 个引擎同时命中（多引擎背书）才保留，默认 1 = 不过滤 */
+    public static final String TOOL_WEB_SEARCH_MIN_ENGINES    = "HARNESS_TOOL_WEB_SEARCH_MIN_ENGINES";
+    /** 结果最低 SearXNG score 阈值，默认 0 = 不过滤 */
+    public static final String TOOL_WEB_SEARCH_MIN_SCORE      = "HARNESS_TOOL_WEB_SEARCH_MIN_SCORE";
     public static final String TOOL_URL_READER_ENABLED       = "HARNESS_TOOL_URL_READER_ENABLED";
     public static final String TOOL_URL_READER_MAX_BYTES     = "HARNESS_TOOL_URL_READER_MAX_BYTES";
     public static final String TOOL_URL_READER_PAGE_CHARS    = "HARNESS_TOOL_URL_READER_PAGE_CHARS";
@@ -255,26 +221,60 @@ public final class EnvKey {
     public static final String LARGE_FILE_SUMMARY_CONCURRENCY  = "HARNESS_LARGE_FILE_SUMMARY_CONCURRENCY";
 
     // ==================== Memory (会话记忆管理) ====================
+    /** 长期知识权威存储：mysql | none；与 Trace 存储开关解耦。 */
+    public static final String MEMORY_STORE                       = "HARNESS_MEMORY_STORE";
     /** 会话超时时间（分钟），默认 30 */
     public static final String SESSION_TIMEOUT_MINUTES         = "HARNESS_SESSION_TIMEOUT_MINUTES";
-    /** 触发长期记忆提炼的最少消息数，默认 5 */
-    public static final String MEMORY_MIN_MESSAGES             = "HARNESS_MEMORY_MIN_MESSAGES";
-    /** 触发长期记忆提炼的最少用户字符数，默认 100 */
-    public static final String MEMORY_MIN_USER_CHARS           = "HARNESS_MEMORY_MIN_USER_CHARS";
-    /** 长期记忆（用户偏好）注入 system prompt 的最大 token 数，默认 800 */
-    public static final String MEMORY_LONGTERM_MAX_TOKENS      = "HARNESS_MEMORY_LONGTERM_MAX_TOKENS";
     /** 大压缩触发阈值（总上下文 > 此百分比时触发），默认 85 */
     public static final String CTX_COMPRESS_MAJOR              = "HARNESS_CTX_COMPRESS_MAJOR";
     /** 大压缩目标百分比，默认 30 */
     public static final String CTX_COMPRESS_MAJOR_TARGET        = "HARNESS_CTX_COMPRESS_MAJOR_TARGET";
     /** 基础系统提示词，留空则使用默认值 */
     public static final String SYSTEM_PROMPT                   = "HARNESS_SYSTEM_PROMPT";
-    /** 触发长期记忆提炼的最低 session 质量分数（0-100），默认 30 */
-    public static final String MEMORY_REFINEMENT_MIN_SCORE     = "HARNESS_MEMORY_REFINEMENT_MIN_SCORE";
     /** 会话清理扫描间隔（分钟），默认 60 */
     public static final String MEMORY_CLEANUP_INTERVAL_MINUTES = "HARNESS_MEMORY_CLEANUP_INTERVAL_MINUTES";
-    /** refinement 卡住检测阈值（分钟），默认 10 */
-    public static final String MEMORY_REFINEMENT_STUCK_MINUTES = "HARNESS_MEMORY_REFINEMENT_STUCK_MINUTES";
+    /** 文档入库 Worker 的分页大小，默认 100。 */
+    public static final String KNOWLEDGE_COMPILER_BATCH_SIZE =
+            "HARNESS_KNOWLEDGE_COMPILER_BATCH_SIZE";
+    /** Knowledge Catalog 的独立物理 Collection。 */
+    public static final String KNOWLEDGE_CATALOG_COLLECTION =
+            "HARNESS_KNOWLEDGE_CATALOG_COLLECTION";
+    /** User Episode 当前 Revision 的独立物理 Collection。 */
+    public static final String MEMORY_USER_KNOWLEDGE_COLLECTION =
+            "HARNESS_MEMORY_USER_KNOWLEDGE_COLLECTION";
+    /** Operation Playbook 当前 Revision 的独立物理 Collection。 */
+    public static final String MEMORY_OPERATION_KNOWLEDGE_COLLECTION =
+            "HARNESS_MEMORY_OPERATION_KNOWLEDGE_COLLECTION";
+    public static final String MEMORY_LONGTERM_BUDGET_RATIO =
+            "HARNESS_MEMORY_LONGTERM_BUDGET_RATIO";
+
+    public static final String MEMORY_OKF_EXPORT_ENABLED =
+            "HARNESS_MEMORY_OKF_EXPORT_ENABLED";
+    public static final String KNOWLEDGE_CATALOG_RETRIEVAL_LANE_TOP_K =
+            "HARNESS_KNOWLEDGE_CATALOG_RETRIEVAL_LANE_TOP_K";
+    public static final String KNOWLEDGE_CATALOG_RETRIEVAL_FUSED_TOP_K =
+            "HARNESS_KNOWLEDGE_CATALOG_RETRIEVAL_FUSED_TOP_K";
+    public static final String KNOWLEDGE_CATALOG_RETRIEVAL_DENSE_THRESHOLD =
+            "HARNESS_KNOWLEDGE_CATALOG_RETRIEVAL_DENSE_THRESHOLD";
+    public static final String KNOWLEDGE_CATALOG_RETRIEVAL_SPARSE_THRESHOLD =
+            "HARNESS_KNOWLEDGE_CATALOG_RETRIEVAL_SPARSE_THRESHOLD";
+    public static final String KNOWLEDGE_CATALOG_RETRIEVAL_RRF_K =
+            "HARNESS_KNOWLEDGE_CATALOG_RETRIEVAL_RRF_K";
+    /** 索引 Outbox 每次领取的任务上限，默认 100。 */
+    public static final String MEMORY_INDEX_OUTBOX_BATCH_SIZE =
+            "HARNESS_MEMORY_INDEX_OUTBOX_BATCH_SIZE";
+    /** 索引 Outbox 同时执行的最大 Worker 数，默认 2。 */
+    public static final String MEMORY_INDEX_OUTBOX_CONCURRENCY =
+            "HARNESS_MEMORY_INDEX_OUTBOX_CONCURRENCY";
+    /** 索引 Outbox 固定轮询间隔秒数，默认 5。 */
+    public static final String MEMORY_INDEX_OUTBOX_POLL_SECONDS =
+            "HARNESS_MEMORY_INDEX_OUTBOX_POLL_SECONDS";
+    /** 索引 Outbox 领取超时分钟数，默认 30。 */
+    public static final String MEMORY_INDEX_OUTBOX_STUCK_MINUTES =
+            "HARNESS_MEMORY_INDEX_OUTBOX_STUCK_MINUTES";
+    /** 索引 Outbox 最大尝试次数，默认 5。 */
+    public static final String MEMORY_INDEX_OUTBOX_MAX_ATTEMPTS =
+            "HARNESS_MEMORY_INDEX_OUTBOX_MAX_ATTEMPTS";
 
     // ==================== Cache (会话缓存管理) ====================
     /** 缓存 session 过期时间(小时)，空闲超时自动淘汰，默认 12 */
@@ -306,11 +306,31 @@ public final class EnvKey {
     public static final String KNOWLEDGE_MAX_FILE_SIZE_MB    = "HARNESS_KNOWLEDGE_MAX_FILE_SIZE_MB";
     /** 文本分块大小，默认 1000 */
     public static final String KNOWLEDGE_CHUNK_SIZE          = "HARNESS_KNOWLEDGE_CHUNK_SIZE";
+    /** 单个 Source Document Revision 最大 Chunk 数，默认 10000。 */
+    public static final String KNOWLEDGE_SOURCE_REVISION_MAX_CHUNKS =
+            "HARNESS_KNOWLEDGE_SOURCE_REVISION_MAX_CHUNKS";
     public static final String KNOWLEDGE_PDF_ENABLED         = "HARNESS_KNOWLEDGE_PDF_ENABLED";
     public static final String KNOWLEDGE_DOCX_ENABLED        = "HARNESS_KNOWLEDGE_DOCX_ENABLED";
     public static final String KNOWLEDGE_XLSX_ENABLED        = "HARNESS_KNOWLEDGE_XLSX_ENABLED";
     public static final String KNOWLEDGE_PPTX_ENABLED        = "HARNESS_KNOWLEDGE_PPTX_ENABLED";
+    /** 文档 Ingest Job 领取超时分钟数，默认 30。 */
+    public static final String KNOWLEDGE_INGEST_STUCK_MINUTES =
+            "HARNESS_KNOWLEDGE_INGEST_STUCK_MINUTES";
+    /** 文档 Ingest Job 最大尝试次数，默认 5。 */
+    public static final String KNOWLEDGE_INGEST_MAX_ATTEMPTS =
+            "HARNESS_KNOWLEDGE_INGEST_MAX_ATTEMPTS";
 
+    public static final String GRAPH_MUTATION_POLL_SECONDS =
+            "HARNESS_GRAPH_MUTATION_POLL_SECONDS";
+
+    public static final String GRAPH_MUTATION_STUCK_MINUTES =
+            "HARNESS_GRAPH_MUTATION_STUCK_MINUTES";
+
+    public static final String GRAPH_MUTATION_MAX_ATTEMPTS =
+            "HARNESS_GRAPH_MUTATION_MAX_ATTEMPTS";
+    /** 未登记 Artifact 报告前的保留小时数，默认 24。 */
+    public static final String KNOWLEDGE_ARTIFACT_ORPHAN_RETENTION_HOURS =
+            "HARNESS_KNOWLEDGE_ARTIFACT_ORPHAN_RETENTION_HOURS";
     // ==================== Artifact (文件生成产物) ====================
     /** 产物存储目录，默认 ./artifacts */
     public static final String ARTIFACT_DIR              = "HARNESS_ARTIFACT_DIR";

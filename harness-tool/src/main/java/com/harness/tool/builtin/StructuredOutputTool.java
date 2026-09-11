@@ -55,7 +55,8 @@ public final class StructuredOutputTool implements TypedOutputTool {
                         "Emit a user-visible structured JSON object block. Use this when "
                                 + "machine-readable data is useful inside a normal chat reply. "
                                 + "The arguments are delivered directly; do not repeat the JSON in prose.",
-                        CHAT_PARAMETERS),
+                        CHAT_PARAMETERS,
+                        com.harness.core.model.ToolCapability.GENERATION),
                 null,
                 null);
     }
@@ -73,7 +74,8 @@ public final class StructuredOutputTool implements TypedOutputTool {
                                 + contract.name()
                                 + "'. Call this only after all information-gathering tools are "
                                 + "finished. It must be the only tool call in its round.",
-                        contract.schema()),
+                        contract.schema(),
+                        com.harness.core.model.ToolCapability.GENERATION),
                 contract.schema(),
                 VALUE_VALIDATOR);
     }

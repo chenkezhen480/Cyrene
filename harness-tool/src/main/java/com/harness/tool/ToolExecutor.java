@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.harness.core.exception.ToolExecutionException;
 import com.harness.core.model.ToolCall;
 import com.harness.core.model.ToolOutput;
+import com.harness.core.model.ToolExecutionOutcome;
 import com.harness.core.model.ToolResult;
 import com.harness.core.env.EnvConfig;
 import com.harness.core.env.EnvKey;
@@ -127,16 +128,13 @@ public class ToolExecutor {
         String argsStr = toolCall.arguments() != null ? toolCall.arguments().toString() : "null";
         log.debug("[L3-Tool] Executing [{}] with args: {}", name,
                 argsStr.length() > 200 ? argsStr.substring(0, 200) + "..." : argsStr);
-        ToolResult.clearCurrentStatus();
         try {
-            ToolOutput output = tool.executeOutput(toolCall.arguments());
+            ToolExecutionOutcome outcome = tool.executeOutcome(toolCall.arguments());
             long duration = System.currentTimeMillis() - start;
-            // Consume explicit status set by tool via ThreadLocal (null if tool didn't set one)
-            ToolResult.ResultStatus status = ToolResult.consumeCurrentStatus();
             log.debug("[L3-Tool] [{}] executed in {}ms", name, duration);
             log.debug("[L3-Tool] [{}] result: {}", name,
-                    summarize(output));
-            return ToolResult.ok(toolCall.id(), name, output, duration, status);
+                    summarize(outcome.content()));
+            return ToolResult.fromOutcome(toolCall.id(), name, outcome, duration);
         } catch (ToolExecutionException e) {
             long duration = System.currentTimeMillis() - start;
             log.error("[L3-Tool] [{}] failed in {}ms: {}", name, duration, e.getMessage());
@@ -145,8 +143,6 @@ public class ToolExecutor {
             long duration = System.currentTimeMillis() - start;
             log.error("[L3-Tool] [{}] unexpected error in {}ms: {}", name, duration, e.getMessage(), e);
             return ToolResult.fail(toolCall.id(), name, "Unexpected error: " + e.getMessage(), duration);
-        } finally {
-            ToolResult.clearCurrentStatus();
         }
     }
 

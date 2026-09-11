@@ -11,6 +11,7 @@ import io.milvus.v2.service.collection.request.CreateCollectionReq;
 import io.milvus.v2.service.collection.request.HasCollectionReq;
 import io.milvus.v2.service.collection.request.LoadCollectionReq;
 import io.milvus.v2.service.index.request.CreateIndexReq;
+import io.milvus.v2.service.index.request.ListIndexesReq;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -54,6 +55,7 @@ public class MilvusCollectionInitializer {
             if (!exists) {
                 createCollection(client, collectionName, embedDim);
             }
+            ensureScalarIndexes(client, collectionName);
             client.loadCollection(LoadCollectionReq.builder()
                     .collectionName(collectionName).build());
             log.info("[Milvus] Collection '{}' ready", collectionName);
@@ -113,11 +115,61 @@ public class MilvusCollectionInitializer {
                 .indexType(IndexParam.IndexType.SPARSE_INVERTED_INDEX)
                 .metricType(IndexParam.MetricType.BM25)
                 .build();
+        IndexParam collectionIndex = IndexParam.builder()
+                .fieldName("collection")
+                .indexName("idx_document_collection")
+                .indexType(IndexParam.IndexType.INVERTED)
+                .build();
+        IndexParam sourceIndex = IndexParam.builder()
+                .fieldName("source")
+                .indexName("idx_document_source")
+                .indexType(IndexParam.IndexType.INVERTED)
+                .build();
+        IndexParam chunkIndex = IndexParam.builder()
+                .fieldName("chunk_index")
+                .indexName("idx_document_chunk_index")
+                .indexType(IndexParam.IndexType.INVERTED)
+                .build();
         client.createIndex(CreateIndexReq.builder()
                 .collectionName(collectionName)
-                .indexParams(List.of(vectorIndex, sparseIndex))
+                .indexParams(List.of(
+                        vectorIndex, sparseIndex, collectionIndex, sourceIndex, chunkIndex))
                 .build());
 
         log.info("[Milvus] Collection '{}' created: HNSW(dim={}) + BM25 sparse", collectionName, embedDim);
+    }
+
+    private static void ensureScalarIndexes(
+            MilvusClientV2 client,
+            String collectionName
+    ) {
+        ensureScalarIndex(client, collectionName, "collection", "idx_document_collection");
+        ensureScalarIndex(client, collectionName, "source", "idx_document_source");
+        ensureScalarIndex(client, collectionName, "chunk_index", "idx_document_chunk_index");
+    }
+
+    private static void ensureScalarIndex(
+            MilvusClientV2 client,
+            String collectionName,
+            String fieldName,
+            String indexName
+    ) {
+        List<String> existing = client.listIndexes(ListIndexesReq.builder()
+                .collectionName(collectionName)
+                .fieldName(fieldName)
+                .build());
+        if (existing != null && !existing.isEmpty()) {
+            return;
+        }
+        client.createIndex(CreateIndexReq.builder()
+                .collectionName(collectionName)
+                .indexParams(List.of(IndexParam.builder()
+                        .fieldName(fieldName)
+                        .indexName(indexName)
+                        .indexType(IndexParam.IndexType.INVERTED)
+                        .build()))
+                .build());
+        log.info("[Milvus] Added scalar index '{}' on {}.{}",
+                indexName, collectionName, fieldName);
     }
 }

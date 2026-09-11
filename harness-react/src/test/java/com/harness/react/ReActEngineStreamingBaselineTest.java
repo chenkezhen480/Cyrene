@@ -99,7 +99,7 @@ class ReActEngineStreamingBaselineTest {
                             toolCall.toolName(),
                             "tool result",
                             1,
-                            ToolResult.ResultStatus.SUCCESS);
+                            com.harness.core.model.ResultStatus.AVAILABLE);
                 });
 
         List<String> visibleTokens = new ArrayList<>();

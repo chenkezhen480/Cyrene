@@ -5,7 +5,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.harness.core.exception.ToolExecutionException;
 import com.harness.core.model.Artifact;
-import com.harness.core.model.ToolResult;
+import com.harness.core.model.ResultStatus;
+import com.harness.core.model.ToolExecutionOutcome;
 import com.harness.core.model.ToolOutput;
 import com.harness.core.model.ToolSpec;
 import com.harness.tool.TypedOutputTool;
@@ -96,12 +97,18 @@ public class PythonSandboxTool implements TypedOutputTool {
                                 .<ObjectNode>set("memory_limit_mb", mapper.createObjectNode()
                                         .put("type", "integer")
                                         .put("description", "Memory limit in MB (default: " + defaultMemoryMb + ")")))
-                        .<ObjectNode>set("required", mapper.createArrayNode().add("script"))
+                        .<ObjectNode>set("required", mapper.createArrayNode().add("script")),
+                com.harness.core.model.ToolCapability.GENERATION
         );
     }
 
     @Override
     public ToolOutput executeOutput(JsonNode arguments) {
+        return executeOutcome(arguments).content();
+    }
+
+    @Override
+    public ToolExecutionOutcome executeOutcome(JsonNode arguments) {
         String script = arguments.has("script") ? arguments.get("script").asText() : null;
         if (script == null || script.isBlank()) {
             throw new ToolExecutionException("python_sandbox", "Missing required parameter: script");
@@ -244,14 +251,12 @@ public class PythonSandboxTool implements TypedOutputTool {
                 log.info("Sandbox completed: {} artifacts produced", artifactList.size());
             }
 
-            // Declare explicit status for Inspector
-            if (stdoutStr.isBlank() && artifactList.isEmpty()) {
-                ToolResult.setCurrentStatus(ToolResult.ResultStatus.EMPTY);
-            } else {
-                ToolResult.setCurrentStatus(ToolResult.ResultStatus.SUCCESS);
-            }
-
-            return ToolOutput.artifacts(mapper.writeValueAsString(result), artifactList);
+            ToolOutput output = ToolOutput.artifacts(
+                    mapper.writeValueAsString(result), artifactList);
+            ResultStatus resultStatus = stdoutStr.isBlank() && artifactList.isEmpty()
+                    ? ResultStatus.EMPTY
+                    : ResultStatus.AVAILABLE;
+            return ToolExecutionOutcome.succeeded(output, resultStatus);
 
         } catch (ToolExecutionException e) {
             throw e;

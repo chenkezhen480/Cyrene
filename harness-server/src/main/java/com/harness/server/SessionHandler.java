@@ -4,6 +4,8 @@ import com.harness.core.model.MemoryMessage;
 import com.harness.core.model.PageInfo;
 import com.harness.core.model.PageResponse;
 import com.harness.core.model.Session;
+import com.harness.core.model.SessionCursor;
+import com.harness.core.knowledge.KnowledgeSourceType;
 import com.harness.core.env.MysqlConnectionPool;
 import com.harness.input.memory.MessageStore;
 import com.harness.input.memory.MessageWriteWorker;
@@ -11,6 +13,7 @@ import com.harness.input.memory.SessionMessageCache;
 import com.harness.input.memory.SessionStore;
 import com.harness.server.api.ApiErrorCode;
 import com.harness.server.api.ApiResponses;
+import com.harness.tool.knowledge.authority.KnowledgeSourcePurgeGuard;
 import io.javalin.http.Context;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -22,7 +25,6 @@ import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
-import java.time.format.DateTimeParseException;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -34,13 +36,31 @@ public class SessionHandler {
     private final MessageStore messageStore;
     private final SessionMessageCache cache;
     private final MessageWriteWorker messageWriteWorker;
+    private final SessionRequestOwnerResolver ownerResolver;
+    private final KnowledgeSourcePurgeGuard sourcePurgeGuard;
 
     public SessionHandler(SessionStore sessionStore, MessageStore messageStore,
-                          SessionMessageCache cache, MessageWriteWorker messageWriteWorker) {
+                          SessionMessageCache cache, MessageWriteWorker messageWriteWorker,
+                          KnowledgeSourcePurgeGuard sourcePurgeGuard) {
+        this(sessionStore, messageStore, cache, messageWriteWorker,
+                new SessionRequestOwnerResolver(), sourcePurgeGuard);
+    }
+
+    SessionHandler(
+            SessionStore sessionStore,
+            MessageStore messageStore,
+            SessionMessageCache cache,
+            MessageWriteWorker messageWriteWorker,
+            SessionRequestOwnerResolver ownerResolver,
+            KnowledgeSourcePurgeGuard sourcePurgeGuard
+    ) {
         this.sessionStore = sessionStore;
         this.messageStore = messageStore;
         this.cache = cache;
         this.messageWriteWorker = messageWriteWorker;
+        this.ownerResolver = ownerResolver;
+        this.sourcePurgeGuard = java.util.Objects.requireNonNull(
+                sourcePurgeGuard, "sourcePurgeGuard");
     }
 
     /**
@@ -49,18 +69,20 @@ public class SessionHandler {
     public void create(Context ctx) {
         Map<String, String> body = ctx.bodyAsClass(Map.class);
         String userId = body.get("userId");
-        if (userId == null || userId.isBlank()) {
-            ApiResponses.error(
-                    ctx, 400, ApiErrorCode.INVALID_REQUEST, "userId is required");
+        SessionRequestOwnerResolver.Owner owner = resolveOwner(
+                ctx, userId, body.get("tenantId"));
+        if (owner == null) {
             return;
         }
         String title = body.get("title");
-        Session session = sessionStore.create(userId);
+        Session session = sessionStore.create(owner.userId(), owner.tenantId());
         if (title != null && !title.isBlank()) {
             sessionStore.updateTitle(session.id(), title.trim());
-            session = sessionStore.findById(session.id()).orElse(session);
+            session = sessionStore.findByIdAndOwner(
+                    session.id(), owner.userId(), owner.tenantId()).orElse(session);
         }
-        log.debug("[Server] Created session {} for user {}, title={}", session.id(), userId, session.title());
+        log.debug("[Server] Created session {} for user {}, title={}",
+                session.id(), owner.userId(), session.title());
         ctx.status(201).json(session);
     }
 
@@ -70,6 +92,11 @@ public class SessionHandler {
      */
     public void list(Context ctx) {
         String userId = ctx.queryParam("userId");
+        SessionRequestOwnerResolver.Owner owner = resolveOwner(
+                ctx, userId, ctx.queryParam("tenantId"));
+        if (owner == null) {
+            return;
+        }
         String statusParam = ctx.queryParam("status");
         String cursorParam = ctx.queryParam("cursor");
 
@@ -92,20 +119,15 @@ public class SessionHandler {
             }
         }
 
-        Instant cursor = null;
-        if (cursorParam != null && !cursorParam.isBlank()) {
-            try {
-                cursor = Instant.parse(cursorParam);
-            } catch (DateTimeParseException e) {
-                ApiResponses.error(ctx, 400, ApiErrorCode.INVALID_REQUEST,
-                        "Invalid cursor format. Use ISO-8601 (e.g., 2026-06-01T10:00:00Z)");
-                return;
-            }
+        SessionCursor cursor;
+        try {
+            cursor = parseSessionCursor(cursorParam);
+        } catch (IllegalArgumentException e) {
+            ApiResponses.error(ctx, 400, ApiErrorCode.INVALID_REQUEST, e.getMessage());
+            return;
         }
-
-        List<Session> sessions = sessionStore.findAll(userId, status, cursor, limit + 1);
-        ctx.json(PageResponse.fromFetched(
-                sessions, limit, session -> session.lastActive().toString()));
+        ctx.json(sessionStore.findAllByOwner(
+                owner.userId(), owner.tenantId(), status, cursor, limit));
     }
 
     /**
@@ -113,7 +135,12 @@ public class SessionHandler {
      */
     public void detail(Context ctx) {
         String sessionId = ctx.pathParam("sessionId");
-        Optional<Session> session = sessionStore.findById(sessionId);
+        SessionRequestOwnerResolver.Owner owner = resolveOwnerFromQuery(ctx);
+        if (owner == null) {
+            return;
+        }
+        Optional<Session> session = sessionStore.findByIdAndOwner(
+                sessionId, owner.userId(), owner.tenantId());
         if (session.isEmpty()) {
             ApiResponses.error(ctx, 404, ApiErrorCode.NOT_FOUND,
                     "Session not found: " + sessionId);
@@ -128,7 +155,12 @@ public class SessionHandler {
      */
     public void messages(Context ctx) {
         String sessionId = ctx.pathParam("sessionId");
-        if (sessionStore.findById(sessionId).isEmpty()) {
+        SessionRequestOwnerResolver.Owner owner = resolveOwnerFromQuery(ctx);
+        if (owner == null) {
+            return;
+        }
+        if (sessionStore.findByIdAndOwner(
+                sessionId, owner.userId(), owner.tenantId()).isEmpty()) {
             ApiResponses.error(ctx, 404, ApiErrorCode.NOT_FOUND,
                     "Session not found: " + sessionId);
             return;
@@ -186,7 +218,12 @@ public class SessionHandler {
      */
     public void stats(Context ctx) {
         String sessionId = ctx.pathParam("sessionId");
-        Optional<Session> sessionOpt = sessionStore.findById(sessionId);
+        SessionRequestOwnerResolver.Owner owner = resolveOwnerFromQuery(ctx);
+        if (owner == null) {
+            return;
+        }
+        Optional<Session> sessionOpt = sessionStore.findByIdAndOwner(
+                sessionId, owner.userId(), owner.tenantId());
         if (sessionOpt.isEmpty()) {
             ApiResponses.error(ctx, 404, ApiErrorCode.NOT_FOUND,
                     "Session not found: " + sessionId);
@@ -228,7 +265,12 @@ public class SessionHandler {
      */
     public void delete(Context ctx) {
         String sessionId = ctx.pathParam("sessionId");
-        if (sessionStore.findById(sessionId).isEmpty()) {
+        SessionRequestOwnerResolver.Owner owner = resolveOwnerFromQuery(ctx);
+        if (owner == null) {
+            return;
+        }
+        if (sessionStore.findByIdAndOwner(
+                sessionId, owner.userId(), owner.tenantId()).isEmpty()) {
             ApiResponses.error(ctx, 404, ApiErrorCode.NOT_FOUND,
                     "Session not found: " + sessionId);
             return;
@@ -246,16 +288,42 @@ public class SessionHandler {
             conn = MysqlConnectionPool.getConnection();
             conn.setAutoCommit(false);
 
-            // Diagnostic: count messages before delete
-            int existingCount = 0;
-            try (PreparedStatement ps = conn.prepareStatement(
-                    "SELECT COUNT(*) FROM messages WHERE session_id = ?")) {
+            try (PreparedStatement ps = conn.prepareStatement("""
+                    SELECT id FROM sessions
+                    WHERE id = ? AND user_id = ? AND tenant_id <=> ? FOR UPDATE
+                    """)) {
                 ps.setString(1, sessionId);
-                ResultSet rs = ps.executeQuery();
-                if (rs.next()) existingCount = rs.getInt(1);
+                ps.setString(2, owner.userId());
+                ps.setString(3, owner.tenantId());
+                try (ResultSet rs = ps.executeQuery()) {
+                    if (!rs.next()) {
+                        throw new SQLException("Session owner changed before delete");
+                    }
+                }
             }
-            if (existingCount == 0) {
+
+            List<Long> messageIds = new java.util.ArrayList<>();
+            try (PreparedStatement ps = conn.prepareStatement(
+                    "SELECT id FROM messages WHERE session_id = ? ORDER BY id FOR UPDATE")) {
+                ps.setString(1, sessionId);
+                try (ResultSet rs = ps.executeQuery()) {
+                    while (rs.next()) {
+                        messageIds.add(rs.getLong("id"));
+                    }
+                }
+            }
+            if (messageIds.isEmpty()) {
                 log.warn("[Server] Session {} has 0 messages in DB before delete — possible stale UI or write failure", sessionId);
+            }
+            for (Long messageId : messageIds) {
+                if (sourcePurgeGuard.retainIfReferenced(
+                        KnowledgeSourceType.SESSION_MESSAGE,
+                        Long.toString(messageId))) {
+                    conn.rollback();
+                    ApiResponses.error(ctx, 409, ApiErrorCode.CONFLICT,
+                            "Session contains evidence retained by knowledge revisions");
+                    return;
+                }
             }
 
             int deleted;
@@ -275,7 +343,7 @@ public class SessionHandler {
             log.info("[Server] Deleted session {} with {} messages", sessionId, deleted);
             ctx.json(Map.of("message", "Session deleted", "sessionId", sessionId, "messagesDeleted", deleted));
 
-        } catch (SQLException e) {
+        } catch (SQLException | RuntimeException e) {
             log.error("[Server] Failed to delete session {}, rolling back: {}", sessionId, e.getMessage(), e);
             if (conn != null) {
                 try { conn.rollback(); } catch (SQLException ex) { log.error("Rollback failed: {}", ex.getMessage()); }
@@ -286,6 +354,43 @@ public class SessionHandler {
             if (conn != null) {
                 try { conn.setAutoCommit(true); conn.close(); } catch (SQLException ignored) {}
             }
+        }
+    }
+
+    private SessionRequestOwnerResolver.Owner resolveOwnerFromQuery(Context context) {
+        return resolveOwner(
+                context,
+                context.queryParam("userId"),
+                context.queryParam("tenantId"));
+    }
+
+    private SessionRequestOwnerResolver.Owner resolveOwner(
+            Context context,
+            String userId,
+            String tenantId
+    ) {
+        try {
+            return ownerResolver.resolve(context, userId, tenantId);
+        } catch (SessionRequestOwnerResolver.OwnerResolutionException e) {
+            ApiResponses.error(context, 401, ApiErrorCode.UNAUTHORIZED, e.getMessage());
+            return null;
+        }
+    }
+
+    private static SessionCursor parseSessionCursor(String cursor) {
+        if (cursor == null || cursor.isBlank()) {
+            return null;
+        }
+        int separator = cursor.lastIndexOf('|');
+        if (separator <= 0 || separator == cursor.length() - 1) {
+            throw new IllegalArgumentException("Invalid Session cursor");
+        }
+        try {
+            return new SessionCursor(
+                    Instant.parse(cursor.substring(0, separator)),
+                    cursor.substring(separator + 1));
+        } catch (RuntimeException e) {
+            throw new IllegalArgumentException("Invalid Session cursor", e);
         }
     }
 }

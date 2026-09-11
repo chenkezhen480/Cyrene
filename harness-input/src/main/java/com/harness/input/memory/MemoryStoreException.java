@@ -5,6 +5,10 @@ package com.harness.input.memory;
  */
 public final class MemoryStoreException extends RuntimeException {
 
+    public MemoryStoreException(String message) {
+        super(message);
+    }
+
     public MemoryStoreException(String message, Throwable cause) {
         super(message, cause);
     }

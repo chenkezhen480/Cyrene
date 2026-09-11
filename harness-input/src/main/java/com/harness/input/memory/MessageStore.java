@@ -4,6 +4,8 @@ import com.harness.core.model.MemoryMessage;
 import com.harness.core.model.MessageBlock;
 
 import java.util.List;
+import java.util.Optional;
+import java.util.function.LongPredicate;
 
 /**
  * Persistence interface for conversation messages within a session.
@@ -12,9 +14,15 @@ public interface MessageStore {
     /**
      * Save a message with structured content blocks.
      */
-    void save(String sessionId, String role, List<MessageBlock> content, boolean isSummary);
+    long save(MessageWrite message);
+
+    List<Long> saveBatch(List<MessageWrite> messages);
 
     List<MemoryMessage> loadForContext(String sessionId);
+
+    /** Resolve one exact message only when it belongs to the supplied session. */
+    Optional<MemoryMessage> findByIdAndSession(long messageId, String sessionId);
+
     int countUserMessages(String sessionId);
     int sumUserContentLength(String sessionId);
 
@@ -22,6 +30,8 @@ public interface MessageStore {
      * Count conversation turns (user+assistant message pairs) in a session.
      */
     int countConversationTurns(String sessionId);
+
+    ConversationBoundary findConversationBoundary(String sessionId);
 
     /**
      * Count messages with tool-related roles (e.g., tool execution results).
@@ -66,16 +76,27 @@ public interface MessageStore {
             boolean hasUserQuestions
     ) {}
 
+    record ConversationBoundary(int completeTurns, long latestCompleteTurnMessageId) {
+        public ConversationBoundary {
+            if (completeTurns < 0 || latestCompleteTurnMessageId < 0) {
+                throw new IllegalArgumentException("conversation boundary values must not be negative");
+            }
+            if (completeTurns == 0 && latestCompleteTurnMessageId != 0) {
+                throw new IllegalArgumentException("empty conversation cannot have a boundary");
+            }
+        }
+    }
+
     SessionStats loadSessionStats(String sessionId);
 
-    /**
-     * Delete all messages belonging to a session.
-     *
-     * @param sessionId session ID
-     * @return number of deleted messages
-     */
-    int deleteBySession(String sessionId);
-
     /** Delete Tool calls/results when minor compression strips Tool context. */
-    int deleteToolMessages(String sessionId);
+    DeletionResult deleteToolMessages(String sessionId, LongPredicate retainedByKnowledge);
+
+    record DeletionResult(int deleted, int retainedByKnowledge) {
+        public DeletionResult {
+            if (deleted < 0 || retainedByKnowledge < 0) {
+                throw new IllegalArgumentException("deletion counts must not be negative");
+            }
+        }
+    }
 }

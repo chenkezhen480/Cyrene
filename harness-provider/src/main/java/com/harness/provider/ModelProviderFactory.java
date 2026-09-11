@@ -130,7 +130,7 @@ public final class ModelProviderFactory {
     }
 
     /**
-     * 4. Embedding Model (optional, needed for pgvector RAG)
+     * 4. Embedding Model (optional, needed for RAG)
      */
     public static EmbeddingModelProvider createEmbedding(ModelConfig config) {
         String provider = normalizedProvider(config, ModelConfigKey.EMBEDDING_PROVIDER);

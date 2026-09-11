@@ -132,24 +132,28 @@ const CyreneAPI = (() => {
     return request('GET', `/api/sessions?${params}`);
   }
 
-  function getSession(sessionId) {
-    return request('GET', `/api/sessions/${sessionId}`);
+  function getSession(sessionId, userId) {
+    const params = new URLSearchParams({ userId });
+    return request('GET', `/api/sessions/${sessionId}?${params}`);
   }
 
-  function getMessages(sessionId, { limit, cursor, direction } = {}) {
+  function getMessages(sessionId, userId, { limit, cursor, direction } = {}) {
     const params = new URLSearchParams();
+    if (userId) params.set('userId', userId);
     if (limit) params.set('limit', limit);
     if (cursor) params.set('cursor', cursor);
     if (direction) params.set('direction', direction);
     return request('GET', `/api/sessions/${sessionId}/messages?${params}`);
   }
 
-  function getSessionStats(sessionId) {
-    return request('GET', `/api/sessions/${sessionId}/stats`);
+  function getSessionStats(sessionId, userId) {
+    const params = new URLSearchParams({ userId });
+    return request('GET', `/api/sessions/${sessionId}/stats?${params}`);
   }
 
-  function closeSession(sessionId) {
-    return request('DELETE', `/api/sessions/${sessionId}`);
+  function closeSession(sessionId, userId) {
+    const params = new URLSearchParams({ userId });
+    return request('DELETE', `/api/sessions/${sessionId}?${params}`);
   }
 
   // ── Knowledge ──
@@ -177,22 +181,6 @@ const CyreneAPI = (() => {
     params.set('limit', String(limit));
     if (cursor) params.set('cursor', cursor);
     return request('GET', `/api/knowledge/${encodeURIComponent(collection)}?${params}`);
-  }
-
-  function deleteCollection(collection) {
-    return request('DELETE', `/api/knowledge/${collection}`);
-  }
-
-  function getDocument(collection, documentId) {
-    return request('GET', `/api/knowledge/${collection}/${documentId}`);
-  }
-
-  function updateDocument(collection, documentId, content) {
-    return request('PUT', `/api/knowledge/${collection}/${documentId}`, { content });
-  }
-
-  function deleteDocument(collection, documentId) {
-    return request('DELETE', `/api/knowledge/${collection}/${documentId}`);
   }
 
   // ── Knowledge Graph ──
@@ -344,6 +332,14 @@ const CyreneAPI = (() => {
     return request('DELETE', `/api/traces/${traceId}`);
   }
 
+  function updateTraceFeedback(traceId, feedback, userId, tenantId) {
+    return request('PUT', `/api/traces/${traceId}/feedback`, {
+      feedback,
+      userId,
+      ...(tenantId ? { tenantId } : {}),
+    });
+  }
+
   // ── Project Discovery ──
   function scanProject(sourceRoot, baseUrl) {
     return request('POST', '/api/project-discovery/scan', { sourceRoot, baseUrl });
@@ -376,14 +372,14 @@ const CyreneAPI = (() => {
     chat, cancelChat, approveConfirmation, rejectConfirmation, uploadFile,
     getModelConfiguration, updateModelConfiguration,
     createSession, listSessions, getSession, getMessages, getSessionStats, closeSession,
-    listCollections, uploadKnowledge, listKnowledge, getDocument, updateDocument, deleteCollection, deleteDocument,
+    listCollections, uploadKnowledge, listKnowledge,
     getGraphStatus, listGraphSchemas, getGraphSchema,
     listGraphSchemaConfigs, getGraphSchemaConfig, createGraphSchemaConfig, updateGraphSchemaConfig,
     enableGraphSchemaConfig, disableGraphSchemaConfig, deleteGraphSchemaConfig,
     listGraphSpaces, deleteGraphSpace, listGraphNodes, listGraphRelations,
     deleteGraphNode, deleteGraphRelation, queryGraph, buildGraph, previewNaturalLanguageGraph,
     getArtifactUrl, getArtifactPreviewUrl, listSessionArtifacts,
-    getTrace, listTraces, getTraceStats, cleanupTraces, deleteTrace,
+    getTrace, listTraces, getTraceStats, cleanupTraces, deleteTrace, updateTraceFeedback,
     scanProject, generateConfig, getConfig, updateConfig, reloadConfig,
     health,
   };

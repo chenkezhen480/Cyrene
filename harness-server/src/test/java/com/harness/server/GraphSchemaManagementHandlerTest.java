@@ -3,11 +3,13 @@ package com.harness.server;
 import com.harness.core.model.PageResponse;
 import com.harness.graph.config.GraphSettings;
 import com.harness.graph.schema.GraphSchemaFormat;
+import com.harness.graph.schema.GraphSchemaDetails;
 import com.harness.graph.schema.GraphSchemaManagementService;
 import com.harness.graph.schema.GraphSchemaMode;
 import com.harness.graph.schema.GraphSchemaSource;
 import com.harness.graph.schema.GraphSchemaSummary;
 import com.harness.graph.store.KnowledgeGraphStore;
+import com.harness.tool.knowledge.GraphSchemaWikiCompiler;
 import io.javalin.http.Context;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -29,6 +31,7 @@ class GraphSchemaManagementHandlerTest {
         KnowledgeGraphStore graphStore = mock(KnowledgeGraphStore.class);
         GraphSettings settings = mock(GraphSettings.class);
         GraphRequestAuthenticator authenticator = mock(GraphRequestAuthenticator.class);
+        GraphSchemaWikiCompiler wikiCompiler = mock(GraphSchemaWikiCompiler.class);
         Context context = mock(Context.class);
         GraphSchemaSummary first = summary("alpha-schema");
         GraphSchemaSummary second = summary("beta-schema");
@@ -40,7 +43,8 @@ class GraphSchemaManagementHandlerTest {
         when(service.list()).thenReturn(List.of(first, second));
 
         GraphSchemaManagementHandler handler =
-                new GraphSchemaManagementHandler(service, graphStore, settings, authenticator);
+                new GraphSchemaManagementHandler(
+                        service, graphStore, settings, authenticator, wikiCompiler);
         handler.list(context);
 
         verify(authenticator).authenticate(context);
@@ -59,7 +63,9 @@ class GraphSchemaManagementHandlerTest {
         KnowledgeGraphStore graphStore = mock(KnowledgeGraphStore.class);
         GraphSettings settings = mock(GraphSettings.class);
         GraphRequestAuthenticator authenticator = mock(GraphRequestAuthenticator.class);
+        GraphSchemaWikiCompiler wikiCompiler = mock(GraphSchemaWikiCompiler.class);
         Context context = mock(Context.class);
+        GraphSchemaDetails details = mock(GraphSchemaDetails.class);
         GraphSchemaManagementHandler.GraphSchemaWriteRequest request =
                 new GraphSchemaManagementHandler.GraphSchemaWriteRequest(
                         "yaml", "schemaId: managed-schema", true);
@@ -67,13 +73,17 @@ class GraphSchemaManagementHandlerTest {
         when(context.bodyAsClass(GraphSchemaManagementHandler.GraphSchemaWriteRequest.class))
                 .thenReturn(request);
         when(context.status(201)).thenReturn(context);
+        when(service.create(GraphSchemaFormat.YAML, request.content(), true))
+                .thenReturn(details);
 
         GraphSchemaManagementHandler handler =
-                new GraphSchemaManagementHandler(service, graphStore, settings, authenticator);
+                new GraphSchemaManagementHandler(
+                        service, graphStore, settings, authenticator, wikiCompiler);
         handler.create(context);
 
         verify(authenticator).authenticate(context);
         verify(service).create(GraphSchemaFormat.YAML, request.content(), true);
+        verify(wikiCompiler).synchronize(details);
     }
 
     @Test
@@ -82,6 +92,7 @@ class GraphSchemaManagementHandlerTest {
         KnowledgeGraphStore graphStore = mock(KnowledgeGraphStore.class);
         GraphSettings settings = mock(GraphSettings.class);
         GraphRequestAuthenticator authenticator = mock(GraphRequestAuthenticator.class);
+        GraphSchemaWikiCompiler wikiCompiler = mock(GraphSchemaWikiCompiler.class);
         Context context = mock(Context.class);
 
         when(context.pathParam("schemaId")).thenReturn("student-schema");
@@ -89,12 +100,35 @@ class GraphSchemaManagementHandlerTest {
         when(graphStore.hasGraphSpacesForSchema("student-schema")).thenReturn(true);
 
         GraphSchemaManagementHandler handler =
-                new GraphSchemaManagementHandler(service, graphStore, settings, authenticator);
+                new GraphSchemaManagementHandler(
+                        service, graphStore, settings, authenticator, wikiCompiler);
         handler.delete(context);
 
         verify(graphStore).hasGraphSpacesForSchema("student-schema");
         verify(service, never()).delete("student-schema");
+        verify(wikiCompiler, never()).deprecate("student-schema");
         verify(context).status(409);
+    }
+
+    @Test
+    void deprecatesWikiConceptAfterDeletingUnusedSchema() {
+        GraphSchemaManagementService service = mock(GraphSchemaManagementService.class);
+        KnowledgeGraphStore graphStore = mock(KnowledgeGraphStore.class);
+        GraphSettings settings = mock(GraphSettings.class);
+        GraphRequestAuthenticator authenticator = mock(GraphRequestAuthenticator.class);
+        GraphSchemaWikiCompiler wikiCompiler = mock(GraphSchemaWikiCompiler.class);
+        Context context = mock(Context.class);
+
+        when(context.pathParam("schemaId")).thenReturn("student-schema");
+        when(context.json(any())).thenReturn(context);
+        when(graphStore.hasGraphSpacesForSchema("student-schema")).thenReturn(false);
+
+        GraphSchemaManagementHandler handler = new GraphSchemaManagementHandler(
+                service, graphStore, settings, authenticator, wikiCompiler);
+        handler.delete(context);
+
+        verify(service).delete("student-schema");
+        verify(wikiCompiler).deprecate("student-schema");
     }
 
     private static GraphSchemaSummary summary(String schemaId) {

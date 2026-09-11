@@ -3,6 +3,8 @@ package com.harness.trace.store;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.harness.core.model.AgentTrace;
+import com.harness.core.model.PageResponse;
+import com.harness.core.model.TraceCursor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -15,6 +17,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.function.Predicate;
+import java.util.stream.Stream;
 
 /**
  * File-based trace store. Saves each trace as a JSON file.
@@ -43,6 +47,7 @@ public class FileTraceStore implements TraceStore {
             mapper.writerWithDefaultPrettyPrinter().writeValue(file.toFile(), trace);
         } catch (IOException e) {
             log.error("Failed to save trace {}: {}", trace.traceId(), e.getMessage(), e);
+            throw new TraceStoreException("Failed to save trace " + trace.traceId(), e);
         }
     }
 
@@ -61,8 +66,8 @@ public class FileTraceStore implements TraceStore {
     @Override
     public List<AgentTrace> listRecent(int limit) {
         List<AgentTrace> traces = new ArrayList<>();
-        try {
-            Files.list(traceDir)
+        try (Stream<Path> paths = Files.list(traceDir)) {
+            paths
                     .filter(p -> p.toString().endsWith(".json"))
                     .sorted((a, b) -> {
                         try { return Files.getLastModifiedTime(b).compareTo(Files.getLastModifiedTime(a)); }
@@ -80,21 +85,73 @@ public class FileTraceStore implements TraceStore {
     }
 
     @Override
-    public int cleanup(int retentionDays) {
+    public PageResponse<AgentTrace> findBySession(String sessionId, TraceCursor cursor, int limit) {
+        if (sessionId == null || sessionId.isBlank()) {
+            throw new IllegalArgumentException("sessionId is required");
+        }
+        if (limit < 1 || limit > 200) {
+            throw new IllegalArgumentException("limit must be between 1 and 200");
+        }
+        List<AgentTrace> filtered;
+        try (Stream<Path> paths = Files.list(traceDir)) {
+            filtered = paths
+                    .filter(path -> path.toString().endsWith(".json"))
+                    .map(this::readRequired)
+                    .filter(trace -> sessionId.equals(trace.sessionId()))
+                    .filter(trace -> cursor == null
+                            || trace.timestamp().isBefore(cursor.timestamp())
+                            || (trace.timestamp().equals(cursor.timestamp())
+                            && trace.traceId().compareTo(cursor.traceId()) < 0))
+                    .sorted(java.util.Comparator.comparing(AgentTrace::timestamp)
+                            .thenComparing(AgentTrace::traceId)
+                            .reversed())
+                    .limit((long) limit + 1)
+                    .toList();
+        } catch (IOException e) {
+            throw new TraceStoreException("Failed to list traces for session " + sessionId, e);
+        }
+        return PageResponse.fromFetched(
+                filtered,
+                limit,
+                trace -> trace.timestamp() + "|" + trace.traceId());
+    }
+
+    private AgentTrace readRequired(Path path) {
+        try {
+            return mapper.readValue(path.toFile(), AgentTrace.class);
+        } catch (IOException e) {
+            throw new TraceStoreException("Failed to read trace file " + path.getFileName(), e);
+        }
+    }
+
+    @Override
+    public CleanupResult cleanup(
+            int retentionDays,
+            Predicate<String> retainedByKnowledge
+    ) {
+        java.util.Objects.requireNonNull(retainedByKnowledge, "retainedByKnowledge");
         Instant cutoff = Instant.now().minusSeconds(retentionDays * 86400L);
         int deleted = 0;
-        try {
-            var files = Files.list(traceDir).filter(p -> p.toString().endsWith(".json")).toList();
+        int retained = 0;
+        try (Stream<Path> paths = Files.list(traceDir)) {
+            var files = paths.filter(p -> p.toString().endsWith(".json")).toList();
             for (Path f : files) {
                 if (Files.getLastModifiedTime(f).toInstant().isBefore(cutoff)) {
+                    String fileName = f.getFileName().toString();
+                    String traceId = fileName.substring(0, fileName.length() - ".json".length());
+                    if (retainedByKnowledge.test(traceId)) {
+                        retained++;
+                        continue;
+                    }
                     Files.delete(f);
                     deleted++;
                 }
             }
-        } catch (IOException e) {
+        } catch (IOException | RuntimeException e) {
             log.error("Cleanup failed: {}", e.getMessage(), e);
+            throw new TraceStoreException("Failed to cleanup trace files", e);
         }
-        return deleted;
+        return new CleanupResult(deleted, retained);
     }
 
     @Override
@@ -119,19 +176,23 @@ public class FileTraceStore implements TraceStore {
     }
 
     @Override
-    public void updateMetadata(String traceId, Map<String, String> entries) {
+    public synchronized boolean updateMetadata(String traceId, Map<String, String> entries) {
         // Read-modify-write: load JSON, merge metadata, save back
-        findById(traceId).ifPresent(trace -> {
-            Map<String, String> merged = new HashMap<>(trace.metadata());
-            merged.putAll(entries);
-            AgentTrace updated = new AgentTrace(
-                    trace.traceId(), trace.timestamp(), trace.userId(), trace.sessionId(),
-                    trace.inputText(), trace.inputAttachments(), trace.intent(), trace.ragHits(),
-                    trace.rerankResult(), trace.llmModel(), trace.promptVersion(), trace.steps(),
-                    trace.finalOutput(), trace.riskLevel(), trace.userConfirmed(),
-                    trace.totalDurationMs(), trace.totalTokens(), merged);
-            save(updated);
-        });
+        Optional<AgentTrace> found = findById(traceId);
+        if (found.isEmpty()) {
+            return false;
+        }
+        AgentTrace trace = found.get();
+        Map<String, String> merged = new HashMap<>(trace.metadata());
+        merged.putAll(entries);
+        AgentTrace updated = new AgentTrace(
+                trace.traceId(), trace.timestamp(), trace.userId(), trace.sessionId(),
+                trace.inputText(), trace.inputAttachments(), trace.intent(), trace.ragHits(),
+                trace.rerankResult(), trace.llmModel(), trace.promptVersion(), trace.steps(),
+                trace.finalOutput(), trace.riskLevel(), trace.userConfirmed(),
+                trace.totalDurationMs(), trace.totalTokens(), merged);
+        save(updated);
+        return true;
     }
 
     @Override

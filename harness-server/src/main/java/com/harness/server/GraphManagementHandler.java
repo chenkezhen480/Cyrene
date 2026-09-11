@@ -1,12 +1,9 @@
 package com.harness.server;
 
-import com.harness.agent.graph.GraphSpaceAccessService;
-import com.harness.agent.graph.OpenGraphSpaceAccessService;
 import com.harness.core.model.PageResponse;
 import com.harness.graph.config.GraphSettings;
-import com.harness.graph.model.GraphDeleteMode;
-import com.harness.graph.model.GraphDeleteRequest;
-import com.harness.graph.model.GraphDeleteTarget;
+import com.harness.graph.build.GraphMutationCommitter;
+import com.harness.graph.model.GraphChangeSet;
 import com.harness.graph.model.GraphMutationBatch;
 import com.harness.graph.model.GraphNeighborhoodRequest;
 import com.harness.graph.model.GraphNode;
@@ -15,7 +12,6 @@ import com.harness.graph.model.GraphNodePageRequest;
 import com.harness.graph.model.GraphRelation;
 import com.harness.graph.model.GraphRelationPageRequest;
 import com.harness.graph.model.GraphSpacePageRequest;
-import com.harness.graph.model.GraphSpaceKey;
 import com.harness.graph.schema.GraphSchemaDefinition;
 import com.harness.graph.schema.GraphSchemaRegistry;
 import com.harness.graph.store.KnowledgeGraphStore;
@@ -35,16 +31,17 @@ public final class GraphManagementHandler {
     private final KnowledgeGraphStore graphStore;
     private final GraphSchemaRegistry schemaRegistry;
     private final GraphSettings settings;
-    private final GraphSpaceAccessService graphSpaceAccessService;
     private final GraphRequestExecutor requestExecutor;
+    private final GraphMutationCommitter mutationCommitter;
 
     public GraphManagementHandler(
             KnowledgeGraphStore graphStore,
             GraphSchemaRegistry schemaRegistry,
-            GraphSettings settings
+            GraphSettings settings,
+            GraphMutationCommitter mutationCommitter
     ) {
-        this(graphStore, schemaRegistry, settings, new OpenGraphSpaceAccessService(graphStore),
-                new GraphRequestExecutor(new GraphRequestAuthenticator()));
+        this(graphStore, schemaRegistry, settings,
+                new GraphRequestExecutor(new GraphRequestAuthenticator()), mutationCommitter);
     }
 
     GraphManagementHandler(
@@ -53,36 +50,23 @@ public final class GraphManagementHandler {
             GraphSettings settings,
             GraphRequestAuthenticator requestAuthenticator
     ) {
-        this(graphStore, schemaRegistry, settings, new OpenGraphSpaceAccessService(graphStore),
-                new GraphRequestExecutor(requestAuthenticator));
+        this(graphStore, schemaRegistry, settings,
+                new GraphRequestExecutor(requestAuthenticator), unavailableCommitter());
     }
 
     GraphManagementHandler(
             KnowledgeGraphStore graphStore,
             GraphSchemaRegistry schemaRegistry,
             GraphSettings settings,
-            GraphSpaceAccessService graphSpaceAccessService,
-            GraphRequestAuthenticator requestAuthenticator
-    ) {
-        this(graphStore, schemaRegistry, settings, graphSpaceAccessService,
-                new GraphRequestExecutor(requestAuthenticator));
-    }
-
-    GraphManagementHandler(
-            KnowledgeGraphStore graphStore,
-            GraphSchemaRegistry schemaRegistry,
-            GraphSettings settings,
-            GraphSpaceAccessService graphSpaceAccessService,
-            GraphRequestExecutor requestExecutor
+            GraphRequestExecutor requestExecutor,
+            GraphMutationCommitter mutationCommitter
     ) {
         this.graphStore = Objects.requireNonNull(graphStore, "graphStore");
         this.schemaRegistry = Objects.requireNonNull(schemaRegistry, "schemaRegistry");
         this.settings = Objects.requireNonNull(settings, "settings");
-        this.graphSpaceAccessService = Objects.requireNonNull(
-                graphSpaceAccessService,
-                "graphSpaceAccessService"
-        );
         this.requestExecutor = Objects.requireNonNull(requestExecutor, "requestExecutor");
+        this.mutationCommitter = Objects.requireNonNull(
+                mutationCommitter, "mutationCommitter");
     }
 
     public void status(Context context) {
@@ -115,23 +99,27 @@ public final class GraphManagementHandler {
     public void mutate(Context context) {
         execute(context, () -> {
             GraphMutationBatch request = context.bodyAsClass(GraphMutationBatch.class);
-            context.json(graphStore.upsertBatch(request));
+            context.json(mutationCommitter.commit(new GraphChangeSet(
+                    request.requestId(), request.graphId(), request.schemaId(),
+                    request.nodes(), request.relations(), Set.of(), Set.of())));
         });
     }
 
     public void upsertNodes(Context context) {
         execute(context, () -> {
             GraphNodeBatchRequest request = context.bodyAsClass(GraphNodeBatchRequest.class);
-            context.json(graphStore.upsertBatch(new GraphMutationBatch(
-                    request.requestId(), request.graphId(), request.schemaId(), request.nodes(), List.of())));
+            context.json(mutationCommitter.commit(new GraphChangeSet(
+                    request.requestId(), request.graphId(), request.schemaId(),
+                    request.nodes(), List.of(), Set.of(), Set.of())));
         });
     }
 
     public void upsertRelations(Context context) {
         execute(context, () -> {
             GraphRelationBatchRequest request = context.bodyAsClass(GraphRelationBatchRequest.class);
-            context.json(graphStore.upsertBatch(new GraphMutationBatch(
-                    request.requestId(), request.graphId(), request.schemaId(), List.of(), request.relations())));
+            context.json(mutationCommitter.commit(new GraphChangeSet(
+                    request.requestId(), request.graphId(), request.schemaId(),
+                    List.of(), request.relations(), Set.of(), Set.of())));
         });
     }
 
@@ -182,22 +170,8 @@ public final class GraphManagementHandler {
     }
 
     public void deleteGraphSpace(Context context) {
-        execute(context, () -> {
-            GraphSpaceKey graphSpaceKey = new GraphSpaceKey(
-                    requiredQuery(context, "graphId"),
-                    requiredQuery(context, "schemaId")
-            );
-            var deleted = graphStore.deleteGraphSpace(graphSpaceKey);
-            int deletedBindings = graphSpaceAccessService.deleteBindings(
-                    graphSpaceKey.graphId(), graphSpaceKey.schemaId());
-            context.json(new GraphSpaceDeleteResponse(
-                    graphSpaceKey.graphId(),
-                    graphSpaceKey.schemaId(),
-                    deleted.deletedNodes(),
-                    deleted.deletedRelations(),
-                    deletedBindings
-            ));
-        });
+        context.status(405).json(Map.of(
+                "error", "Direct Graph Space deletion is disabled; submit a reviewed migration"));
     }
 
     public void query(Context context) {
@@ -215,33 +189,20 @@ public final class GraphManagementHandler {
     }
 
     public void deleteNode(Context context) {
-        delete(context, GraphDeleteTarget.NODE, GraphDeleteMode.REJECT_IF_REFERENCED);
+        rejectDirectDelete(context);
     }
 
     public void deleteRelation(Context context) {
-        delete(context, GraphDeleteTarget.RELATION, GraphDeleteMode.REJECT_IF_REFERENCED);
+        rejectDirectDelete(context);
     }
 
     public void deleteSource(Context context) {
-        delete(context, GraphDeleteTarget.SOURCE, GraphDeleteMode.DELETE_DERIVED_ONLY);
+        rejectDirectDelete(context);
     }
 
-    private void delete(Context context, GraphDeleteTarget target, GraphDeleteMode defaultMode) {
-        execute(context, () -> {
-            String requestedMode = optionalQuery(context, "mode");
-            GraphDeleteMode mode = requestedMode.isBlank()
-                    ? defaultMode
-                    : GraphDeleteMode.valueOf(requestedMode.toUpperCase());
-            context.json(graphStore.delete(new GraphDeleteRequest(
-                    requiredQuery(context, "graphId"),
-                    requiredQuery(context, "schemaId"),
-                    target,
-                    context.pathParam(target == GraphDeleteTarget.NODE
-                            ? "nodeId"
-                            : target == GraphDeleteTarget.RELATION ? "relationId" : "sourceId"),
-                    mode
-            )));
-        });
+    private void rejectDirectDelete(Context context) {
+        context.status(405).json(Map.of(
+                "error", "Direct Graph deletion is disabled; use confirmed /api/graph/build"));
     }
 
     private int requestedLimit(Context context) {
@@ -264,6 +225,12 @@ public final class GraphManagementHandler {
     @FunctionalInterface
     private interface HandlerAction {
         void run();
+    }
+
+    private static GraphMutationCommitter unavailableCommitter() {
+        return ignored -> {
+            throw new IllegalStateException("Graph Mutation Saga is not configured");
+        };
     }
 
     public record GraphNodeBatchRequest(
@@ -292,12 +259,4 @@ public final class GraphManagementHandler {
     ) {
     }
 
-    public record GraphSpaceDeleteResponse(
-            String graphId,
-            String schemaId,
-            int deletedNodes,
-            int deletedRelations,
-            int deletedBindings
-    ) {
-    }
 }

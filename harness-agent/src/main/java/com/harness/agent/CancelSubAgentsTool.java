@@ -5,7 +5,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.harness.core.exception.ToolExecutionException;
-import com.harness.core.model.ToolResult;
+import com.harness.core.model.ResultStatus;
+import com.harness.core.model.ToolExecutionOutcome;
+import com.harness.core.model.ToolOutput;
 import com.harness.core.model.ToolSpec;
 import com.harness.tool.Tool;
 import org.slf4j.Logger;
@@ -45,12 +47,18 @@ public class CancelSubAgentsTool implements Tool {
                                                         .<ObjectNode>set("items",
                                                                 mapper.createObjectNode().put("type", "string"))))
                         .<ObjectNode>set("required",
-                                mapper.createArrayNode().add("task_ids"))
+                                mapper.createArrayNode().add("task_ids")),
+                com.harness.core.model.ToolCapability.ORCHESTRATION
         );
     }
 
     @Override
     public String execute(JsonNode arguments) {
+        return executeOutcome(arguments).content().modelContent();
+    }
+
+    @Override
+    public ToolExecutionOutcome executeOutcome(JsonNode arguments) {
         AgentRunContext runContext = SubAgentToolHelper.requireRunContext("cancel_subagents");
 
         List<String> taskIds = SubAgentToolHelper.parseTaskIds(arguments);
@@ -85,8 +93,9 @@ public class CancelSubAgentsTool implements Tool {
             result.set("not_found", notFound);
             result.put("total_requested", taskIds.size());
 
-            ToolResult.setCurrentStatus(ToolResult.ResultStatus.SUCCESS);
-            return mapper.writeValueAsString(result);
+            return ToolExecutionOutcome.succeeded(
+                    ToolOutput.text(mapper.writeValueAsString(result)),
+                    ResultStatus.AVAILABLE);
 
         } catch (Exception e) {
             log.error("[CancelSubAgents] Error: {}", e.getMessage());

@@ -3,6 +3,7 @@ package com.harness.react;
 import com.harness.core.model.ReActStep;
 import com.harness.core.model.ToolCall;
 import com.harness.core.model.ToolResult;
+import com.harness.core.model.ResultStatus;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -127,19 +128,8 @@ public class AdaptiveReflector {
     private boolean isSuccess(ToolResult result) {
         if (result == null) return false;
         if (!result.success()) return false;
-        // Explicit status from tool — authoritative
-        if (result.status() != null) {
-            return result.status() == ToolResult.ResultStatus.SUCCESS;
-        }
-        // Fallback: heuristic detection for external/MCP tools without explicit status
-        String output = result.output();
-        if (output == null || output.isBlank()) return false;
-        String lower = output.toLowerCase().strip();
-        if (lower.length() < 50) return false;
-        for (String phrase : INSUFFICIENT_PHRASES) {
-            if (lower.contains(phrase)) return false;
-        }
-        return true;
+        return result.resultStatus() == ResultStatus.AVAILABLE
+                || result.resultStatus() == ResultStatus.VERIFIED;
     }
 
     private static final java.util.Set<String> INSUFFICIENT_PHRASES = java.util.Set.of(

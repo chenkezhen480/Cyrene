@@ -1,12 +1,14 @@
 package com.harness.server;
 
 import com.harness.core.model.MemoryMessage;
+import com.harness.core.model.PageInfo;
 import com.harness.core.model.PageResponse;
 import com.harness.core.model.Session;
 import com.harness.input.memory.MessageStore;
 import com.harness.input.memory.MessageWriteWorker;
 import com.harness.input.memory.SessionMessageCache;
 import com.harness.input.memory.SessionStore;
+import com.harness.tool.knowledge.authority.KnowledgeSourcePurgeGuard;
 import io.javalin.http.Context;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -28,7 +30,7 @@ class SessionHandlerTest {
         SessionStore sessionStore = mock(SessionStore.class);
         MessageStore messageStore = mock(MessageStore.class);
         Context context = mock(Context.class);
-        List<Session> fetched = java.util.stream.IntStream.rangeClosed(1, 21)
+        List<Session> fetched = java.util.stream.IntStream.rangeClosed(1, 20)
                 .mapToObj(index -> session(
                         "session-" + index,
                         Instant.parse("2026-07-30T00:00:00Z")
@@ -40,9 +42,12 @@ class SessionHandlerTest {
         when(context.queryParam("limit")).thenReturn(null);
         when(context.queryParam("cursor")).thenReturn(null);
         when(context.json(any())).thenReturn(context);
-        when(sessionStore.findAll("user-1", null, null, 21)).thenReturn(fetched);
+        when(sessionStore.findAllByOwner("user-1", null, null, null, 20))
+                .thenReturn(new PageResponse<>(fetched,
+                        new PageInfo(20, "2026-07-29T23:59:40Z|session-20", true)));
 
-        SessionHandler handler = new SessionHandler(sessionStore, messageStore, null, null);
+        SessionHandler handler = new SessionHandler(
+                sessionStore, messageStore, null, null, purgeGuard());
         handler.list(context);
 
         ArgumentCaptor<Object> responseCaptor = ArgumentCaptor.forClass(Object.class);
@@ -52,7 +57,7 @@ class SessionHandlerTest {
         assertThat(response.pageInfo().limit()).isEqualTo(20);
         assertThat(response.pageInfo().hasMore()).isTrue();
         assertThat(response.pageInfo().nextCursor())
-                .isEqualTo("2026-07-29T23:59:40Z");
+                .isEqualTo("2026-07-29T23:59:40Z|session-20");
     }
 
     @Test
@@ -64,16 +69,18 @@ class SessionHandlerTest {
         Context context = mock(Context.class);
 
         when(context.pathParam("sessionId")).thenReturn("session-1");
+        when(context.queryParam("userId")).thenReturn("user-1");
         when(context.queryParam("limit")).thenReturn("2");
         when(context.queryParam("cursor")).thenReturn(null);
         when(context.queryParam("direction")).thenReturn("desc");
         when(context.json(any())).thenReturn(context);
-        when(sessionStore.findById("session-1")).thenReturn(Optional.of(session("session-1")));
+        when(sessionStore.findByIdAndOwner("session-1", "user-1", null))
+                .thenReturn(Optional.of(session("session-1")));
         when(messageStore.loadPage("session-1", 0, 3, false)).thenReturn(List.of(
                 message(98), message(99), message(100)));
 
         SessionHandler handler = new SessionHandler(
-                sessionStore, messageStore, cache, messageWriteWorker);
+                sessionStore, messageStore, cache, messageWriteWorker, purgeGuard());
         handler.messages(context);
 
         ArgumentCaptor<Object> responseCaptor = ArgumentCaptor.forClass(Object.class);
@@ -94,15 +101,18 @@ class SessionHandlerTest {
         Context context = mock(Context.class);
 
         when(context.pathParam("sessionId")).thenReturn("session-1");
+        when(context.queryParam("userId")).thenReturn("user-1");
         when(context.queryParam("limit")).thenReturn("2");
         when(context.queryParam("cursor")).thenReturn(null);
         when(context.queryParam("direction")).thenReturn("asc");
         when(context.json(any())).thenReturn(context);
-        when(sessionStore.findById("session-1")).thenReturn(Optional.of(session("session-1")));
+        when(sessionStore.findByIdAndOwner("session-1", "user-1", null))
+                .thenReturn(Optional.of(session("session-1")));
         when(messageStore.loadPage("session-1", 0, 3, true)).thenReturn(List.of(
                 message(1), message(2), message(3)));
 
-        SessionHandler handler = new SessionHandler(sessionStore, messageStore, null, null);
+        SessionHandler handler = new SessionHandler(
+                sessionStore, messageStore, null, null, purgeGuard());
         handler.messages(context);
 
         ArgumentCaptor<Object> responseCaptor = ArgumentCaptor.forClass(Object.class);
@@ -126,6 +136,7 @@ class SessionHandlerTest {
                 sessionId,
                 "user-1",
                 null,
+                null,
                 createdAt,
                 lastActive,
                 null,
@@ -133,7 +144,11 @@ class SessionHandlerTest {
     }
 
     private static MemoryMessage message(long id) {
-        return new MemoryMessage(id, "session-1", "assistant", List.of(), false,
+        return new MemoryMessage(id, "session-1", "trace-1", "assistant", List.of(), false,
                 Instant.parse("2026-07-30T00:00:00Z"));
+    }
+
+    private static KnowledgeSourcePurgeGuard purgeGuard() {
+        return mock(KnowledgeSourcePurgeGuard.class);
     }
 }

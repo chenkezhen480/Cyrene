@@ -14,6 +14,7 @@ import com.harness.tool.ToolExecutor;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.ToolExecutionResultMessage;
+import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.request.ChatRequest;
 import dev.langchain4j.model.chat.response.ChatResponse;
@@ -40,6 +41,40 @@ import static org.mockito.Mockito.when;
 class ReActEngineTerminationTest {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
+
+    @Test
+    void dynamicKnowledgeIsAUserMessageAfterHistoryAndBeforeCurrentUser() {
+        AtomicReference<ChatRequest> captured = new AtomicReference<>();
+        ChatModel chatModel = new ChatModel() {
+            @Override
+            public ChatResponse doChat(ChatRequest request) {
+                captured.set(request);
+                return ChatResponse.builder().aiMessage(AiMessage.from("answer")).build();
+            }
+        };
+
+        new ReActEngine(provider(chatModel), catalog(), mock(ToolExecutor.class),
+                null, null, 1).execute(new ReActRequest(
+                "system",
+                "current-user",
+                List.of(UserMessage.from("history-user")),
+                "<dynamic-knowledge-context>evidence</dynamic-knowledge-context>",
+                RunTrace.noop(),
+                null,
+                null,
+                false,
+                null));
+
+        assertThat(captured.get().messages().stream()
+                .filter(UserMessage.class::isInstance)
+                .map(UserMessage.class::cast)
+                .map(UserMessage::singleText)
+                .toList())
+                .containsExactly(
+                        "history-user",
+                        "<dynamic-knowledge-context>evidence</dynamic-knowledge-context>",
+                        "current-user");
+    }
 
     @Test
     void maxIterationsGeneratesToolFreeFinalAnswerAndNormalizesMissingCallId() {
@@ -73,7 +108,7 @@ class ReActEngineTerminationTest {
                     executedCallId.set(call.id());
                     return ToolResult.ok(
                             call.id(), call.toolName(), "raw tool output", 1,
-                            ToolResult.ResultStatus.SUCCESS);
+                            com.harness.core.model.ResultStatus.AVAILABLE);
                 });
 
         ReActResult result = new ReActEngine(

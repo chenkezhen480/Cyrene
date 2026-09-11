@@ -1,11 +1,12 @@
 package com.harness.agent.memory;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.harness.core.concurrent.BlockingTaskExecutor;
 import com.harness.core.env.EnvConfig;
 import com.harness.core.env.EnvKey;
+import com.harness.core.knowledge.KnowledgeSourceType;
 import com.harness.core.model.MessageBlock;
 import com.harness.core.model.MemoryMessage;
-import com.harness.core.model.Preference;
 import com.harness.core.model.ReActStep;
 import com.harness.core.model.ToolResult;
 import com.harness.core.runtime.RunTrace;
@@ -14,28 +15,35 @@ import com.harness.input.memory.MemoryCompressor;
 import com.harness.input.memory.MemoryStoreFactory;
 import com.harness.input.memory.MessageStore;
 import com.harness.input.memory.MessageWriteWorker;
-import com.harness.input.memory.PreferenceRefinementWorker;
-import com.harness.input.memory.PreferenceStore;
 import com.harness.input.memory.SessionLifecycleManager;
 import com.harness.input.memory.SessionMessageCache;
 import com.harness.input.memory.SessionStore;
 import com.harness.input.multimodal.TextChunker;
 import com.harness.provider.ChatModelProvider;
+import com.harness.provider.EmbeddingModelProvider;
 import com.harness.react.ReActResult;
 import com.harness.tool.ToolRegistry;
-import com.harness.tool.builtin.UpdateMemoryTool;
+import com.harness.tool.knowledge.authority.KnowledgeRepository;
+import com.harness.tool.knowledge.authority.KnowledgeSourcePurgeGuard;
+import com.harness.tool.knowledge.authority.MysqlKnowledgeRepository;
+import com.harness.tool.knowledge.authority.MysqlKnowledgeIndexOutboxStore;
+import com.harness.tool.knowledge.index.KnowledgeIndexProjector;
+import com.harness.tool.knowledge.index.KnowledgeProjectionMapper;
+import com.harness.tool.knowledge.index.KnowledgeProjectionStore;
+import com.harness.tool.knowledge.index.KnowledgeProjectionStoreFactory;
+import com.harness.tool.knowledge.index.KnowledgeReindexService;
 import com.harness.tool.skill.SkillRegistry;
 import dev.langchain4j.data.message.ChatMessage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.time.Clock;
 
 /** Owns session memory, compression, persistence, and their background workers. */
 public final class AgentMemoryRuntime {
@@ -46,57 +54,88 @@ public final class AgentMemoryRuntime {
     private final ChatModelProvider chatModel;
     private final SessionStore sessionStore;
     private final MessageStore messageStore;
-    private final PreferenceStore preferenceStore;
     private final SessionLifecycleManager sessionLifecycle;
-    private final PreferenceRefinementWorker refinementWorker;
     private final MemoryCompressor memoryCompressor;
     private final SessionCleanupScheduler cleanupScheduler;
+    private final KnowledgeRepository knowledgeRepository;
+    private final KnowledgeSourcePurgeGuard sourcePurgeGuard;
+    private final KnowledgeProjectionStore knowledgeProjectionStore;
+    private final KnowledgeIndexOutboxWorker indexOutboxWorker;
+    private final KnowledgeReindexService knowledgeReindexService;
     private final SessionMessageCache messageCache;
     private final SessionContextLoader sessionContextLoader;
     private final MessageWriteWorker messageWriteWorker;
 
     public AgentMemoryRuntime(
             ChatModelProvider chatModel,
+            EmbeddingModelProvider embeddingModel,
             SkillRegistry skillRegistry,
-            ToolRegistry toolRegistry
+            ToolRegistry toolRegistry,
+            com.harness.tool.rag.VectorStore vectorStore
     ) {
         this.enabled = MemoryStoreFactory.isEnabled();
         this.chatModel = chatModel;
         if (enabled) {
             this.sessionStore = MemoryStoreFactory.createSessionStore();
             this.messageStore = MemoryStoreFactory.createMessageStore();
-            this.preferenceStore = MemoryStoreFactory.createPreferenceStore();
-            this.sessionLifecycle = new SessionLifecycleManager(sessionStore, messageStore);
-            this.refinementWorker = new PreferenceRefinementWorker(
-                    messageStore, preferenceStore, chatModel);
+            this.sessionLifecycle = new SessionLifecycleManager(sessionStore);
             this.memoryCompressor = new MemoryCompressor(messageStore, sessionStore, chatModel);
             this.messageCache = MemoryStoreFactory.createMessageCache();
             this.messageWriteWorker = new MessageWriteWorker(messageStore);
-            this.cleanupScheduler = new SessionCleanupScheduler(
-                    sessionStore,
-                    sessionLifecycle,
-                    refinementWorker,
-                    messageCache,
-                    skillRegistry);
+            this.cleanupScheduler = new SessionCleanupScheduler(messageCache, skillRegistry);
+            ObjectMapper objectMapper = new ObjectMapper();
+            Clock clock = Clock.systemUTC();
+            var projectionRuntime = KnowledgeProjectionStoreFactory.create(embeddingModel);
+            this.knowledgeProjectionStore = projectionRuntime.store();
+            this.knowledgeRepository = new MysqlKnowledgeRepository(
+                    com.harness.core.env.MysqlConnectionPool::getConnection, objectMapper,
+                    knowledgeProjectionStore, vectorStore);
+            this.sourcePurgeGuard = new KnowledgeSourcePurgeGuard(knowledgeRepository);
+            if (projectionRuntime.enabled()) {
+                KnowledgeIndexProjector projector = new KnowledgeIndexProjector(
+                        knowledgeRepository,
+                        projectionRuntime.store(),
+                        new KnowledgeProjectionMapper(embeddingModel));
+                this.indexOutboxWorker = new KnowledgeIndexOutboxWorker(
+                        new MysqlKnowledgeIndexOutboxStore(),
+                        projector,
+                        clock,
+                        KnowledgeIndexOutboxSettings.fromEnvironment());
+                this.knowledgeReindexService = new KnowledgeReindexService(
+                        knowledgeRepository,
+                        projectionRuntime.store(),
+                        new KnowledgeProjectionMapper(embeddingModel));
+            } else {
+                this.indexOutboxWorker = null;
+                this.knowledgeReindexService = null;
+            }
 
             messageCache.setOnEvict(skillRegistry::clearSession);
-            refinementWorker.start();
             messageWriteWorker.start();
+            if (indexOutboxWorker != null) {
+                indexOutboxWorker.start();
+            }
             cleanupScheduler.start();
-            registerUpdateMemoryTool(toolRegistry);
         } else {
             this.sessionStore = null;
             this.messageStore = null;
-            this.preferenceStore = null;
             this.sessionLifecycle = null;
-            this.refinementWorker = null;
             this.memoryCompressor = null;
             this.cleanupScheduler = null;
+            this.knowledgeRepository = null;
+            this.sourcePurgeGuard = null;
+            this.knowledgeProjectionStore = null;
+            this.indexOutboxWorker = null;
+            this.knowledgeReindexService = null;
             this.messageCache = new InMemorySessionMessageCache();
             this.messageWriteWorker = null;
             messageCache.setOnEvict(skillRegistry::clearSession);
         }
         this.sessionContextLoader = new SessionContextLoader(messageCache, messageStore);
+    }
+
+    public void signalKnowledgeIndex() {
+        if (indexOutboxWorker != null) indexOutboxWorker.signal();
     }
 
     public boolean enabled() {
@@ -105,6 +144,7 @@ public final class AgentMemoryRuntime {
 
     public MemoryContext resolve(
             String userId,
+            String tenantId,
             String requestedSessionId,
             String text,
             RunTrace trace
@@ -113,11 +153,11 @@ public final class AgentMemoryRuntime {
             String sessionId = requestedSessionId != null
                     ? requestedSessionId
                     : UUID.randomUUID().toString();
-            return new MemoryContext(sessionId, userId, List.of(), List.of());
+            return new MemoryContext(sessionId, userId, tenantId, List.of());
         }
 
         SessionLifecycleManager.LifecycleResult lifecycle =
-                sessionLifecycle.process(userId, requestedSessionId);
+                sessionLifecycle.process(userId, tenantId, requestedSessionId);
         String sessionId = lifecycle.session().id();
         trace.setSessionId(sessionId);
         Map<String, String> metadata = new HashMap<>(trace.snapshot().metadata());
@@ -134,22 +174,15 @@ public final class AgentMemoryRuntime {
                     sessionId,
                     safeText.length() > 100 ? safeText.substring(0, 100) : safeText);
         }
-        scheduleRefinement(lifecycle.timedOutSessionIds(), userId);
-
         CompletableFuture<List<MemoryMessage>> shorttermFuture =
                 CompletableFuture.supplyAsync(
                         () -> loadMessages(sessionId, userId, trace),
                         BlockingTaskExecutor.shared());
-        CompletableFuture<List<Preference>> longtermFuture =
-                CompletableFuture.supplyAsync(
-                        () -> preferenceStore.loadByUser(userId),
-                        BlockingTaskExecutor.shared());
-        CompletableFuture.allOf(shorttermFuture, longtermFuture).join();
         return new MemoryContext(
                 sessionId,
                 userId,
-                shorttermFuture.join(),
-                longtermFuture.join());
+                lifecycle.session().tenantId(),
+                shorttermFuture.join());
     }
 
     public CompressionOutcome compress(
@@ -210,6 +243,7 @@ public final class AgentMemoryRuntime {
     public void persistUserMessage(
             String sessionId,
             String userId,
+            String rootTraceId,
             String text,
             boolean updateActivity
     ) {
@@ -218,11 +252,11 @@ public final class AgentMemoryRuntime {
         }
         List<MessageBlock> blocks = List.of(
                 new MessageBlock(MessageBlock.BlockType.TEXT, text, null));
-        messageWriteWorker.submit(sessionId, "user", blocks, false);
+        messageWriteWorker.submit(sessionId, rootTraceId, "user", blocks, false);
         messageCache.append(
                 sessionId,
                 userId,
-                new MemoryMessage(0, sessionId, "user", blocks, false, null));
+                new MemoryMessage(0, sessionId, rootTraceId, "user", blocks, false, null));
         if (updateActivity) {
             sessionStore.updateLastActive(sessionId);
         }
@@ -231,23 +265,29 @@ public final class AgentMemoryRuntime {
     public void persistAssistantMessage(
             String sessionId,
             String userId,
+            String rootTraceId,
             List<MessageBlock> blocks,
             boolean updateActivity
     ) {
         if (!enabled || sessionId == null || userId == null) {
             return;
         }
-        messageWriteWorker.submit(sessionId, "assistant", blocks, false);
+        messageWriteWorker.submit(sessionId, rootTraceId, "assistant", blocks, false);
         messageCache.append(
                 sessionId,
                 userId,
-                new MemoryMessage(0, sessionId, "assistant", blocks, false, null));
+                new MemoryMessage(0, sessionId, rootTraceId, "assistant", blocks, false, null));
         if (updateActivity) {
             sessionStore.updateLastActive(sessionId);
         }
     }
 
-    public void persistToolMessages(ReActResult result, String sessionId, String userId) {
+    public void persistToolMessages(
+            ReActResult result,
+            String sessionId,
+            String userId,
+            String rootTraceId
+    ) {
         if (sessionId == null || userId == null) {
             return;
         }
@@ -258,6 +298,7 @@ public final class AgentMemoryRuntime {
             appendContextMessage(
                     sessionId,
                     userId,
+                    rootTraceId,
                     ToolMemoryCodec.TOOL_CALL_ROLE,
                     ToolMemoryCodec.encodeCalls(step.toolCalls()));
             if (step.toolResults() == null) {
@@ -267,6 +308,7 @@ public final class AgentMemoryRuntime {
                 appendContextMessage(
                         sessionId,
                         userId,
+                        rootTraceId,
                         ToolMemoryCodec.TOOL_RESULT_ROLE,
                         ToolMemoryCodec.encodeResult(toolResult));
             }
@@ -285,15 +327,13 @@ public final class AgentMemoryRuntime {
         return sessionContextLoader.load(sessionId, userId, trace);
     }
 
-    public List<Preference> loadPreferences(String userId) {
-        return enabled && userId != null ? preferenceStore.loadByUser(userId) : List.of();
-    }
-
     public String findSessionUserId(String sessionId) {
         if (!enabled) {
             return null;
         }
-        return sessionStore.findById(sessionId).map(session -> session.userId()).orElse(null);
+        return sessionStore.findByIdForInternalTask(sessionId)
+                .map(session -> session.userId())
+                .orElse(null);
     }
 
     public void updateActivity(String sessionId) {
@@ -323,16 +363,8 @@ public final class AgentMemoryRuntime {
         return messageStore;
     }
 
-    public PreferenceStore preferenceStore() {
-        return preferenceStore;
-    }
-
     public SessionLifecycleManager sessionLifecycle() {
         return sessionLifecycle;
-    }
-
-    public PreferenceRefinementWorker refinementWorker() {
-        return refinementWorker;
     }
 
     public SessionMessageCache messageCache() {
@@ -343,66 +375,81 @@ public final class AgentMemoryRuntime {
         return messageWriteWorker;
     }
 
+    public KnowledgeReindexService knowledgeReindexService() {
+        return knowledgeReindexService;
+    }
+
+    public KnowledgeRepository knowledgeRepository() {
+        if (knowledgeRepository == null) {
+            throw new IllegalStateException("Knowledge authority requires HARNESS_MEMORY_STORE=mysql");
+        }
+        return knowledgeRepository;
+    }
+
+    public KnowledgeSourcePurgeGuard sourcePurgeGuard() {
+        if (sourcePurgeGuard == null) {
+            throw new IllegalStateException("Knowledge authority requires HARNESS_MEMORY_STORE=mysql");
+        }
+        return sourcePurgeGuard;
+    }
+
+    public KnowledgeProjectionStore knowledgeProjectionStore() {
+        if (knowledgeProjectionStore == null) {
+            throw new IllegalStateException(
+                    "Knowledge projection search requires MySQL memory and an enabled RAG provider");
+        }
+        return knowledgeProjectionStore;
+    }
+
+    public void awaitMessageWrites(String rootTraceId) {
+        if (enabled) {
+            messageWriteWorker.awaitTrace(rootTraceId);
+        }
+    }
+
     public void shutdown() {
+        if (indexOutboxWorker != null) {
+            indexOutboxWorker.stop();
+        }
         if (cleanupScheduler != null) {
             cleanupScheduler.stop();
         }
         if (messageWriteWorker != null) {
             messageWriteWorker.stop();
         }
-        if (refinementWorker != null) {
-            refinementWorker.stop();
-        }
         messageCache.evictExpired();
-    }
-
-    private void registerUpdateMemoryTool(ToolRegistry toolRegistry) {
-        toolRegistry.register(new UpdateMemoryTool((userId, content, sessionId) -> {
-            String existing = preferenceStore.loadByUser(userId).stream()
-                    .filter(preference -> "memory".equals(preference.category()))
-                    .findFirst()
-                    .map(Preference::content)
-                    .orElse("");
-            String merged = existing.isEmpty() ? content : existing + " # " + content;
-            preferenceStore.upsert(userId, "memory", merged, sessionId);
-        }));
-    }
-
-    private void scheduleRefinement(List<String> timedOutSessionIds, String userId) {
-        for (String timedOutSessionId : timedOutSessionIds) {
-            CompletableFuture.runAsync(() -> {
-                if (sessionLifecycle.isWorthyOfRefinement(timedOutSessionId)) {
-                    refinementWorker.submit(timedOutSessionId, userId);
-                }
-            }, BlockingTaskExecutor.shared());
-        }
     }
 
     private void appendContextMessage(
             String sessionId,
             String userId,
+            String rootTraceId,
             String role,
             List<MessageBlock> blocks
     ) {
         if (messageWriteWorker != null) {
-            messageWriteWorker.submit(sessionId, role, blocks, false);
+            messageWriteWorker.submit(sessionId, rootTraceId, role, blocks, false);
         }
         messageCache.append(
                 sessionId,
                 userId,
-                new MemoryMessage(0, sessionId, role, blocks, false, null));
+                new MemoryMessage(0, sessionId, rootTraceId, role, blocks, false, null));
     }
 
     private int stripToolMessages(String sessionId, String userId) {
         if (messageWriteWorker != null) {
             messageWriteWorker.flushPending();
         }
-        int persistedRemoved = messageStore == null
-                ? 0
-                : messageStore.deleteToolMessages(sessionId);
+        MessageStore.DeletionResult persisted = messageStore == null
+                ? new MessageStore.DeletionResult(0, 0)
+                : messageStore.deleteToolMessages(
+                        sessionId,
+                        messageId -> sourcePurgeGuard.retainIfReferenced(
+                                KnowledgeSourceType.SESSION_MESSAGE,
+                                Long.toString(messageId)));
         List<MemoryMessage> cached = messageCache.getIfPresent(sessionId);
         if (cached == null || cached.isEmpty()) {
-            return persistedRemoved;
+            return persisted.deleted();
         }
         List<MemoryMessage> stripped = cached.stream()
                 .filter(message -> !ToolMemoryCodec.TOOL_RESULT_ROLE.equals(message.role()))
@@ -414,7 +461,7 @@ public final class AgentMemoryRuntime {
         if (removed > 0) {
             messageCache.put(sessionId, userId, stripped);
         }
-        return Math.max(removed, persistedRemoved);
+        return Math.max(removed, persisted.deleted());
     }
 
     private static int estimateTokens(List<MemoryMessage> messages) {
@@ -426,8 +473,8 @@ public final class AgentMemoryRuntime {
     public record MemoryContext(
             String sessionId,
             String userId,
-            List<MemoryMessage> shorttermMessages,
-            List<Preference> longtermPreferences
+            String tenantId,
+            List<MemoryMessage> shorttermMessages
     ) {
     }
 

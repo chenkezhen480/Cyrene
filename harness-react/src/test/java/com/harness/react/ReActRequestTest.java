@@ -22,6 +22,7 @@ class ReActRequestTest {
 
         assertThat(request.historyMessages()).hasSize(1);
         assertThat(request.trace()).isNotNull();
+        assertThat(request.dynamicKnowledgeContext()).isNull();
     }
 
     @Test
@@ -29,6 +30,17 @@ class ReActRequestTest {
         ReActRequest request = new ReActRequest(
                 "system", "question", null, null, null, null, null, null);
 
+        assertThat(request.historyMessages()).isEmpty();
+    }
+
+    @Test
+    void preservesNonBlankDynamicKnowledgeWithoutAddingItToHistory() {
+        ReActRequest request = new ReActRequest(
+                "system", "question", List.of(), "<knowledge>evidence</knowledge>",
+                null, null, null, null, null);
+
+        assertThat(request.dynamicKnowledgeContext())
+                .isEqualTo("<knowledge>evidence</knowledge>");
         assertThat(request.historyMessages()).isEmpty();
     }
 }

@@ -6,7 +6,9 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.harness.core.exception.ToolExecutionException;
 import com.harness.core.model.ApiEndpoint;
 import com.harness.core.model.ProjectApiConfig;
-import com.harness.core.model.ToolResult;
+import com.harness.core.model.ResultStatus;
+import com.harness.core.model.ToolExecutionOutcome;
+import com.harness.core.model.ToolOutput;
 import com.harness.core.model.ToolSpec;
 
 import java.util.function.Supplier;
@@ -51,21 +53,27 @@ public class CallDiscoveredApiTool implements Tool {
         return new ToolSpec(
                 "call_discovered_api",
                 "调用一个已发现的内部接口。先通过 list_api_endpoints 和 get_api_endpoint_detail 了解接口定义。",
-                params
+                params,
+                com.harness.core.model.ToolCapability.UNKNOWN
         );
     }
 
     @Override
     public String execute(JsonNode arguments) {
+        return executeOutcome(arguments).content().modelContent();
+    }
+
+    @Override
+    public ToolExecutionOutcome executeOutcome(JsonNode arguments) {
         String endpointId = arguments != null && arguments.has("endpointId")
                 ? arguments.get("endpointId").asText() : "";
         if (endpointId.isBlank()) {
-            return "Error: endpointId is required. Call list_api_endpoints() first.";
+            throw new ToolExecutionException("call_discovered_api", "endpointId is required");
         }
 
         ProjectApiConfig config = configSupplier.get();
         if (config == null || config.endpoints() == null) {
-            return "Error: No API endpoints configured.";
+            throw new ToolExecutionException("call_discovered_api", "No API endpoints configured");
         }
 
         // Find endpoint by ID
@@ -77,8 +85,10 @@ public class CallDiscoveredApiTool implements Tool {
             }
         }
         if (target == null) {
-            ToolResult.setCurrentStatus(ToolResult.ResultStatus.EMPTY);
-            return "Error: Endpoint '" + endpointId + "' not found. Call list_api_endpoints() to see available endpoints.";
+            return ToolExecutionOutcome.succeeded(
+                    ToolOutput.text("Endpoint '" + endpointId
+                            + "' not found. Call list_api_endpoints() to see available endpoints."),
+                    ResultStatus.EMPTY);
         }
         if (!ProjectApiPolicy.isCallable(target)) {
             throw new ToolExecutionException("call_discovered_api",
@@ -88,7 +98,9 @@ public class CallDiscoveredApiTool implements Tool {
         // Resolve baseUrl: endpoint-level overrides global config-level
         String resolvedBaseUrl = config.resolveBaseUrl(target);
         if (resolvedBaseUrl == null || resolvedBaseUrl.isBlank()) {
-            return "Error: No baseUrl configured for endpoint '" + endpointId + "'. Set global baseUrl in config or endpoint-level baseUrl.";
+            throw new ToolExecutionException(
+                    "call_discovered_api",
+                    "No baseUrl configured for endpoint '" + endpointId + "'");
         }
 
         // Create endpoint with resolved baseUrl
@@ -102,8 +114,6 @@ public class CallDiscoveredApiTool implements Tool {
 
         // Delegate to HttpApiTool for actual HTTP execution
         HttpApiTool httpTool = new HttpApiTool(resolved);
-        String result = httpTool.execute(params);
-        ToolResult.setCurrentStatus(ToolResult.ResultStatus.SUCCESS);
-        return result;
+        return httpTool.executeOutcome(params);
     }
 }

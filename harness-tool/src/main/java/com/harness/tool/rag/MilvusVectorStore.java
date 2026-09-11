@@ -178,6 +178,29 @@ public class MilvusVectorStore implements VectorStore {
         }
     }
 
+    @Override
+    public long deleteDocumentRevision(
+            String collection,
+            String documentId,
+            String revisionId
+    ) {
+        try {
+            return client.delete(DeleteReq.builder()
+                    .collectionName(collectionName)
+                    .filter("collection == {collectionValue}"
+                            + " and metadata[\"document_id\"] == {documentValue}"
+                            + " and metadata[\"revision_id\"] == {revisionValue}")
+                    .filterTemplateValues(Map.of(
+                            "collectionValue", requireCollection(collection),
+                            "documentValue", requireId(documentId),
+                            "revisionValue", requireId(revisionId)))
+                    .build()).getDeleteCnt();
+        } catch (Exception e) {
+            throw new IllegalStateException(
+                    "Failed to delete Milvus Source Document Revision " + revisionId, e);
+        }
+    }
+
     // ==================== 2. 查询能力 ====================
 
     @Override
@@ -207,29 +230,6 @@ public class MilvusVectorStore implements VectorStore {
                     "Failed to get Milvus knowledge chunk " + id, e);
         }
         return null;
-    }
-
-    @Override
-    public void updateContent(String collection, String id, String content, float[] embedding) {
-        if (content == null || content.isBlank()) {
-            throw new IllegalArgumentException("Knowledge chunk content is required");
-        }
-        if (embedding == null || embedding.length == 0) {
-            throw new IllegalArgumentException("Knowledge chunk embedding is required");
-        }
-        Document existing = getById(collection, id);
-        if (existing == null) {
-            throw new IllegalArgumentException(
-                    "Knowledge chunk does not exist in collection: " + id);
-        }
-        upsert(collection, List.of(new Document(
-                id,
-                content,
-                existing.source(),
-                existing.score(),
-                existing.metadata(),
-                embedding,
-                existing.chunkIndex())));
     }
 
     @Override
@@ -340,9 +340,21 @@ public class MilvusVectorStore implements VectorStore {
     }
 
     private SearchResult searchVectorWithEvidence(String collection, float[] embedding, int topK) {
+        return searchVectorWithEvidence(collection, embedding, topK, Map.of());
+    }
+
+    private SearchResult searchVectorWithEvidence(String collection, float[] embedding, int topK,
+                                                  Map<String, String> documentRevisions) {
         if (embedding == null || embedding.length == 0) {
             log.warn("Empty embedding, skipping Milvus vector search");
             return SearchResult.empty();
+        }
+        String filter = collectionFilter(collection);
+        if (!documentRevisions.isEmpty()) {
+            filter += " and (" + documentRevisions.entrySet().stream()
+                    .map(entry -> "(metadata[\"document_id\"] == " + stringLiteral(entry.getKey())
+                            + " and metadata[\"revision_id\"] == " + stringLiteral(entry.getValue()) + ")")
+                    .collect(java.util.stream.Collectors.joining(" or ")) + ")";
         }
         try {
             SearchResp resp = client.search(SearchReq.builder()
@@ -350,7 +362,7 @@ public class MilvusVectorStore implements VectorStore {
                     .annsField("embedding")
                     .data(List.of(new FloatVec(toFloatList(embedding))))
                     .topK(topK)
-                    .filter(collectionFilter(collection))
+                    .filter(filter)
                     .metricType(IndexParam.MetricType.COSINE)
                     .outputFields(List.of("content", "source", "chunk_index", "metadata"))
                     .build());
@@ -436,21 +448,37 @@ public class MilvusVectorStore implements VectorStore {
         return searchVectorWithEvidence(collection, embedding.vector(), topK);
     }
 
+    @Override
+    public SearchResult searchDocumentRevisions(String collection, String query, int topK,
+                                                 Map<String, String> documentRevisions) {
+        if (documentRevisions == null || documentRevisions.isEmpty() || documentRevisions.size() > 1000) {
+            throw new IllegalArgumentException("A bounded authorized document revision scope is required");
+        }
+        if (embeddingProvider == null || !embeddingProvider.isAvailable()) {
+            throw new IllegalStateException("Document retrieval embedding provider is unavailable");
+        }
+        return searchVectorWithEvidence(collection, embeddingProvider.embed(query).vector(), topK,
+                Map.copyOf(documentRevisions));
+    }
+
     // ==================== 4. Explicit document context ====================
 
     @Override
     public List<Document> readDocumentWindow(
             String collection,
             String documentId,
+            String revisionId,
             int anchorChunkIndex,
             int before,
             int after
     ) {
-        validateWindowArguments(collection, documentId, anchorChunkIndex, before, after);
+        validateWindowArguments(
+                collection, documentId, revisionId, anchorChunkIndex, before, after);
         int startIndex = Math.max(0, anchorChunkIndex - before);
         int endIndex = Math.addExact(anchorChunkIndex, after);
         String filter = collectionFilter(collection)
                 + " and metadata[\"document_id\"] == \"" + escapeExpr(documentId) + "\""
+                + " and metadata[\"revision_id\"] == \"" + escapeExpr(revisionId) + "\""
                 + " and chunk_index >= " + startIndex
                 + " and chunk_index <= " + endIndex;
         try {
@@ -638,6 +666,7 @@ public class MilvusVectorStore implements VectorStore {
     private static void validateWindowArguments(
             String collection,
             String documentId,
+            String revisionId,
             int anchorChunkIndex,
             int before,
             int after
@@ -647,6 +676,9 @@ public class MilvusVectorStore implements VectorStore {
         }
         if (documentId == null || documentId.isBlank()) {
             throw new IllegalArgumentException("documentId is required");
+        }
+        if (revisionId == null || revisionId.isBlank()) {
+            throw new IllegalArgumentException("revisionId is required");
         }
         if (anchorChunkIndex < 0 || before < 0 || after < 0) {
             throw new IllegalArgumentException("chunk indexes and window sizes cannot be negative");

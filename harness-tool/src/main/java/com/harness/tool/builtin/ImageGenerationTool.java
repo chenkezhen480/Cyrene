@@ -123,7 +123,9 @@ public class ImageGenerationTool implements TypedOutputTool, CancellableTool {
         params.set("properties", props);
         params.set("required", mapper.createArrayNode().add("prompt"));
 
-        return new ToolSpec("image_generation", desc, params);
+        return new ToolSpec(
+                "image_generation", desc, params,
+                com.harness.core.model.ToolCapability.GENERATION);
     }
 
     @Override
@@ -151,7 +153,6 @@ public class ImageGenerationTool implements TypedOutputTool, CancellableTool {
                 artifactList = executeText2Img(prompt, size, arguments);
             }
 
-            ToolResult.setCurrentStatus(ToolResult.ResultStatus.SUCCESS);
             return ToolOutput.artifacts(
                     "Image generation completed with " + artifactList.size()
                             + " artifact(s) using model " + model + ".",

@@ -98,6 +98,7 @@ class SessionContextLoaderTest {
         return new MemoryMessage(
                 1,
                 sessionId,
+                "trace-1",
                 "user",
                 List.of(new MessageBlock(MessageBlock.BlockType.TEXT, text, null)),
                 false,

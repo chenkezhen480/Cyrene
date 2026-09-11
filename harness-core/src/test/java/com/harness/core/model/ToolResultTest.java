@@ -1,5 +1,6 @@
 package com.harness.core.model;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -16,15 +17,18 @@ class ToolResultTest {
         assertThat(result.output()).isEqualTo("search results");
         assertThat(result.error()).isNull();
         assertThat(result.durationMs()).isEqualTo(150);
-        assertThat(result.status()).isNull();
+        assertThat(result.executionStatus()).isEqualTo(ExecutionStatus.SUCCEEDED);
+        assertThat(result.resultStatus()).isEqualTo(ResultStatus.AVAILABLE);
     }
 
     @Test
     void ok_withStatus_createsResultWithStatus() {
-        var result = ToolResult.ok("call-3", "knowledge_base_search", "some context", 200, ToolResult.ResultStatus.SUCCESS);
+        var result = ToolResult.ok(
+                "call-3", "knowledge_search", "some context", 200,
+                ResultStatus.LOW_RELEVANCE);
 
         assertThat(result.success()).isTrue();
-        assertThat(result.status()).isEqualTo(ToolResult.ResultStatus.SUCCESS);
+        assertThat(result.resultStatus()).isEqualTo(ResultStatus.LOW_RELEVANCE);
     }
 
     @Test
@@ -37,14 +41,36 @@ class ToolResultTest {
         assertThat(result.output()).isNull();
         assertThat(result.error()).isEqualTo("timeout error");
         assertThat(result.durationMs()).isEqualTo(3000);
-        assertThat(result.status()).isNull();
+        assertThat(result.resultStatus()).isNull();
+        assertThat(result.executionStatus()).isEqualTo(ExecutionStatus.FAILED);
     }
 
     @Test
-    void threadLocal_setAndConsume() {
-        ToolResult.setCurrentStatus(ToolResult.ResultStatus.EMPTY);
-        assertThat(ToolResult.consumeCurrentStatus()).isEqualTo(ToolResult.ResultStatus.EMPTY);
-        // Should be cleared after consume
-        assertThat(ToolResult.consumeCurrentStatus()).isNull();
+    void verified_requiresBoundedValidationEvidence() {
+        var result = ToolResult.verified(
+                "call-4", "business_api", ToolOutput.text("validated"), 20,
+                "business-api", "response contract and business status verified");
+
+        assertThat(result.resultStatus()).isEqualTo(ResultStatus.VERIFIED);
+        assertThat(result.validationSource()).isEqualTo("business-api");
+        assertThat(result.validationReason()).contains("business status");
+    }
+
+    @Test
+    void legacySuccessStatus_deserializesAsAvailable() throws Exception {
+        ToolResult result = new ObjectMapper().readValue("""
+                {
+                  "toolCallId":"call-old",
+                  "toolName":"legacy",
+                  "success":true,
+                  "output":"legacy output",
+                  "durationMs":5,
+                  "status":"SUCCESS"
+                }
+                """, ToolResult.class);
+
+        assertThat(result.executionStatus()).isEqualTo(ExecutionStatus.SUCCEEDED);
+        assertThat(result.resultStatus()).isEqualTo(ResultStatus.AVAILABLE);
+        assertThat(result.success()).isTrue();
     }
 }

@@ -72,7 +72,12 @@ public class HttpApiTool implements Tool {
                 : mapper.createObjectNode().put("type", "object");
         String desc = endpoint.description() != null ? endpoint.description()
                 : "Call " + endpoint.method() + " " + endpoint.path();
-        return new ToolSpec(toolName, desc, params);
+        String method = endpoint.method() == null ? "" : endpoint.method().toUpperCase();
+        com.harness.core.model.ToolCapability capability = switch (method) {
+            case "GET", "HEAD" -> com.harness.core.model.ToolCapability.READ;
+            default -> com.harness.core.model.ToolCapability.MUTATION;
+        };
+        return new ToolSpec(toolName, desc, params, capability);
     }
 
     @Override
@@ -106,7 +111,6 @@ public class HttpApiTool implements Tool {
                 throw new ToolExecutionException(toolName, errMsg);
             }
             log.debug("[HttpApi] {} succeeded: {} chars", toolName, body.length());
-            ToolResult.setCurrentStatus(ToolResult.ResultStatus.SUCCESS);
             return truncate(body, 4000);
         } catch (ToolExecutionException e) {
             throw e;

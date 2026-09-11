@@ -1,7 +1,9 @@
 package com.harness.react;
 
+import com.harness.core.model.ExecutionStatus;
 import com.harness.core.model.ReActStep.InspectionResult;
 import com.harness.core.model.ReActStep.InspectionResult.InspectionStatus;
+import com.harness.core.model.ResultStatus;
 import com.harness.core.model.ToolCall;
 import com.harness.core.model.ToolResult;
 import org.slf4j.Logger;
@@ -46,9 +48,6 @@ public class Inspector {
             "found 0 match"
     );
 
-    /** Minimum output length to not be considered insufficient. */
-    private static final int MIN_OUTPUT_LENGTH = 50;
-
     /**
      * Inspect a set of tool calls and their results.
      *
@@ -70,101 +69,118 @@ public class Inspector {
             return new InspectionResult(InspectionStatus.PASS, "no tool results to inspect");
         }
 
+        InspectionResult confirmation = null;
+        InspectionResult toolError = null;
+        InspectionResult insufficient = null;
+        InspectionResult wrongTool = null;
+
         for (ToolResult result : toolResults) {
-            if (result.status() == ToolResult.ResultStatus.CONFIRMATION_REQUIRED) {
-                String detail = result.error() != null ? result.error() : "explicit confirmation is required";
-                return new InspectionResult(InspectionStatus.CONFIRMATION_REQUIRED, detail);
+            InspectionResult executionInspection = inspectExecution(result);
+            if (executionInspection != null) {
+                if (executionInspection.status() == InspectionStatus.TOOL_ERROR
+                        && toolError == null) {
+                    toolError = executionInspection;
+                } else if (executionInspection.status() != InspectionStatus.TOOL_ERROR
+                        && confirmation == null) {
+                    confirmation = executionInspection;
+                }
+                continue;
             }
-            if (result.status() == ToolResult.ResultStatus.CONFIRMATION_REJECTED) {
-                String detail = result.error() != null ? result.error() : "tool execution was rejected";
-                return new InspectionResult(InspectionStatus.CONFIRMATION_REJECTED, detail);
+
+            ResultStatus resultStatus = result.resultStatus();
+            if (resultStatus == ResultStatus.EMPTY
+                    || resultStatus == ResultStatus.LOW_RELEVANCE
+                    || resultStatus == ResultStatus.ESCALATING
+                    || resultStatus == ResultStatus.PARTIAL
+                    || resultStatus == ResultStatus.CONTRACT_FAILED) {
+                if (insufficient == null) {
+                    insufficient = insufficientResult(result, resultStatus);
+                }
+                continue;
             }
-            if (result.status() == ToolResult.ResultStatus.CONFIRMATION_EXPIRED) {
-                String detail = result.error() != null ? result.error() : "tool confirmation expired";
-                return new InspectionResult(InspectionStatus.CONFIRMATION_EXPIRED, detail);
+
+            if ((result.output() == null || result.output().isBlank())
+                    && resultStatus != ResultStatus.PENDING) {
+                if (wrongTool == null) {
+                    wrongTool = new InspectionResult(
+                            InspectionStatus.WRONG_TOOL,
+                            "Tool '" + result.toolName() + "' returned empty output");
+                }
+                continue;
+            }
+
+            if (resultStatus == ResultStatus.AVAILABLE
+                    && containsInsufficientPhrase(result.output())
+                    && insufficient == null) {
+                insufficient = new InspectionResult(
+                        InspectionStatus.INSUFFICIENT,
+                        "Tool '" + result.toolName()
+                                + "' reported an unverified no results response");
             }
         }
 
-        // Check for tool errors first (TOOL_ERROR)
-        for (ToolResult result : toolResults) {
-            if (!result.success()) {
+        if (confirmation != null) {
+            return confirmation;
+        }
+        if (toolError != null) {
+            return toolError;
+        }
+        if (insufficient != null) {
+            return insufficient;
+        }
+        if (wrongTool != null) {
+            return wrongTool;
+        }
+        return new InspectionResult(
+                InspectionStatus.PASS, "All tool executions in the round were inspected");
+    }
+
+    private InspectionResult inspectExecution(ToolResult result) {
+        ExecutionStatus executionStatus = result.executionStatus();
+        return switch (executionStatus) {
+            case SUCCEEDED -> null;
+            case CONFIRMATION_REQUIRED -> new InspectionResult(
+                    InspectionStatus.CONFIRMATION_REQUIRED,
+                    errorOr(result, "explicit confirmation is required"));
+            case REJECTED, CANCELLED -> new InspectionResult(
+                    InspectionStatus.CONFIRMATION_REJECTED,
+                    errorOr(result, "tool execution was rejected or cancelled"));
+            case EXPIRED -> new InspectionResult(
+                    InspectionStatus.CONFIRMATION_EXPIRED,
+                    errorOr(result, "tool confirmation expired"));
+            case FAILED -> {
                 String errorDetail = result.error() != null ? result.error() : "unknown error";
-                return new InspectionResult(
+                yield new InspectionResult(
                         InspectionStatus.TOOL_ERROR,
                         "Tool '" + result.toolName() + "' failed: " + errorDetail);
             }
-        }
+        };
+    }
 
-        // Check for WRONG_TOOL: null/empty output when a tool should have produced something
-        for (ToolResult result : toolResults) {
-            if (result.output() == null || result.output().isBlank()) {
-                return new InspectionResult(
-                        InspectionStatus.WRONG_TOOL,
-                        "Tool '" + result.toolName() + "' returned empty output");
-            }
-        }
+    private InspectionResult insufficientResult(ToolResult result, ResultStatus status) {
+        String detail = switch (status) {
+            case ESCALATING -> "found a near-miss result eligible for one retrieval escalation";
+            case EMPTY -> "found no eligible results";
+            case LOW_RELEVANCE -> "found only low-relevance results";
+            case PARTIAL -> "returned a partial result";
+            case CONTRACT_FAILED -> "returned a failed business contract result";
+            default -> throw new IllegalArgumentException("Not an insufficient status: " + status);
+        };
+        return new InspectionResult(
+                InspectionStatus.INSUFFICIENT,
+                "Tool '" + result.toolName() + "' " + detail);
+    }
 
-        // Check for explicit status from tools that declare their own result quality.
-        // This is authoritative — no guessing needed. Tools like KnowledgeBaseTool set this
-        // via ThreadLocal before returning, and ToolExecutor attaches it to ToolResult.
-        for (ToolResult result : toolResults) {
-            if (result.status() != null) {
-                return switch (result.status()) {
-                    case ESCALATING -> new InspectionResult(
-                            InspectionStatus.INSUFFICIENT,
-                            "Tool '" + result.toolName() + "' found a near-miss result and made one implicit retrieval escalation eligible. "
-                                    + "Wait for the next iteration to see if the escalated strategy produces results.");
-                    case EMPTY -> new InspectionResult(
-                            InspectionStatus.INSUFFICIENT,
-                            "Tool '" + result.toolName() + "' found no eligible results and no implicit escalation is available. "
-                                    + "Try a different tool, adjust your approach, or output the final answer with available information.");
-                    case LOW_RELEVANCE -> new InspectionResult(
-                            InspectionStatus.INSUFFICIENT,
-                            "Tool '" + result.toolName() + "' found results but none are relevant to the query, "
-                                    + "and no further escalation is available. "
-                                    + "Try a different tool, rephrase your query, or output the final answer with available information.");
-                    case SUCCESS -> new InspectionResult(InspectionStatus.PASS,
-                            "Tool '" + result.toolName() + "' explicitly reported success");
-                    case CONFIRMATION_REQUIRED -> new InspectionResult(
-                            InspectionStatus.CONFIRMATION_REQUIRED,
-                            "Tool '" + result.toolName() + "' requires explicit confirmation");
-                    case CONFIRMATION_REJECTED -> new InspectionResult(
-                            InspectionStatus.CONFIRMATION_REJECTED,
-                            "Tool '" + result.toolName() + "' was rejected by the user");
-                    case CONFIRMATION_EXPIRED -> new InspectionResult(
-                            InspectionStatus.CONFIRMATION_EXPIRED,
-                            "Tool '" + result.toolName() + "' confirmation expired");
-                    case CONFIRMATION_CANCELLED -> new InspectionResult(
-                            InspectionStatus.CONFIRMATION_REJECTED,
-                            "Tool '" + result.toolName() + "' confirmation was cancelled");
-                };
-            }
+    private boolean containsInsufficientPhrase(String output) {
+        if (output == null) {
+            return false;
         }
+        String lower = output.toLowerCase().strip();
+        return INSUFFICIENT_PHRASES.stream().anyMatch(lower::contains);
+    }
 
-        // Fallback: heuristic detection for external/MCP tools that don't declare explicit status.
-        // These tools return arbitrary text — we have no choice but to guess.
-        for (ToolResult result : toolResults) {
-            String output = result.output();
-            if (output != null) {
-                String lower = output.toLowerCase().strip();
-                if (lower.length() < MIN_OUTPUT_LENGTH) {
-                    return new InspectionResult(
-                            InspectionStatus.INSUFFICIENT,
-                            "Tool '" + result.toolName() + "' returned very short output (" + lower.length() + " chars)");
-                }
-                for (String phrase : INSUFFICIENT_PHRASES) {
-                    if (lower.contains(phrase)) {
-                        return new InspectionResult(
-                                InspectionStatus.INSUFFICIENT,
-                                "Tool '" + result.toolName() + "' found no results. "
-                                        + "Do NOT retry the same tool with different parameters. "
-                                        + "Either try a different tool, or output the final answer with available information.");
-                    }
-                }
-            }
-        }
-
-        return new InspectionResult(InspectionStatus.PASS, "All tools executed successfully");
+    private String errorOr(ToolResult result, String fallback) {
+        return result.error() == null || result.error().isBlank() ? fallback : result.error();
     }
 
     /**

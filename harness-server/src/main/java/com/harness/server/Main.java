@@ -11,10 +11,25 @@ import com.harness.core.env.EnvConfig;
 import com.harness.core.env.EnvKey;
 import com.harness.core.modelconfig.ModelConfigFile;
 import com.harness.graph.build.GraphBuildService;
+import com.harness.graph.build.GraphMutationCommitter;
+import com.harness.graph.build.GraphMutationSagaService;
+import com.harness.graph.build.GraphMutationSagaWorker;
 import com.harness.agent.graph.LlmGraphDataConverter;
 import com.harness.graph.build.GraphDataConverterRegistry;
 import com.harness.tool.knowledge.KnowledgeIngestService;
-import com.harness.tool.knowledge.FileStorageService;
+import com.harness.tool.knowledge.KnowledgeIngestWorker;
+import com.harness.tool.knowledge.KnowledgeDocumentLifecycleService;
+import com.harness.tool.knowledge.PersistentGraphSchemaWikiCompiler;
+import com.harness.tool.knowledge.PersistentGraphSpaceWikiCompiler;
+import com.harness.tool.knowledge.authority.ContentAddressedArtifactStorage;
+import com.harness.tool.knowledge.authority.MysqlKnowledgeArtifactRepository;
+import com.harness.tool.knowledge.authority.MysqlKnowledgeIngestJobStore;
+import com.harness.tool.knowledge.authority.MysqlKnowledgeGraphMutationJobStore;
+import com.harness.tool.knowledge.authority.MysqlKnowledgeIndexOutboxStore;
+import com.harness.tool.knowledge.authority.KnowledgeSourcePurgeGuard;
+import com.harness.core.knowledge.KnowledgeSourceType;
+import com.harness.tool.knowledge.okf.OkfBundleExporter;
+import com.harness.tool.knowledge.okf.OkfImportService;
 import com.harness.server.api.ApiErrorCode;
 import com.harness.server.api.ApiResponses;
 import com.harness.server.log.LogStorageService;
@@ -25,12 +40,12 @@ import org.slf4j.LoggerFactory;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Clock;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
-import java.nio.file.Path;
 
 /**
  * HTTP API server entry point for Harness Agent.
@@ -98,13 +113,23 @@ public class Main {
         Runtime.getRuntime().addShutdownHook(new Thread(agent::shutdown));
 
         // Knowledge base upload service — reuse agent's instances
-        FileStorageService fileStorageService = new FileStorageService();
+        String knowledgeUploadDir = EnvConfig.get().getString(
+                EnvKey.KNOWLEDGE_UPLOAD_DIR, "./knowledge-uploads");
+        MysqlKnowledgeArtifactRepository knowledgeArtifactRepository =
+                new MysqlKnowledgeArtifactRepository();
         KnowledgeIngestService ingestService = new KnowledgeIngestService(
                 agent.embeddingModel(),
                 agent.vectorStore(),
                 agent.documentConversionService(),
-                fileStorageService);
+                new ContentAddressedArtifactStorage(Path.of(knowledgeUploadDir)),
+                knowledgeArtifactRepository,
+                new MysqlKnowledgeIngestJobStore(agent.knowledgeRepository()),
+                agent.knowledgeRepository());
+        KnowledgeIngestWorker ingestWorker = new KnowledgeIngestWorker(ingestService);
+        ingestWorker.start();
+        Runtime.getRuntime().addShutdownHook(new Thread(ingestWorker::close));
         TraceStore traceStore = agent.traceStore();
+        KnowledgeSourcePurgeGuard sourcePurgeGuard = agent.sourcePurgeGuard();
 
         // Shared cancellation token registry for in-flight chat requests
         ConcurrentHashMap<String, CancellationToken> activeRequests = new ConcurrentHashMap<>();
@@ -113,7 +138,10 @@ public class Main {
         mapper.disable(com.fasterxml.jackson.databind.SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
 
         // Audit cleanup scheduler
-        AuditCleanupScheduler auditCleanup = new AuditCleanupScheduler(traceStore);
+        AuditCleanupScheduler auditCleanup = new AuditCleanupScheduler(
+                traceStore,
+                traceId -> sourcePurgeGuard.retainIfReferenced(
+                        KnowledgeSourceType.TRACE, traceId));
         auditCleanup.start();
         Runtime.getRuntime().addShutdownHook(new Thread(auditCleanup::stop));
 
@@ -170,13 +198,14 @@ public class Main {
         app.post("/api/knowledge/upload", knowledgeHandler::handle);
 
         // File upload endpoint (for image-to-image and other file references)
-        String knowledgeUploadDir = EnvConfig.get().getString(EnvKey.KNOWLEDGE_UPLOAD_DIR, "./knowledge-uploads");
         FileUploadHandler fileUploadHandler = new FileUploadHandler(knowledgeUploadDir);
         app.post("/api/files/upload", fileUploadHandler::handle);
 
         // Knowledge base management endpoints
         KnowledgeManagementHandler knowledgeMgmtHandler = new KnowledgeManagementHandler(
-                agent.vectorStore(), agent.embeddingModel(), fileStorageService);
+                agent.vectorStore(),
+                new KnowledgeDocumentLifecycleService(
+                        agent.knowledgeRepository(), agent.vectorStore()));
         app.get("/api/knowledge/{collection}", knowledgeMgmtHandler::listDocuments);
         // List all knowledge collections
         app.get("/api/knowledge", knowledgeMgmtHandler::listCollections);
@@ -185,16 +214,26 @@ public class Main {
         app.delete("/api/knowledge/{collection}", knowledgeMgmtHandler::deleteCollection);
         app.delete("/api/knowledge/{collection}/{documentId}", knowledgeMgmtHandler::deleteDocument);
 
+        KnowledgeOkfSourceAccess okfSourceAccess = new KnowledgeOkfSourceAccess(
+                agent.knowledgeRepository(), knowledgeArtifactRepository,
+                agent.sessionStore(), agent.messageStore(), traceStore,
+                agent.graphSpaceAccessService(), agent.graphSchemaRegistry());
+        KnowledgeOkfHandler okfHandler = new KnowledgeOkfHandler(
+                new OkfBundleExporter(
+                        agent.knowledgeRepository(), new MysqlKnowledgeIndexOutboxStore(),
+                        okfSourceAccess, Clock.systemUTC()),
+                new OkfImportService(
+                        agent.knowledgeRepository(), okfSourceAccess,
+                        Clock.systemUTC()),
+                agent.graphSpaceAccessService(),
+                EnvConfig.get().getBool(EnvKey.MEMORY_OKF_EXPORT_ENABLED, false));
+        app.post("/api/knowledge/okf/export", okfHandler::exportBundle);
+        app.post("/api/knowledge/okf/import/review", okfHandler::reviewImport);
+        app.post("/api/knowledge/okf/import/commit", okfHandler::commitImport);
+
         // Structured knowledge graph endpoints (independent from vector RAG)
         GraphRequestExecutor graphRequestExecutor =
                 new GraphRequestExecutor(new GraphRequestAuthenticator());
-        GraphManagementHandler graphHandler = new GraphManagementHandler(
-                agent.knowledgeGraphStore(),
-                agent.graphSchemaRegistry(),
-                agent.graphSettings(),
-                agent.graphSpaceAccessService(),
-                graphRequestExecutor
-        );
         GraphDataConverterRegistry graphDataConverterRegistry =
                 GraphDataConverterRegistry.withDefaults(mapper);
         graphDataConverterRegistry.register(new LlmGraphDataConverter(
@@ -204,15 +243,40 @@ public class Main {
                 agent.graphSettings(),
                 mapper
         ));
+        GraphMutationCommitter graphMutationCommitter;
+        if ("none".equals(agent.knowledgeGraphStore().providerName())) {
+            graphMutationCommitter = agent.knowledgeGraphStore()::applyChanges;
+        } else {
+            GraphMutationSagaService graphMutationSagaService =
+                    new GraphMutationSagaService(
+                            agent.knowledgeGraphStore()::applyChanges,
+                            new PersistentGraphSpaceWikiCompiler(
+                                    agent.knowledgeRepository()),
+                            new MysqlKnowledgeGraphMutationJobStore());
+            GraphMutationSagaWorker graphMutationSagaWorker =
+                    new GraphMutationSagaWorker(graphMutationSagaService);
+            graphMutationSagaWorker.start();
+            Runtime.getRuntime().addShutdownHook(
+                    new Thread(graphMutationSagaWorker::close));
+            graphMutationCommitter = graphMutationSagaService;
+        }
+        GraphManagementHandler graphHandler = new GraphManagementHandler(
+                agent.knowledgeGraphStore(),
+                agent.graphSchemaRegistry(),
+                agent.graphSettings(),
+                graphRequestExecutor,
+                graphMutationCommitter
+        );
         GraphBuildService graphBuildService = new GraphBuildService(
-                agent.knowledgeGraphStore(), graphDataConverterRegistry);
+                graphMutationCommitter, graphDataConverterRegistry);
         GraphBuildHandler graphBuildHandler =
                 new GraphBuildHandler(graphBuildService, graphRequestExecutor);
         GraphSchemaManagementHandler graphSchemaHandler = new GraphSchemaManagementHandler(
                 agent.graphSchemaManagementService(),
                 agent.knowledgeGraphStore(),
                 agent.graphSettings(),
-                graphRequestExecutor
+                graphRequestExecutor,
+                new PersistentGraphSchemaWikiCompiler(agent.knowledgeRepository())
         );
         app.get("/api/graph/status", graphHandler::status);
         app.get("/api/graph/graphs", graphHandler::listGraphSpaces);
@@ -272,7 +336,12 @@ public class Main {
         });
 
         // Session management endpoints
-        SessionHandler sessionHandler = new SessionHandler(agent.sessionStore(), agent.messageStore(), agent.messageCache(), agent.messageWriteWorker());
+        SessionHandler sessionHandler = new SessionHandler(
+                agent.sessionStore(),
+                agent.messageStore(),
+                agent.messageCache(),
+                agent.messageWriteWorker(),
+                sourcePurgeGuard);
         app.post("/api/sessions", sessionHandler::create);
         app.get("/api/sessions", sessionHandler::list);
         app.get("/api/sessions/{sessionId}", sessionHandler::detail);
@@ -283,6 +352,8 @@ public class Main {
         // Bounded process-level cache metrics. Labels never include user or session identifiers.
         app.get("/api/metrics/session-cache",
                 ctx -> ctx.json(agent.messageCache().metricsSnapshot()));
+        app.get("/api/metrics/knowledge-purge",
+                ctx -> ctx.json(sourcePurgeGuard.metricsSnapshot()));
 
         // Cancel in-progress chat request
         app.delete("/api/chat/{sessionId}", ctx -> {
@@ -333,15 +404,31 @@ public class Main {
             ctx.json(Map.of("count", traceStore.count(), "retentionDays", retentionDays));
         });
 
+        TraceFeedbackHandler traceFeedbackHandler = new TraceFeedbackHandler(
+                new TraceFeedbackService(traceStore, agent.sessionStore()));
+        app.put("/api/traces/{traceId}/feedback", traceFeedbackHandler::update);
+
         // Manual trace cleanup
         app.delete("/api/traces/cleanup", ctx -> {
-            int deleted = traceStore.cleanup(retentionDays);
-            ctx.json(Map.of("deleted", deleted, "retentionDays", retentionDays));
+            TraceStore.CleanupResult result = traceStore.cleanup(
+                    retentionDays,
+                    traceId -> sourcePurgeGuard.retainIfReferenced(
+                            KnowledgeSourceType.TRACE, traceId));
+            ctx.json(Map.of(
+                    "deleted", result.deleted(),
+                    "retainedByKnowledge", result.retainedByKnowledge(),
+                    "retentionDays", retentionDays));
         });
 
         // Delete specific trace
         app.delete("/api/traces/{traceId}", ctx -> {
             String traceId = ctx.pathParam("traceId");
+            if (sourcePurgeGuard.retainIfReferenced(KnowledgeSourceType.TRACE, traceId)) {
+                ApiResponses.error(
+                        ctx, 409, ApiErrorCode.CONFLICT,
+                        "Trace is retained by knowledge revisions");
+                return;
+            }
             boolean deleted = traceStore.deleteById(traceId);
             if (deleted) {
                 ctx.json(Map.of("status", "deleted", "traceId", traceId));

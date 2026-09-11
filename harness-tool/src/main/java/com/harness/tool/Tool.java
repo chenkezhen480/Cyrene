@@ -2,6 +2,7 @@ package com.harness.tool;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.harness.core.model.ToolOutput;
+import com.harness.core.model.ToolExecutionOutcome;
 import com.harness.core.model.ToolSpec;
 
 /**
@@ -30,5 +31,13 @@ public interface Tool {
      */
     default ToolOutput executeOutput(JsonNode arguments) {
         return ToolOutput.text(execute(arguments));
+    }
+
+    /**
+     * Execute through the explicit status channel used by the runtime.
+     * Text-only external Tools are AVAILABLE until separate validation evidence exists.
+     */
+    default ToolExecutionOutcome executeOutcome(JsonNode arguments) {
+        return ToolExecutionOutcome.available(executeOutput(arguments));
     }
 }

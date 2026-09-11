@@ -71,7 +71,7 @@ public class UpdateProjectApiTool implements Tool {
                         + "For 'remove': provide endpoint 'id'. "
                         + "For 'update': provide 'id' plus fields to change.",
                 parametersSchema,
-                Set.of("configuration", "write"),
+                Set.of("configuration", "write", "capability:mutation"),
                 true
         );
     }
@@ -149,7 +149,6 @@ public class UpdateProjectApiTool implements Tool {
         }
 
         log.info("[UpdateProjectApi] Added endpoint: {} {} ({})", method, path, nextId);
-        ToolResult.setCurrentStatus(ToolResult.ResultStatus.SUCCESS);
         return "Endpoint added successfully:\n"
                 + "  id: " + nextId + "\n"
                 + "  name: " + name + "\n"
@@ -177,7 +176,6 @@ public class UpdateProjectApiTool implements Tool {
         }
 
         log.info("[UpdateProjectApi] Removed endpoint: {} {} ({})", found.method(), found.path(), id);
-        ToolResult.setCurrentStatus(ToolResult.ResultStatus.SUCCESS);
         return "Endpoint removed: " + found.method() + " " + found.path() + " (" + id + ")";
     }
 
@@ -250,7 +248,6 @@ public class UpdateProjectApiTool implements Tool {
         }
 
         log.info("[UpdateProjectApi] Updated endpoint: {} {} ({})", updated.method(), updated.path(), id);
-        ToolResult.setCurrentStatus(ToolResult.ResultStatus.SUCCESS);
         return "Endpoint updated: " + updated.method() + " " + updated.path() + " (" + id + ")";
     }
 

@@ -1,11 +1,16 @@
 package com.harness.input.memory;
 
-import com.harness.core.model.Session;
 import com.harness.core.env.MysqlConnectionPool;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.harness.core.model.PageResponse;
+import com.harness.core.model.Session;
+import com.harness.core.model.SessionCursor;
+import com.harness.core.persistence.SqlConnectionProvider;
 
-import java.sql.*;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -13,246 +18,316 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
-/**
- * MySQL-backed session store.
- * Uses shared HikariCP connection pool.
- */
+/** MySQL Session Store with null-safe owner checks and stable compound cursors. */
 public class MysqlSessionStore implements SessionStore {
 
-    private static final Logger log = LoggerFactory.getLogger(MysqlSessionStore.class);
+    private static final String COLUMNS = """
+            id, user_id, tenant_id, title, created_at, last_active, ended_at, status
+            """;
+
+    private final SqlConnectionProvider connectionProvider;
+
+    public MysqlSessionStore() {
+        this(MysqlConnectionPool::getConnection);
+    }
+
+    public MysqlSessionStore(SqlConnectionProvider connectionProvider) {
+        this.connectionProvider = java.util.Objects.requireNonNull(
+                connectionProvider, "connectionProvider");
+    }
 
     @Override
-    public Session create(String userId) {
+    public Session create(String userId, String tenantId) {
+        if (userId == null || userId.isBlank()) {
+            throw new IllegalArgumentException("userId is required");
+        }
         String id = UUID.randomUUID().toString().replace("-", "");
         Instant now = Instant.now();
-        String sql = "INSERT INTO sessions (id, user_id, created_at, last_active, status) VALUES (?, ?, ?, ?, 'active')";
-        try (Connection conn = MysqlConnectionPool.getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setString(1, id);
-            ps.setString(2, userId);
-            ps.setTimestamp(3, Timestamp.from(now));
-            ps.setTimestamp(4, Timestamp.from(now));
-            ps.executeUpdate();
-            log.debug("Created session {} for user {}", id, userId);
-            return new Session(id, userId, null, now, now, null, Session.SessionStatus.active);
+        String sql = """
+                INSERT INTO sessions
+                    (id, user_id, tenant_id, created_at, last_active, status)
+                VALUES (?, ?, ?, ?, ?, 'active')
+                """;
+        try (Connection connection = connectionProvider.getConnection();
+             PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setString(1, id);
+            statement.setString(2, userId.trim());
+            statement.setString(3, normalizeTenant(tenantId));
+            statement.setTimestamp(4, Timestamp.from(now));
+            statement.setTimestamp(5, Timestamp.from(now));
+            statement.executeUpdate();
+            return new Session(
+                    id, userId.trim(), normalizeTenant(tenantId), null, now, now, null,
+                    Session.SessionStatus.active);
         } catch (SQLException e) {
-            log.error("Failed to create session: {}", e.getMessage(), e);
-            throw new RuntimeException("Failed to create session", e);
+            throw new MemoryStoreException("Failed to create Session", e);
         }
     }
 
     @Override
-    public Optional<Session> findActive(String sessionId) {
-        String sql = "SELECT id, user_id, title, created_at, last_active, ended_at, status FROM sessions WHERE id = ? AND status = 'active'";
-        try (Connection conn = MysqlConnectionPool.getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setString(1, sessionId);
-            ResultSet rs = ps.executeQuery();
-            if (rs.next()) {
-                return Optional.of(mapSession(rs));
+    public Optional<Session> findActiveByOwner(
+            String sessionId,
+            String userId,
+            String tenantId
+    ) {
+        return findOwned(sessionId, userId, tenantId, true);
+    }
+
+    @Override
+    public Optional<Session> findByIdAndOwner(
+            String sessionId,
+            String userId,
+            String tenantId
+    ) {
+        return findOwned(sessionId, userId, tenantId, false);
+    }
+
+    @Override
+    public Optional<Session> findByIdForInternalTask(String sessionId) {
+        String sql = "SELECT " + COLUMNS + " FROM sessions WHERE id = ?";
+        try (Connection connection = connectionProvider.getConnection();
+             PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setString(1, sessionId);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                return resultSet.next() ? Optional.of(map(resultSet)) : Optional.empty();
             }
         } catch (SQLException e) {
-            throw new MemoryStoreException("Failed to find active session " + sessionId, e);
+            throw new MemoryStoreException("Failed to read internal Session " + sessionId, e);
         }
-        return Optional.empty();
     }
 
     @Override
-    public List<Session> findActiveByUser(String userId) {
-        String sql = "SELECT id, user_id, title, created_at, last_active, ended_at, status FROM sessions WHERE user_id = ? AND status = 'active'";
+    public PageResponse<Session> findTimedOut(
+            Duration timeout,
+            SessionCursor cursor,
+            int limit
+    ) {
+        return findTimedOutPage(null, null, false, timeout, cursor, limit);
+    }
+
+    @Override
+    public PageResponse<Session> findTimedOutByOwner(
+            String userId,
+            String tenantId,
+            Duration timeout,
+            SessionCursor cursor,
+            int limit
+    ) {
+        if (userId == null || userId.isBlank()) {
+            throw new IllegalArgumentException("userId is required");
+        }
+        return findTimedOutPage(userId, tenantId, true, timeout, cursor, limit);
+    }
+
+    @Override
+    public PageResponse<Session> findAllByOwner(
+            String userId,
+            String tenantId,
+            Session.SessionStatus status,
+            SessionCursor cursor,
+            int limit
+    ) {
+        if (userId == null || userId.isBlank()) {
+            throw new IllegalArgumentException("userId is required");
+        }
+        validateLimit(limit);
+        StringBuilder sql = new StringBuilder("SELECT ").append(COLUMNS).append("""
+                 FROM sessions WHERE user_id = ? AND tenant_id <=> ?
+                """);
+        if (status != null) {
+            sql.append(" AND status = ?");
+        }
+        if (cursor != null) {
+            sql.append(" AND (last_active < ? OR (last_active = ? AND id < ?))");
+        }
+        sql.append(" ORDER BY last_active DESC, id DESC LIMIT ?");
         List<Session> sessions = new ArrayList<>();
-        try (Connection conn = MysqlConnectionPool.getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setString(1, userId);
-            ResultSet rs = ps.executeQuery();
-            while (rs.next()) {
-                sessions.add(mapSession(rs));
+        try (Connection connection = connectionProvider.getConnection();
+             PreparedStatement statement = connection.prepareStatement(sql.toString())) {
+            int parameter = 1;
+            statement.setString(parameter++, userId.trim());
+            statement.setString(parameter++, normalizeTenant(tenantId));
+            if (status != null) {
+                statement.setString(parameter++, status.name());
             }
-        } catch (SQLException e) {
-            log.error("Failed to find active sessions for user {}: {}", userId, e.getMessage(), e);
-        }
-        return sessions;
-    }
-
-    @Override
-    public List<Session> findTimedOut(Duration timeout) {
-        String sql = "SELECT id, user_id, title, created_at, last_active, ended_at, status FROM sessions WHERE status = 'active' AND last_active < ?";
-        Instant cutoff = Instant.now().minus(timeout);
-        List<Session> sessions = new ArrayList<>();
-        try (Connection conn = MysqlConnectionPool.getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setTimestamp(1, Timestamp.from(cutoff));
-            ResultSet rs = ps.executeQuery();
-            while (rs.next()) {
-                sessions.add(mapSession(rs));
+            if (cursor != null) {
+                Timestamp timestamp = Timestamp.from(cursor.lastActive());
+                statement.setTimestamp(parameter++, timestamp);
+                statement.setTimestamp(parameter++, timestamp);
+                statement.setString(parameter++, cursor.sessionId());
             }
+            statement.setInt(parameter, limit + 1);
+            readAll(statement, sessions);
         } catch (SQLException e) {
-            log.error("Failed to find timed-out sessions: {}", e.getMessage(), e);
+            throw new MemoryStoreException("Failed to list owned Sessions", e);
         }
-        return sessions;
+        return page(sessions, limit);
     }
 
     @Override
     public void close(String sessionId, Session.SessionStatus status) {
-        String sql = "UPDATE sessions SET status = ?, ended_at = ? WHERE id = ?";
-        try (Connection conn = MysqlConnectionPool.getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setString(1, status.name());
-            ps.setTimestamp(2, Timestamp.from(Instant.now()));
-            ps.setString(3, sessionId);
-            ps.executeUpdate();
-            log.debug("Closed session {} with status {}", sessionId, status);
-        } catch (SQLException e) {
-            log.error("Failed to close session {}: {}", sessionId, e.getMessage(), e);
+        if (status == null || status == Session.SessionStatus.active) {
+            throw new IllegalArgumentException("closed Session status is required");
         }
+        executeRequiredUpdate(
+                "UPDATE sessions SET status = ?, ended_at = ? WHERE id = ?",
+                statement -> {
+                    statement.setString(1, status.name());
+                    statement.setTimestamp(2, Timestamp.from(Instant.now()));
+                    statement.setString(3, sessionId);
+                },
+                "Session not found: " + sessionId);
     }
 
     @Override
     public void updateLastActive(String sessionId) {
-        String sql = "UPDATE sessions SET last_active = ?, status = 'active' WHERE id = ?";
-        try (Connection conn = MysqlConnectionPool.getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setTimestamp(1, Timestamp.from(Instant.now()));
-            ps.setString(2, sessionId);
-            ps.executeUpdate();
-        } catch (SQLException e) {
-            log.error("Failed to update last_active for session {}: {}", sessionId, e.getMessage(), e);
-        }
-    }
-
-    @Override
-    public void markRefinementStatus(String sessionId, String status) {
-        String sql = "UPDATE sessions SET refinement_status = ? WHERE id = ?";
-        try (Connection conn = MysqlConnectionPool.getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setString(1, status);
-            ps.setString(2, sessionId);
-            ps.executeUpdate();
-            log.debug("Marked session {} refinement_status={}", sessionId, status);
-        } catch (SQLException e) {
-            log.error("Failed to mark refinement status for session {}: {}", sessionId, e.getMessage(), e);
-        }
-    }
-
-    @Override
-    public boolean claimForRefinement(String sessionId) {
-        String sql = "UPDATE sessions SET refinement_status = 'in_progress' WHERE id = ? AND refinement_status = 'pending'";
-        try (Connection conn = MysqlConnectionPool.getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setString(1, sessionId);
-            int updated = ps.executeUpdate();
-            if (updated > 0) {
-                log.debug("Claimed session {} for refinement", sessionId);
-                return true;
-            }
-            log.debug("Session {} not claimed (not in 'pending' state)", sessionId);
-        } catch (SQLException e) {
-            log.error("Failed to claim session {} for refinement: {}", sessionId, e.getMessage(), e);
-        }
-        return false;
-    }
-
-    @Override
-    public List<Session> findStuckRefinements(Duration stuckThreshold) {
-        String sql = "SELECT id, user_id, title, created_at, last_active, ended_at, status FROM sessions " +
-                "WHERE refinement_status = 'in_progress' AND last_active < ?";
-        Instant cutoff = Instant.now().minus(stuckThreshold);
-        List<Session> sessions = new ArrayList<>();
-        try (Connection conn = MysqlConnectionPool.getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setTimestamp(1, Timestamp.from(cutoff));
-            ResultSet rs = ps.executeQuery();
-            while (rs.next()) {
-                sessions.add(mapSession(rs));
-            }
-        } catch (SQLException e) {
-            log.error("Failed to find stuck refinements: {}", e.getMessage(), e);
-        }
-        return sessions;
-    }
-
-    @Override
-    public void resetRefinementToPending(String sessionId) {
-        String sql = "UPDATE sessions SET refinement_status = 'pending' WHERE id = ? AND refinement_status = 'in_progress'";
-        try (Connection conn = MysqlConnectionPool.getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setString(1, sessionId);
-            int updated = ps.executeUpdate();
-            if (updated > 0) {
-                log.debug("Reset refinement_status to 'pending' for session {}", sessionId);
-            }
-        } catch (SQLException e) {
-            log.error("Failed to reset refinement status for session {}: {}", sessionId, e.getMessage(), e);
-        }
-    }
-
-    @Override
-    public Optional<Session> findById(String sessionId) {
-        String sql = "SELECT id, user_id, title, created_at, last_active, ended_at, status FROM sessions WHERE id = ?";
-        try (Connection conn = MysqlConnectionPool.getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setString(1, sessionId);
-            ResultSet rs = ps.executeQuery();
-            if (rs.next()) {
-                return Optional.of(mapSession(rs));
-            }
-        } catch (SQLException e) {
-            throw new MemoryStoreException("Failed to find session " + sessionId, e);
-        }
-        return Optional.empty();
-    }
-
-    @Override
-    public List<Session> findAll(String userId, Session.SessionStatus status, Instant cursor, int limit) {
-        StringBuilder sql = new StringBuilder(
-                "SELECT id, user_id, title, created_at, last_active, ended_at, status FROM sessions WHERE 1=1");
-        List<Object> params = new ArrayList<>();
-
-        if (userId != null) {
-            sql.append(" AND user_id = ?");
-            params.add(userId);
-        }
-        if (status != null) {
-            sql.append(" AND status = ?");
-            params.add(status.name());
-        }
-        if (cursor != null) {
-            sql.append(" AND last_active < ?");
-            params.add(Timestamp.from(cursor));
-        }
-        sql.append(" ORDER BY last_active DESC LIMIT ?");
-        params.add(limit);
-
-        List<Session> sessions = new ArrayList<>();
-        try (Connection conn = MysqlConnectionPool.getConnection(); PreparedStatement ps = conn.prepareStatement(sql.toString())) {
-            for (int i = 0; i < params.size(); i++) {
-                Object p = params.get(i);
-                if (p instanceof String s) ps.setString(i + 1, s);
-                else if (p instanceof Timestamp t) ps.setTimestamp(i + 1, t);
-                else if (p instanceof Integer n) ps.setInt(i + 1, n);
-            }
-            ResultSet rs = ps.executeQuery();
-            while (rs.next()) {
-                sessions.add(mapSession(rs));
-            }
-        } catch (SQLException e) {
-            throw new MemoryStoreException("Failed to list sessions", e);
-        }
-        return sessions;
+        executeRequiredUpdate(
+                "UPDATE sessions SET last_active = ?, status = 'active', ended_at = NULL WHERE id = ?",
+                statement -> {
+                    statement.setTimestamp(1, Timestamp.from(Instant.now()));
+                    statement.setString(2, sessionId);
+                },
+                "Session not found: " + sessionId);
     }
 
     @Override
     public void updateTitle(String sessionId, String title) {
-        String sql = "UPDATE sessions SET title = ? WHERE id = ?";
-        try (Connection conn = MysqlConnectionPool.getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setString(1, title);
-            ps.setString(2, sessionId);
-            ps.executeUpdate();
-            log.debug("Updated title for session {}", sessionId);
+        executeRequiredUpdate(
+                "UPDATE sessions SET title = ? WHERE id = ?",
+                statement -> {
+                    statement.setString(1, title);
+                    statement.setString(2, sessionId);
+                },
+                "Session not found: " + sessionId);
+    }
+
+    private Optional<Session> findOwned(
+            String sessionId,
+            String userId,
+            String tenantId,
+            boolean activeOnly
+    ) {
+        if (userId == null || userId.isBlank()) {
+            throw new IllegalArgumentException("userId is required");
+        }
+        String sql = "SELECT " + COLUMNS
+                + " FROM sessions WHERE id = ? AND user_id = ? AND tenant_id <=> ?"
+                + (activeOnly ? " AND status = 'active'" : "");
+        try (Connection connection = connectionProvider.getConnection();
+             PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setString(1, sessionId);
+            statement.setString(2, userId.trim());
+            statement.setString(3, normalizeTenant(tenantId));
+            try (ResultSet resultSet = statement.executeQuery()) {
+                return resultSet.next() ? Optional.of(map(resultSet)) : Optional.empty();
+            }
         } catch (SQLException e) {
-            log.error("Failed to update title for session {}: {}", sessionId, e.getMessage(), e);
+            throw new MemoryStoreException("Failed to read owned Session " + sessionId, e);
         }
     }
 
-    private Session mapSession(ResultSet rs) throws SQLException {
-        Timestamp endedTs = rs.getTimestamp("ended_at");
+    private PageResponse<Session> findTimedOutPage(
+            String userId,
+            String tenantId,
+            boolean ownerScoped,
+            Duration timeout,
+            SessionCursor cursor,
+            int limit
+    ) {
+        if (timeout == null || timeout.isNegative()) {
+            throw new IllegalArgumentException("timeout must not be negative");
+        }
+        validateLimit(limit);
+        StringBuilder sql = new StringBuilder("SELECT ").append(COLUMNS).append("""
+                 FROM sessions WHERE status = 'active' AND last_active < ?
+                """);
+        if (ownerScoped) {
+            sql.append(" AND user_id = ? AND tenant_id <=> ?");
+        }
+        if (cursor != null) {
+            sql.append(" AND (last_active > ? OR (last_active = ? AND id > ?))");
+        }
+        sql.append(" ORDER BY last_active, id LIMIT ?");
+        List<Session> sessions = new ArrayList<>();
+        try (Connection connection = connectionProvider.getConnection();
+             PreparedStatement statement = connection.prepareStatement(sql.toString())) {
+            int parameter = 1;
+            statement.setTimestamp(parameter++, Timestamp.from(Instant.now().minus(timeout)));
+            if (ownerScoped) {
+                statement.setString(parameter++, userId.trim());
+                statement.setString(parameter++, normalizeTenant(tenantId));
+            }
+            if (cursor != null) {
+                Timestamp timestamp = Timestamp.from(cursor.lastActive());
+                statement.setTimestamp(parameter++, timestamp);
+                statement.setTimestamp(parameter++, timestamp);
+                statement.setString(parameter++, cursor.sessionId());
+            }
+            statement.setInt(parameter, limit + 1);
+            readAll(statement, sessions);
+        } catch (SQLException e) {
+            throw new MemoryStoreException("Failed to list timed-out Sessions", e);
+        }
+        return page(sessions, limit);
+    }
+
+    private void executeRequiredUpdate(
+            String sql,
+            SqlBinder binder,
+            String missingMessage
+    ) {
+        try (Connection connection = connectionProvider.getConnection();
+             PreparedStatement statement = connection.prepareStatement(sql)) {
+            binder.bind(statement);
+            if (statement.executeUpdate() != 1) {
+                throw new MemoryStoreException(missingMessage);
+            }
+        } catch (SQLException e) {
+            throw new MemoryStoreException("Failed to update Session", e);
+        }
+    }
+
+    private static void readAll(PreparedStatement statement, List<Session> sessions)
+            throws SQLException {
+        try (ResultSet resultSet = statement.executeQuery()) {
+            while (resultSet.next()) {
+                sessions.add(map(resultSet));
+            }
+        }
+    }
+
+    private static PageResponse<Session> page(List<Session> fetched, int limit) {
+        return PageResponse.fromFetched(
+                fetched,
+                limit,
+                session -> session.lastActive() + "|" + session.id());
+    }
+
+    private static Session map(ResultSet resultSet) throws SQLException {
+        Timestamp endedAt = resultSet.getTimestamp("ended_at");
         return new Session(
-                rs.getString("id"),
-                rs.getString("user_id"),
-                rs.getString("title"),
-                rs.getTimestamp("created_at").toInstant(),
-                rs.getTimestamp("last_active").toInstant(),
-                endedTs != null ? endedTs.toInstant() : null,
-                Session.SessionStatus.valueOf(rs.getString("status"))
-        );
+                resultSet.getString("id"),
+                resultSet.getString("user_id"),
+                resultSet.getString("tenant_id"),
+                resultSet.getString("title"),
+                resultSet.getTimestamp("created_at").toInstant(),
+                resultSet.getTimestamp("last_active").toInstant(),
+                endedAt == null ? null : endedAt.toInstant(),
+                Session.SessionStatus.valueOf(resultSet.getString("status")));
+    }
+
+    private static String normalizeTenant(String tenantId) {
+        return tenantId == null || tenantId.isBlank() ? null : tenantId.trim();
+    }
+
+    private static void validateLimit(int limit) {
+        if (limit < 1 || limit > 200) {
+            throw new IllegalArgumentException("limit must be between 1 and 200");
+        }
+    }
+
+    @FunctionalInterface
+    private interface SqlBinder {
+        void bind(PreparedStatement statement) throws SQLException;
     }
 }

@@ -62,7 +62,8 @@ public final class AudioTranscriptionTool implements TypedOutputTool {
                 TOOL_NAME,
                 "Transcribe an uploaded or generated audio file into text. "
                         + "Use the exact file reference shown in the conversation.",
-                parameters);
+                parameters,
+                com.harness.core.model.ToolCapability.READ);
     }
 
     @Override

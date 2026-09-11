@@ -3,6 +3,7 @@ package com.harness.agent;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.harness.agent.context.KnowledgeAccessService;
+import com.harness.agent.knowledge.KnowledgeToolRuntimeContext;
 import com.harness.core.model.ArtifactStore;
 import com.harness.react.ReActLoop;
 import com.harness.react.ReActLoopFactory;
@@ -228,6 +229,8 @@ public class SubAgentManager {
                 KnowledgeGraphTool.captureCurrentContext();
         final KnowledgeAccessService.ContextSnapshot knowledgeContext =
                 KnowledgeAccessService.captureCurrentContext();
+        final KnowledgeToolRuntimeContext unifiedKnowledgeContext =
+                KnowledgeToolRuntimeContext.captureCurrent();
 
         CompletableFuture<SubAgentResult> future = CompletableFuture.supplyAsync(() -> {
             Thread currentThread = Thread.currentThread();
@@ -262,6 +265,8 @@ public class SubAgentManager {
                     subAgentToolCatalog = subAgentToolCatalog.replacing(
                             StructuredOutputTool.terminal(jsonSchema));
                 }
+                KnowledgeToolRuntimeContext.restoreForCatalog(
+                        unifiedKnowledgeContext, subAgentToolCatalog);
 
                 ReActLoop reActLoop = reActLoopFactory.create(subAgentToolCatalog, toolExecutor);
 
@@ -287,13 +292,13 @@ public class SubAgentManager {
                 long duration = System.currentTimeMillis() - start;
                 log.info("[SubAgentManager] Task {} completed in {}ms, steps={}", taskId, duration, result.steps().size());
 
-                // Persist full ReAct steps only in the linked sub-agent trace.
-                String subTraceId = saveSubAgentTrace(trace, record, runContext, result, duration);
-
                 SubAgentCompletionContractValidator.Evaluation evaluation =
                         completionContractValidator.evaluate(
                                 record.task().completionContract(),
                                 result.steps(), result.artifacts(), result.output());
+                // Persist full ReAct steps and evaluated completion evidence together.
+                String subTraceId = saveSubAgentTrace(
+                        trace, record, runContext, result, evaluation, duration);
                 SubAgentResult subResult;
                 if (evaluation.contractValidation().satisfied()) {
                     subResult = SubAgentResult.success(
@@ -329,6 +334,7 @@ public class SubAgentManager {
                 HttpApiTool.clearCurrentCredentials();
                 KnowledgeGraphTool.clearCurrentContext();
                 KnowledgeAccessService.clearCurrentContext();
+                KnowledgeToolRuntimeContext.clear();
                 taskToken.untrackThread(currentThread);
                 activeTasks.decrementAndGet();
 
@@ -499,8 +505,14 @@ public class SubAgentManager {
      *
      * @return the sub-agent's trace ID, or null if persistence failed
      */
-    private String saveSubAgentTrace(RunTrace trace, SubAgentTaskRecord record,
-                                     AgentRunContext runContext, ReActResult result, long durationMs) {
+    private String saveSubAgentTrace(
+            RunTrace trace,
+            SubAgentTaskRecord record,
+            AgentRunContext runContext,
+            ReActResult result,
+            SubAgentCompletionContractValidator.Evaluation evaluation,
+            long durationMs
+    ) {
         try {
             result.steps().forEach(trace::addStep);
             RiskLevel risk = result.steps().stream()
@@ -508,10 +520,18 @@ public class SubAgentManager {
                     .anyMatch(toolResult -> !toolResult.success())
                     ? RiskLevel.MEDIUM : RiskLevel.LOW;
             trace.recordOutput(result.output(), risk, true);
+            if (result.loopStats() != null) {
+                var stats = result.loopStats();
+                trace.recordReactStats(
+                        stats.outcome(), stats.rounds(), stats.toolCalls(),
+                        stats.reflectionChecks(), stats.inputTokens(), stats.outputTokens(),
+                        stats.llmCalls(), stats.toolRetries());
+            }
 
             // Link to parent trace via metadata
             java.util.Map<String, String> meta = new java.util.HashMap<>();
             meta.put("sub_agent_task_id", record.taskId());
+            meta.put("run_id", record.taskId());
             meta.put("parent_run_id", runContext.runId());
             if (runContext.parentTraceId() != null) {
                 meta.put("parent_trace_id", runContext.parentTraceId());
@@ -519,6 +539,10 @@ public class SubAgentManager {
             meta.put("sub_agent_persona", record.task().persona() != null ? record.task().persona() : "");
             meta.put("sub_agent_tools", String.join(",", record.task().tools()));
             meta.put("sub_agent_duration_ms", String.valueOf(durationMs));
+            meta.put("completion_validated", String.valueOf(
+                    evaluation.contractValidation().satisfied()));
+            meta.put("task_contract_status",
+                    evaluation.contractValidation().status().name().toLowerCase(java.util.Locale.ROOT));
             trace.putMetadata(meta);
 
             var subTrace = trace.finish();

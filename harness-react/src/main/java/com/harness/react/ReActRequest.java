@@ -14,6 +14,7 @@ public record ReActRequest(
         String systemPrompt,
         String userMessage,
         List<ChatMessage> historyMessages,
+        String dynamicKnowledgeContext,
         RunTrace trace,
         ReActListener listener,
         CancellationToken cancellationToken,
@@ -25,10 +26,46 @@ public record ReActRequest(
         Objects.requireNonNull(systemPrompt, "systemPrompt");
         Objects.requireNonNull(userMessage, "userMessage");
         historyMessages = historyMessages != null ? List.copyOf(historyMessages) : List.of();
+        dynamicKnowledgeContext = dynamicKnowledgeContext == null
+                || dynamicKnowledgeContext.isBlank()
+                ? null
+                : dynamicKnowledgeContext;
         trace = trace != null ? trace : RunTrace.noop();
         finalOutputContract = finalOutputContract != null
                 ? finalOutputContract
                 : new FinalOutputContract.Text();
+    }
+
+    public ReActRequest(
+            String systemPrompt,
+            String userMessage,
+            List<ChatMessage> historyMessages,
+            String dynamicKnowledgeContext,
+            RunTrace trace,
+            ReActListener listener,
+            CancellationToken cancellationToken,
+            Boolean enableThinking,
+            ConfirmationExecutionContext confirmationContext
+    ) {
+        this(systemPrompt, userMessage, historyMessages, dynamicKnowledgeContext,
+                trace, listener, cancellationToken, enableThinking,
+                confirmationContext, new FinalOutputContract.Text());
+    }
+
+    public ReActRequest(
+            String systemPrompt,
+            String userMessage,
+            List<ChatMessage> historyMessages,
+            RunTrace trace,
+            ReActListener listener,
+            CancellationToken cancellationToken,
+            Boolean enableThinking,
+            ConfirmationExecutionContext confirmationContext,
+            FinalOutputContract finalOutputContract
+    ) {
+        this(systemPrompt, userMessage, historyMessages, null, trace, listener,
+                cancellationToken, enableThinking, confirmationContext,
+                finalOutputContract);
     }
 
     public ReActRequest(
@@ -41,7 +78,7 @@ public record ReActRequest(
             Boolean enableThinking,
             ConfirmationExecutionContext confirmationContext
     ) {
-        this(systemPrompt, userMessage, historyMessages, trace, listener,
+        this(systemPrompt, userMessage, historyMessages, null, trace, listener,
                 cancellationToken, enableThinking, confirmationContext,
                 new FinalOutputContract.Text());
     }

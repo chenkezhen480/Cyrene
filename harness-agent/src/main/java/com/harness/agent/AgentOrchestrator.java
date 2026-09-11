@@ -3,6 +3,12 @@ package com.harness.agent;
 import com.harness.agent.graph.GraphSpaceAccessService;
 import com.harness.agent.graph.GraphSpaceAccessServiceFactory;
 import com.harness.agent.memory.AgentMemoryRuntime;
+import com.harness.agent.memory.LongTermKnowledgeRetriever;
+import com.harness.agent.memory.PreferenceActivationContextBuilder;
+import com.harness.agent.knowledge.KnowledgeDiscoveryRouter;
+import com.harness.agent.knowledge.KnowledgeReadTool;
+import com.harness.agent.knowledge.KnowledgeSearchTool;
+import com.harness.agent.knowledge.KnowledgeToolRuntimeContext;
 import com.harness.agent.runtime.AgentRuntime;
 import com.harness.agent.runtime.AgentRunPreparer;
 import com.harness.agent.runtime.AgentRunCoordinator;
@@ -25,6 +31,8 @@ import com.harness.core.env.EnvConfig;
 import com.harness.core.env.EnvKey;
 import com.harness.core.env.MysqlConnectionPool;
 import com.harness.core.env.RedisConnectionPool;
+import com.harness.core.knowledge.KnowledgeHandleCodec;
+import com.harness.core.knowledge.LongTermKnowledgeBudgetAllocator;
 import com.harness.graph.config.GraphSettings;
 import com.harness.graph.config.KnowledgeGraphStoreFactory;
 import com.harness.graph.retrieval.AnchoredNeighborhoodGraphRetriever;
@@ -52,7 +60,6 @@ import com.harness.input.memory.*;
 import com.harness.tool.RunToolCatalog;
 import com.harness.tool.ToolExecutor;
 import com.harness.tool.ToolRegistry;
-import com.harness.tool.builtin.UpdateMemoryTool;
 import com.harness.tool.builtin.WebSearchTool;
 import com.harness.tool.confirmation.ConfirmationManager;
 import com.harness.tool.web.AuthorizedUrlContext;
@@ -65,8 +72,10 @@ import org.slf4j.LoggerFactory;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.UserMessage;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.nio.file.Path;
+import java.time.Clock;
 import java.time.Duration;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -86,7 +95,6 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
     static {
         // Register JDBC drivers for fat JAR (SPI discovery may fail)
         try { Class.forName("com.mysql.cj.jdbc.Driver"); } catch (ClassNotFoundException ignored) {}
-        try { Class.forName("org.postgresql.Driver"); } catch (ClassNotFoundException ignored) {}
         try { Class.forName("org.sqlite.JDBC"); } catch (ClassNotFoundException ignored) {}
     }
 
@@ -118,6 +126,7 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
     private final SessionResumeDispatcher resumeDispatcher;
 
     private final AgentMemoryRuntime memoryRuntime;
+    private LongTermKnowledgeRetriever longTermKnowledgeRetriever;
 
     // Skill subsystem
     private final SkillRegistry skillRegistry;
@@ -131,7 +140,9 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
         ModelConfig initialModelConfig = loadModelConfiguration();
 
         // Database connections (主动建立，按需连接)
-        if (MemoryStoreFactory.isEnabled()) {
+        if (MemoryStoreFactory.isMysqlEnabled()
+                || "mysql".equalsIgnoreCase(EnvConfig.get().getString(
+                EnvKey.AUDIT_STORE, "none"))) {
             MysqlConnectionPool.init();
         }
         if (EnvConfig.get().getString(EnvKey.MEMORY_REDIS_URL) != null) {
@@ -225,13 +236,17 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
                 new GapRuleEngine(), new GapModelAnalyzer(runtime.providers().smallTask()));
 
         this.memoryRuntime = new AgentMemoryRuntime(
-                runtime.providers().chat(), skillRegistry, toolRegistry);
+                runtime.providers().chat(), runtime.providers().embedding(),
+                skillRegistry, toolRegistry, contextBuilder.vectorStore());
+        registerUnifiedKnowledgeTools();
         this.runPreparer = new AgentRunPreparer(
                 runtime,
                 promptBuilder,
                 gapAnalyzer,
                 memoryRuntime,
-                knowledgeGraphToolEnabled);
+                knowledgeGraphToolEnabled,
+                longTermKnowledgeRetriever,
+                new PreferenceActivationContextBuilder());
         this.runCoordinator = new AgentRunCoordinator(
                 runtime,
                 runPreparer,
@@ -250,6 +265,50 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
                 runtime.providers().smallTask().providerName(),
                 toolRegistry.size(),
                 memoryRuntime.enabled() ? "enabled" : "none");
+    }
+
+    private void registerUnifiedKnowledgeTools() {
+        String ragProvider = EnvConfig.get().getString(EnvKey.RAG_PROVIDER, "milvus");
+        if (!memoryRuntime.enabled()) {
+            log.info("Knowledge authority and tools disabled (memory=none)");
+            return;
+        }
+        ObjectMapper objectMapper = new ObjectMapper();
+        this.longTermKnowledgeRetriever = new LongTermKnowledgeRetriever(
+                memoryRuntime.knowledgeRepository(),
+                new LongTermKnowledgeBudgetAllocator(
+                        runtime.providers().embedding().tokenEstimator(),
+                        EnvConfig.get().getDouble(
+                                EnvKey.MEMORY_LONGTERM_BUDGET_RATIO,
+                                LongTermKnowledgeBudgetAllocator.DEFAULT_BUDGET_RATIO)),
+                runtime.providers().embedding().tokenEstimator(),
+                objectMapper,
+                Clock.systemUTC());
+        toolRegistry.register(new com.harness.agent.memory.SaveMemoryTool(
+                memoryRuntime.knowledgeRepository(), objectMapper, Clock.systemUTC(),
+                memoryRuntime::signalKnowledgeIndex));
+        if ("none".equalsIgnoreCase(ragProvider)) {
+            log.info("Knowledge search tools disabled (ragProvider=none); "
+                    + "memory capture and MySQL preference injection remain enabled");
+            return;
+        }
+        KnowledgeHandleCodec handleCodec = new KnowledgeHandleCodec(objectMapper);
+        KnowledgeDiscoveryRouter router = new KnowledgeDiscoveryRouter(
+                memoryRuntime.knowledgeRepository(),
+                memoryRuntime.knowledgeProjectionStore(),
+                runtime.providers().embedding(),
+                toolRuntime.knowledgeAccessService(),
+                toolRuntime.graphKnowledgeExecutor(),
+                Clock.systemUTC());
+        toolRegistry.register(new KnowledgeSearchTool(router, handleCodec, objectMapper));
+        toolRegistry.register(new KnowledgeReadTool(
+                memoryRuntime.knowledgeRepository(),
+                memoryRuntime.knowledgeProjectionStore(),
+                handleCodec,
+                toolRuntime.knowledgeAccessService(),
+                toolRuntime.graphKnowledgeExecutor(),
+                objectMapper,
+                Clock.systemUTC()));
     }
 
     public AgentResult run(String token, String text, List<MultimodalParser.RawAttachment> attachments) {
@@ -463,8 +522,6 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
 
     private static void activateToolContext(String userId, String sessionId) {
         LoadSkillTool.setCurrentSession(sessionId);
-        UpdateMemoryTool.setCurrentUserId(userId);
-        UpdateMemoryTool.setCurrentSessionId(sessionId);
     }
 
     private String openRunScope(
@@ -483,6 +540,7 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
         subAgentManager.openScope(runId);
         SpawnSubAgentTool.setCurrentRunContext(runContext);
         Map<String, String> metadata = new HashMap<>(trace.snapshot().metadata());
+        metadata.put("run_id", runId);
         metadata.put("tool_catalog_version", String.valueOf(runToolCatalog.version()));
         metadata.put("tool_count", String.valueOf(runToolCatalog.size()));
         metadata.put("authorized_tools", runToolCatalog.getAll().stream()
@@ -519,22 +577,21 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
             log.debug("[Orchestrator] Sub-agent scope finished: runId={}", runId);
         }
         LoadSkillTool.clearCurrentSession();
-        UpdateMemoryTool.clearContext();
         KnowledgeGraphTool.clearCurrentContext();
         KnowledgeAccessService.clearCurrentContext();
+        KnowledgeToolRuntimeContext.clear();
         AuthorizedUrlContext.clear();
     }
 
     private Set<String> detachedResumeUnavailableTools(AgentContext context) {
         Set<String> unavailable = new HashSet<>();
         if (Boolean.FALSE.equals(context.needsKnowledgeBase())) {
-            unavailable.add(KnowledgeBaseTool.TOOL_NAME);
-            unavailable.add(KnowledgeContextReadTool.TOOL_NAME);
+            unavailable.add(KnowledgeSearchTool.TOOL_NAME);
+            unavailable.add(KnowledgeReadTool.TOOL_NAME);
         }
         if (Boolean.FALSE.equals(context.needsWebSearch())) {
             unavailable.add(WebSearchTool.TOOL_NAME);
         }
-        unavailable.add(KnowledgeGraphTool.TOOL_NAME);
         return Set.copyOf(unavailable);
     }
 
@@ -568,7 +625,7 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
         return result.steps().stream()
                 .flatMap(step -> step.toolResults().stream())
                 .anyMatch(toolResult ->
-                        toolResult.status() == ToolResult.ResultStatus.CONFIRMATION_REQUIRED);
+                        toolResult.executionStatus() == ExecutionStatus.CONFIRMATION_REQUIRED);
     }
 
     /**
@@ -591,17 +648,26 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
     // Expose memory stores for external use (e.g., cleanup scheduler)
     public SessionStore sessionStore() { return memoryRuntime.sessionStore(); }
     public MessageStore messageStore() { return memoryRuntime.messageStore(); }
-    public PreferenceStore preferenceStore() { return memoryRuntime.preferenceStore(); }
     public SessionLifecycleManager sessionLifecycle() { return memoryRuntime.sessionLifecycle(); }
-    public PreferenceRefinementWorker refinementWorker() { return memoryRuntime.refinementWorker(); }
     public SubAgentManager subAgentManager() { return subAgentManager; }
     public SessionMessageCache messageCache() { return memoryRuntime.messageCache(); }
     public MessageWriteWorker messageWriteWorker() { return memoryRuntime.messageWriteWorker(); }
+
+    public com.harness.tool.knowledge.index.KnowledgeReindexService knowledgeReindexService() {
+        return memoryRuntime.knowledgeReindexService();
+    }
     public SkillRegistry skillRegistry() { return skillRegistry; }
     public TraceStore traceStore() { return traceStore; }
     public ConfirmationManager confirmationManager() { return confirmationManager; }
     public com.harness.tool.rag.VectorStore vectorStore() { return contextBuilder.vectorStore(); }
     public KnowledgeGraphStore knowledgeGraphStore() { return knowledgeGraphStore; }
+
+    public com.harness.tool.knowledge.authority.KnowledgeRepository knowledgeRepository() {
+        return memoryRuntime.knowledgeRepository();
+    }
+    public com.harness.tool.knowledge.authority.KnowledgeSourcePurgeGuard sourcePurgeGuard() {
+        return memoryRuntime.sourcePurgeGuard();
+    }
     public GraphSpaceAccessService graphSpaceAccessService() { return graphSpaceAccessService; }
     public GraphSchemaRegistry graphSchemaRegistry() { return graphSchemaRegistry; }
     public GraphSchemaManagementService graphSchemaManagementService() { return graphSchemaManagementService; }
@@ -626,8 +692,14 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
                 return;
             }
 
-            String userId = memoryRuntime.findSessionUserId(sessionId);
-            List<Preference> longtermPrefs = memoryRuntime.loadPreferences(userId);
+            var session = memoryRuntime.sessionStore()
+                    .findByIdForInternalTask(sessionId).orElse(null);
+            if (session == null) {
+                log.warn("[Orchestrator] Cannot resume session {}: session not found", sessionId);
+                return;
+            }
+            String userId = session.userId();
+            String tenantId = session.tenantId();
             List<MemoryMessage> shorttermMessages =
                     memoryRuntime.loadMessages(sessionId, userId);
 
@@ -660,9 +732,10 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
 
             CancellationToken cancellationToken = new CancellationToken();
             AgentContext resumeAgentContext = AgentContext.empty();
-            // Detached resume events currently persist the user/session identity but not the
-            // trusted caller's tenantId. Keep graph retrieval unavailable here instead of
-            // silently falling back to the standalone tenant and crossing graph-space scopes.
+            // The tenant scope is restored from the session row, which was written under the
+            // original trusted boundary, so knowledge tools keep their owner/tenant scope
+            // instead of silently falling back to a standalone tenant. No request-scoped
+            // graph context exists on this path.
             Set<String> unavailableTools = detachedResumeUnavailableTools(resumeAgentContext);
             RunToolCatalog runToolCatalog = createRunToolCatalog(unavailableTools);
             RunTrace trace = runtime.startTrace();
@@ -675,7 +748,10 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
                 AuthorizedUrlContext.clear();
                 KnowledgeGraphTool.clearCurrentContext();
                 KnowledgeAccessService.clearCurrentContext();
+                KnowledgeToolRuntimeContext.clear();
                 activateToolContext(userId, sessionId);
+                KnowledgeAccessService.setCurrentContext(tenantId, null);
+                KnowledgeToolRuntimeContext.activate(tenantId, userId, null, null, runToolCatalog);
                 resumeRunId = openRunScope(
                         sessionId,
                         cancellationToken,
@@ -684,7 +760,7 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
 
                 // Build system prompt
                 GapAnalysis gapAnalysis = gapAnalyzer.analyze(eventMessage.toString(), resumeAgentContext);
-                String systemPrompt = promptBuilder.buildSystemPrompt(longtermPrefs, null, sessionId,
+                String systemPrompt = promptBuilder.buildSystemPrompt(null, sessionId,
                         gapAnalysis.needsKnowledgeBase(), false, null,
                         gapAnalysis.needsWebSearch());
 
@@ -706,15 +782,16 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
                 result.steps().forEach(trace::addStep);
                 recordReactStats(trace, result);
                 trace.recordOutput(result.output(), determineRisk(result), true);
-                trace.finish();
 
                 // Save assistant message
                 if (userId != null) {
                     List<MessageBlock> asstBlocks = List.of(new MessageBlock(MessageBlock.BlockType.TEXT,
                             result.output() != null ? result.output() : "", null));
                     memoryRuntime.persistAssistantMessage(
-                            sessionId, userId, asstBlocks, true);
+                            sessionId, userId, trace.traceId(), asstBlocks, true);
+                    memoryRuntime.awaitMessageWrites(trace.traceId());
                 }
+                trace.finish();
 
                 log.info("[Orchestrator] Session {} resumed successfully, outputLen={}", sessionId,
                         result.output() != null ? result.output().length() : 0);
@@ -734,7 +811,6 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
         skillRegistry.evictExpired();
         traceStore.close();
         knowledgeGraphStore.close();
-        com.harness.core.env.PgConnectionPool.shutdown();
         com.harness.core.env.MysqlConnectionPool.shutdown();
         com.harness.core.env.RedisConnectionPool.shutdown();
         log.info("Agent shut down");

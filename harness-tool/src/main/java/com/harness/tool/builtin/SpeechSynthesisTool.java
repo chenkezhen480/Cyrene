@@ -52,7 +52,8 @@ public final class SpeechSynthesisTool implements TypedOutputTool {
                 TOOL_NAME,
                 "Convert text to speech and return a downloadable audio artifact. "
                         + "Use this only when the user explicitly requests spoken audio.",
-                parameters);
+                parameters,
+                com.harness.core.model.ToolCapability.GENERATION);
     }
 
     @Override

@@ -2,7 +2,6 @@ FROM python:3.12.11-slim-bookworm
 
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends \
-        ffmpeg \
         libimage-exiftool-perl \
         libmagic1 \
     && rm -rf /var/lib/apt/lists/*

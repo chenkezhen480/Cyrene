@@ -65,7 +65,7 @@ public record ReActStep(
     /**
      * 获取指定工具最近一次调用声明的结构化结果状态。
      */
-    public static ToolResult.ResultStatus getLastToolResultStatus(String toolName) {
+    public static ResultStatus getLastToolResultStatus(String toolName) {
         List<ReActStep> steps = getCurrentSteps();
         for (int i = steps.size() - 1; i >= 0; i--) {
             ReActStep step = steps.get(i);
@@ -75,7 +75,7 @@ public record ReActStep(
             for (int j = step.toolResults().size() - 1; j >= 0; j--) {
                 ToolResult result = step.toolResults().get(j);
                 if (toolName.equals(result.toolName())) {
-                    return result.status();
+                    return result.resultStatus();
                 }
             }
         }
@@ -85,7 +85,7 @@ public record ReActStep(
     /**
      * 判断指定工具在当前 ReAct 运行中是否曾声明过目标结果状态。
      */
-    public static boolean hasToolResultStatus(String toolName, ToolResult.ResultStatus status) {
+    public static boolean hasToolResultStatus(String toolName, ResultStatus status) {
         if (status == null) {
             return false;
         }
@@ -94,7 +94,7 @@ public record ReActStep(
                 continue;
             }
             for (ToolResult result : step.toolResults()) {
-                if (toolName.equals(result.toolName()) && status == result.status()) {
+                if (toolName.equals(result.toolName()) && status == result.resultStatus()) {
                     return true;
                 }
             }

@@ -64,6 +64,7 @@ const messages = {
     submittingConfirmation: '正在提交...',
     // KnowledgePage
     enterCollectionName: '请输入知识库名称', uploadSuccess: '上传成功',
+    uploadQueued: '上传已接收，正在后台重试处理',
     collectionDeleted: '知识库已删除', uploadKnowledge: '上传知识库',
     collectionName: '知识库名称', chooseFile: '选择文件', uploading: '上传中...',
     upload: '上传', browseKnowledge: '知识库浏览',
@@ -326,6 +327,7 @@ const messages = {
     submittingConfirmation: 'Submitting...',
     // KnowledgePage
     enterCollectionName: 'Please enter a collection name', uploadSuccess: 'Upload successful',
+    uploadQueued: 'Upload accepted and queued for background retry',
     collectionDeleted: 'Collection deleted', uploadKnowledge: 'Upload Knowledge',
     collectionName: 'Collection name', chooseFile: 'Choose file', uploading: 'Uploading...',
     upload: 'Upload', browseKnowledge: 'Browse Knowledge',

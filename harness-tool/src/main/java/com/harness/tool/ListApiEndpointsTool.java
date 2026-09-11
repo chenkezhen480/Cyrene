@@ -6,7 +6,9 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.harness.core.model.ApiEndpoint;
 import com.harness.core.model.ProjectApiConfig;
-import com.harness.core.model.ToolResult;
+import com.harness.core.model.ResultStatus;
+import com.harness.core.model.ToolExecutionOutcome;
+import com.harness.core.model.ToolOutput;
 import com.harness.core.model.ToolSpec;
 
 import java.util.function.Supplier;
@@ -35,20 +37,24 @@ public class ListApiEndpointsTool implements Tool {
                 "list_api_endpoints",
                 "列出已发现的内部接口目录（返回 id、名称、描述、方法、路径）。" +
                 "如需完整参数定义，请用 get_api_endpoint_detail(endpointId) 查询。",
-                params
+                params,
+                com.harness.core.model.ToolCapability.RETRIEVAL
         );
     }
 
     @Override
     public String execute(JsonNode arguments) {
+        return executeOutcome(arguments).content().modelContent();
+    }
+
+    @Override
+    public ToolExecutionOutcome executeOutcome(JsonNode arguments) {
         ProjectApiConfig config = configSupplier.get();
         var endpoints = ProjectApiPolicy.callableEndpoints(config);
         if (endpoints.isEmpty()) {
-            ToolResult.setCurrentStatus(ToolResult.ResultStatus.EMPTY);
-            return "No confirmed API endpoints are available.";
+            return outcome("No confirmed API endpoints are available.", ResultStatus.EMPTY);
         }
 
-        ToolResult.setCurrentStatus(ToolResult.ResultStatus.SUCCESS);
         ArrayNode arr = mapper.createArrayNode();
         for (ApiEndpoint ep : endpoints) {
             ObjectNode node = mapper.createObjectNode();
@@ -64,6 +70,10 @@ public class ListApiEndpointsTool implements Tool {
         result.put("total", arr.size());
         result.put("projectDescription", config.projectDescription());
         result.set("endpoints", arr);
-        return result.toString();
+        return outcome(result.toString(), ResultStatus.AVAILABLE);
+    }
+
+    private static ToolExecutionOutcome outcome(String text, ResultStatus status) {
+        return ToolExecutionOutcome.succeeded(ToolOutput.text(text), status);
     }
 }

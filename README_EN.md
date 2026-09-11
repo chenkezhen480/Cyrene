@@ -4,7 +4,7 @@
 
 > Add an autonomous ReAct Agent to an existing business system, its domain knowledge, and its authorization model instead of building an isolated AI application from scratch.
 
-Cyrene Agent is an enterprise Agent development framework built with Java 21. It is designed for vertical-domain developers who need to give an existing system a natural-language interface, project API control, enterprise knowledge retrieval, relational-data retrieval, validated structured output, sub-agent collaboration, and end-to-end tracing. The current version is `0.5.10`.
+Cyrene Agent is an enterprise Agent development framework built with Java 21. It is designed for vertical-domain developers who need to give an existing system a natural-language interface, project API control, enterprise knowledge retrieval, relational-data retrieval, validated structured output, sub-agent collaboration, and end-to-end tracing. The current version is `0.6.0`.
 
 ## Why Cyrene Agent
 
@@ -21,8 +21,6 @@ Cyrene Agent addresses a different question: **how do you build a dedicated Agen
 | Relational data is often flattened into text | Documents use vector retrieval; relationships use a knowledge graph |
 
 The framework service, knowledge stores, and persistence components can be deployed locally. Calls to external model providers or business APIs send data to the configured services, so deployments should select providers according to their own data policies.
-
-![Chat interface](docs/assets/chat.png)
 
 ## Core Runtime Model
 
@@ -90,7 +88,7 @@ The project is centered on a request-scoped ReAct Loop rather than a fixed node 
 
 Enterprise documents and relational business data require different retrieval strategies:
 
-- `knowledge_base_search` targets policies, manuals, contracts, and technical documents. It supports Milvus or pgvector and uses collections as knowledge-set boundaries. Chunking prioritizes paragraph and semantic integrity before embedding, hybrid retrieval, and optional reranking.
+- `knowledge_base_search` targets policies, manuals, contracts, and technical documents. It supports Milvus and uses collections as knowledge-set boundaries. Chunking prioritizes paragraph and semantic integrity before embedding, hybrid retrieval, and optional reranking.
 ![Knowledge-base interface](docs/assets/knowledge.png)
 
 - `knowledge_graph_search` targets entities, relationships, and paths. Neo4j stores graph data, and graph results are not disguised as document chunks that distract the model.
@@ -98,7 +96,7 @@ Enterprise documents and relational business data require different retrieval st
 
 - The graph tenant scope comes from the trusted `tenantId` in Context. In multi-tenant mode, tenant-to-Graph-Space authorization is persisted in the MySQL `graph_space_bindings` table. Request context can narrow the graph scope; the model cannot expand the tenant, schema, or subject scope.
 
-Milvus, pgvector, Neo4j, MySQL, and Redis can all run through local Docker Compose so private knowledge and business data remain within the local deployment boundary by default. Vector tenancy can be organized by the integrating system at the collection or deployment layer; request-level hard isolation currently focuses on knowledge-graph tenant and Graph Space authorization.
+Milvus, Neo4j, MySQL, and Redis can all run through local Docker Compose so private knowledge and business data remain within the local deployment boundary by default. Vector tenancy can be organized by the integrating system at the collection or deployment layer; request-level hard isolation currently focuses on knowledge-graph tenant and Graph Space authorization.
 
 ### 4. Hot-Reloadable Tools and Request-Scoped Tool Snapshots
 
@@ -151,7 +149,7 @@ docker compose --env-file .env -f docker/docker-compose.yml --profile graph up -
 
 ```bash
 mvn clean package -pl harness-server -am -DskipTests
-java -jar harness-server/target/harness-server-0.5.10.jar
+java -jar harness-server/target/harness-server-0.6.0.jar
 ```
 
 The service listens on `8080` by default. Open the Web console to discover project APIs, upload knowledge, manage graph data, and talk to the Agent.

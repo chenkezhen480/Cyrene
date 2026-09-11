@@ -17,26 +17,26 @@ class ReActStepTest {
     @Test
     void structuredToolStatusHistoryUsesLatestResult() {
         ReActStep.setCurrentSteps(List.of(
-                step(1, ToolResult.ResultStatus.ESCALATING),
-                step(2, ToolResult.ResultStatus.LOW_RELEVANCE)));
+                step(1, ResultStatus.ESCALATING),
+                step(2, ResultStatus.LOW_RELEVANCE)));
 
-        assertThat(ReActStep.getLastToolResultStatus("knowledge_base_search"))
-                .isEqualTo(ToolResult.ResultStatus.LOW_RELEVANCE);
+        assertThat(ReActStep.getLastToolResultStatus("knowledge_search"))
+                .isEqualTo(ResultStatus.LOW_RELEVANCE);
         assertThat(ReActStep.hasToolResultStatus(
-                "knowledge_base_search", ToolResult.ResultStatus.ESCALATING)).isTrue();
+                "knowledge_search", ResultStatus.ESCALATING)).isTrue();
     }
 
-    private static ReActStep step(int number, ToolResult.ResultStatus status) {
+    private static ReActStep step(int number, ResultStatus status) {
         ToolResult result = ToolResult.ok(
                 "call-" + number,
-                "knowledge_base_search",
+                "knowledge_search",
                 "result",
                 10,
                 status);
         return new ReActStep(
                 number,
                 null,
-                "knowledge_base_search",
+                "knowledge_search",
                 List.of(),
                 List.of(result),
                 result.output(),

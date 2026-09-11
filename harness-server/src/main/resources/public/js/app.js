@@ -625,7 +625,7 @@ const ChatPage = {
       currentSessionId.value = sid;
       try {
         const page = requirePageResponse(
-          await CyreneAPI.getMessages(sid, { limit: 50, direction: 'asc' }),
+          await CyreneAPI.getMessages(sid, userId.value, { limit: 50, direction: 'asc' }),
           message => typeof message?.id === 'number'
             && typeof message?.role === 'string',
           t('invalidMessagePageResponse')
@@ -645,7 +645,7 @@ const ChatPage = {
     async function deleteSession(sid) {
       if (!confirm(t('deleteSessionConfirm'))) return;
       try {
-        await CyreneAPI.closeSession(sid);
+        await CyreneAPI.closeSession(sid, userId.value);
         showToast(t('sessionDeleted'), 'success');
         if (currentSessionId.value === sid) {
           currentSessionId.value = null;
@@ -1140,13 +1140,9 @@ const KnowledgePage = {
     const loadingDocuments = ref(false);
     const loadingMore = ref(false);
     const documentListError = ref('');
-    const deletingDocumentId = ref('');
     const uploading = ref(false);
     const uploadCollection = ref('');
     const fileInput = ref(null);
-    const editingDoc = ref(null);
-    const editingContent = ref('');
-    const saving = ref(false);
     let searchTimer = null;
     let documentQueryVersion = 0;
 
@@ -1237,8 +1233,10 @@ const KnowledgePage = {
       }
       uploading.value = true;
       try {
-        await CyreneAPI.uploadKnowledge(file, uploadCollection.value.trim());
-        showToast(t('uploadSuccess'), 'success');
+        const result = await CyreneAPI.uploadKnowledge(file, uploadCollection.value.trim());
+        const pending = result.status === 'pending';
+        showToast(pending ? t('uploadQueued') : t('uploadSuccess'),
+          pending ? 'info' : 'success');
         selectedCollection.value = uploadCollection.value.trim();
         loadCollections();
         loadDocuments();
@@ -1247,64 +1245,6 @@ const KnowledgePage = {
       } finally {
         uploading.value = false;
       }
-    }
-
-    async function deleteDoc(docId) {
-      if (deletingDocumentId.value || loadingDocuments.value || loadingMore.value) return;
-      deletingDocumentId.value = docId;
-      try {
-        await CyreneAPI.deleteDocument(selectedCollection.value, docId);
-        showToast(t('deleted'), 'success');
-        loadDocuments();
-      } catch (e) {
-        showToast(t('deleteFailed') + e.message, 'error');
-      } finally {
-        deletingDocumentId.value = '';
-      }
-    }
-
-    async function deleteCol() {
-      if (!selectedCollection.value) return;
-      try {
-        await CyreneAPI.deleteCollection(selectedCollection.value);
-        showToast(t('collectionDeleted'), 'success');
-        selectedCollection.value = '';
-        documents.value = [];
-        loadCollections();
-      } catch (e) {
-        showToast(t('deleteFailed') + e.message, 'error');
-      }
-    }
-
-    async function openEdit(docId) {
-      try {
-        const doc = await CyreneAPI.getDocument(selectedCollection.value, docId);
-        editingDoc.value = doc;
-        editingContent.value = doc.content || '';
-      } catch (e) {
-        showToast(t('loadFailed') + e.message, 'error');
-      }
-    }
-
-    async function saveEdit() {
-      if (!editingDoc.value) return;
-      saving.value = true;
-      try {
-        await CyreneAPI.updateDocument(selectedCollection.value, editingDoc.value.id, editingContent.value);
-        showToast(t('saved'), 'success');
-        editingDoc.value = null;
-        editingContent.value = '';
-        loadDocuments();
-      } catch (e) {
-        showToast(t('saveFailed') + e.message, 'error');
-      } finally {
-        saving.value = false;
-      }
-    }
-
-    function closeEdit() {
-      editingDoc.value = null;
-      editingContent.value = '';
     }
 
     watch(selectedCollection, () => {
@@ -1331,10 +1271,10 @@ const KnowledgePage = {
     return {
       Icons, t, collections, collectionPageInfo, loadingCollections,
       selectedCollection, documents, pageInfo, fileNameFilter,
-      loadingDocuments, loadingMore, documentListError, deletingDocumentId,
-      uploading, uploadCollection, fileInput, editingDoc, editingContent, saving,
+      loadingDocuments, loadingMore, documentListError,
+      uploading, uploadCollection, fileInput,
       loadCollections, loadMoreCollections, loadDocuments, loadMoreDocuments, clearFileNameFilter,
-      uploadFile, deleteDoc, deleteCol, openEdit, saveEdit, closeEdit,
+      uploadFile,
     };
   },
   template: `
@@ -1368,9 +1308,6 @@ const KnowledgePage = {
           <div style="display: flex; gap: var(--space-2); align-items: center;">
             <button class="btn btn-ghost btn-sm" @click="loadCollections">
               <span v-html="Icons.refresh" style="width:14px;height:14px;"></span>
-            </button>
-            <button class="btn btn-danger btn-sm" v-if="selectedCollection" @click="deleteCol">
-              <span v-html="Icons.trash" style="width:14px;height:14px;"></span>
             </button>
           </div>
         </div>
@@ -1422,27 +1359,17 @@ const KnowledgePage = {
                 <tr>
                   <th>{{ t('chunksSource') }}</th>
                   <th>{{ t('chunksCount') }}</th>
-                  <th>{{ t('operation') }}</th>
                 </tr>
               </thead>
               <tbody>
                 <tr v-for="doc in documents" :key="doc.id">
                   <td class="text-sm">{{ doc.fileName || doc.id }}</td>
                   <td class="text-ash text-xs">#{{ doc.chunkIndex }}</td>
-                  <td>
-                    <button class="btn btn-ghost btn-sm" @click="openEdit(doc.id)" :title="t('edit')">
-                      <span v-html="Icons.edit" style="width:14px;height:14px;"></span>
-                    </button>
-                    <button class="btn btn-ghost btn-sm" @click="deleteDoc(doc.id)"
-                            :disabled="deletingDocumentId || loadingMore" :title="t('deleteDoc')">
-                      <span v-html="Icons.trash" style="width:14px;height:14px;"></span>
-                    </button>
-                  </td>
                 </tr>
               </tbody>
             </table>
             <button v-if="pageInfo.hasMore" class="btn btn-ghost btn-sm w-full mt-4"
-                    @click="loadMoreDocuments" :disabled="loadingMore || deletingDocumentId">
+                    @click="loadMoreDocuments" :disabled="loadingMore">
               {{ loadingMore ? t('loadingChunks') : t('loadMoreChunks') }}
             </button>
           </template>
@@ -1456,28 +1383,6 @@ const KnowledgePage = {
         </div>
       </div>
 
-      <!-- Edit modal -->
-      <div v-if="editingDoc" class="modal-overlay" @click.self="closeEdit">
-        <div class="modal" style="max-width: 700px;">
-          <div class="modal-header">
-            <div class="modal-title">{{ t('editChunk') }}</div>
-            <button class="btn btn-ghost btn-sm" @click="closeEdit">✕</button>
-          </div>
-          <div class="modal-body">
-            <div class="text-xs text-ash" style="margin-bottom: var(--space-2);">
-              {{ t('source') }}：{{ editingDoc.source }} | {{ t('id') }}{{ editingDoc.id }}
-            </div>
-            <textarea class="input" v-model="editingContent" rows="15"
-                      style="width: 100%; font-family: var(--font-mono); font-size: var(--text-sm); resize: vertical;"></textarea>
-          </div>
-          <div class="modal-footer">
-            <button class="btn btn-ghost" @click="closeEdit">{{ t('cancel') }}</button>
-            <button class="btn btn-primary" @click="saveEdit" :disabled="saving">
-              {{ saving ? t('saving') : t('save') }}
-            </button>
-          </div>
-        </div>
-      </div>
     </div>
   `
 };

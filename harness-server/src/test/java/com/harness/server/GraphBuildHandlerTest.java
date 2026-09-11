@@ -34,10 +34,10 @@ class GraphBuildHandlerTest {
     @Test
     void authenticatesAndBuildsCanonicalJson() throws Exception {
         KnowledgeGraphStore graphStore = mock(KnowledgeGraphStore.class);
-        when(graphStore.upsertBatch(any())).thenReturn(
+        when(graphStore.applyChanges(any())).thenReturn(
                 new GraphMutationResult("request-1", true, 1, 0));
         GraphBuildService buildService = new GraphBuildService(
-                graphStore, GraphDataConverterRegistry.withDefaults(objectMapper));
+                graphStore::applyChanges, GraphDataConverterRegistry.withDefaults(objectMapper));
         GraphRequestAuthenticator authenticator = mock(GraphRequestAuthenticator.class);
         GraphBuildHandler handler = new GraphBuildHandler(buildService, authenticator);
         Context context = mock(Context.class);
@@ -83,7 +83,7 @@ class GraphBuildHandlerTest {
                 List.of()
         ));
         GraphBuildService buildService = new GraphBuildService(
-                graphStore, new GraphDataConverterRegistry(List.of(converter)));
+                graphStore::applyChanges, new GraphDataConverterRegistry(List.of(converter)));
         GraphRequestAuthenticator authenticator = mock(GraphRequestAuthenticator.class);
         GraphBuildHandler handler = new GraphBuildHandler(buildService, authenticator);
         Context context = mock(Context.class);

@@ -1,9 +1,8 @@
 package com.harness.server;
 
-import com.harness.provider.EmbeddingModelProvider;
-import com.harness.tool.knowledge.FileStorageService;
 import com.harness.core.model.PageResponse;
 import com.harness.tool.knowledge.KnowledgeChunkSummary;
+import com.harness.tool.knowledge.KnowledgeDocumentLifecycleService;
 import com.harness.tool.rag.VectorStore;
 import com.harness.server.api.ApiErrorCode;
 import com.harness.server.api.ApiResponses;
@@ -28,17 +27,18 @@ public class KnowledgeManagementHandler {
     private static final int MAX_FILE_NAME_LENGTH = 512;
 
     private final VectorStore vectorStore;
-    private final EmbeddingModelProvider embeddingProvider;
-    private final FileStorageService fileStorage;
+    private final KnowledgeDocumentLifecycleService lifecycleService;
+
+    public KnowledgeManagementHandler(VectorStore vectorStore) {
+        this(vectorStore, null);
+    }
 
     public KnowledgeManagementHandler(
             VectorStore vectorStore,
-            EmbeddingModelProvider embeddingProvider,
-            FileStorageService fileStorage
+            KnowledgeDocumentLifecycleService lifecycleService
     ) {
         this.vectorStore = Objects.requireNonNull(vectorStore, "vectorStore");
-        this.embeddingProvider = Objects.requireNonNull(embeddingProvider, "embeddingProvider");
-        this.fileStorage = Objects.requireNonNull(fileStorage, "fileStorage");
+        this.lifecycleService = lifecycleService;
     }
 
     /**
@@ -89,26 +89,8 @@ public class KnowledgeManagementHandler {
      * DELETE /api/knowledge/{collection} — delete all documents in a collection.
      */
     public void deleteCollection(Context ctx) {
-        String collection = ctx.pathParam("collection");
-        if (collection == null || collection.isBlank()) {
-            ApiResponses.error(ctx, 400, ApiErrorCode.INVALID_REQUEST,
-                    "Collection name is required");
-            return;
-        }
-
-        try {
-            vectorStore.delete(collection);
-            fileStorage.deleteCollection(collection);
-
-            log.info("[Server] Deleted collection '{}'", collection);
-            ctx.json(Map.of(
-                    "collection", collection,
-                    "deletedCount", -1
-            ));
-        } catch (Exception e) {
-            log.error("[Server] Failed to delete collection '{}': {}", collection, e.getMessage(), e);
-            ApiResponses.error(ctx, 500, ApiErrorCode.INTERNAL_ERROR, e.getMessage());
-        }
+        ApiResponses.error(ctx, 405, ApiErrorCode.INVALID_REQUEST,
+                "Direct Collection deletion is disabled; deprecate Source Documents explicitly");
     }
 
     /**
@@ -144,75 +126,26 @@ public class KnowledgeManagementHandler {
      * PUT /api/knowledge/{collection}/{documentId} — update a document's content.
      */
     public void updateDocument(Context ctx) {
-        String documentId = ctx.pathParam("documentId");
-        String collection = ctx.pathParam("collection");
-        if (collection == null || collection.isBlank()
-                || documentId == null || documentId.isBlank()) {
-            ApiResponses.error(ctx, 400, ApiErrorCode.INVALID_REQUEST,
-                    "Collection name and document ID are required");
-            return;
-        }
-
-        try {
-            var body = ctx.bodyAsClass(java.util.Map.class);
-            Object contentValue = body.get("content");
-            if (!(contentValue instanceof String content) || content.isBlank()) {
-                ApiResponses.error(ctx, 400, ApiErrorCode.INVALID_REQUEST, "Content is required");
-                return;
-            }
-
-            VectorStore.Document existing = vectorStore.getById(collection, documentId);
-            if (existing == null) {
-                ApiResponses.error(
-                        ctx, 404, ApiErrorCode.NOT_FOUND, "Document not found: " + documentId);
-                return;
-            }
-
-            if (!embeddingProvider.isAvailable()) {
-                throw new IllegalStateException("Embedding model is not configured");
-            }
-            vectorStore.updateContent(
-                    collection, documentId, content, embeddingProvider.embed(content).vector());
-
-            log.info("[Server] Updated document {} in collection '{}'", documentId, collection);
-            ctx.json(Map.of("documentId", documentId, "updated", true));
-        } catch (IllegalArgumentException e) {
-            ApiResponses.error(ctx, 400, ApiErrorCode.INVALID_REQUEST, e.getMessage());
-        } catch (Exception e) {
-            log.error("[Server] Failed to update document '{}': {}", documentId, e.getMessage(), e);
-            ApiResponses.error(ctx, 500, ApiErrorCode.INTERNAL_ERROR, e.getMessage());
-        }
+        ApiResponses.error(ctx, 405, ApiErrorCode.INVALID_REQUEST,
+                "Chunk editing is disabled; upload a complete Source Document Revision");
     }
 
     /**
      * DELETE /api/knowledge/{collection}/{documentId} — delete a specific document.
      */
     public void deleteDocument(Context ctx) {
-        String collection = ctx.pathParam("collection");
-        String documentId = ctx.pathParam("documentId");
-        if (collection == null || collection.isBlank() || documentId == null || documentId.isBlank()) {
-            ApiResponses.error(ctx, 400, ApiErrorCode.INVALID_REQUEST,
-                    "Collection name and document ID are required");
+        if (lifecycleService == null) {
+            ApiResponses.error(ctx, 405, ApiErrorCode.INVALID_REQUEST,
+                    "Chunk deletion is disabled; deprecate the Source Document Concept");
             return;
         }
-
         try {
-            boolean deleted = vectorStore.deleteById(collection, documentId);
-            if (deleted) {
-                log.info("[Server] Deleted document {} from collection '{}'", documentId, collection);
-                ctx.json(Map.of(
-                        "collection", collection,
-                        "documentId", documentId,
-                        "deleted", true
-                ));
-            } else {
-                ApiResponses.error(ctx, 404, ApiErrorCode.NOT_FOUND, "Document not found",
-                        Map.of("collection", collection, "documentId", documentId));
-            }
+            ctx.json(lifecycleService.deprecate(
+                    ctx.pathParam("collection"), ctx.pathParam("documentId"), null));
         } catch (IllegalArgumentException e) {
             ApiResponses.error(ctx, 400, ApiErrorCode.INVALID_REQUEST, e.getMessage());
         } catch (Exception e) {
-            log.error("[Server] Failed to delete document {} from collection '{}': {}", documentId, collection, e.getMessage(), e);
+            log.error("[Server] Failed to deprecate Source Document: {}", e.getMessage(), e);
             ApiResponses.error(ctx, 500, ApiErrorCode.INTERNAL_ERROR, e.getMessage());
         }
     }

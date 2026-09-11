@@ -5,7 +5,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.harness.core.exception.ToolExecutionException;
-import com.harness.core.model.ToolResult;
+import com.harness.core.model.ResultStatus;
+import com.harness.core.model.ToolExecutionOutcome;
+import com.harness.core.model.ToolOutput;
 import com.harness.core.model.ToolSpec;
 import com.harness.tool.Tool;
 import org.slf4j.Logger;
@@ -43,12 +45,18 @@ public class GetSubAgentsTool implements Tool {
                                                         .put("description", "List of task IDs to query (empty for all tasks in current run)")
                                                         .<ObjectNode>set("items",
                                                                 mapper.createObjectNode().put("type", "string"))))
-                        .<ObjectNode>set("required", mapper.createArrayNode())
+                        .<ObjectNode>set("required", mapper.createArrayNode()),
+                com.harness.core.model.ToolCapability.ORCHESTRATION
         );
     }
 
     @Override
     public String execute(JsonNode arguments) {
+        return executeOutcome(arguments).content().modelContent();
+    }
+
+    @Override
+    public ToolExecutionOutcome executeOutcome(JsonNode arguments) {
         AgentRunContext runContext = SubAgentToolHelper.requireRunContext("get_subagents");
         SubAgentRunScope scope = SubAgentToolHelper.requireScope(subAgentManager, runContext, "get_subagents");
 
@@ -82,8 +90,9 @@ public class GetSubAgentsTool implements Tool {
             result.put("total", tasks.size());
             result.put("scope_run_id", runContext.runId());
 
-            ToolResult.setCurrentStatus(ToolResult.ResultStatus.SUCCESS);
-            return mapper.writeValueAsString(result);
+            return ToolExecutionOutcome.succeeded(
+                    ToolOutput.text(mapper.writeValueAsString(result)),
+                    ResultStatus.AVAILABLE);
 
         } catch (Exception e) {
             log.error("[GetSubAgents] Error: {}", e.getMessage());

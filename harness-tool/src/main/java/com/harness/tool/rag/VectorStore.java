@@ -8,7 +8,7 @@ import java.util.Map;
 
 /**
  * 向量存储通用接口。
- * 所有向量数据库实现（PgVector、Milvus 等）都实现此接口。
+ * 所有向量数据库实现（Milvus）都实现此接口。
  * 不支持的方法抛出 UnsupportedOperationException。
  */
 public interface VectorStore {
@@ -33,18 +33,15 @@ public interface VectorStore {
      */
     boolean deleteById(String collection, String id);
 
+    /** Delete every chunk projected from one immutable Source Document Revision. */
+    long deleteDocumentRevision(String collection, String documentId, String revisionId);
+
     // ==================== 2. 查询能力 ====================
 
     /**
      * 按 ID 获取单个文档。
      */
     Document getById(String collection, String id);
-
-    /**
-     * Atomically replace one chunk's content and embedding inside its collection.
-     * Implementations must fail when the scoped chunk does not exist.
-     */
-    void updateContent(String collection, String id, String content, float[] embedding);
 
     /**
      * Cursor-paginated management projection. Implementations must use a stable
@@ -74,7 +71,7 @@ public interface VectorStore {
 
     /**
      * 混合检索（向量 + 关键词加权融合）。
-     * 天然支持的库（如 Milvus）直接实现；PG 在内部并发调用两路后融合。
+     * 由 Milvus 直接实现。
      */
     List<Document> searchHybrid(String collection, String query, float[] embedding, int topK);
 
@@ -95,15 +92,19 @@ public interface VectorStore {
         return SearchResult.fromAccepted(searchText(collection, query, topK));
     }
 
+    SearchResult searchDocumentRevisions(String collection, String query, int topK,
+                                         Map<String, String> documentRevisions);
+
     // ==================== 4. 显式文档上下文 ====================
 
     /**
      * Read one bounded window from a stable document anchor.
-     * Results must be ordered by chunkIndex and remain inside collection + documentId.
+     * Results must be ordered by chunkIndex and remain inside one immutable Source Document Revision.
      */
     List<Document> readDocumentWindow(
             String collection,
             String documentId,
+            String revisionId,
             int anchorChunkIndex,
             int before,
             int after

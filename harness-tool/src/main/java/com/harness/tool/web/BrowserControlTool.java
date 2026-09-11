@@ -112,7 +112,8 @@ public final class BrowserControlTool
                 MAPPER.createObjectNode()
                         .put("type", "object")
                         .<ObjectNode>set("properties", properties)
-                        .<ObjectNode>set("required", MAPPER.createArrayNode().add("action")));
+                        .<ObjectNode>set("required", MAPPER.createArrayNode().add("action")),
+                com.harness.core.model.ToolCapability.UNKNOWN);
     }
 
     @Override
@@ -171,7 +172,6 @@ public final class BrowserControlTool
                         "Browser worker returned HTTP " + response.code()
                                 + ": " + errorMessage(responseBody));
             }
-            ToolResult.setCurrentStatus(ToolResult.ResultStatus.SUCCESS);
             return responseBody;
         } catch (ToolExecutionException e) {
             throw e;

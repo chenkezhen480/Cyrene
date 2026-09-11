@@ -29,10 +29,19 @@ public final class TraceStoreFactory {
         @Override public void save(AgentTrace trace) {}
         @Override public java.util.Optional<AgentTrace> findById(String traceId) { return java.util.Optional.empty(); }
         @Override public java.util.List<AgentTrace> listRecent(int limit) { return java.util.List.of(); }
-        @Override public int cleanup(int retentionDays) { return 0; }
+        @Override public com.harness.core.model.PageResponse<AgentTrace> findBySession(
+                String sessionId, com.harness.core.model.TraceCursor cursor, int limit) {
+            return new com.harness.core.model.PageResponse<>(
+                    java.util.List.of(),
+                    new com.harness.core.model.PageInfo(limit, "", false));
+        }
+        @Override public CleanupResult cleanup(
+                int retentionDays, java.util.function.Predicate<String> retainedByKnowledge) {
+            return new CleanupResult(0, 0);
+        }
         @Override public boolean deleteById(String traceId) { return false; }
         @Override public int count() { return 0; }
-        @Override public void updateMetadata(String traceId, java.util.Map<String, String> entries) {}
+        @Override public boolean updateMetadata(String traceId, java.util.Map<String, String> entries) { return false; }
         @Override public void close() {}
     }
 }

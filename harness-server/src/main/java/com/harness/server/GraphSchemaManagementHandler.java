@@ -7,6 +7,7 @@ import com.harness.graph.schema.GraphSchemaFormat;
 import com.harness.graph.schema.GraphSchemaManagementService;
 import com.harness.graph.schema.GraphSchemaSummary;
 import com.harness.graph.store.KnowledgeGraphStore;
+import com.harness.tool.knowledge.GraphSchemaWikiCompiler;
 import io.javalin.http.Context;
 
 import java.util.List;
@@ -19,35 +20,41 @@ public final class GraphSchemaManagementHandler {
     private final KnowledgeGraphStore graphStore;
     private final GraphSettings settings;
     private final GraphRequestExecutor requestExecutor;
+    private final GraphSchemaWikiCompiler wikiCompiler;
 
     public GraphSchemaManagementHandler(
             GraphSchemaManagementService schemaService,
             KnowledgeGraphStore graphStore,
-            GraphSettings settings
+            GraphSettings settings,
+            GraphSchemaWikiCompiler wikiCompiler
     ) {
         this(schemaService, graphStore, settings,
-                new GraphRequestExecutor(new GraphRequestAuthenticator()));
+                new GraphRequestExecutor(new GraphRequestAuthenticator()), wikiCompiler);
     }
 
     GraphSchemaManagementHandler(
             GraphSchemaManagementService schemaService,
             KnowledgeGraphStore graphStore,
             GraphSettings settings,
-            GraphRequestAuthenticator requestAuthenticator
+            GraphRequestAuthenticator requestAuthenticator,
+            GraphSchemaWikiCompiler wikiCompiler
     ) {
-        this(schemaService, graphStore, settings, new GraphRequestExecutor(requestAuthenticator));
+        this(schemaService, graphStore, settings,
+                new GraphRequestExecutor(requestAuthenticator), wikiCompiler);
     }
 
     GraphSchemaManagementHandler(
             GraphSchemaManagementService schemaService,
             KnowledgeGraphStore graphStore,
             GraphSettings settings,
-            GraphRequestExecutor requestExecutor
+            GraphRequestExecutor requestExecutor,
+            GraphSchemaWikiCompiler wikiCompiler
     ) {
         this.schemaService = Objects.requireNonNull(schemaService, "schemaService");
         this.graphStore = Objects.requireNonNull(graphStore, "graphStore");
         this.settings = Objects.requireNonNull(settings, "settings");
         this.requestExecutor = Objects.requireNonNull(requestExecutor, "requestExecutor");
+        this.wikiCompiler = Objects.requireNonNull(wikiCompiler, "wikiCompiler");
     }
 
     public void list(Context context) {
@@ -77,6 +84,7 @@ public final class GraphSchemaManagementHandler {
                     request.content(),
                     request.enabled()
             );
+            wikiCompiler.synchronize(details);
             context.status(201).json(details);
         });
     }
@@ -84,23 +92,29 @@ public final class GraphSchemaManagementHandler {
     public void update(Context context) {
         execute(context, () -> {
             GraphSchemaWriteRequest request = context.bodyAsClass(GraphSchemaWriteRequest.class);
-            context.json(schemaService.update(
+            GraphSchemaDetails details = schemaService.update(
                     context.pathParam("schemaId"),
                     GraphSchemaFormat.parseEditable(request.format()),
                     request.content()
-            ));
+            );
+            wikiCompiler.synchronize(details);
+            context.json(details);
         });
     }
 
     public void enable(Context context) {
         execute(context, () -> {
-            context.json(schemaService.enable(context.pathParam("schemaId")));
+            GraphSchemaDetails details = schemaService.enable(context.pathParam("schemaId"));
+            wikiCompiler.synchronize(details);
+            context.json(details);
         });
     }
 
     public void disable(Context context) {
         execute(context, () -> {
-            context.json(schemaService.disable(context.pathParam("schemaId")));
+            GraphSchemaDetails details = schemaService.disable(context.pathParam("schemaId"));
+            wikiCompiler.synchronize(details);
+            context.json(details);
         });
     }
 
@@ -113,6 +127,7 @@ public final class GraphSchemaManagementHandler {
                 );
             }
             schemaService.delete(schemaId);
+            wikiCompiler.deprecate(schemaId);
             context.json(Map.of("schemaId", schemaId, "deleted", true));
         });
     }

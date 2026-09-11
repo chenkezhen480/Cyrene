@@ -32,7 +32,7 @@ class InMemorySessionMessageCacheTest {
     }
 
     private MemoryMessage msg(String role, String content) {
-        return new MemoryMessage(0, null, role, List.of(new MessageBlock(MessageBlock.BlockType.TEXT, content, null)), false, Instant.now());
+        return new MemoryMessage(0, null, null, role, List.of(new MessageBlock(MessageBlock.BlockType.TEXT, content, null)), false, Instant.now());
     }
 
     private List<MemoryMessage> msgs(int count) {

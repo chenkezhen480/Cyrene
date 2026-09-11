@@ -47,7 +47,7 @@ class MemoryCompressorTest {
         List<MemoryMessage> msgs = new ArrayList<>();
         for (int i = 0; i < count; i++) {
             String role = (i % 2 == 0) ? "user" : "assistant";
-            msgs.add(new MemoryMessage(i, "sess1", role, List.of(new MessageBlock(MessageBlock.BlockType.TEXT, "Message content " + i, null)), false, Instant.now()));
+            msgs.add(new MemoryMessage(i, "sess1", "trace-" + i, role, List.of(new MessageBlock(MessageBlock.BlockType.TEXT, "Message content " + i, null)), false, Instant.now()));
         }
         return msgs;
     }
@@ -86,9 +86,12 @@ class MemoryCompressorTest {
         assertThat(result.messagesBefore()).isEqualTo(10);
         assertThat(result.messagesAfter()).isEqualTo(2);
 
-        ArgumentCaptor<List> summaryCaptor = ArgumentCaptor.forClass(List.class);
-        verify(messageStore).save(eq("sess1"), eq("system"), summaryCaptor.capture(), eq(true));
-        assertThat(MemoryMessage.text(summaryCaptor.getValue())).contains("compressed summary");
+        ArgumentCaptor<MessageWrite> summaryCaptor = ArgumentCaptor.forClass(MessageWrite.class);
+        verify(messageStore).save(summaryCaptor.capture());
+        assertThat(summaryCaptor.getValue().sessionId()).isEqualTo("sess1");
+        assertThat(summaryCaptor.getValue().role()).isEqualTo("system");
+        assertThat(summaryCaptor.getValue().isSummary()).isTrue();
+        assertThat(MemoryMessage.text(summaryCaptor.getValue().content())).contains("compressed summary");
 
         verify(sessionStore).updateLastActive("sess1");
     }
@@ -105,9 +108,10 @@ class MemoryCompressorTest {
 
         assertThat(result.type()).isEqualTo(MemoryCompressor.CompressionResult.CompressionType.MAJOR);
 
-        ArgumentCaptor<List> summaryCaptor = ArgumentCaptor.forClass(List.class);
-        verify(messageStore).save(eq("sess1"), eq("system"), summaryCaptor.capture(), eq(true));
-        assertThat(MemoryMessage.text(summaryCaptor.getValue())).contains("[Conversation summary]");
+        ArgumentCaptor<MessageWrite> summaryCaptor = ArgumentCaptor.forClass(MessageWrite.class);
+        verify(messageStore).save(summaryCaptor.capture());
+        assertThat(summaryCaptor.getValue().isSummary()).isTrue();
+        assertThat(MemoryMessage.text(summaryCaptor.getValue().content())).contains("[Conversation summary]");
 
         verify(sessionStore).updateLastActive("sess1");
     }
@@ -163,7 +167,8 @@ class MemoryCompressorTest {
         assertThat(result.type()).isEqualTo(MemoryCompressor.CompressionResult.CompressionType.MAJOR);
         assertThat(result.messagesBefore()).isEqualTo(10);
         assertThat(result.messagesAfter()).isEqualTo(2);
-        verify(messageStore).save(eq("sess1"), eq("system"), anyList(), eq(true));
+        verify(messageStore).save(argThat(write -> write.sessionId().equals("sess1")
+                && write.role().equals("system") && write.isSummary()));
     }
 
     @Test
@@ -195,9 +200,9 @@ class MemoryCompressorTest {
 
         assertThat(result.type()).isEqualTo(MemoryCompressor.CompressionResult.CompressionType.MAJOR);
 
-        ArgumentCaptor<List> captor = ArgumentCaptor.forClass(List.class);
-        verify(messageStore).save(eq("sess1"), eq("system"), captor.capture(), eq(true));
-        String summary = MemoryMessage.text(captor.getValue());
+        ArgumentCaptor<MessageWrite> captor = ArgumentCaptor.forClass(MessageWrite.class);
+        verify(messageStore).save(captor.capture());
+        String summary = MemoryMessage.text(captor.getValue().content());
         // Fallback should produce a summary within ~9000 chars
         assertThat(summary.length()).isLessThanOrEqualTo(9000 + 100); // small margin for header
         assertThat(summary).contains("[Conversation summary]");
@@ -236,10 +241,10 @@ class MemoryCompressorTest {
 
         assertThat(result.type()).isEqualTo(MemoryCompressor.CompressionResult.CompressionType.MAJOR);
 
-        ArgumentCaptor<List> captor = ArgumentCaptor.forClass(List.class);
-        verify(messageStore).save(eq("sess1"), eq("system"), captor.capture(), eq(true));
+        ArgumentCaptor<MessageWrite> captor = ArgumentCaptor.forClass(MessageWrite.class);
+        verify(messageStore).save(captor.capture());
         // Should fall back to truncation
-        assertThat(MemoryMessage.text(captor.getValue())).contains("[Conversation summary]");
+        assertThat(MemoryMessage.text(captor.getValue().content())).contains("[Conversation summary]");
     }
 
     @Test

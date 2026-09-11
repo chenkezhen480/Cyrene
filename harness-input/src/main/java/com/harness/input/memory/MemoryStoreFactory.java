@@ -4,8 +4,7 @@ import com.harness.core.env.EnvConfig;
 import com.harness.core.env.EnvKey;
 
 /**
- * Factory for creating memory store instances based on HARNESS_AUDIT_STORE env var.
- * Shared with TraceStoreFactory — one storage type controls both memory and trace.
+ * Factory for creating memory stores based on the independent HARNESS_MEMORY_STORE setting.
  * Supported backends: mysql, none (default).
  * When set to "none", all stores return NoOp implementations.
  */
@@ -14,7 +13,7 @@ public final class MemoryStoreFactory {
     private MemoryStoreFactory() {}
 
     public static SessionStore createSessionStore() {
-        String store = EnvConfig.get().getString(EnvKey.AUDIT_STORE, "none");
+        String store = storeType();
         return switch (store.toLowerCase()) {
             case "mysql" -> new MysqlSessionStore();
             case "none" -> new NoOpSessionStore();
@@ -23,19 +22,10 @@ public final class MemoryStoreFactory {
     }
 
     public static MessageStore createMessageStore() {
-        String store = EnvConfig.get().getString(EnvKey.AUDIT_STORE, "none");
+        String store = storeType();
         return switch (store.toLowerCase()) {
             case "mysql" -> new MysqlMessageStore();
             case "none" -> new NoOpMessageStore();
-            default -> throw new IllegalStateException("Unknown memory store: " + store);
-        };
-    }
-
-    public static PreferenceStore createPreferenceStore() {
-        String store = EnvConfig.get().getString(EnvKey.AUDIT_STORE, "none");
-        return switch (store.toLowerCase()) {
-            case "mysql" -> new MysqlPreferenceStore();
-            case "none" -> new NoOpPreferenceStore();
             default -> throw new IllegalStateException("Unknown memory store: " + store);
         };
     }
@@ -44,8 +34,11 @@ public final class MemoryStoreFactory {
      * Returns true if memory store is enabled (not "none").
      */
     public static boolean isEnabled() {
-        String store = EnvConfig.get().getString(EnvKey.AUDIT_STORE, "none");
-        return !"none".equalsIgnoreCase(store);
+        return !"none".equalsIgnoreCase(storeType());
+    }
+
+    public static boolean isMysqlEnabled() {
+        return "mysql".equalsIgnoreCase(storeType());
     }
 
     /**
@@ -58,5 +51,9 @@ public final class MemoryStoreFactory {
             return new RedisSessionMessageCache();
         }
         return new InMemorySessionMessageCache();
+    }
+
+    private static String storeType() {
+        return EnvConfig.get().getString(EnvKey.MEMORY_STORE, "none").trim();
     }
 }

@@ -67,7 +67,7 @@ public final class EnvConfig {
     public void set(String key, String value) { store.put(key, value); }
     public Map<String, String> all() { return Collections.unmodifiableMap(store); }
 
-    /** HikariCP defaults shared by PostgreSQL and MySQL pools. */
+    /** HikariCP defaults shared by connection pools. */
     public static void applyDefaultPoolSettings(com.zaxxer.hikari.HikariConfig config, String poolName) {
         config.setMaximumPoolSize(10);
         config.setMinimumIdle(2);

@@ -1,8 +1,6 @@
 package com.harness.agent.runtime;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.harness.agent.KnowledgeBaseTool;
-import com.harness.agent.KnowledgeContextReadTool;
 import com.harness.agent.KnowledgeGraphTool;
 import com.harness.agent.context.KnowledgeAccessService;
 import com.harness.agent.graph.GraphSpaceAccessService;
@@ -65,6 +63,8 @@ public final class AgentToolRuntime {
     private final ArtifactStore artifactStore;
     private final ArtifactStorageService artifactStorageService;
     private final VoiceModelProvider voiceProvider;
+    private KnowledgeAccessService knowledgeAccessService;
+    private KnowledgeGraphTool graphKnowledgeExecutor;
 
     public AgentToolRuntime(
             ModelProviders providers,
@@ -105,6 +105,17 @@ public final class AgentToolRuntime {
 
     public SkillRegistry skills() {
         return skillRegistry;
+    }
+
+    public KnowledgeAccessService knowledgeAccessService() {
+        if (knowledgeAccessService == null) {
+            throw new IllegalStateException("Document knowledge provider is unavailable");
+        }
+        return knowledgeAccessService;
+    }
+
+    public KnowledgeGraphTool graphKnowledgeExecutor() {
+        return graphKnowledgeExecutor;
     }
 
     public void reloadProjectApiConfig() {
@@ -153,27 +164,27 @@ public final class AgentToolRuntime {
             toolRegistry.register(new BrowserControlTool());
         }
 
-        String ragProvider = config.getString(EnvKey.RAG_PROVIDER, "pgvector");
+        String ragProvider = config.getString(EnvKey.RAG_PROVIDER, "milvus");
         if (!"none".equalsIgnoreCase(ragProvider) && providers.embedding().isAvailable()) {
-            KnowledgeAccessService knowledgeAccess = new KnowledgeAccessService(
+            knowledgeAccessService = new KnowledgeAccessService(
                     providers.rerank(), providers.embedding());
-            toolRegistry.register(new KnowledgeBaseTool(knowledgeAccess, providers.chat()));
-            toolRegistry.register(new KnowledgeContextReadTool(knowledgeAccess));
+            log.info("Document knowledge executor initialized for unified knowledge tools");
         } else {
-            log.info("Knowledge tools disabled (ragProvider={}, embedding={})",
+            log.info("Document knowledge executor disabled (ragProvider={}, embedding={})",
                     ragProvider, providers.embedding().isAvailable());
         }
 
         if (!"none".equals(knowledgeGraphStore.providerName())) {
-            toolRegistry.register(new KnowledgeGraphTool(
+            graphKnowledgeExecutor = new KnowledgeGraphTool(
                     graphKnowledgeRetriever,
                     knowledgeGraphStore,
                     graphSpaceAccessService,
                     graphSchemaRegistry,
                     graphSettings,
-                    new ObjectMapper()));
+                    new ObjectMapper());
+            log.info("Graph knowledge executor initialized for unified knowledge tools");
         } else {
-            log.info("Knowledge graph tool disabled (provider=none)");
+            log.info("Graph knowledge executor disabled (provider=none)");
         }
 
         if (config.getBool(EnvKey.TOOL_FFMPEG_ENABLED, false)) {

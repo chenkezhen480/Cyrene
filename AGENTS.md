@@ -17,7 +17,7 @@ Provider
 
 Keep framework code domain-neutral. Domain models, tenant identity sources, authorization, and graph semantics belong to the integrating system. Existing-system APIs use user credentials from trusted `context.credentials`; authorization remains the business system's responsibility.
 
-The root `pom.xml` `revision` is the only version source. Current version: `0.5.10`. Do not change it or release notes unless explicitly requested.
+The root `pom.xml` `revision` is the only version source. Current version: `0.6.0`. Do not change it or release notes unless explicitly requested.
 
 ### Version 0.5.10 implementation notes
 
@@ -25,9 +25,9 @@ The root `pom.xml` `revision` is the only version source. Current version: `0.5.
 - Tool results that benefit from machine readability use a shared JSON envelope and typed DTOs. Knowledge-base and knowledge-graph tools expose stable fields, explicit result status, truncation metadata, and filtered sensitive properties without coupling every Tool to one universal payload shape.
 - ReAct tool-planning text is not streamed as final prose. Tool events are correlated by normalized `toolCallId`; cancellation raises a cancellation outcome; exhausting the iteration limit performs one final tool-free response generation instead of returning raw Tool output.
 - Text budgeting uses an injected Unicode-aware estimator. Markdown ingestion parses semantic blocks and packs headings, paragraphs, lists, tables, fenced code, and separators within a token budget. Stable `documentId`, `chunkIndex`, and heading context are persisted for new knowledge chunks.
-- Automatic adjacent-Chunk expansion was removed. `knowledge_base_search` returns deterministic chunk identity and heading context, while the independent `knowledge_context_read` Tool lets the Agent explicitly fetch a bounded window. Its `before` and `after` arguments both default to `1` and remain collection/document scoped.
-- Milvus and pgvector management operations are collection scoped. Chunk and collection lists use stable cursor pagination with `limit + 1`; filename filtering executes server-side; update re-embeds changed content; retrieval and storage failures are surfaced instead of being disguised as empty results. File-storage paths are normalized and constrained to the configured upload root.
-- Milvus client and Docker image are aligned to `2.5.13`. Logical collections remain isolated inside the physical Milvus collection, including get, update, delete, explicit-ID upsert, and collection deletion semantics.
+- Unified knowledge retrieval uses `knowledge_search` as the semantic Wiki entry and returns signed, typed handles. `knowledge_read` reauthorizes the current MySQL revision and expands only an exact returned handle. Source-document reads keep deterministic chunk identity and a bounded document window; `before` and `after` default to `1`.
+- Milvus management operations are collection scoped. Chunk and collection lists use stable cursor pagination with `limit + 1`; filename filtering executes server-side; update re-embeds changed content; retrieval and storage failures are surfaced instead of being disguised as empty results. File-storage paths are normalized and constrained to the configured upload root.
+- Milvus client and Docker image are aligned to `2.5.13`. Document chunks, Wiki catalog entries, user episodes, and Agent operation playbooks use dedicated configured collections; collection-scoped get, update, delete, explicit-ID upsert, and deletion semantics must remain isolated.
 - Sub-Agent completion contracts are optional. A task can require an allowlisted tool set, successful Tool executions, typed artifacts, and a final output Schema. Results include contract validation, artifact summaries, and Tool execution summaries; unmet contracts finish explicitly as `INCOMPLETE` or `FAILED_CONTRACT` without unbounded retries.
 - The Web model configuration names the existing Classifier configuration group "Sub-Agent small-task model" because it handles lightweight internal tasks such as GapAnalyzer Tier 2. It is separate from asynchronous agents created through `spawn_subagent`; those dispatched agents continue to use the primary Chat model in 0.5.10.
 - Web-managed model settings are persisted atomically in `HARNESS_CONFIG_MODEL_FILE` and activate for later requests without restarting the service. Active Agent and Sub-Agent runs retain their provider generation until completion. Embedding provider, endpoint, model, or dimension changes are rejected until knowledge data is explicitly re-indexed.
@@ -56,7 +56,7 @@ mvn clean test -Dmaven.compiler.fork=true -DskipITs
 mvn test -pl harness-agent,harness-server -am -DskipITs
 mvn test -pl harness-agent -am -Dtest=KnowledgeGraphToolTest -Dsurefire.failIfNoSpecifiedTests=false -DskipITs
 mvn clean package -pl harness-server -am -DskipTests
-java -jar harness-server/target/harness-server-0.5.10.jar
+java -jar harness-server/target/harness-server-0.6.0.jar
 ```
 
 Quote complex or comma-containing `-D...` arguments in PowerShell. Before committing, run scope-appropriate tests plus:
@@ -170,19 +170,53 @@ Do not use a System Prompt as an execution boundary; unavailable tools must be a
 ### Reflection and Tool Evolution
 
 - `reflectionInterval` is an environment-level loop policy, not request `context` JSON.
-- Query rewrite is a knowledge-base tool argument chosen by the Agent, not a request-level switch or separate mode toggle.
+- Query rewrite is a `knowledge_search` argument chosen by the Agent, not a request-level switch or separate mode toggle.
 - An `INSUFFICIENT` knowledge result may implicitly escalate once into query-rewrite mode. Keep this in the tool-result protocol and Agent policy, not a fixed workflow bypassing tool calls.
 - The vector-store candidate threshold and the result-sufficiency/escalation threshold are different concepts. Preserve `HARNESS_RAG_SCORE_THRESHOLD` as the storage-side hard filter.
-- Completely irrelevant results must not escalate. Any score-range change must keep Milvus, pgvector, `KnowledgeBaseTool`, `RetrievalEscalationPolicy`, and tests aligned.
+- Completely irrelevant results must not escalate. Any score-range change must keep Milvus, `KnowledgeDiscoveryRouter`, and tests aligned.
 
-## Knowledge Base and Knowledge Graph
+## Unified Knowledge Architecture
 
-Keep the retrieval paths separate:
+Milvus is the semantic Wiki entry, MySQL is the authority and lifecycle control plane, and Neo4j owns graph data. Do not reintroduce the removed `knowledge_base_search`, `knowledge_context_read`, Topic/API concept types, or MySQL-revision-body retrieval paths for episodes and playbooks.
 
-- `knowledge_base_search`: document chunks through Milvus or pgvector, with optional query rewrite, semantic completion, and rerank.
-- `knowledge_graph_search`: Neo4j entities, relations, and paths; never feed it into vector rerank.
+```text
+trusted request scope
+  -> inject active USER_PREFERENCE records from MySQL before the model call
+  -> knowledge_search
+       -> Wiki catalog + dedicated episode/playbook projections in Milvus
+       -> signed typed handle
+  -> knowledge_read(handle)
+       -> recheck current revision, lifecycle, tenant/user/collection scope in MySQL
+       -> document chunks | user episodes | operation playbooks | Neo4j graph route
+```
 
-Do not disguise graph results as document chunks or couple graph construction to knowledge-document upload.
+`knowledge_search` discovers routes; it is not an authorization source. `knowledge_read` must reject stale, forged, expired, cross-tenant, cross-user, or otherwise unauthorized handles before reading downstream data. Returned handles and source anchors may be used in later calls for bounded deeper retrieval.
+
+### Storage Roles
+
+| Store | Role |
+|---|---|
+| MySQL | Authoritative concepts, current revisions, lifecycle/status, evidence and sources, permissions/scope metadata, preferences, outbox records, ingest jobs, and graph-mutation jobs/bindings. |
+| Milvus | Semantic projections only: document chunks, Wiki catalog entries, user episodes, and Agent operation playbooks. It is never the authority for access or lifecycle. |
+| Neo4j | Concrete graph nodes, relations, and paths only. Graph results are not disguised as document chunks and never enter vector reranking. |
+| OKF | Portable structured import/export representation over the authoritative knowledge model. It does not replace MySQL, Milvus, or Neo4j. |
+
+The live concept types are exactly `SOURCE_DOCUMENT`, `GRAPH_SCHEMA`, `GRAPH_SPACE`, `USER_PREFERENCE`, `USER_EPISODE`, and `OPERATION_PLAYBOOK`. Preferences remain MySQL-backed and are activated before the request; they are not searchable Wiki entries. The default Milvus collections are:
+
+- document chunks: `cyrene_test`
+- semantic Wiki catalog: `cyrene_knowledge_catalog`
+- user episodes: `cyrene_user_knowledge`
+- Agent operation playbooks: `cyrene_operation_knowledge`
+
+Collection names remain configurable through `HARNESS_*` settings. User episodes are user-scoped; operation playbooks are reusable Agent knowledge and must not acquire a user owner.
+
+### Ingestion and Durability
+
+- Document upload stores an immutable source artifact, converts it to canonical Markdown through MarkItDown, creates the MySQL `SOURCE_DOCUMENT` concept/current revision, writes document chunks, and projects the semantic Wiki entry through the outbox.
+- A retryable initial ingest failure returns HTTP `202` with `status: pending`, `jobId`, `documentId`, `sourceArtifactId`, `collection`, and `message`; the background worker retries. Successful ingestion returns `status: indexed`; non-retryable conversion or validation failures mark the job failed.
+- Graph Schema Wiki namespace key is `schemaId`. Graph Space Wiki namespace key is `graphId:schemaId`. Graph concepts are global after explicit graph-access checks; callers cannot provide an arbitrary OKF graph namespace.
+- Graph writes use the Neo4j change plus MySQL Graph Space Wiki Saga/outbox path. A retry after Neo4j commit must not reapply the graph mutation.
+- Related MySQL writes use explicit transactions. Projection/outbox work must be idempotent and must not make Milvus the source of truth.
 
 ### Graph Model
 
@@ -194,7 +228,7 @@ Do not disguise graph results as document chunks or couple graph construction to
 
 ### Graph Enablement and Retrieval
 
-`HARNESS_GRAPH_PROVIDER=none` is the only graph switch. It selects the NoOp store and prevents `knowledge_graph_search` registration.
+`HARNESS_GRAPH_PROVIDER=none` is the only graph switch. It selects the NoOp store and disables graph-backed `knowledge_read` routing.
 
 ```text
 no graphId/schemaId: listGraphSpaces -> findNodes -> findNeighborhood
@@ -216,8 +250,17 @@ Trusted server `graphRequestContext` overrides model arguments. The model cannot
 
 - Trusted `context.tenantId`, not an LLM tool argument, defines tenant scope; missing values use `000000`.
 - Single-tenant mode allows only the default tenant to access global graph spaces.
-- Multi-tenant deployments may apply `sql/schema-graph-space-bindings-mysql.sql`; `graph_space_bindings` persists tenant-to-space access and purpose, not graph data or feature switches.
+- `knowledge_graph_bindings` persists tenant-to-space access and purpose, not graph data or feature switches. Graph concepts themselves remain global (`tenant_id = null`) after access is checked explicitly.
 - Child agents inherit graph context. Remove graph tools from asynchronous recovery that lacks trusted tenant context.
+
+### TODO12 Handoff Baseline (2026-09-09)
+
+- The unified knowledge architecture above is implemented in the current working tree. It is intentionally uncommitted and includes broad TODO12 changes; preserve it and do not restore removed legacy tools/types.
+- The last completed clean unit/component run reported 637 tests, 0 failures, 0 errors, and 7 skipped. Targeted MySQL, Redis, Milvus, and Neo4j integration suites also passed, including 9 `MysqlTraceStoreIT` tests after correcting its stale database name.
+- A real upload-to-Agent E2E used a random local YAML file, produced two document chunks plus a Wiki catalog/current revision, and successfully exercised `knowledge_search` followed by `knowledge_read`. Its temporary knowledge rows, Milvus entries, and artifact directories were removed afterward; the service on port 8080 was stopped.
+- `git diff --check`, the three JavaScript syntax checks, and the server package build passed. The packaged artifact is `harness-server/target/harness-server-0.5.10.jar`.
+- Do not repeat the full suite merely to reconfirm this handoff. Run targeted checks proportional to later changes; reserve a new full clean suite for broad behavior/storage changes or release validation. A later redundant full-suite rerun was intentionally interrupted at the user's request and is not an additional completed result.
+- Existing Milvus production data must not be mutated, deleted, or migrated without explicit confirmation and verified targets. MySQL/Neo4j schemas may evolve with the new architecture, but destructive work still requires exact target checks.
 
 ## Docker and Persistence
 
@@ -249,7 +292,12 @@ Main services: `cyrene-agent`, `document-parser`, `mysql`, `milvus`, `redis`, `s
 | Tool registry/catalog | `harness-tool/src/main/java/com/harness/tool/ToolRegistry.java`, `RunToolCatalog.java` |
 | Tool execution | `harness-tool/src/main/java/com/harness/tool/ToolExecutor.java` |
 | Request context | `harness-core/src/main/java/com/harness/core/model/AgentContext.java` |
-| Graph tool | `harness-agent/src/main/java/com/harness/agent/KnowledgeGraphTool.java` |
+| Unified knowledge tools | `harness-agent/src/main/java/com/harness/agent/knowledge/KnowledgeSearchTool.java`, `KnowledgeReadTool.java` |
+| Knowledge discovery/router | `harness-agent/src/main/java/com/harness/agent/knowledge/KnowledgeDiscoveryRouter.java` |
+| Knowledge authority | `harness-tool/src/main/java/com/harness/tool/knowledge/authority` |
+| Knowledge projections | `harness-tool/src/main/java/com/harness/tool/knowledge/index` |
+| Knowledge ingest/lifecycle | `harness-tool/src/main/java/com/harness/tool/knowledge/KnowledgeIngestService.java`, `KnowledgeDocumentLifecycleService.java` |
+| Graph read adapter | `harness-agent/src/main/java/com/harness/agent/KnowledgeGraphTool.java` |
 | Graph store | `harness-tool/src/main/java/com/harness/graph/neo4j/Neo4jKnowledgeGraphStore.java` |
 | Graph Schema | `harness-tool/src/main/java/com/harness/graph/schema` |
 | Graph APIs | `harness-server/src/main/java/com/harness/server/Graph*Handler.java` |

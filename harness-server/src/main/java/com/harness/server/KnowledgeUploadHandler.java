@@ -5,6 +5,7 @@ import com.harness.core.model.AgentTrace;
 import com.harness.core.model.RiskLevel;
 import com.harness.tool.knowledge.IngestResult;
 import com.harness.tool.knowledge.KnowledgeIngestService;
+import com.harness.tool.knowledge.KnowledgeIngestPendingException;
 import com.harness.input.document.DocumentConversionException;
 import com.harness.server.api.ApiErrorCode;
 import com.harness.server.api.ApiResponses;
@@ -16,6 +17,7 @@ import org.slf4j.LoggerFactory;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.io.InputStream;
 
 public class KnowledgeUploadHandler {
 
@@ -39,7 +41,11 @@ public class KnowledgeUploadHandler {
             }
 
             String collection = ctx.formParam("collection");
-            byte[] fileData = uploadedFile.content().readAllBytes();
+            String documentId = ctx.formParam("documentId");
+            byte[] fileData;
+            try (InputStream input = uploadedFile.content()) {
+                fileData = input.readAllBytes();
+            }
             String fileName;
             try {
                 fileName = uploadedFile.filename();
@@ -54,7 +60,8 @@ public class KnowledgeUploadHandler {
             log.debug("[Server] POST /api/knowledge/upload: file={}, size={}KB, mimeType={}, collection={}",
                     fileName, fileData.length / 1024, mimeType, collection);
 
-            IngestResult result = ingestService.ingest(fileData, fileName, mimeType, collection);
+            IngestResult result = ingestService.ingest(
+                    fileData, fileName, mimeType, collection, documentId, null);
 
             log.info("[Server] Knowledge ingested: chunks={}, embeddings={}, duration={}ms",
                     result.chunkCount(), result.embeddingDimension(), result.ingestDurationMs());
@@ -68,20 +75,11 @@ public class KnowledgeUploadHandler {
                 meta.put("chunk_count", String.valueOf(result.chunkCount()));
                 meta.put("embedding_dim", String.valueOf(result.embeddingDimension()));
                 meta.put("stored_path", result.storedFilePath());
-                meta.put("document_converter", result.documentConverter());
-                meta.put("detected_mime_type", result.detectedMimeType());
-                meta.put("document_ocr_enabled", String.valueOf(result.ocrEnabled()));
-                meta.put("document_vision_calls", String.valueOf(result.visionCalls()));
-                meta.put("document_vision_source", result.visionSource());
-                meta.put("document_conversion_duration_ms",
-                        String.valueOf(result.conversionDurationMs()));
-                if (result.visionModel() != null) {
-                    meta.put("document_vision_model", result.visionModel());
-                }
-                if (!result.conversionWarnings().isEmpty()) {
-                    meta.put("document_conversion_warnings",
-                            String.join("\n", result.conversionWarnings()));
-                }
+                meta.put("ingest_job_id", result.jobId());
+                meta.put("document_id", result.documentId());
+                meta.put("revision_id", result.revisionId());
+                meta.put("source_artifact_id", result.sourceArtifactId());
+                meta.put("canonical_artifact_id", result.canonicalArtifactId());
 
                 AgentTrace trace = AgentTrace.builder()
                         .inputText("knowledge upload: " + fileName)
@@ -97,21 +95,28 @@ public class KnowledgeUploadHandler {
 
             Map<String, Object> response = new LinkedHashMap<>();
             response.put("fileName", result.fileName());
+            response.put("status", "indexed");
             response.put("collection", result.collection());
+            response.put("jobId", result.jobId());
+            response.put("documentId", result.documentId());
+            response.put("revisionId", result.revisionId());
+            response.put("sourceArtifactId", result.sourceArtifactId());
+            response.put("canonicalArtifactId", result.canonicalArtifactId());
             response.put("chunkCount", result.chunkCount());
             response.put("embeddingDimension", result.embeddingDimension());
-            response.put("documentConverter", result.documentConverter());
-            response.put("detectedMimeType", result.detectedMimeType());
-            response.put("visionModel", result.visionModel());
-            response.put("visionSource", result.visionSource());
-            response.put("ocrEnabled", result.ocrEnabled());
-            response.put("visionCalls", result.visionCalls());
-            response.put("conversionDurationMs", result.conversionDurationMs());
-            response.put("conversionWarnings", result.conversionWarnings());
             response.put("storedPath", result.storedFilePath());
             response.put("ingestDurationMs", result.ingestDurationMs());
             ctx.json(response);
 
+        } catch (KnowledgeIngestPendingException e) {
+            Map<String, Object> response = new LinkedHashMap<>();
+            response.put("status", "pending");
+            response.put("jobId", e.jobId());
+            response.put("documentId", e.documentId());
+            response.put("sourceArtifactId", e.sourceArtifactId());
+            response.put("collection", e.collection());
+            response.put("message", e.getMessage());
+            ctx.status(202).json(response);
         } catch (DocumentConversionException e) {
             int workerStatus = e.statusCode();
             int status = workerStatus == 400 || workerStatus == 413

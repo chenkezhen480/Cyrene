@@ -61,7 +61,7 @@ class StudentCapabilityGraphIntegrationTest {
             source.set("nodes", objectMapper.valueToTree(mutation.nodes()));
             source.set("relations", objectMapper.valueToTree(mutation.relations()));
             GraphBuildService buildService = new GraphBuildService(
-                    store, GraphDataConverterRegistry.withDefaults(objectMapper));
+                    store::applyChanges, GraphDataConverterRegistry.withDefaults(objectMapper));
             var buildResult = buildService.build(new GraphBuildRequest(
                     mutation.requestId(),
                     mutation.graphId(),

@@ -3,7 +3,6 @@ package com.harness.tool.rag;
 import com.harness.provider.EmbeddingModelProvider;
 import com.harness.core.env.EnvConfig;
 import com.harness.core.env.EnvKey;
-import com.harness.core.env.PgConnectionPool;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -12,7 +11,7 @@ import org.slf4j.LoggerFactory;
  *
  * 职责分离：
  * - ConnectionPool：数据库连接（启动时主动建立）
- * - CollectionInitializer：schema/索引管理（Milvus 需要，PG 不需要）
+ * - CollectionInitializer：schema/索引管理（Milvus）
  * - VectorStore：纯检索操作
  */
 public final class VectorStoreFactory {
@@ -23,14 +22,13 @@ public final class VectorStoreFactory {
 
     public static VectorStore create(EmbeddingModelProvider embeddingProvider) {
         EnvConfig cfg = EnvConfig.get();
-        String provider = cfg.getString(EnvKey.RAG_PROVIDER, "pgvector");
-        log.info("[VectorStore] Initializing provider: {}", provider);
+        String provider = cfg.getString(EnvKey.RAG_PROVIDER, "milvus");
+        String database = cfg.getString(EnvKey.RAG_DATABASE, "default");
+        String collection = cfg.getString(EnvKey.RAG_COLLECTION, "knowledge_documents");
+        log.info("[VectorStore] Initializing provider={}, database={}, collection={}",
+                provider, database, collection);
 
         return switch (provider.toLowerCase()) {
-            case "pgvector" -> {
-                PgConnectionPool.init();
-                yield new PgVectorStore(embeddingProvider);
-            }
             case "milvus" -> {
                 MilvusConnectionPool.init();
                 MilvusCollectionInitializer.ensureCollection(

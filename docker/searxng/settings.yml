@@ -32,10 +32,26 @@ outgoing:
   max_request_timeout: 15
   useragent_suffix: ""
   pool_connections: 100
-  pool_maxsize: 20
+  # pool_maxsize 已在 curl_cffi 网络栈迁移（PR #6620）中删除，2026.9.x 起不再存在
 
 # The Java web_search tool passes its configured engine list on every request.
 # SEARXNG_SECRET is read directly by SearXNG and is supplied by Compose.
 engines:
   - name: bing
-    weight: 2.0
+    weight: 1.0
+
+# 域名过滤插件（hostnames plugin）：正则匹配 parsed_url.netloc。
+# 插件默认注册，但只有存在顶层 hostnames: 块才会生效；对 format=json 输出同样有效。
+# 参考清单：https://github.com/hezhijie0327/ContentFarm4SearXNG （可生成 remove/low/high 三个清单文件；
+# 若改用外部清单文件，需在 docker-compose.yml 里额外挂载到 /etc/searxng/ 下，否则容器内读不到）。
+hostnames:
+  remove:
+    # SEO/内容农场与登录墙站点
+    - '(.*\.)?pinterest\..*$'
+    - '(.*\.)?facebook\.com$'
+    - '(.*\.)?quora\.com$'
+    - '(.*\.)?jb51\.net$'
+  high_priority:
+    - '(.*\.)?github\.com$'
+    - '(.*\.)?stackoverflow\.com$'
+    - '(.*\.)?wikipedia\.org$'

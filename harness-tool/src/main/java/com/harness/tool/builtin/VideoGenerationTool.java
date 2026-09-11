@@ -5,7 +5,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.harness.core.exception.ToolExecutionException;
 import com.harness.core.model.Artifact;
-import com.harness.core.model.ToolResult;
+import com.harness.core.model.ResultStatus;
+import com.harness.core.model.ToolExecutionOutcome;
 import com.harness.core.model.ToolOutput;
 import com.harness.core.model.ToolSpec;
 import com.harness.tool.TypedOutputTool;
@@ -107,12 +108,18 @@ public class VideoGenerationTool implements TypedOutputTool {
                                 .<ObjectNode>set("resolution", mapper.createObjectNode()
                                         .put("type", "string")
                                         .put("description", "Video resolution: 720p, 1080p (default: 1080p)")))
-                        .<ObjectNode>set("required", mapper.createArrayNode().add("action"))
+                        .<ObjectNode>set("required", mapper.createArrayNode().add("action")),
+                com.harness.core.model.ToolCapability.GENERATION
         );
     }
 
     @Override
     public ToolOutput executeOutput(JsonNode arguments) {
+        return executeOutcome(arguments).content();
+    }
+
+    @Override
+    public ToolExecutionOutcome executeOutcome(JsonNode arguments) {
         String action = arguments.has("action") ? arguments.get("action").asText() : null;
         if (action == null || action.isBlank()) {
             throw new ToolExecutionException("video_generation", "Missing required parameter: action");
@@ -132,7 +139,7 @@ public class VideoGenerationTool implements TypedOutputTool {
         };
     }
 
-    private ToolOutput handleSubmit(JsonNode arguments) {
+    private ToolExecutionOutcome handleSubmit(JsonNode arguments) {
         String prompt = arguments.has("prompt") ? arguments.get("prompt").asText() : null;
         if (prompt == null || prompt.isBlank()) {
             throw new ToolExecutionException("video_generation", "Missing required parameter for submit: prompt");
@@ -184,8 +191,9 @@ public class VideoGenerationTool implements TypedOutputTool {
                 result.put("status", "submitted");
                 result.put("task_id", taskId);
                 result.put("message", "视频正在生成中，完成后会自动通知。可稍后使用 action='check', task_id='" + taskId + "' 查询状态。");
-                ToolResult.setCurrentStatus(ToolResult.ResultStatus.SUCCESS);
-                return ToolOutput.text(mapper.writeValueAsString(result));
+                return ToolExecutionOutcome.succeeded(
+                        ToolOutput.text(mapper.writeValueAsString(result)),
+                        ResultStatus.PENDING);
             }
 
         } catch (ToolExecutionException e) {
@@ -195,7 +203,7 @@ public class VideoGenerationTool implements TypedOutputTool {
         }
     }
 
-    private ToolOutput handleCheck(JsonNode arguments) {
+    private ToolExecutionOutcome handleCheck(JsonNode arguments) {
         String taskId = arguments.has("task_id") ? arguments.get("task_id").asText() : null;
         if (taskId == null || taskId.isBlank()) {
             throw new ToolExecutionException("video_generation", "Missing required parameter for check: task_id");
@@ -205,7 +213,7 @@ public class VideoGenerationTool implements TypedOutputTool {
         if (state == null) {
             // Try polling once in case it was submitted in a different session
             try {
-                return pollTaskStatus(taskId);
+                return pollOutcome(pollTaskStatus(taskId));
             } catch (Exception e) {
                 throw new ToolExecutionException("video_generation",
                         "Unknown task_id: " + taskId + ". It may have been submitted in a different session or already expired.");
@@ -218,9 +226,10 @@ public class VideoGenerationTool implements TypedOutputTool {
             result.put("status", "completed");
             result.put("task_id", taskId);
             try {
-                ToolResult.setCurrentStatus(ToolResult.ResultStatus.SUCCESS);
-                return ToolOutput.artifacts(
-                        mapper.writeValueAsString(result), List.of(state.artifact));
+                return ToolExecutionOutcome.succeeded(
+                        ToolOutput.artifacts(
+                                mapper.writeValueAsString(result), List.of(state.artifact)),
+                        ResultStatus.AVAILABLE);
             } catch (Exception e) {
                 throw new ToolExecutionException("video_generation", "Serialization failed: " + e.getMessage(), e);
             }
@@ -231,8 +240,11 @@ public class VideoGenerationTool implements TypedOutputTool {
         result.put("task_id", taskId);
         result.put("message", "视频仍在生成中，请稍后再试。");
         try {
-            ToolResult.setCurrentStatus(ToolResult.ResultStatus.EMPTY);
-            return ToolOutput.text(mapper.writeValueAsString(result));
+            ResultStatus status = "failed".equals(state.status)
+                    ? ResultStatus.CONTRACT_FAILED
+                    : ResultStatus.PENDING;
+            return ToolExecutionOutcome.succeeded(
+                    ToolOutput.text(mapper.writeValueAsString(result)), status);
         } catch (Exception e) {
             throw new ToolExecutionException("video_generation", "Serialization failed: " + e.getMessage(), e);
         }
@@ -316,6 +328,22 @@ public class VideoGenerationTool implements TypedOutputTool {
             return ToolOutput.artifacts(mapper.writeValueAsString(result), artifacts);
         } catch (Exception e) {
             throw new RuntimeException("Poll failed: " + e.getMessage(), e);
+        }
+    }
+
+    private ToolExecutionOutcome pollOutcome(ToolOutput output) {
+        try {
+            JsonNode result = mapper.readTree(output.text());
+            String status = result.path("status").asText("unknown");
+            ResultStatus resultStatus = switch (status) {
+                case "completed" -> ResultStatus.AVAILABLE;
+                case "failed" -> ResultStatus.CONTRACT_FAILED;
+                default -> ResultStatus.PENDING;
+            };
+            return ToolExecutionOutcome.succeeded(output, resultStatus);
+        } catch (IOException e) {
+            throw new ToolExecutionException(
+                    "video_generation", "Invalid status response: " + e.getMessage(), e);
         }
     }
 

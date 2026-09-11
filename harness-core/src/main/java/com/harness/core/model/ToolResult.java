@@ -1,8 +1,8 @@
 package com.harness.core.model;
 
-/**
- * Result returned from a tool execution.
- */
+import com.fasterxml.jackson.annotation.JsonAlias;
+
+/** Persisted result of one Tool invocation. */
 public record ToolResult(
         String toolCallId,
         String toolName,
@@ -10,17 +10,43 @@ public record ToolResult(
         String output,
         String error,
         long durationMs,
-        ResultStatus status,
-        ToolOutput content
+        @JsonAlias("status") ResultStatus resultStatus,
+        ToolOutput content,
+        ExecutionStatus executionStatus,
+        String validationSource,
+        String validationReason
 ) {
+    private static final int MAX_VALIDATION_SOURCE_LENGTH = 128;
+    private static final int MAX_VALIDATION_REASON_LENGTH = 512;
 
     public ToolResult {
+        executionStatus = executionStatus == null
+                ? legacyExecutionStatus(success, resultStatus)
+                : executionStatus;
+        success = executionStatus == ExecutionStatus.SUCCEEDED;
         if (success && content == null) {
             content = ToolOutput.text(output);
         }
+        if (success && resultStatus == null) {
+            resultStatus = ResultStatus.AVAILABLE;
+        }
+        validationSource = bounded(
+                validationSource, "validationSource", MAX_VALIDATION_SOURCE_LENGTH);
+        validationReason = bounded(
+                validationReason, "validationReason", MAX_VALIDATION_REASON_LENGTH);
+        if (resultStatus == ResultStatus.VERIFIED
+                && (validationSource == null || validationReason == null)) {
+            throw new IllegalArgumentException(
+                    "VERIFIED results require validationSource and validationReason");
+        }
+        if (resultStatus != ResultStatus.VERIFIED
+                && (validationSource != null || validationReason != null)) {
+            throw new IllegalArgumentException(
+                    "validation evidence is only allowed for VERIFIED results");
+        }
     }
 
-    /** Source-compatible constructor for callers that do not yet provide typed content. */
+    /** Source-compatible constructor for typed content without execution metadata. */
     public ToolResult(
             String toolCallId,
             String toolName,
@@ -28,74 +54,60 @@ public record ToolResult(
             String output,
             String error,
             long durationMs,
-            ResultStatus status
+            ResultStatus resultStatus,
+            ToolOutput content
     ) {
-        this(toolCallId, toolName, success, output, error, durationMs, status,
+        this(toolCallId, toolName, success, output, error, durationMs, resultStatus, content,
+                null, null, null);
+    }
+
+    /** Source-compatible constructor for text-only callers. */
+    public ToolResult(
+            String toolCallId,
+            String toolName,
+            boolean success,
+            String output,
+            String error,
+            long durationMs,
+            ResultStatus resultStatus
+    ) {
+        this(toolCallId, toolName, success, output, error, durationMs, resultStatus,
                 success ? ToolOutput.text(output) : null);
     }
 
-    /**
-     * Structured result status that tools can explicitly declare.
-     * When present, Inspector trusts it directly instead of guessing from output text.
-     * null means "no explicit status" — Inspector falls back to heuristic detection.
-     */
-    public enum ResultStatus {
-        /** Tool found and returned useful results. */
-        SUCCESS,
-        /** Tool found zero results (empty retrieval, no matches, etc.). */
-        EMPTY,
-        /** Tool found results but they are irrelevant to the query (e.g. low rerank scores). */
-        LOW_RELEVANCE,
-        /** Tool found a near-miss result and made one implicit strategy escalation eligible.
-         *  Reflector should NOT count this as failure — the tool is still actively trying. */
-        ESCALATING,
-        /** Tool execution was blocked until an explicit confirmation policy allows it. */
-        CONFIRMATION_REQUIRED,
-        /** User explicitly rejected the pending tool execution. */
-        CONFIRMATION_REJECTED,
-        /** The pending confirmation expired before the user decided. */
-        CONFIRMATION_EXPIRED,
-        /** The enclosing request was cancelled while waiting for confirmation. */
-        CONFIRMATION_CANCELLED
+    public static ToolResult fromOutcome(
+            String toolCallId,
+            String toolName,
+            ToolExecutionOutcome outcome,
+            long durationMs
+    ) {
+        ToolOutput content = outcome.content();
+        return new ToolResult(
+                toolCallId,
+                toolName,
+                outcome.executionStatus() == ExecutionStatus.SUCCEEDED,
+                content == null ? null : content.modelContent(),
+                outcome.error(),
+                durationMs,
+                outcome.resultStatus(),
+                content,
+                outcome.executionStatus(),
+                outcome.validationSource(),
+                outcome.validationReason());
     }
-
-    // --- ThreadLocal for tools to communicate status without changing Tool.execute() signature ---
-
-    private static final ThreadLocal<ResultStatus> CURRENT_STATUS = new ThreadLocal<>();
-
-    /**
-     * Set the result status for the current tool execution.
-     * Called by tools (e.g. KnowledgeBaseTool) before returning from execute().
-     */
-    public static void setCurrentStatus(ResultStatus status) {
-        CURRENT_STATUS.set(status);
-    }
-
-    /**
-     * Consume the result status set by the tool and clear the ThreadLocal.
-     * Called by ToolExecutor after tool.execute() returns.
-     */
-    public static ResultStatus consumeCurrentStatus() {
-        ResultStatus s = CURRENT_STATUS.get();
-        CURRENT_STATUS.remove();
-        return s;
-    }
-
-    /**
-     * Clear any status left by a failed tool execution.
-     */
-    public static void clearCurrentStatus() {
-        CURRENT_STATUS.remove();
-    }
-
-    // --- Factory methods ---
 
     public static ToolResult ok(String toolCallId, String toolName, String output, long durationMs) {
-        return ok(toolCallId, toolName, ToolOutput.text(output), durationMs, null);
+        return ok(toolCallId, toolName, ToolOutput.text(output), durationMs, ResultStatus.AVAILABLE);
     }
 
-    public static ToolResult ok(String toolCallId, String toolName, String output, long durationMs, ResultStatus status) {
-        return ok(toolCallId, toolName, ToolOutput.text(output), durationMs, status);
+    public static ToolResult ok(
+            String toolCallId,
+            String toolName,
+            String output,
+            long durationMs,
+            ResultStatus resultStatus
+    ) {
+        return ok(toolCallId, toolName, ToolOutput.text(output), durationMs, resultStatus);
     }
 
     public static ToolResult ok(
@@ -103,41 +115,93 @@ public record ToolResult(
             String toolName,
             ToolOutput content,
             long durationMs,
-            ResultStatus status
+            ResultStatus resultStatus
     ) {
-        ToolOutput normalized = content == null ? ToolOutput.empty() : content;
-        return new ToolResult(
+        return fromOutcome(
                 toolCallId,
                 toolName,
-                true,
-                normalized.modelContent(),
-                null,
-                durationMs,
-                status,
-                normalized);
+                ToolExecutionOutcome.succeeded(content, resultStatus),
+                durationMs);
+    }
+
+    public static ToolResult verified(
+            String toolCallId,
+            String toolName,
+            ToolOutput content,
+            long durationMs,
+            String validationSource,
+            String validationReason
+    ) {
+        return fromOutcome(
+                toolCallId,
+                toolName,
+                ToolExecutionOutcome.verified(content, validationSource, validationReason),
+                durationMs);
     }
 
     public static ToolResult fail(String toolCallId, String toolName, String error, long durationMs) {
-        return new ToolResult(toolCallId, toolName, false, null, error, durationMs, null, null);
+        return fromOutcome(
+                toolCallId, toolName, ToolExecutionOutcome.failed(error), durationMs);
     }
 
     public static ToolResult confirmationRequired(String toolCallId, String toolName, String message) {
-        return new ToolResult(toolCallId, toolName, false, null, message, 0,
-                ResultStatus.CONFIRMATION_REQUIRED, null);
+        return unsuccessful(
+                toolCallId, toolName, ExecutionStatus.CONFIRMATION_REQUIRED,
+                ResultStatus.PENDING, message);
     }
 
     public static ToolResult confirmationRejected(String toolCallId, String toolName, String message) {
-        return new ToolResult(toolCallId, toolName, false, null, message, 0,
-                ResultStatus.CONFIRMATION_REJECTED, null);
+        return unsuccessful(
+                toolCallId, toolName, ExecutionStatus.REJECTED,
+                ResultStatus.CONTRACT_FAILED, message);
     }
 
     public static ToolResult confirmationExpired(String toolCallId, String toolName, String message) {
-        return new ToolResult(toolCallId, toolName, false, null, message, 0,
-                ResultStatus.CONFIRMATION_EXPIRED, null);
+        return unsuccessful(
+                toolCallId, toolName, ExecutionStatus.EXPIRED,
+                ResultStatus.CONTRACT_FAILED, message);
     }
 
     public static ToolResult confirmationCancelled(String toolCallId, String toolName, String message) {
-        return new ToolResult(toolCallId, toolName, false, null, message, 0,
-                ResultStatus.CONFIRMATION_CANCELLED, null);
+        return unsuccessful(
+                toolCallId, toolName, ExecutionStatus.CANCELLED,
+                ResultStatus.CONTRACT_FAILED, message);
+    }
+
+    private static ToolResult unsuccessful(
+            String toolCallId,
+            String toolName,
+            ExecutionStatus executionStatus,
+            ResultStatus resultStatus,
+            String message
+    ) {
+        return new ToolResult(
+                toolCallId, toolName, false, null, message, 0, resultStatus, null,
+                executionStatus, null, null);
+    }
+
+    private static ExecutionStatus legacyExecutionStatus(
+            boolean success,
+            ResultStatus resultStatus
+    ) {
+        if (success) {
+            return ExecutionStatus.SUCCEEDED;
+        }
+        if (resultStatus == ResultStatus.PENDING) {
+            return ExecutionStatus.CONFIRMATION_REQUIRED;
+        }
+        return ExecutionStatus.FAILED;
+    }
+
+    private static String bounded(String value, String field, int maxLength) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        String normalized = value.trim();
+        if (normalized.length() > maxLength) {
+            throw new IllegalArgumentException(
+                    field + " must not exceed " + maxLength + " characters");
+        }
+        return normalized;
     }
 }

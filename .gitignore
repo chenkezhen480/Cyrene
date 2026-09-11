@@ -23,6 +23,7 @@ artifacts/
 # Env
 .env
 data/model.conf
+data/migration-backups/
 *.log
 project-apis.json
 

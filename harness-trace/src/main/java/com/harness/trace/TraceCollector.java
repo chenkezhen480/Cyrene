@@ -221,25 +221,6 @@ public class TraceCollector implements RunTrace {
         return trace;
     }
 
-    // ==================== Post-write Updates ====================
-
-    /**
-     * Update trace metadata after initial write (e.g., user feedback).
-     * Supports "事后按 trace id 更新" — e.g., thumbs up/down from UI.
-     *
-     * @param traceId the trace to update
-     * @param key metadata key (e.g., "user_feedback")
-     * @param value metadata value (e.g., "positive" / "negative")
-     */
-    public void updateFeedback(String traceId, String key, String value) {
-        try {
-            store.updateMetadata(traceId, java.util.Map.of(key, value));
-            log.debug("[L5-Trace] Feedback updated: traceId={}, {}={}", traceId, key, value);
-        } catch (Exception e) {
-            log.error("[L5-Trace] Failed to update feedback: traceId={}, {}", traceId, e.getMessage(), e);
-        }
-    }
-
     @Override
     public synchronized void setSessionId(String sessionId) {
         builder.sessionId(sessionId);

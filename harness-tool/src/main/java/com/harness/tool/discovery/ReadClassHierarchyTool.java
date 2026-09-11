@@ -4,7 +4,9 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.harness.core.exception.ToolExecutionException;
-import com.harness.core.model.ToolResult;
+import com.harness.core.model.ResultStatus;
+import com.harness.core.model.ToolExecutionOutcome;
+import com.harness.core.model.ToolOutput;
 import com.harness.core.model.ToolSpec;
 import com.harness.tool.Tool;
 import org.slf4j.Logger;
@@ -50,15 +52,27 @@ public class ReadClassHierarchyTool implements Tool {
                                                         .put("type", "string")
                                                         .put("description", "Simple class name, e.g. 'UserDTO', 'CourseVO', 'QueryForm'")))
                         .<ObjectNode>set("required",
-                                mapper.createArrayNode().add("className"))
+                                mapper.createArrayNode().add("className")),
+                com.harness.core.model.ToolCapability.READ
         );
     }
 
     @Override
     public String execute(JsonNode arguments) {
-        String className = arguments.has("className") ? arguments.get("className").asText().trim() : null;
+        try {
+            return executeOutcome(arguments).content().modelContent();
+        } catch (ToolExecutionException e) {
+            return "ERROR: " + e.getMessage();
+        }
+    }
+
+    @Override
+    public ToolExecutionOutcome executeOutcome(JsonNode arguments) {
+        String className = arguments != null && arguments.has("className")
+                ? arguments.get("className").asText().trim() : null;
         if (className == null || className.isEmpty()) {
-            return "ERROR: 'className' is required";
+            throw new ToolExecutionException(
+                    "read_class_hierarchy", "Missing required parameter: className");
         }
 
         // Project not initialized — sourceRoot is still the default "."
@@ -74,8 +88,7 @@ public class ReadClassHierarchyTool implements Tool {
             List<ClassHierarchyReader.ClassInfo> hierarchy = reader.readHierarchy(className);
 
             if (hierarchy.isEmpty()) {
-                ToolResult.setCurrentStatus(ToolResult.ResultStatus.EMPTY);
-                return "Class not found: " + className;
+                return outcome("Class not found: " + className, ResultStatus.EMPTY);
             }
 
             // Build output
@@ -111,13 +124,16 @@ public class ReadClassHierarchyTool implements Tool {
             sb.append("\nJSON Schema:\n");
             sb.append(generateJsonSchema(className, mergedFields));
 
-            ToolResult.setCurrentStatus(ToolResult.ResultStatus.SUCCESS);
-            return sb.toString();
+            return outcome(sb.toString(), ResultStatus.AVAILABLE);
 
         } catch (Exception e) {
             log.error("[ReadClassHierarchy] Error reading {}: {}", className, e.getMessage(), e);
-            return "ERROR: " + e.getMessage();
+            throw new ToolExecutionException("read_class_hierarchy", e.getMessage(), e);
         }
+    }
+
+    private static ToolExecutionOutcome outcome(String text, ResultStatus status) {
+        return ToolExecutionOutcome.succeeded(ToolOutput.text(text), status);
     }
 
     /**

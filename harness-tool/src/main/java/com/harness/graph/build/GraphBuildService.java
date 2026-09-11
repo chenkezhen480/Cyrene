@@ -1,22 +1,20 @@
 package com.harness.graph.build;
 
 import com.harness.graph.model.GraphChangeSet;
-import com.harness.graph.model.GraphMutationBatch;
 import com.harness.graph.model.GraphMutationResult;
-import com.harness.graph.store.KnowledgeGraphStore;
 
 import java.util.Objects;
 
 public final class GraphBuildService {
 
-    private final KnowledgeGraphStore graphStore;
+    private final GraphMutationCommitter mutationCommitter;
     private final GraphDataConverterRegistry converterRegistry;
 
     public GraphBuildService(
-            KnowledgeGraphStore graphStore,
+            GraphMutationCommitter mutationCommitter,
             GraphDataConverterRegistry converterRegistry
     ) {
-        this.graphStore = Objects.requireNonNull(graphStore, "graphStore");
+        this.mutationCommitter = Objects.requireNonNull(mutationCommitter, "mutationCommitter");
         this.converterRegistry = Objects.requireNonNull(converterRegistry, "converterRegistry");
     }
 
@@ -30,23 +28,14 @@ public final class GraphBuildService {
         if (draft.isEmpty() && !request.hasDeletions()) {
             throw new IllegalArgumentException("Graph build must contain at least one change");
         }
-        GraphMutationResult mutationResult = request.hasDeletions()
-                ? graphStore.applyChanges(new GraphChangeSet(
-                        request.requestId(),
-                        request.graphId(),
-                        request.schemaId(),
-                        draft.nodes(),
-                        draft.relations(),
-                        request.deleteNodeIds(),
-                        request.deleteRelationIds()
-                ))
-                : graphStore.upsertBatch(new GraphMutationBatch(
-                        request.requestId(),
-                        request.graphId(),
-                        request.schemaId(),
-                        draft.nodes(),
-                        draft.relations()
-                ));
+        GraphMutationResult mutationResult = mutationCommitter.commit(new GraphChangeSet(
+                request.requestId(),
+                request.graphId(),
+                request.schemaId(),
+                draft.nodes(),
+                draft.relations(),
+                request.deleteNodeIds(),
+                request.deleteRelationIds()));
         return new GraphBuildResult(
                 request.requestId(),
                 request.graphId(),

@@ -3,9 +3,12 @@ package com.harness.tool.skill;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.harness.core.exception.ToolExecutionException;
+import com.harness.core.model.ResultStatus;
 import com.harness.core.model.Skill;
 import com.harness.core.model.SkillIndex;
-import com.harness.core.model.ToolResult;
+import com.harness.core.model.ToolExecutionOutcome;
+import com.harness.core.model.ToolOutput;
 import com.harness.core.model.ToolSpec;
 import com.harness.tool.Tool;
 import com.harness.tool.ToolCatalog;
@@ -76,17 +79,29 @@ public class LoadSkillTool implements Tool {
         return new ToolSpec(
                 "load_skill",
                 "加载 skill 内容。仅传 name 返回全文；传 name + query 返回匹配的片段（推荐，更高效）。",
-                params
+                params,
+                com.harness.core.model.ToolCapability.READ
         );
     }
 
     @Override
     public String execute(JsonNode arguments) {
-        String skillName = arguments.has("name") ? arguments.get("name").asText() : null;
-        String query = arguments.has("query") ? arguments.get("query").asText() : null;
+        try {
+            return executeOutcome(arguments).content().modelContent();
+        } catch (ToolExecutionException e) {
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @Override
+    public ToolExecutionOutcome executeOutcome(JsonNode arguments) {
+        String skillName = arguments != null && arguments.has("name")
+                ? arguments.get("name").asText() : null;
+        String query = arguments != null && arguments.has("query")
+                ? arguments.get("query").asText() : null;
 
         if (skillName == null || skillName.isBlank()) {
-            return "Error: missing required parameter 'name'";
+            throw new ToolExecutionException("load_skill", "Missing required parameter: name");
         }
 
         String sessionId = CURRENT_SESSION_ID.get();
@@ -94,31 +109,30 @@ public class LoadSkillTool implements Tool {
         // Look up skill
         SkillIndex index = skillRegistry.get(skillName, sessionId);
         if (index == null) {
-            ToolResult.setCurrentStatus(ToolResult.ResultStatus.EMPTY);
-            return "Error: skill '" + skillName + "' not found. Available skills: " +
-                    skillRegistry.listAll(sessionId).stream().map(SkillIndex::name).toList();
+            return outcome("Error: skill '" + skillName + "' not found. Available skills: "
+                    + skillRegistry.listAll(sessionId).stream().map(SkillIndex::name).toList(),
+                    ResultStatus.EMPTY);
         }
 
         Skill skill = skillRegistry.getFull(skillName, sessionId);
         if (skill == null) {
-            ToolResult.setCurrentStatus(ToolResult.ResultStatus.EMPTY);
-            return "Error: failed to load skill '" + skillName + "'";
+            return outcome("Error: failed to load skill '" + skillName + "'", ResultStatus.EMPTY);
         }
 
         // Search mode: return matching sections
         if (query != null && !query.isBlank()) {
             String searchResult = executeSearch(skill, query);
-            if (searchResult.startsWith("No matches found")) {
-                ToolResult.setCurrentStatus(ToolResult.ResultStatus.EMPTY);
-            } else {
-                ToolResult.setCurrentStatus(ToolResult.ResultStatus.SUCCESS);
-            }
-            return searchResult;
+            return outcome(searchResult, searchResult.startsWith("No matches found")
+                    ? ResultStatus.EMPTY
+                    : ResultStatus.AVAILABLE);
         }
 
         // Full load mode: return complete content
-        ToolResult.setCurrentStatus(ToolResult.ResultStatus.SUCCESS);
-        return executeFullLoad(skill);
+        return outcome(executeFullLoad(skill), ResultStatus.AVAILABLE);
+    }
+
+    private static ToolExecutionOutcome outcome(String text, ResultStatus status) {
+        return ToolExecutionOutcome.succeeded(ToolOutput.text(text), status);
     }
 
     private String executeFullLoad(Skill skill) {

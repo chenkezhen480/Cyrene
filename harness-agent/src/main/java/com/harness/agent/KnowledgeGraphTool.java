@@ -9,8 +9,9 @@ import com.harness.core.exception.ToolExecutionException;
 import com.harness.core.model.GraphRequestContext;
 import com.harness.core.model.PageInfo;
 import com.harness.core.model.PageResponse;
-import com.harness.core.model.ToolResult;
-import com.harness.core.model.ToolSpec;
+import com.harness.core.model.ResultStatus;
+import com.harness.core.model.ToolExecutionOutcome;
+import com.harness.core.model.ToolOutput;
 import com.harness.graph.config.GraphSettings;
 import com.harness.graph.model.GraphNodePageRequest;
 import com.harness.graph.model.GraphRouteResult;
@@ -20,7 +21,6 @@ import com.harness.graph.retrieval.GraphKnowledgeRetriever;
 import com.harness.graph.retrieval.GraphToolData;
 import com.harness.graph.schema.GraphSchemaRegistry;
 import com.harness.graph.store.KnowledgeGraphStore;
-import com.harness.tool.Tool;
 import com.harness.tool.protocol.ToolEnvelope;
 import com.harness.tool.protocol.ToolEnvelopeStatus;
 
@@ -39,9 +39,9 @@ import java.util.Set;
  * <p>A server-provided request scope always takes precedence. Without one, the tool can discover
  * graph spaces and nodes autonomously, subject to the configured graph-space access service.</p>
  */
-public final class KnowledgeGraphTool implements Tool {
+public final class KnowledgeGraphTool {
 
-    public static final String TOOL_NAME = "knowledge_graph_search";
+    private static final String ERROR_SOURCE = "knowledge_read";
     static final String ACTION_LIST_GRAPH_SPACES = "listGraphSpaces";
     static final String ACTION_FIND_NODES = "findNodes";
     static final String ACTION_FIND_NEIGHBORHOOD = "findNeighborhood";
@@ -97,135 +97,160 @@ public final class KnowledgeGraphTool implements Tool {
         CURRENT_CONTEXT.remove();
     }
 
-    @Override
-    public ToolSpec spec() {
-        RuntimeContext runtimeContext = CURRENT_CONTEXT.get();
-        GraphRequestContext serverContext = runtimeContext == null
-                ? null
-                : runtimeContext.requestContext();
-        boolean graphScoped = serverContext != null;
-        boolean subjectScoped = graphScoped && serverContext.hasSubjectScope();
-        ObjectNode properties = objectMapper.createObjectNode();
-        ObjectNode action = stringProperty(
-                subjectScoped
-                        ? "The server supplied the graph space and subject nodes. Use findNeighborhood."
-                        : graphScoped
-                                ? "The server supplied the graph space. Use findNodes once, then findNeighborhood once."
-                                : "Use the shortest sequence: listGraphSpaces once, findNodes once, then "
-                                        + "findNeighborhood once."
-        );
-        var actionValues = action.putArray("enum");
-        if (subjectScoped) {
-            actionValues.add(ACTION_FIND_NEIGHBORHOOD);
-        } else if (graphScoped) {
-            actionValues.add(ACTION_FIND_NODES)
-                    .add(ACTION_FIND_NEIGHBORHOOD);
-        } else {
-            actionValues.add(ACTION_LIST_GRAPH_SPACES)
-                    .add(ACTION_FIND_NODES)
-                    .add(ACTION_FIND_NEIGHBORHOOD);
-        }
-        properties.set("action", action);
-        if (!graphScoped) {
-            properties.set("graphId", stringProperty(
-                    "Graph-space ID returned by listGraphSpaces. Never invent this value."
-            ));
-            properties.set("schemaId", stringProperty(
-                    "Schema ID returned by listGraphSpaces. Never invent this value."
-            ));
-        }
-        if (!subjectScoped) {
-            properties.set("name", stringProperty(
-                    "Optional case-insensitive node name filter for findNodes."
-            ));
-            properties.set("label", stringProperty(
-                    "Optional Schema node label filter for findNodes."
-            ));
-            properties.set("subjectIds", arrayProperty(
-                    "Node IDs returned by findNodes and used as neighborhood anchors."
-            ));
-            properties.set("cursor", stringProperty(
-                    "Opaque nextCursor returned by listGraphSpaces or findNodes."
-            ));
-        }
-        properties.set("relationTypes", arrayProperty(
-                "Optional Schema relation types to include in a neighborhood."
-        ));
-        properties.set("queryId", stringProperty(
-                "Registered graph query ID. Use anchored-neighborhood unless instructed otherwise."
-        ));
-        properties.set("maxDepth", objectMapper.createObjectNode()
-                .put("type", "integer")
-                .put("minimum", 1)
-                .put("description", "Traversal depth; server and Schema limits always apply."));
-        properties.set("limit", objectMapper.createObjectNode()
-                .put("type", "integer")
-                .put("minimum", 1)
-                .put("description", "Page or result size; the server maximum always applies."));
-
-        return new ToolSpec(
-                TOOL_NAME,
-                subjectScoped
-                        ? "Retrieve the server-authorized structured graph neighborhood in one call. "
-                                + "The graph space and subject nodes are already fixed by the server. "
-                                + "Do not discover spaces or nodes, generate Cypher, or guess identifiers."
-                        : graphScoped
-                                ? "Find the named entity inside the server-authorized graph space once, then retrieve "
-                                        + "its structured neighborhood once. The graphId and schemaId are fixed by the "
-                                        + "server. Do not list graph spaces, generate Cypher, or guess identifiers."
-                                : "Discover and retrieve structured graph spaces, nodes, relations, and paths. "
-                                + "This route is independent from vector document search and does not use reranking. "
-                                + "For a named entity relationship question, call listGraphSpaces once, choose the "
-                                + "best space from its description, call findNodes once with the entity name, then "
-                                + "call findNeighborhood once with every matching node ID. Do not repeat an identical "
-                                + "failed call, generate Cypher, guess identifiers, or search unrelated graph spaces.",
-                objectMapper.createObjectNode()
-                        .put("type", "object")
-                        .set("properties", properties)
-        );
+    /** Executes a deterministic Neo4j route selected by an authorized Graph Schema Wiki handle. */
+    public ToolExecutionOutcome executeForWiki(String schemaId, JsonNode arguments) {
+        return executeForWiki(schemaId, null, arguments);
     }
 
-    @Override
-    public String execute(JsonNode arguments) {
+    /** Executes a deterministic route already narrowed to one Graph Space Wiki handle. */
+    public ToolExecutionOutcome executeForWiki(
+            String schemaId,
+            String graphId,
+            JsonNode arguments
+    ) {
         RuntimeContext runtimeContext = CURRENT_CONTEXT.get();
         if (runtimeContext == null) {
             throw new ToolExecutionException(
-                    TOOL_NAME,
-                    "No graph tool runtime context is available"
-            );
+                    ERROR_SOURCE, "No graph tool runtime context is available");
         }
-
+        String normalizedSchemaId = requireValue(schemaId, "schemaId");
         try {
             GraphRequestContext serverContext = runtimeContext.requestContext();
+            if (serverContext != null
+                    && !normalizedSchemaId.equals(serverContext.schemaId())) {
+                throw new SecurityException(
+                        "Graph Wiki handle exceeds the server-authorized graph scope");
+            }
+            String normalizedGraphId = graphId == null
+                    ? null : requireValue(graphId, "graphId");
+            if (normalizedGraphId != null && serverContext != null
+                    && !normalizedGraphId.equals(serverContext.graphId())) {
+                throw new SecurityException(
+                        "Graph Space Wiki handle exceeds the server-authorized graph scope");
+            }
             String defaultAction = serverContext == null
-                    ? ACTION_LIST_GRAPH_SPACES
+                    ? normalizedGraphId == null ? ACTION_LIST_GRAPH_SPACES : ACTION_FIND_NODES
                     : serverContext.hasSubjectScope()
                             ? ACTION_FIND_NEIGHBORHOOD
                             : ACTION_FIND_NODES;
-            String action = text(arguments, "action", defaultAction);
+            String action = text(arguments, "graphAction", defaultAction);
             requireAllowedAction(serverContext, action);
-            runtimeContext.requireFreshInvocation(action, canonicalArguments(arguments));
+            if (normalizedGraphId != null && ACTION_LIST_GRAPH_SPACES.equals(action)) {
+                throw new SecurityException(
+                        "Graph Space Wiki handle cannot widen retrieval to other graph spaces");
+            }
+            ObjectNode graphArguments = wikiGraphArguments(arguments, normalizedSchemaId);
+            if (normalizedGraphId != null) {
+                String requestedGraphId = text(arguments, "graphId", normalizedGraphId);
+                if (!normalizedGraphId.equals(requestedGraphId)) {
+                    throw new SecurityException(
+                            "Graph Space Wiki handle cannot select another graphId");
+                }
+                graphArguments.put("graphId", normalizedGraphId);
+            }
+            graphArguments.put("action", action);
+            runtimeContext.requireFreshInvocation(
+                    "wiki:" + normalizedSchemaId + ':' + action,
+                    canonicalArguments(graphArguments));
             return switch (action) {
-                case ACTION_LIST_GRAPH_SPACES -> listGraphSpaces(arguments, runtimeContext);
-                case ACTION_FIND_NODES -> findNodes(arguments, runtimeContext);
-                case ACTION_FIND_NEIGHBORHOOD -> findNeighborhood(arguments, runtimeContext);
-                default -> throw new IllegalArgumentException("Unsupported graph action: " + action);
+                case ACTION_LIST_GRAPH_SPACES -> listGraphSpaces(
+                        graphArguments, runtimeContext, normalizedSchemaId);
+                case ACTION_FIND_NODES -> findNodes(graphArguments, runtimeContext);
+                case ACTION_FIND_NEIGHBORHOOD ->
+                        findNeighborhood(graphArguments, runtimeContext);
+                default -> throw new IllegalArgumentException(
+                        "Unsupported graph action: " + action);
             };
-        } catch (ToolExecutionException e) {
-            throw e;
-        } catch (Exception e) {
+        } catch (ToolExecutionException exception) {
+            throw exception;
+        } catch (Exception exception) {
             throw new ToolExecutionException(
-                    TOOL_NAME,
-                    "Knowledge graph search failed: " + e.getMessage()
-            );
+                    ERROR_SOURCE, "Knowledge graph Wiki route failed: " + exception.getMessage());
         }
     }
 
-    private String listGraphSpaces(JsonNode arguments, RuntimeContext runtimeContext) {
+    /** Returns only requested Schema IDs that have a graph space readable in this request. */
+    public Set<String> readableWikiSchemas(String tenantId, Set<String> schemaIds) {
+        Set<String> requested = Set.copyOf(
+                Objects.requireNonNull(schemaIds, "schemaIds"));
+        if (requested.isEmpty()) return Set.of();
+        RuntimeContext runtimeContext = CURRENT_CONTEXT.get();
+        if (runtimeContext == null) {
+            throw new ToolExecutionException(
+                    ERROR_SOURCE, "No graph tool runtime context is available");
+        }
+        GraphRequestContext trusted = runtimeContext.requestContext();
+        if (trusted != null) {
+            if (!requested.contains(trusted.schemaId())) return Set.of();
+            graphSpaceAccessService.requireReadable(
+                    tenantId, trusted.graphId(), trusted.schemaId());
+            return Set.of(trusted.schemaId());
+        }
+
+        LinkedHashSet<String> readable = new LinkedHashSet<>();
+        String cursor = "";
+        while (true) {
+            PageResponse<GraphSpaceReference> page = graphSpaceAccessService.listReadable(
+                    tenantId, settings.maxLimit(), cursor);
+            page.items().stream()
+                    .map(GraphSpaceReference::schemaId)
+                    .filter(requested::contains)
+                    .filter(schemaId -> schemaRegistry.find(schemaId).isPresent())
+                    .forEach(readable::add);
+            if (readable.containsAll(requested) || !page.pageInfo().hasMore()) {
+                return Set.copyOf(readable);
+            }
+            String nextCursor = page.pageInfo().nextCursor();
+            if (nextCursor.isBlank() || nextCursor.equals(cursor)) {
+                throw new IllegalStateException(
+                        "Graph-space pagination did not advance its cursor");
+            }
+            cursor = nextCursor;
+        }
+    }
+
+    /** Returns only candidate Concept IDs whose exact graphId/schemaId pair is readable. */
+    public Set<String> readableWikiGraphSpaces(
+            String tenantId,
+            Map<String, GraphSpaceReference> candidates
+    ) {
+        Map<String, GraphSpaceReference> requested = Map.copyOf(
+                Objects.requireNonNull(candidates, "candidates"));
+        if (requested.isEmpty()) return Set.of();
+        RuntimeContext runtimeContext = CURRENT_CONTEXT.get();
+        if (runtimeContext == null) {
+            throw new ToolExecutionException(
+                    ERROR_SOURCE, "No graph tool runtime context is available");
+        }
+        GraphRequestContext trusted = runtimeContext.requestContext();
+        LinkedHashSet<String> readable = new LinkedHashSet<>();
+        for (Map.Entry<String, GraphSpaceReference> entry : requested.entrySet()) {
+            GraphSpaceReference space = entry.getValue();
+            if (trusted != null && (!space.graphId().equals(trusted.graphId())
+                    || !space.schemaId().equals(trusted.schemaId()))) {
+                continue;
+            }
+            try {
+                graphSpaceAccessService.requireReadable(
+                        tenantId, space.graphId(), space.schemaId());
+                readable.add(entry.getKey());
+            } catch (SecurityException ignored) {
+                // A bounded candidate is omitted when the current tenant cannot read it.
+            }
+        }
+        return Set.copyOf(readable);
+    }
+
+    private ToolExecutionOutcome listGraphSpaces(
+            JsonNode arguments,
+            RuntimeContext runtimeContext,
+            String schemaId
+    ) {
         PageResponse<GraphSpaceReference> page = listRegisteredGraphSpaces(
                 runtimeContext.tenantId(),
                 settings.capLimit(integer(arguments, "limit")),
-                text(arguments, "cursor", "")
+                text(arguments, "cursor", ""),
+                schemaId
         );
         ToolEnvelope<GraphSpacesData> envelope = page.items().isEmpty()
                 ? ToolEnvelope.empty(
@@ -236,14 +261,14 @@ public final class KnowledgeGraphTool implements Tool {
                         new GraphSpacesData(page.items()),
                         page.pageInfo(),
                         Map.of("truncated", false));
-        setToolStatus(envelope.status());
-        return serialize(envelope);
+        return graphOutcome(envelope);
     }
 
     private PageResponse<GraphSpaceReference> listRegisteredGraphSpaces(
             String tenantId,
             int limit,
-            String cursor
+            String cursor,
+            String schemaId
     ) {
         List<GraphSpaceReference> items = new ArrayList<>(limit);
         String currentCursor = cursor;
@@ -253,6 +278,7 @@ public final class KnowledgeGraphTool implements Tool {
             PageResponse<GraphSpaceReference> page = graphSpaceAccessService.listReadable(
                     tenantId, remaining, currentCursor);
             page.items().stream()
+                    .filter(space -> schemaId == null || schemaId.equals(space.schemaId()))
                     .filter(space -> schemaRegistry.find(space.schemaId()).isPresent())
                     .forEach(items::add);
             pageInfo = page.pageInfo();
@@ -275,7 +301,7 @@ public final class KnowledgeGraphTool implements Tool {
         ));
     }
 
-    private String findNodes(JsonNode arguments, RuntimeContext runtimeContext) {
+    private ToolExecutionOutcome findNodes(JsonNode arguments, RuntimeContext runtimeContext) {
         GraphRequestContext serverContext = runtimeContext.requestContext();
         String graphId;
         String schemaId;
@@ -306,11 +332,10 @@ public final class KnowledgeGraphTool implements Tool {
         GraphRouteResult result = new GraphRouteResult(
                 page.items(), List.of(), List.of(), List.of(), page.pageInfo(), java.util.Map.of());
         ToolEnvelope<GraphToolData> envelope = formatGraphResult(graphId, schemaId, result);
-        setToolStatus(envelope.status());
-        return serialize(envelope);
+        return graphOutcome(envelope);
     }
 
-    private String findNeighborhood(JsonNode arguments, RuntimeContext runtimeContext) {
+    private ToolExecutionOutcome findNeighborhood(JsonNode arguments, RuntimeContext runtimeContext) {
         GraphRequestContext serverContext = runtimeContext.requestContext();
         String queryId = text(
                 arguments,
@@ -383,8 +408,7 @@ public final class KnowledgeGraphTool implements Tool {
         );
         ToolEnvelope<GraphToolData> envelope = formatGraphResult(
                 effectiveContext.graphId(), effectiveContext.schemaId(), result);
-        setToolStatus(envelope.status());
-        return serialize(envelope);
+        return graphOutcome(envelope);
     }
 
     private static void requireAllowedAction(
@@ -426,23 +450,27 @@ public final class KnowledgeGraphTool implements Tool {
         }
     }
 
-    private static void setToolStatus(ToolEnvelopeStatus status) {
-        ToolResult.setCurrentStatus(status == ToolEnvelopeStatus.EMPTY
-                ? ToolResult.ResultStatus.EMPTY
-                : ToolResult.ResultStatus.SUCCESS);
+    private ToolExecutionOutcome graphOutcome(ToolEnvelope<?> envelope) {
+        ResultStatus resultStatus = envelope.status() == ToolEnvelopeStatus.EMPTY
+                ? ResultStatus.EMPTY
+                : ResultStatus.AVAILABLE;
+        return ToolExecutionOutcome.succeeded(
+                ToolOutput.text(serialize(envelope)), resultStatus);
     }
 
-    private ObjectNode stringProperty(String description) {
-        return objectMapper.createObjectNode()
-                .put("type", "string")
-                .put("description", description);
-    }
-
-    private ObjectNode arrayProperty(String description) {
-        return objectMapper.createObjectNode()
-                .put("type", "array")
-                .put("description", description)
-                .set("items", objectMapper.createObjectNode().put("type", "string"));
+    private ObjectNode wikiGraphArguments(JsonNode arguments, String schemaId) {
+        ObjectNode routed = objectMapper.createObjectNode();
+        if (arguments != null && arguments.isObject()) {
+            for (String field : List.of(
+                    "graphId", "name", "label", "subjectIds", "cursor",
+                    "relationTypes", "queryId", "maxDepth", "limit")) {
+                if (arguments.has(field)) {
+                    routed.set(field, arguments.get(field).deepCopy());
+                }
+            }
+        }
+        routed.put("schemaId", schemaId);
+        return routed;
     }
 
     private static String requiredText(JsonNode arguments, String name) {
@@ -451,6 +479,13 @@ public final class KnowledgeGraphTool implements Tool {
             throw new IllegalArgumentException(name + " is required");
         }
         return value;
+    }
+
+    private static String requireValue(String value, String name) {
+        if (value == null || value.isBlank()) {
+            throw new IllegalArgumentException(name + " is required");
+        }
+        return value.trim();
     }
 
     private static String text(JsonNode arguments, String name, String defaultValue) {
@@ -540,7 +575,7 @@ public final class KnowledgeGraphTool implements Tool {
             String invocationKey = action + ':' + canonicalArguments;
             if (!invocationKeys.add(invocationKey)) {
                 throw new ToolExecutionException(
-                        TOOL_NAME,
+                        ERROR_SOURCE,
                         "An identical knowledge graph call already ran in this Agent request; "
                                 + "use its result or change the query parameters"
                 );

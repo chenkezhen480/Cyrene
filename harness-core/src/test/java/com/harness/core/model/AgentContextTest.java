@@ -17,6 +17,7 @@ class AgentContextTest {
         assertThat(ctx.isStreaming()).isFalse();
         assertThat(ctx.userId()).isNull();
         assertThat(ctx.tenantId()).isEqualTo(AgentContext.DEFAULT_TENANT_ID);
+        assertThat(ctx.optionalTenantId()).isEmpty();
         assertThat(ctx.enableThinking()).isNull();
     }
 
@@ -81,6 +82,15 @@ class AgentContextTest {
         var ctx = AgentContext.of(Map.of("tenantId", " enterprise-001 "));
 
         assertThat(ctx.tenantId()).isEqualTo("enterprise-001");
+        assertThat(ctx.optionalTenantId()).contains("enterprise-001");
+    }
+
+    @Test
+    void optionalTenantId_blankValue_remainsEmpty() {
+        var ctx = AgentContext.of(Map.of("tenantId", "   "));
+
+        assertThat(ctx.optionalTenantId()).isEmpty();
+        assertThat(ctx.tenantId()).isEqualTo(AgentContext.DEFAULT_TENANT_ID);
     }
 
     @Test

@@ -74,6 +74,7 @@ class ToolOutputTest {
         MemoryMessage message = new MemoryMessage(
                 1,
                 "session-1",
+                "trace-1",
                 "assistant",
                 ToolOutput.json(MAPPER.readTree("{\"items\":[1,2]}")).toMessageBlocks(),
                 false,

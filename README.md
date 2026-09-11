@@ -4,7 +4,7 @@
 
 > 将已有业务系统、领域知识和权限体系接入自主 ReAct Agent，而不是重新开发一套孤立的 AI 应用。
 
-Cyrene Agent 是一个使用 Java 21 构建的 Agent 开发框架。它面向垂直领域开发者，帮助已有系统快速获得自然语言入口、项目接口调用、企业知识检索、关系数据检索、可校验结构化输出、子 Agent 协作和全链路 Trace 能力。当前版本为 `0.5.10`。
+Cyrene Agent 是一个使用 Java 21 构建的 Agent 开发框架。它面向垂直领域开发者，帮助已有系统快速获得自然语言入口、项目接口调用、企业知识检索、关系数据检索、可校验结构化输出、子 Agent 协作和全链路 Trace 能力。当前版本为 `0.6.0`。
 
 ## 为什么需要 Cyrene Agent
 
@@ -21,8 +21,6 @@ Cyrene Agent 解决的是另一类问题：**如何为已有系统构建专用 A
 | 关系数据常被压成文本片段      | 文档走向量检索，关系数据走知识图谱 |
 
 框架服务、知识库与持久化组件可以本地部署；调用外部模型或业务 API 时，数据会按接入方配置发送到对应服务，请结合自身数据策略选择 Provider 与部署方式。
-
-![对话界面](docs/assets/chat.png)
 
 ## 核心运行模式
 
@@ -90,7 +88,7 @@ Agent 调用业务接口时采用用户 Token 透传。调用方通过可信的 
 
 企业文档与关系型业务数据需要不同的检索方式：
 
-- `knowledge_base_search` 面向制度、手册、合同和技术文档。支持 Milvus 或 pgvector，以 collection 作为知识集合边界；切块优先保持段落与语义完整，再执行 Embedding、混合检索和可选 Rerank。
+- `knowledge_base_search` 面向制度、手册、合同和技术文档。支持 Milvus，以 collection 作为知识集合边界；切块优先保持段落与语义完整，再执行 Embedding、混合检索和可选 Rerank。
 ![知识库界面](docs/assets/knowledge.png)
 
 - `knowledge_graph_search` 面向实体、关系和路径。Neo4j 保存图数据，不把关系结果伪装成文档 Chunk，避免无关文本降低模型专注度。
@@ -98,7 +96,7 @@ Agent 调用业务接口时采用用户 Token 透传。调用方通过可信的 
 
 - 图谱租户作用域来自可信 Context 中的 `tenantId`。启用多租户映射时，租户与 Graph Space 的授权关系持久化在 MySQL `graph_space_bindings` 中；请求上下文只能缩小图谱范围，模型不能自行扩大租户、Schema 或主体范围。
 
-Milvus、pgvector、Neo4j、MySQL 和 Redis 均可由本地 Docker Compose 驱动，私有知识与业务数据默认留在本地部署边界内。向量库的租户映射可以由接入系统在 collection/部署层组织；当前请求级强隔离重点落在知识图谱的租户与 Graph Space 授权上。
+Milvus、Neo4j、MySQL 和 Redis 均可由本地 Docker Compose 驱动，私有知识与业务数据默认留在本地部署边界内。向量库的租户映射可以由接入系统在 collection/部署层组织；当前请求级强隔离重点落在知识图谱的租户与 Graph Space 授权上。
 
 ### 4. 热加载工具注册与请求级工具快照
 
@@ -151,7 +149,7 @@ docker compose --env-file .env -f docker/docker-compose.yml --profile graph up -
 
 ```bash
 mvn clean package -pl harness-server -am -DskipTests
-java -jar harness-server/target/harness-server-0.5.10.jar
+java -jar harness-server/target/harness-server-0.6.0.jar
 ```
 
 服务默认监听 `8080`。打开 Web 控制台后，可以完成项目接口扫描、知识库上传、图谱管理和 Agent 对话。

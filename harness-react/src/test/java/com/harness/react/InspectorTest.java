@@ -2,6 +2,7 @@ package com.harness.react;
 
 import com.harness.core.model.ReActStep.InspectionResult;
 import com.harness.core.model.ReActStep.InspectionResult.InspectionStatus;
+import com.harness.core.model.ResultStatus;
 import com.harness.core.model.ToolCall;
 import com.harness.core.model.ToolResult;
 import com.fasterxml.jackson.databind.node.TextNode;
@@ -121,21 +122,21 @@ class InspectorTest {
 
     @Test
     void inspect_explicitEmpty_returnsInsufficient() {
-        ToolCall call = toolCall("knowledge_base_search");
-        ToolResult result = ToolResult.ok("id1", "knowledge_base_search",
-                "No results found in knowledge base for: test query", 200, ToolResult.ResultStatus.EMPTY);
+        ToolCall call = toolCall("knowledge_search");
+        ToolResult result = ToolResult.ok("id1", "knowledge_search",
+                "No results found in knowledge base for: test query", 200, ResultStatus.EMPTY);
 
         var inspection = inspector.inspect(List.of(call), List.of(result));
 
         assertThat(inspection.status()).isEqualTo(InspectionStatus.INSUFFICIENT);
-        assertThat(inspection.reason()).contains("no implicit escalation is available");
+        assertThat(inspection.reason()).contains("no eligible results");
     }
 
     @Test
     void inspect_explicitEscalating_returnsInsufficient() {
-        ToolCall call = toolCall("knowledge_base_search");
-        ToolResult result = ToolResult.ok("id1", "knowledge_base_search",
-                "No results found in knowledge base for: test query", 200, ToolResult.ResultStatus.ESCALATING);
+        ToolCall call = toolCall("knowledge_search");
+        ToolResult result = ToolResult.ok("id1", "knowledge_search",
+                "No results found in knowledge base for: test query", 200, ResultStatus.ESCALATING);
 
         var inspection = inspector.inspect(List.of(call), List.of(result));
 
@@ -146,21 +147,21 @@ class InspectorTest {
 
     @Test
     void inspect_explicitLowRelevance_returnsInsufficient() {
-        ToolCall call = toolCall("knowledge_base_search");
-        ToolResult result = ToolResult.ok("id1", "knowledge_base_search",
-                "Some context that is not very relevant to the query at all", 200, ToolResult.ResultStatus.LOW_RELEVANCE);
+        ToolCall call = toolCall("knowledge_search");
+        ToolResult result = ToolResult.ok("id1", "knowledge_search",
+                "Some context that is not very relevant to the query at all", 200, ResultStatus.LOW_RELEVANCE);
 
         var inspection = inspector.inspect(List.of(call), List.of(result));
 
         assertThat(inspection.status()).isEqualTo(InspectionStatus.INSUFFICIENT);
-        assertThat(inspection.reason()).contains("none are relevant");
+        assertThat(inspection.reason()).contains("low-relevance");
     }
 
     @Test
     void inspect_explicitSuccess_returnsPass() {
-        ToolCall call = toolCall("knowledge_base_search");
-        ToolResult result = ToolResult.ok("id1", "knowledge_base_search",
-                "Detailed context about the refund policy from the knowledge base", 200, ToolResult.ResultStatus.SUCCESS);
+        ToolCall call = toolCall("knowledge_search");
+        ToolResult result = ToolResult.ok("id1", "knowledge_search",
+                "Detailed context about the refund policy from the knowledge base", 200, ResultStatus.AVAILABLE);
 
         var inspection = inspector.inspect(List.of(call), List.of(result));
 
@@ -169,10 +170,9 @@ class InspectorTest {
 
     @Test
     void inspect_explicitStatusTakesPriority_overHeuristics() {
-        // Even though the output is short (would be INSUFFICIENT by heuristics),
-        // explicit SUCCESS should take priority
         ToolCall call = toolCall("custom_tool");
-        ToolResult result = ToolResult.ok("id1", "custom_tool", "ok", 100, ToolResult.ResultStatus.SUCCESS);
+        ToolResult result = ToolResult.ok(
+                "id1", "custom_tool", "ok", 100, ResultStatus.AVAILABLE);
 
         var inspection = inspector.inspect(List.of(call), List.of(result));
 
@@ -180,14 +180,13 @@ class InspectorTest {
     }
 
     @Test
-    void inspect_shortOutput_returnsInsufficient() {
+    void inspect_shortAvailableOutput_returnsPass() {
         ToolCall call = toolCall("search");
         ToolResult result = ToolResult.ok("id1", "search", "ok", 100);
 
         var inspection = inspector.inspect(List.of(call), List.of(result));
 
-        assertThat(inspection.status()).isEqualTo(InspectionStatus.INSUFFICIENT);
-        assertThat(inspection.reason()).contains("short output");
+        assertThat(inspection.status()).isEqualTo(InspectionStatus.PASS);
     }
 
     @Test
@@ -211,6 +210,21 @@ class InspectorTest {
         var inspection = inspector.inspect(List.of(call), List.of(result));
 
         assertThat(inspection.status()).isEqualTo(InspectionStatus.PASS);
+    }
+
+    @Test
+    void inspect_availableThenFailure_aggregatesWholeRoundAsToolError() {
+        ToolResult available = ToolResult.ok(
+                "id1", "search", "result", 10, ResultStatus.AVAILABLE);
+        ToolResult failed = ToolResult.fail(
+                "id2", "database", "connection refused", 20);
+
+        var inspection = inspector.inspect(
+                List.of(toolCall("search"), toolCall("database")),
+                List.of(available, failed));
+
+        assertThat(inspection.status()).isEqualTo(InspectionStatus.TOOL_ERROR);
+        assertThat(inspection.reason()).contains("database", "connection refused");
     }
 
     @Test

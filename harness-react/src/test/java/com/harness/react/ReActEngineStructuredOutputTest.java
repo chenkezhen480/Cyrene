@@ -120,12 +120,12 @@ class ReActEngineStructuredOutputTest {
                     if (StructuredOutputTool.TOOL_NAME.equals(call.toolName())) {
                         return ToolResult.ok(
                                 call.id(), call.toolName(), ToolOutput.json(call.arguments()), 1,
-                                ToolResult.ResultStatus.SUCCESS);
+                                com.harness.core.model.ResultStatus.AVAILABLE);
                     }
                     return ToolResult.ok(
                             call.id(), call.toolName(),
                             "{\"annualAmount\":120000}", 1,
-                            ToolResult.ResultStatus.SUCCESS);
+                            com.harness.core.model.ResultStatus.AVAILABLE);
                 });
 
         ReActEngine engine = new ReActEngine(
@@ -186,7 +186,7 @@ class ReActEngineStructuredOutputTest {
                     ToolCall call = invocation.getArgument(0);
                     return ToolResult.ok(
                             call.id(), call.toolName(), ToolOutput.json(call.arguments()), 1,
-                            ToolResult.ResultStatus.SUCCESS);
+                            com.harness.core.model.ResultStatus.AVAILABLE);
                 });
         AtomicReference<JsonNode> structuredData = new AtomicReference<>();
         ReActListener listener = new ReActListener() {

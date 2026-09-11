@@ -83,7 +83,12 @@ public class MemoryCompressor {
      */
     private CompressionResult doMajorCompression(String sessionId, List<MemoryMessage> messages, int targetTokens, int totalBudget) {
         String summary = generateDecayedSummary(messages, targetTokens, totalBudget);
-        messageStore.save(sessionId, "system", List.of(new MessageBlock(MessageBlock.BlockType.TEXT, summary, null)), true);
+        messageStore.save(new MessageWrite(
+                sessionId,
+                null,
+                "system",
+                List.of(new MessageBlock(MessageBlock.BlockType.TEXT, summary, null)),
+                true));
         sessionStore.updateLastActive(sessionId);
 
         List<MemoryMessage> freshMessages = messageStore.loadForContext(sessionId);

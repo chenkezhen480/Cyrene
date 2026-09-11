@@ -1,183 +1,456 @@
 package com.harness.tool.knowledge;
 
-import com.harness.provider.EmbeddingModelProvider;
 import com.harness.core.env.EnvConfig;
 import com.harness.core.env.EnvKey;
+import com.harness.core.knowledge.*;
 import com.harness.core.modelconfig.ModelConfigKey;
-import com.harness.input.document.DocumentConversionDiagnostics;
+import com.harness.input.document.DocumentConversionException;
 import com.harness.input.document.DocumentConversionResult;
 import com.harness.input.document.DocumentConversionService;
 import com.harness.input.multimodal.MarkdownChunk;
 import com.harness.input.multimodal.TextChunker;
+import com.harness.provider.EmbeddingModelProvider;
+import com.harness.tool.knowledge.authority.*;
 import com.harness.tool.rag.VectorStore;
 import dev.langchain4j.data.embedding.Embedding;
 import dev.langchain4j.data.segment.TextSegment;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.UUID;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.time.Instant;
+import java.util.*;
 
-public class KnowledgeIngestService {
+/** Recoverable immutable-Artifact to whole-document-Revision ingestion pipeline. */
+public final class KnowledgeIngestService {
 
     private static final Logger log = LoggerFactory.getLogger(KnowledgeIngestService.class);
+    private static final String COMPILER_ID = "cyrene-document-compiler/v1";
+    private static final int EMBEDDING_BATCH_SIZE = 10;
 
     private final EmbeddingModelProvider embeddingProvider;
     private final VectorStore vectorStore;
-    private final FileStorageService fileStorage;
     private final DocumentConversionService documentConversionService;
+    private final ContentAddressedArtifactStorage artifactStorage;
+    private final KnowledgeArtifactRepository artifactRepository;
+    private final KnowledgeIngestJobStore ingestJobStore;
+    private final KnowledgeRepository knowledgeRepository;
     private final TextChunker textChunker;
     private final String defaultCollection;
     private final long maxFileSizeMb;
+    private final int chunkSize;
+    private final int maxChunks;
+    private final int maxAttempts;
 
     public KnowledgeIngestService(
             EmbeddingModelProvider embeddingProvider,
             VectorStore vectorStore,
             DocumentConversionService documentConversionService,
-            FileStorageService fileStorage
+            ContentAddressedArtifactStorage artifactStorage,
+            KnowledgeArtifactRepository artifactRepository,
+            KnowledgeIngestJobStore ingestJobStore,
+            KnowledgeRepository knowledgeRepository
     ) {
-        this.embeddingProvider = java.util.Objects.requireNonNull(
-                embeddingProvider, "embeddingProvider");
-        this.vectorStore = java.util.Objects.requireNonNull(vectorStore, "vectorStore");
-        this.documentConversionService = java.util.Objects.requireNonNull(
-                documentConversionService, "documentConversionService");
-        this.fileStorage = java.util.Objects.requireNonNull(fileStorage, "fileStorage");
+        this.embeddingProvider = Objects.requireNonNull(embeddingProvider, "embeddingProvider");
+        this.vectorStore = Objects.requireNonNull(vectorStore, "vectorStore");
+        this.documentConversionService = Objects.requireNonNull(documentConversionService, "documentConversionService");
+        this.artifactStorage = Objects.requireNonNull(artifactStorage, "artifactStorage");
+        this.artifactRepository = Objects.requireNonNull(artifactRepository, "artifactRepository");
+        this.ingestJobStore = Objects.requireNonNull(ingestJobStore, "ingestJobStore");
+        this.knowledgeRepository = Objects.requireNonNull(knowledgeRepository, "knowledgeRepository");
         this.textChunker = new TextChunker(embeddingProvider.tokenEstimator());
 
-        EnvConfig cfg = EnvConfig.get();
-        this.defaultCollection = cfg.getString(EnvKey.RAG_COLLECTION, "default");
-        this.maxFileSizeMb = cfg.getLong(EnvKey.KNOWLEDGE_MAX_FILE_SIZE_MB, 50);
+        EnvConfig config = EnvConfig.get();
+        this.defaultCollection = config.getString(EnvKey.RAG_COLLECTION, "default");
+        this.maxFileSizeMb = config.getLong(EnvKey.KNOWLEDGE_MAX_FILE_SIZE_MB, 50);
+        this.chunkSize = config.getInt(EnvKey.KNOWLEDGE_CHUNK_SIZE, 1024);
+        this.maxChunks = config.getInt(EnvKey.KNOWLEDGE_SOURCE_REVISION_MAX_CHUNKS, 10_000);
+        this.maxAttempts = config.getInt(EnvKey.KNOWLEDGE_INGEST_MAX_ATTEMPTS, 5);
+        if (maxChunks < 1 || maxAttempts < 1) {
+            throw new IllegalArgumentException("Knowledge ingest limits must be positive");
+        }
     }
 
     public IngestResult ingest(byte[] fileData, String fileName, String mimeType, String collection) {
-        long startTime = System.currentTimeMillis();
-        String coll = (collection != null && !collection.isBlank()) ? collection : defaultCollection;
+        return ingest(fileData, fileName, mimeType, collection, null, null);
+    }
 
-        // Pre-flight: embedding provider must be available
+    /** documentId is the stable Source Document Concept ID, never a filename or Chunk ID. */
+    public IngestResult ingest(
+            byte[] fileData,
+            String fileName,
+            String mimeType,
+            String collection,
+            String documentId,
+            String tenantId
+    ) {
+        long started = System.currentTimeMillis();
+        validateUpload(fileData, fileName);
+        String collectionKey = normalizeCollection(collection);
+        String conceptId = resolveConceptId(documentId, tenantId, collectionKey);
+        Instant now = Instant.now();
+        ContentAddressedArtifactStorage.StoredArtifact stored = artifactStorage.store(
+                fileData, tenantId, collectionKey, KnowledgeArtifactType.SOURCE_FILE);
+        KnowledgeArtifact artifact = new KnowledgeArtifact(
+                KnowledgeIdentity.artifactId(tenantId, collectionKey,
+                        KnowledgeArtifactType.SOURCE_FILE, stored.contentHash()),
+                tenantId, collectionKey, KnowledgeArtifactType.SOURCE_FILE,
+                fileName, normalizeMediaType(mimeType), stored.contentHash(),
+                stored.storageUri(), KnowledgeArtifact.Status.ACTIVE, now);
+        KnowledgeIngestJob job = new KnowledgeIngestJob(
+                UUID.randomUUID().toString().replace("-", ""), artifact.id(), tenantId,
+                collectionKey, KnowledgeIngestJob.Status.UPLOADED, 1, now, now,
+                null, conceptId, null, null, now, null);
+        artifactRepository.registerWithIngestJob(artifact, job);
+
+        try {
+            processClaimed(job);
+        } catch (RuntimeException failure) {
+            recordFailure(job, failure);
+            throw ingestFailure(job, artifact, failure);
+        }
+        KnowledgeIngestJob completed;
+        try {
+            completed = runToCompletion(job.id());
+        } catch (RuntimeException failure) {
+            throw ingestFailure(job, artifact, failure);
+        }
+        KnowledgeHead head = knowledgeRepository.findById(conceptId).orElseThrow(
+                () -> new IllegalStateException("Compiled Source Document is missing"));
+        return new IngestResult(
+                completed.id(), conceptId, completed.sourceRevisionId(), artifact.id(),
+                completed.convertedArtifactId(), fileName, collectionKey,
+                numberMetadata(head.currentRevision(), "chunkCount"),
+                embeddingProvider.dimension(), artifact.storageUri(),
+                System.currentTimeMillis() - started);
+    }
+
+    /** Process one durable stage for the next available Job. */
+    public boolean processNext() {
+        Optional<KnowledgeIngestJob> claimed = ingestJobStore.claimNext(Instant.now());
+        if (claimed.isEmpty()) {
+            return false;
+        }
+        KnowledgeIngestJob job = claimed.get();
+        try {
+            processClaimed(job);
+        } catch (RuntimeException failure) {
+            recordFailure(job, failure);
+            throw failure;
+        }
+        return true;
+    }
+
+    public int recoverStuck() {
+        long stuckMinutes = EnvConfig.get().getLong(
+                EnvKey.KNOWLEDGE_INGEST_STUCK_MINUTES, 30);
+        if (stuckMinutes < 1) {
+            throw new IllegalArgumentException(
+                    "HARNESS_KNOWLEDGE_INGEST_STUCK_MINUTES must be positive");
+        }
+        Instant now = Instant.now();
+        return ingestJobStore.recoverStuck(now.minusSeconds(stuckMinutes * 60L), now);
+    }
+
+    public KnowledgeIngestJob runToCompletion(String jobId) {
+        while (true) {
+            KnowledgeIngestJob current = ingestJobStore.findById(jobId).orElseThrow(
+                    () -> new IllegalArgumentException("Ingest Job not found: " + jobId));
+            if (current.status() == KnowledgeIngestJob.Status.INDEXED) {
+                return current;
+            }
+            if (current.status() == KnowledgeIngestJob.Status.FAILED) {
+                throw new IllegalStateException("Knowledge ingest failed: " + current.errorMessage());
+            }
+            if (current.claimedAt() != null) {
+                throw new IllegalStateException(
+                        "Ingest Job is already owned by another Worker: " + jobId);
+            }
+            KnowledgeIngestJob claimed = ingestJobStore.claim(jobId, Instant.now()).orElseThrow(
+                    () -> new IllegalStateException(
+                            "Ingest Job is not currently claimable: " + jobId));
+            try {
+                processClaimed(claimed);
+            } catch (RuntimeException failure) {
+                recordFailure(claimed, failure);
+                throw failure;
+            }
+        }
+    }
+
+    private void processClaimed(KnowledgeIngestJob job) {
+        switch (job.status()) {
+            case UPLOADED -> convert(job);
+            case CONVERTED -> compile(job);
+            case COMPILED -> index(job);
+            case INDEXED, FAILED -> throw new IllegalStateException(
+                    "Terminal Ingest Job cannot be processed: " + job.id());
+        }
+    }
+
+    private void convert(KnowledgeIngestJob job) {
+        KnowledgeArtifact source = artifactRepository.findById(job.artifactId()).orElseThrow(
+                () -> new IllegalStateException("Source Artifact is missing: " + job.artifactId()));
+        DocumentConversionResult converted = documentConversionService.convert(
+                readArtifact(source), source.fileName(), source.mediaType());
+        validateDocumentTypeEnabled(converted.detectedMimeType());
+        if (converted.markdown() == null || converted.markdown().isBlank()) {
+            throw new IllegalArgumentException("No Markdown content converted from file: " + source.fileName());
+        }
+        byte[] markdownBytes = converted.markdown().getBytes(StandardCharsets.UTF_8);
+        ContentAddressedArtifactStorage.StoredArtifact stored = artifactStorage.store(
+                markdownBytes, job.tenantId(), job.collectionKey(),
+                KnowledgeArtifactType.CANONICAL_MARKDOWN);
+        KnowledgeArtifact markdownArtifact = new KnowledgeArtifact(
+                KnowledgeIdentity.artifactId(job.tenantId(), job.collectionKey(),
+                        KnowledgeArtifactType.CANONICAL_MARKDOWN, stored.contentHash()),
+                job.tenantId(), job.collectionKey(), KnowledgeArtifactType.CANONICAL_MARKDOWN,
+                source.fileName() + ".md", "text/markdown", stored.contentHash(),
+                stored.storageUri(), KnowledgeArtifact.Status.ACTIVE, Instant.now());
+        artifactRepository.register(markdownArtifact);
+        ingestJobStore.advance(job.id(), KnowledgeIngestJob.Status.UPLOADED,
+                KnowledgeIngestJob.Status.CONVERTED, markdownArtifact.id(),
+                null, null, null);
+    }
+
+    private void compile(KnowledgeIngestJob job) {
+        KnowledgeArtifact source = artifactRepository.findById(job.artifactId()).orElseThrow();
+        KnowledgeArtifact markdownArtifact = artifactRepository
+                .findById(job.convertedArtifactId()).orElseThrow();
+        String markdown = new String(readArtifact(markdownArtifact), StandardCharsets.UTF_8);
+        List<MarkdownChunk> chunks = textChunker.chunk(markdown, chunkSize);
+        if (chunks.isEmpty()) {
+            throw new IllegalArgumentException("Canonical Markdown has no retrievable content");
+        }
+        if (chunks.size() > maxChunks) {
+            throw new IllegalArgumentException("Source Document exceeds Chunk limit " + maxChunks);
+        }
+
+        Instant now = Instant.now();
+        KnowledgeHead existing = knowledgeRepository.findById(job.sourceConceptId()).orElse(null);
+        validateExistingDocument(existing, job);
+        long expectedVersion = existing == null ? 0 : existing.concept().version();
+        long revisionNumber = expectedVersion + 1;
+        String contentHash = KnowledgeIdentity.sha256(markdown);
+        String revisionId = KnowledgeIdentity.revisionId(
+                job.sourceConceptId(), revisionNumber, contentHash);
+        String previousRevisionId = existing == null ? null : existing.concept().currentRevisionId();
+
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        metadata.put("documentId", job.sourceConceptId());
+        metadata.put("artifactId", source.id());
+        metadata.put("canonicalArtifactId", markdownArtifact.id());
+        metadata.put("collection", job.collectionKey());
+        metadata.put("fileName", source.fileName());
+        metadata.put("mediaType", source.mediaType());
+        metadata.put("chunkCount", chunks.size());
+        metadata.put("tokenEstimator", textChunker.tokenEstimatorStrategy());
+        metadata.put("resourceUri", "cyrene://artifacts/" + source.id());
+        if (previousRevisionId != null) {
+            metadata.put("previousRevisionId", previousRevisionId);
+        }
+        KnowledgeRevision revision = new KnowledgeRevision(
+                revisionId, job.sourceConceptId(), revisionNumber,
+                documentTitle(markdown, source.fileName()),
+                "Source document compiled from immutable Artifact " + source.id(),
+                markdown, COMPILER_ID, now, contentHash, metadata, now);
+        KnowledgeConcept concept = new KnowledgeConcept(
+                job.sourceConceptId(), job.tenantId(), null,
+                KnowledgeNamespaceType.COLLECTION, job.collectionKey(),
+                KnowledgeConceptType.SOURCE_DOCUMENT, null, KnowledgeStatus.STABLE,
+                revision.id(), revisionNumber, null,
+                existing == null ? now : existing.concept().createdAt(), now);
+        List<KnowledgeSource> sources = List.of(
+                artifactSource(revision.id(), source, now),
+                artifactSource(revision.id(), markdownArtifact, now));
+        KnowledgeIndexTask catalogTask = new KnowledgeIndexTask(
+                null, concept.id(), revision.id(),
+                KnowledgeIndexOperation.UPSERT_CURRENT, KnowledgeIndexTaskStatus.PENDING,
+                0, now, null, null, null, now);
+        ingestJobStore.commitCompilation(job.id(), new KnowledgeRevisionChange(
+                concept, expectedVersion, revision, sources,
+                List.of(), List.of(), List.of(catalogTask)));
+    }
+
+    private void index(KnowledgeIngestJob job) {
         if (!embeddingProvider.isAvailable()) {
             throw new IllegalStateException("Embedding model not configured. Set "
                     + ModelConfigKey.EMBEDDING_PROVIDER + " in model.conf.");
         }
-
-        // Validate file size
-        long maxFileBytes = Math.multiplyExact(maxFileSizeMb, 1024L * 1024L);
-        if (fileData.length > maxFileBytes) {
-            throw new IllegalArgumentException(
-                    "File size exceeds limit " + maxFileSizeMb + "MB");
+        KnowledgeHead head = knowledgeRepository.findById(job.sourceConceptId()).orElseThrow();
+        if (!job.sourceRevisionId().equals(head.concept().currentRevisionId())) {
+            throw new IllegalStateException("Ingest Job no longer references current Revision");
         }
-
-        log.debug("Starting ingest: file={}, size={}KB, mimeType={}, collection={}", fileName, fileData.length / 1024, mimeType, coll);
-
-        // Step 1: Convert every document through the shared MarkItDown boundary.
-        DocumentConversionResult convertedDocument = documentConversionService.convert(
-                fileData, fileName, mimeType);
-        validateDocumentTypeEnabled(convertedDocument.detectedMimeType());
-        String rawText = convertedDocument.markdown();
-        if (rawText == null || rawText.isBlank()) {
-            throw new IllegalArgumentException(
-                    "No Markdown content converted from file: " + fileName);
-        }
-        DocumentConversionDiagnostics conversion = convertedDocument.diagnostics();
-
-        // Step 2: Parse Markdown blocks and pack adjacent blocks in one budget-aware pass.
-        int chunkSize = EnvConfig.get().getInt(EnvKey.KNOWLEDGE_CHUNK_SIZE, 1024);
-        List<MarkdownChunk> chunks = textChunker.chunk(rawText, chunkSize);
-        if (chunks.isEmpty()) {
-            throw new IllegalArgumentException(
-                    "No retrievable Markdown content converted from file: " + fileName);
-        }
-
-        // Step 3: Generate embeddings (batched to avoid API body size limits)
-        List<TextSegment> segments = chunks.stream()
-                .map(MarkdownChunk::content)
-                .map(TextSegment::from)
-                .toList();
-        int batchSize = 10;
-        List<Embedding> embeddings = new ArrayList<>();
-        for (int i = 0; i < segments.size(); i += batchSize) {
-            int end = Math.min(i + batchSize, segments.size());
-            List<TextSegment> batch = segments.subList(i, end);
-
-            embeddings.addAll(embeddingProvider.embedAll(batch));
-        }
-        if (embeddings.size() != chunks.size()) {
-            throw new IllegalStateException("Embedding count mismatch: expected " + chunks.size()
-                    + " but got " + embeddings.size());
-        }
-
-        // Step 4: Store original file to disk
-        String storedPath = fileStorage.store(fileData, fileName, coll);
-
-        // Step 5: Build documents and upsert via VectorStore
-        String documentId = UUID.randomUUID().toString();
-        List<VectorStore.Document> docs = new ArrayList<>();
-        for (int i = 0; i < chunks.size(); i++) {
-            MarkdownChunk chunk = chunks.get(i);
-            Map<String, Object> metadata = new HashMap<>();
-            metadata.put("document_id", documentId);
-            metadata.put("file_name", fileName);
-            metadata.put("chunk_index", i);
+        KnowledgeRevision revision = head.currentRevision();
+        List<MarkdownChunk> chunks = textChunker.chunk(revision.body(), chunkSize);
+        List<Embedding> embeddings = embed(chunks);
+        KnowledgeArtifact source = artifactRepository.findById(job.artifactId()).orElseThrow();
+        List<VectorStore.Document> documents = new ArrayList<>(chunks.size());
+        for (int index = 0; index < chunks.size(); index++) {
+            MarkdownChunk chunk = chunks.get(index);
+            Map<String, Object> metadata = new LinkedHashMap<>();
+            metadata.put("document_id", head.concept().id());
+            metadata.put("concept_id", head.concept().id());
+            metadata.put("revision_id", revision.id());
+            metadata.put("artifact_id", source.id());
+            metadata.put("canonical_artifact_id", job.convertedArtifactId());
+            metadata.put("chunk_index", index);
             metadata.put("total_chunks", chunks.size());
+            // Preserve exact canonical text across chunks for version export/reindex, including whitespace.
+            int fragmentStart = (int) ((long) revision.body().length() * index / chunks.size());
+            int fragmentEnd = (int) ((long) revision.body().length() * (index + 1) / chunks.size());
+            if (fragmentStart > 0 && Character.isLowSurrogate(revision.body().charAt(fragmentStart))
+                    && Character.isHighSurrogate(revision.body().charAt(fragmentStart - 1))) fragmentStart++;
+            if (fragmentEnd < revision.body().length() && fragmentEnd > 0
+                    && Character.isLowSurrogate(revision.body().charAt(fragmentEnd))
+                    && Character.isHighSurrogate(revision.body().charAt(fragmentEnd - 1))) fragmentEnd++;
+            metadata.put("canonical_fragment", revision.body().substring(fragmentStart, fragmentEnd));
             metadata.put("start_block_index", chunk.startBlockIndex());
             metadata.put("end_block_index", chunk.endBlockIndex());
             metadata.put("heading_path", chunk.headingPath());
             metadata.put("token_count", chunk.tokenCount());
             metadata.put("token_estimator", textChunker.tokenEstimatorStrategy());
-            metadata.put("document_converter", conversion.converter());
-            metadata.put("document_mime_type", convertedDocument.detectedMimeType());
-            metadata.put("document_ocr_enabled", conversion.ocrEnabled());
-            metadata.put("document_vision_calls", conversion.visionCalls());
-            metadata.put("document_vision_source", conversion.visionSource());
-            if (conversion.model() != null) {
-                metadata.put("document_vision_model", conversion.model());
-            }
-            if (!conversion.warnings().isEmpty()) {
-                metadata.put("document_conversion_warnings",
-                        String.join("\n", conversion.warnings()));
-            }
-
-            docs.add(new VectorStore.Document(
-                    null,
-                    chunk.content(),
-                    fileName,
-                    0,
-                    metadata,
-                    embeddings.get(i).vector(),
-                    i
-            ));
+            documents.add(new VectorStore.Document(
+                    KnowledgeIdentity.documentChunkId(
+                            revision.id(), index, KnowledgeIdentity.sha256(chunk.content())),
+                    chunk.content(), source.fileName(), 0, metadata,
+                    embeddings.get(index).vector(), index));
         }
+        vectorStore.upsert(job.collectionKey(), documents);
+        ingestJobStore.advance(job.id(), KnowledgeIngestJob.Status.COMPILED,
+                KnowledgeIngestJob.Status.INDEXED, null, null, null, Instant.now());
+        log.info("Indexed Source Document {} Revision {} with {} Chunks",
+                head.concept().id(), revision.id(), documents.size());
+    }
+
+    private List<Embedding> embed(List<MarkdownChunk> chunks) {
+        List<TextSegment> segments = chunks.stream().map(MarkdownChunk::content)
+                .map(TextSegment::from).toList();
+        List<Embedding> embeddings = new ArrayList<>(segments.size());
+        for (int index = 0; index < segments.size(); index += EMBEDDING_BATCH_SIZE) {
+            embeddings.addAll(embeddingProvider.embedAll(
+                    segments.subList(index, Math.min(index + EMBEDDING_BATCH_SIZE, segments.size()))));
+        }
+        if (embeddings.size() != chunks.size()) {
+            throw new IllegalStateException("Embedding count does not match Chunk count");
+        }
+        return embeddings;
+    }
+
+    private void recordFailure(KnowledgeIngestJob job, RuntimeException failure) {
+        String message = failure.getMessage() == null
+                ? failure.getClass().getSimpleName() : failure.getMessage();
+        if (!isRetryable(failure) || job.attempts() >= maxAttempts) {
+            ingestJobStore.markFailed(job.id(), Instant.now(), message);
+        } else {
+            long delay = Math.min(3600L, 60L << Math.min(5, Math.max(0, job.attempts() - 1)));
+            ingestJobStore.reschedule(job.id(), Instant.now().plusSeconds(delay), message);
+        }
+    }
+
+    private RuntimeException ingestFailure(
+            KnowledgeIngestJob job,
+            KnowledgeArtifact artifact,
+            RuntimeException failure
+    ) {
+        if (!isRetryable(failure)) return failure;
+        KnowledgeIngestJob current = ingestJobStore.findById(job.id()).orElse(job);
+        if (current.status() == KnowledgeIngestJob.Status.FAILED) return failure;
+        return new KnowledgeIngestPendingException(
+                job.id(), job.sourceConceptId(), artifact.id(),
+                job.collectionKey(), failure);
+    }
+
+    private static boolean isRetryable(RuntimeException failure) {
+        if (failure instanceof DocumentConversionException conversionFailure) {
+            int status = conversionFailure.statusCode();
+            return status != 400 && status != 413 && status != 415 && status != 422;
+        }
+        return !(failure instanceof IllegalArgumentException);
+    }
+
+    private String resolveConceptId(String requested, String tenantId, String collectionKey) {
+        if (requested == null || requested.isBlank()) {
+            return UUID.randomUUID().toString().replace("-", "");
+        }
+        String conceptId = requested.trim();
+        KnowledgeHead head = knowledgeRepository.findById(conceptId).orElseThrow(
+                () -> new IllegalArgumentException("Source Document does not exist: " + conceptId));
+        if (head.concept().conceptType() != KnowledgeConceptType.SOURCE_DOCUMENT
+                || !Objects.equals(normalizeTenant(tenantId), normalizeTenant(head.concept().tenantId()))
+                || !collectionKey.equals(head.concept().namespaceKey())) {
+            throw new IllegalArgumentException("Source Document does not belong to requested scope");
+        }
+        return conceptId;
+    }
+
+    private static void validateExistingDocument(KnowledgeHead existing, KnowledgeIngestJob job) {
+        if (existing == null) return;
+        KnowledgeConcept concept = existing.concept();
+        if (concept.conceptType() != KnowledgeConceptType.SOURCE_DOCUMENT
+                || concept.namespaceType() != KnowledgeNamespaceType.COLLECTION
+                || !job.collectionKey().equals(concept.namespaceKey())
+                || !Objects.equals(normalizeTenant(job.tenantId()), normalizeTenant(concept.tenantId()))) {
+            throw new IllegalArgumentException("Ingest Job Source Document scope differs");
+        }
+    }
+
+    private byte[] readArtifact(KnowledgeArtifact artifact) {
         try {
-            vectorStore.upsert(coll, docs);
-        } catch (Exception e) {
-            // Rollback: clean up the stored file since DB insert failed
-            log.warn("[Ingest] DB insert failed, cleaning up stored file: {}", storedPath);
-            fileStorage.delete(storedPath);
-            throw e;
+            return Files.readAllBytes(artifactStorage.resolveStorageUri(artifact.storageUri()));
+        } catch (java.io.IOException e) {
+            throw new IllegalStateException("Failed to read immutable Artifact " + artifact.id(), e);
         }
+    }
 
-        long duration = System.currentTimeMillis() - startTime;
-        log.info("Ingest complete: {} chunks in {}ms using {}", chunks.size(), duration,
-                textChunker.tokenEstimatorStrategy());
+    private void validateUpload(byte[] data, String fileName) {
+        if (data == null || data.length == 0) throw new IllegalArgumentException("Uploaded file is empty");
+        if (fileName == null || fileName.isBlank()) throw new IllegalArgumentException("fileName is required");
+        if (!embeddingProvider.isAvailable()) {
+            throw new IllegalStateException("Embedding model not configured. Set "
+                    + ModelConfigKey.EMBEDDING_PROVIDER + " in model.conf.");
+        }
+        if (data.length > Math.multiplyExact(maxFileSizeMb, 1024L * 1024L)) {
+            throw new IllegalArgumentException("File size exceeds limit " + maxFileSizeMb + "MB");
+        }
+    }
 
-        return new IngestResult(
-                fileName,
-                coll,
-                chunks.size(),
-                embeddingProvider.dimension(),
-                storedPath,
-                duration,
-                conversion.converter(),
-                convertedDocument.detectedMimeType(),
-                conversion.model(),
-                conversion.visionSource(),
-                conversion.ocrEnabled(),
-                conversion.visionCalls(),
-                conversion.elapsedMs(),
-                conversion.warnings()
-        );
+    private String normalizeCollection(String collection) {
+        return collection == null || collection.isBlank() ? defaultCollection : collection.trim();
+    }
+
+    private static String normalizeMediaType(String value) {
+        return value == null || value.isBlank() ? "application/octet-stream" : value.trim();
+    }
+
+    private static String normalizeTenant(String value) {
+        return value == null || value.isBlank() ? null : value.trim();
+    }
+
+    private static KnowledgeSource artifactSource(
+            String revisionId, KnowledgeArtifact artifact, Instant now) {
+        return new KnowledgeSource(revisionId, KnowledgeSourceType.KNOWLEDGE_ARTIFACT,
+                artifact.id(), "cyrene://artifacts/" + artifact.id(),
+                artifact.createdAt(), now);
+    }
+
+    private static int numberMetadata(KnowledgeRevision revision, String key) {
+        Object value = revision.metadata().get(key);
+        if (value instanceof Number number) return number.intValue();
+        throw new IllegalStateException("Revision metadata is missing " + key);
+    }
+
+    private static String documentTitle(String markdown, String fileName) {
+        for (String line : markdown.split("\\R", 50)) {
+            String trimmed = line.trim();
+            if (trimmed.matches("^#{1,6}\\s+.+$")) {
+                return trimmed.replaceFirst("^#{1,6}\\s+", "").trim();
+            }
+        }
+        String leaf = java.nio.file.Path.of(fileName).getFileName().toString();
+        int extension = leaf.lastIndexOf('.');
+        return extension > 0 ? leaf.substring(0, extension) : leaf;
     }
 
     private static void validateDocumentTypeEnabled(String mimeType) {
@@ -192,10 +465,8 @@ public class KnowledgeIngestService {
                     config.getBool(EnvKey.KNOWLEDGE_PPTX_ENABLED, true);
             default -> true;
         };
-        if (!enabled) {
-            throw new IllegalArgumentException(
-                    "Knowledge ingestion is disabled for MIME type: " + mimeType);
-        }
+        if (!enabled) throw new IllegalArgumentException(
+                "Knowledge ingestion is disabled for MIME type: " + mimeType);
     }
 
     public String getDefaultCollection() {

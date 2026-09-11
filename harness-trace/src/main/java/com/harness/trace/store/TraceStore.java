@@ -1,14 +1,17 @@
 package com.harness.trace.store;
 
 import com.harness.core.model.AgentTrace;
+import com.harness.core.model.PageResponse;
+import com.harness.core.model.TraceCursor;
 
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.function.Predicate;
 
 /**
  * Interface for trace persistence.
- * Implementations: SQLite, PostgreSQL, file-based.
+ * Implementations: MySQL, SQLite, file-based.
  */
 public interface TraceStore {
 
@@ -27,10 +30,13 @@ public interface TraceStore {
      */
     List<AgentTrace> listRecent(int limit);
 
+    /** Stable newest-first pagination scoped to one session. */
+    PageResponse<AgentTrace> findBySession(String sessionId, TraceCursor cursor, int limit);
+
     /**
      * Delete traces older than the given number of days.
      */
-    int cleanup(int retentionDays);
+    CleanupResult cleanup(int retentionDays, Predicate<String> retainedByKnowledge);
 
     /**
      * Delete a specific trace by ID.
@@ -50,11 +56,20 @@ public interface TraceStore {
      *
      * @param traceId the trace to update
      * @param entries metadata key-value pairs to merge
+     * @return true only when the trace existed and the update was persisted
      */
-    void updateMetadata(String traceId, Map<String, String> entries);
+    boolean updateMetadata(String traceId, Map<String, String> entries);
 
     /**
      * Close the store (release connections).
      */
     void close();
+
+    record CleanupResult(int deleted, int retainedByKnowledge) {
+        public CleanupResult {
+            if (deleted < 0 || retainedByKnowledge < 0) {
+                throw new IllegalArgumentException("cleanup counts must not be negative");
+            }
+        }
+    }
 }

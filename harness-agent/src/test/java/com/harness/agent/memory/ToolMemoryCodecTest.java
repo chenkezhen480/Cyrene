@@ -36,7 +36,7 @@ class ToolMemoryCodecTest {
                         List.of(artifact),
                         MAPPER.readTree("{\"eligible\":true}")),
                 5,
-                ToolResult.ResultStatus.SUCCESS);
+                com.harness.core.model.ResultStatus.AVAILABLE);
         List<MemoryMessage> memory = List.of(
                 message(ToolMemoryCodec.TOOL_CALL_ROLE, ToolMemoryCodec.encodeCalls(List.of(call))),
                 message(ToolMemoryCodec.TOOL_RESULT_ROLE, ToolMemoryCodec.encodeResult(result)));
@@ -72,6 +72,6 @@ class ToolMemoryCodecTest {
 
     private static MemoryMessage message(
             String role, List<com.harness.core.model.MessageBlock> blocks) {
-        return new MemoryMessage(1, "session-1", role, blocks, false, Instant.now());
+        return new MemoryMessage(1, "session-1", "trace-1", role, blocks, false, Instant.now());
     }
 }

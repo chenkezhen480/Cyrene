@@ -4,11 +4,8 @@ import com.harness.core.model.PageInfo;
 import com.harness.core.model.PageResponse;
 import com.harness.server.api.ApiError;
 import com.harness.server.api.ApiErrorCode;
-import com.harness.provider.EmbeddingModelProvider;
-import com.harness.tool.knowledge.FileStorageService;
 import com.harness.tool.knowledge.KnowledgeChunkSummary;
 import com.harness.tool.rag.VectorStore;
-import dev.langchain4j.data.embedding.Embedding;
 import io.javalin.http.Context;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -127,50 +124,32 @@ class KnowledgeManagementHandlerTest {
     }
 
     @Test
-    void updateDocumentReembedsContentAndPreservesCollectionScope() {
+    void updateDocumentRejectsSingleChunkMutation() {
         VectorStore vectorStore = mock(VectorStore.class);
-        EmbeddingModelProvider embeddingProvider = mock(EmbeddingModelProvider.class);
-        FileStorageService fileStorage = mock(FileStorageService.class);
         Context context = mock(Context.class);
-        VectorStore.Document existing = new VectorStore.Document(
-                "chunk-1", "old", "manual.md", 1.0,
-                java.util.Map.of(), null, 0);
-        float[] embedding = new float[]{0.1f, 0.2f};
-
-        when(context.pathParam("collection")).thenReturn("manuals");
-        when(context.pathParam("documentId")).thenReturn("chunk-1");
-        when(context.bodyAsClass(java.util.Map.class))
-                .thenReturn(java.util.Map.of("content", "new content"));
+        when(context.status(405)).thenReturn(context);
         when(context.json(any())).thenReturn(context);
-        when(vectorStore.getById("manuals", "chunk-1")).thenReturn(existing);
-        when(embeddingProvider.isAvailable()).thenReturn(true);
-        when(embeddingProvider.embed("new content")).thenReturn(Embedding.from(embedding));
 
-        new KnowledgeManagementHandler(vectorStore, embeddingProvider, fileStorage)
-                .updateDocument(context);
+        new KnowledgeManagementHandler(vectorStore).updateDocument(context);
 
-        verify(vectorStore).updateContent("manuals", "chunk-1", "new content", embedding);
+        verify(context).status(405);
         verify(vectorStore, never()).upsert(any(), any());
     }
 
     @Test
-    void deleteDocumentScopesDeletionToRouteCollection() {
+    void deleteDocumentRejectsSingleChunkDeletion() {
         VectorStore vectorStore = mock(VectorStore.class);
         Context context = mock(Context.class);
-        when(context.pathParam("collection")).thenReturn("manuals");
-        when(context.pathParam("documentId")).thenReturn("chunk-1");
+        when(context.status(405)).thenReturn(context);
         when(context.json(any())).thenReturn(context);
-        when(vectorStore.deleteById("manuals", "chunk-1")).thenReturn(true);
 
         handler(vectorStore).deleteDocument(context);
 
-        verify(vectorStore).deleteById("manuals", "chunk-1");
+        verify(context).status(405);
+        verify(vectorStore, never()).deleteById(any(), any());
     }
 
     private static KnowledgeManagementHandler handler(VectorStore vectorStore) {
-        return new KnowledgeManagementHandler(
-                vectorStore,
-                mock(EmbeddingModelProvider.class),
-                mock(FileStorageService.class));
+        return new KnowledgeManagementHandler(vectorStore);
     }
 }

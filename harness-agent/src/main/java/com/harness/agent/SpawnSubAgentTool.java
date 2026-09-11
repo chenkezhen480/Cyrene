@@ -4,7 +4,9 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.harness.core.exception.ToolExecutionException;
-import com.harness.core.model.ToolResult;
+import com.harness.core.model.ResultStatus;
+import com.harness.core.model.ToolExecutionOutcome;
+import com.harness.core.model.ToolOutput;
 import com.harness.core.model.ToolSpec;
 import com.harness.tool.Tool;
 import org.slf4j.Logger;
@@ -75,9 +77,10 @@ public class SpawnSubAgentTool implements Tool {
                         "The sub-agent has NO access to conversation history — you MUST include relevant history here.\n\n" +
                         "Optionally provide 'tools' to give the sub-agent specific tools. If omitted, the sub-agent has NO tools (text-only analysis).\n\n" +
                         "Optionally provide 'completion_contract' when completion must be verified from successful tool calls, stored artifacts, or structured output.\n\n" +
-                        "Available tool names: web_search, knowledge_base_search, knowledge_context_read, image_generation, " +
+                        "Available tool names: web_search, knowledge_search, knowledge_read, image_generation, " +
                         "code_sandbox, load_skill, and any registered MCP tools.",
-                buildParametersSchema()
+                buildParametersSchema(),
+                com.harness.core.model.ToolCapability.ORCHESTRATION
         );
     }
 
@@ -148,6 +151,11 @@ public class SpawnSubAgentTool implements Tool {
 
     @Override
     public String execute(JsonNode arguments) {
+        return executeOutcome(arguments).content().modelContent();
+    }
+
+    @Override
+    public ToolExecutionOutcome executeOutcome(JsonNode arguments) {
         AgentRunContext runContext = currentRunContext.get();
         if (runContext == null) {
             throw new ToolExecutionException("spawn_subagent", "No active run context. This tool must be called within an agent run.");
@@ -206,8 +214,9 @@ public class SpawnSubAgentTool implements Tool {
             result.put("message", "Task submitted. Use await_subagents to wait for completion.");
 
             log.info("[SpawnSubAgent] Task {} accepted, status={}", taskId, record.status().get());
-            ToolResult.setCurrentStatus(ToolResult.ResultStatus.SUCCESS);
-            return mapper.writeValueAsString(result);
+            return ToolExecutionOutcome.succeeded(
+                    ToolOutput.text(mapper.writeValueAsString(result)),
+                    ResultStatus.PENDING);
 
         } catch (ToolExecutionException e) {
             throw e;

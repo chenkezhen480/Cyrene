@@ -44,7 +44,8 @@ public class FfmpegTool implements Tool {
                                         .<com.fasterxml.jackson.databind.node.ObjectNode>set("args",
                                                 mapper.createObjectNode().put("type", "string").put("description", "FFmpeg arguments")))
                         .<com.fasterxml.jackson.databind.node.ObjectNode>set("required",
-                                mapper.createArrayNode().add("args"))
+                                mapper.createArrayNode().add("args")),
+                com.harness.core.model.ToolCapability.GENERATION
         );
     }
 
@@ -79,7 +80,6 @@ public class FfmpegTool implements Tool {
                 throw new ToolExecutionException("ffmpeg", "Exit code " + exitCode + ": " + output);
             }
 
-            ToolResult.setCurrentStatus(ToolResult.ResultStatus.SUCCESS);
             return output.toString();
         } catch (IOException | InterruptedException e) {
             throw new ToolExecutionException("ffmpeg", "Execution failed: " + e.getMessage(), e);

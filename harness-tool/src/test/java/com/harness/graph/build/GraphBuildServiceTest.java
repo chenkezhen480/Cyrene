@@ -2,7 +2,6 @@ package com.harness.graph.build;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.harness.graph.model.GraphChangeSet;
-import com.harness.graph.model.GraphMutationBatch;
 import com.harness.graph.model.GraphMutationResult;
 import com.harness.graph.model.GraphNode;
 import com.harness.graph.store.KnowledgeGraphStore;
@@ -28,10 +27,10 @@ class GraphBuildServiceTest {
     @Test
     void buildsCanonicalJsonAndCommitsThroughGraphStore() throws Exception {
         KnowledgeGraphStore graphStore = mock(KnowledgeGraphStore.class);
-        when(graphStore.upsertBatch(any())).thenReturn(
+        when(graphStore.applyChanges(any())).thenReturn(
                 new GraphMutationResult("request-1", true, 1, 0));
         GraphBuildService service = new GraphBuildService(
-                graphStore, GraphDataConverterRegistry.withDefaults(objectMapper));
+                graphStore::applyChanges, GraphDataConverterRegistry.withDefaults(objectMapper));
         GraphBuildRequest request = new GraphBuildRequest(
                 "request-1",
                 "graph-1",
@@ -56,10 +55,10 @@ class GraphBuildServiceTest {
 
         assertThat(result.committed()).isTrue();
         assertThat(result.nodeCount()).isEqualTo(1);
-        ArgumentCaptor<GraphMutationBatch> mutationCaptor =
-                ArgumentCaptor.forClass(GraphMutationBatch.class);
-        verify(graphStore).upsertBatch(mutationCaptor.capture());
-        GraphMutationBatch mutation = mutationCaptor.getValue();
+        ArgumentCaptor<GraphChangeSet> mutationCaptor =
+                ArgumentCaptor.forClass(GraphChangeSet.class);
+        verify(graphStore).applyChanges(mutationCaptor.capture());
+        GraphChangeSet mutation = mutationCaptor.getValue();
         assertThat(mutation.graphId()).isEqualTo("graph-1");
         assertThat(mutation.schemaId()).isEqualTo("student-capability-v1");
         assertThat(mutation.nodes()).extracting(GraphNode::nodeId).containsExactly("student-1");
@@ -71,7 +70,7 @@ class GraphBuildServiceTest {
         when(graphStore.applyChanges(any())).thenReturn(
                 new GraphMutationResult("request-delete", true, 0, 0));
         GraphBuildService service = new GraphBuildService(
-                graphStore, GraphDataConverterRegistry.withDefaults(objectMapper));
+                graphStore::applyChanges, GraphDataConverterRegistry.withDefaults(objectMapper));
         GraphBuildRequest request = new GraphBuildRequest(
                 "request-delete",
                 "graph-1",
@@ -100,7 +99,7 @@ class GraphBuildServiceTest {
     void rejectsStructuredBuildWithoutAnyChanges() throws Exception {
         KnowledgeGraphStore graphStore = mock(KnowledgeGraphStore.class);
         GraphBuildService service = new GraphBuildService(
-                graphStore, GraphDataConverterRegistry.withDefaults(objectMapper));
+                graphStore::applyChanges, GraphDataConverterRegistry.withDefaults(objectMapper));
 
         assertThatThrownBy(() -> service.build(new GraphBuildRequest(
                 "request-empty",
@@ -132,7 +131,7 @@ class GraphBuildServiceTest {
     void requiresExplicitNaturalLanguageConverter() {
         KnowledgeGraphStore graphStore = mock(KnowledgeGraphStore.class);
         GraphBuildService service = new GraphBuildService(
-                graphStore, GraphDataConverterRegistry.withDefaults(objectMapper));
+                graphStore::applyChanges, GraphDataConverterRegistry.withDefaults(objectMapper));
         GraphBuildRequest request = new GraphBuildRequest(
                 "request-2",
                 "graph-1",
@@ -175,7 +174,7 @@ class GraphBuildServiceTest {
         };
         GraphDataConverterRegistry registry =
                 new GraphDataConverterRegistry(List.of(naturalLanguageConverter));
-        GraphBuildService service = new GraphBuildService(graphStore, registry);
+        GraphBuildService service = new GraphBuildService(graphStore::applyChanges, registry);
 
         GraphBuildPreviewResult result = service.preview(new GraphBuildRequest(
                 "request-3",
@@ -197,7 +196,8 @@ class GraphBuildServiceTest {
         when(naturalLanguageConverter.sourceType()).thenReturn(GraphBuildSourceType.NATURAL_LANGUAGE);
         when(naturalLanguageConverter.converterId()).thenReturn("test-natural-language");
         GraphBuildService service = new GraphBuildService(
-                graphStore, new GraphDataConverterRegistry(List.of(naturalLanguageConverter)));
+                graphStore::applyChanges,
+                new GraphDataConverterRegistry(List.of(naturalLanguageConverter)));
         GraphBuildRequest request = new GraphBuildRequest(
                 "request-4",
                 "graph-1",

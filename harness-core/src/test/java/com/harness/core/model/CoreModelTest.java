@@ -28,7 +28,8 @@ class CoreModelTest {
         assertThat(spec.name()).isEqualTo("search");
         assertThat(spec.description()).isEqualTo("Search tool");
         assertThat(spec.parameters()).isEqualTo(params);
-        assertThat(spec.tags()).isEmpty();
+        assertThat(spec.tags()).containsExactly(ToolCapability.UNKNOWN.tag());
+        assertThat(spec.capability()).isEqualTo(ToolCapability.UNKNOWN);
         assertThat(spec.requiresConfirmation()).isFalse();
     }
 
@@ -37,7 +38,8 @@ class CoreModelTest {
         ObjectNode params = MAPPER.createObjectNode();
         ToolSpec spec = new ToolSpec("db_exec", "Execute SQL", params, Set.of("dangerous"), true);
 
-        assertThat(spec.tags()).containsExactly("dangerous");
+        assertThat(spec.tags()).containsExactlyInAnyOrder(
+                "dangerous", ToolCapability.UNKNOWN.tag());
         assertThat(spec.requiresConfirmation()).isTrue();
     }
 
@@ -67,7 +69,9 @@ class CoreModelTest {
     @Test
     void session_recordFields() {
         Instant now = Instant.now();
-        Session s = new Session("id1", "user1", "My Chat", now, now, null, Session.SessionStatus.active);
+        Session s = new Session(
+                "id1", "user1", null, "My Chat", now, now, null,
+                Session.SessionStatus.active);
 
         assertThat(s.id()).isEqualTo("id1");
         assertThat(s.userId()).isEqualTo("user1");

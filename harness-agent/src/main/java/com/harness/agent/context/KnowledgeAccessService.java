@@ -35,27 +35,25 @@ public final class KnowledgeAccessService {
         this.contextWindowMax = contextWindowMax;
     }
 
-    public ContextBuilder.ContextResult search(String query, String collection, int limit) {
-        return contextBuilder.buildRagForTool(query, collection, limit);
-    }
-
-    public ContextBuilder.ContextResult searchWithQueries(
-            List<String> queries,
-            String collection,
-            int limit
-    ) {
-        return contextBuilder.buildRagWithQueries(queries, collection, limit);
+    public ContextBuilder.ContextResult searchDocumentRevisions(String query, String collection,
+            int limit, java.util.Map<String, String> documentRevisions) {
+        if (!effectiveCollection(collection).equals(collection)) {
+            throw new SecurityException("Collection exceeds the trusted knowledge scope");
+        }
+        documentRevisions.keySet().forEach(documentId -> requireAuthorizedDocument("knowledge_search", documentId));
+        return contextBuilder.searchDocumentRevisions(query, collection, limit, documentRevisions);
     }
 
     public List<RagRetriever.RagDocument> readContext(
             String collection,
             String documentId,
+            String revisionId,
             int anchorChunkIndex,
             int before,
             int after
     ) {
         return contextBuilder.readContext(
-                collection, documentId, anchorChunkIndex, before, after);
+                collection, documentId, revisionId, anchorChunkIndex, before, after);
     }
 
     public int maxSearchLimit() {

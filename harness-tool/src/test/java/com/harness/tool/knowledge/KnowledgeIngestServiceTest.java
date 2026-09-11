@@ -2,45 +2,50 @@ package com.harness.tool.knowledge;
 
 import com.harness.core.env.EnvConfig;
 import com.harness.core.env.EnvKey;
+import com.harness.core.knowledge.KnowledgeArtifact;
+import com.harness.core.knowledge.KnowledgeIngestJob;
 import com.harness.core.text.UnicodeAwareTextTokenEstimator;
 import com.harness.input.document.DocumentConversionDiagnostics;
 import com.harness.input.document.DocumentConversionException;
 import com.harness.input.document.DocumentConversionResult;
 import com.harness.input.document.DocumentConversionService;
 import com.harness.provider.EmbeddingModelProvider;
+import com.harness.tool.knowledge.authority.*;
 import com.harness.tool.rag.VectorStore;
 import dev.langchain4j.data.embedding.Embedding;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.api.io.TempDir;
 import org.mockito.ArgumentCaptor;
-import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.nio.file.Path;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowableOfType;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.anyList;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.*;
 
-@ExtendWith(MockitoExtension.class)
 class KnowledgeIngestServiceTest {
 
-    @Mock
-    private EmbeddingModelProvider embeddingProvider;
-    @Mock
-    private VectorStore vectorStore;
-    @Mock
-    private DocumentConversionService documentConversionService;
-    @Mock
-    private FileStorageService fileStorage;
-    @Mock
-    private Embedding embedding;
+    @TempDir
+    Path tempDir;
 
+    private EmbeddingModelProvider embeddingProvider;
+    private VectorStore vectorStore;
+    private DocumentConversionService conversionService;
+    private KnowledgeArtifactRepository artifactRepository;
+    private KnowledgeIngestJobStore ingestJobStore;
+    private KnowledgeRepository knowledgeRepository;
+    private AtomicReference<KnowledgeIngestJob> jobState;
+    private Map<String, KnowledgeArtifact> artifacts;
+    private Map<String, KnowledgeHead> heads;
     private KnowledgeIngestService service;
 
     @BeforeEach
@@ -48,128 +53,206 @@ class KnowledgeIngestServiceTest {
         EnvConfig.init(Map.of(
                 EnvKey.KNOWLEDGE_MAX_FILE_SIZE_MB, "10",
                 EnvKey.KNOWLEDGE_CHUNK_SIZE, "1024",
-                EnvKey.RAG_COLLECTION, "default"
-        ));
-        when(embeddingProvider.tokenEstimator())
-                .thenReturn(UnicodeAwareTextTokenEstimator.INSTANCE);
-        service = new KnowledgeIngestService(
-                embeddingProvider,
-                vectorStore,
-                documentConversionService,
-                fileStorage);
-    }
+                EnvKey.KNOWLEDGE_SOURCE_REVISION_MAX_CHUNKS, "100",
+                EnvKey.KNOWLEDGE_INGEST_MAX_ATTEMPTS, "5",
+                EnvKey.RAG_COLLECTION, "documents",
+                EnvKey.KNOWLEDGE_CATALOG_COLLECTION, "catalog"));
+        embeddingProvider = mock(EmbeddingModelProvider.class);
+        vectorStore = mock(VectorStore.class);
+        conversionService = mock(DocumentConversionService.class);
+        artifactRepository = mock(KnowledgeArtifactRepository.class);
+        ingestJobStore = mock(KnowledgeIngestJobStore.class);
+        knowledgeRepository = mock(KnowledgeRepository.class);
+        jobState = new AtomicReference<>();
+        artifacts = new ConcurrentHashMap<>();
+        heads = new ConcurrentHashMap<>();
 
-    @Test
-    void ingestUsesCanonicalMarkdownAndPersistsConversionDiagnostics() {
-        byte[] fileData = "source".getBytes(java.nio.charset.StandardCharsets.UTF_8);
-        DocumentConversionDiagnostics diagnostics = new DocumentConversionDiagnostics(
-                "markitdown", "gpt-4o", true, List.of(),
-                "chat", 2, 25, fileData.length);
+        when(embeddingProvider.tokenEstimator()).thenReturn(UnicodeAwareTextTokenEstimator.INSTANCE);
         when(embeddingProvider.isAvailable()).thenReturn(true);
         when(embeddingProvider.dimension()).thenReturn(3);
-        when(documentConversionService.convert(fileData, "report.pdf", "application/pdf"))
-                .thenReturn(new DocumentConversionResult(
-                        "# Report\n\nCanonical Markdown.",
-                        "Report",
-                        "application/pdf",
-                        diagnostics));
-        when(embeddingProvider.embedAll(anyList())).thenReturn(List.of(embedding));
-        when(embedding.vector()).thenReturn(new float[]{1f, 2f, 3f});
-        when(fileStorage.store(fileData, "report.pdf", "default"))
-                .thenReturn("uploads/default/report.pdf");
-
-        IngestResult result = service.ingest(
-                fileData, "report.pdf", "application/pdf", null);
-
-        ArgumentCaptor<List<VectorStore.Document>> documents = ArgumentCaptor.forClass(List.class);
-        verify(vectorStore).upsert(org.mockito.ArgumentMatchers.eq("default"), documents.capture());
-        assertThat(documents.getValue()).singleElement().satisfies(document -> {
-            assertThat(document.content()).isEqualTo("# Report\n\nCanonical Markdown.");
-            assertThat(document.metadata())
-                    .containsKeys("document_id")
-                    .containsEntry("start_block_index", 0)
-                    .containsEntry("end_block_index", 1)
-                    .containsEntry("heading_path", List.of("Report"))
-                    .containsEntry("token_estimator", "unicode-aware-estimate-v1")
-                    .containsEntry("document_converter", "markitdown")
-                    .containsEntry("document_vision_calls", 2)
-                    .containsEntry("document_vision_model", "gpt-4o");
-            assertThat(document.metadata().get("token_count")).isInstanceOf(Integer.class);
-            assertThat(document.metadata().get("document_id").toString()).isNotBlank();
-        });
-        assertThat(result.documentConverter()).isEqualTo("markitdown");
-        assertThat(result.detectedMimeType()).isEqualTo("application/pdf");
-        assertThat(result.visionCalls()).isEqualTo(2);
-    }
-
-    @Test
-    void writesStableDocumentAndOrderedChunkMetadataAcrossOneIngest() {
-        EnvConfig.init(Map.of(
-                EnvKey.KNOWLEDGE_MAX_FILE_SIZE_MB, "10",
-                EnvKey.KNOWLEDGE_CHUNK_SIZE, "12",
-                EnvKey.RAG_COLLECTION, "default"
-        ));
+        when(embeddingProvider.embedAll(anyList()))
+                .thenAnswer(invocation -> invocation.<List<?>>getArgument(0).stream()
+                        .map(ignored -> Embedding.from(new float[]{1, 2, 3}))
+                        .toList());
+        wirePersistentState();
         service = new KnowledgeIngestService(
                 embeddingProvider,
                 vectorStore,
-                documentConversionService,
-                fileStorage);
-        byte[] fileData = "source".getBytes(java.nio.charset.StandardCharsets.UTF_8);
-        DocumentConversionDiagnostics diagnostics = new DocumentConversionDiagnostics(
-                "markitdown", null, false, List.of(),
-                "disabled", 0, 5, fileData.length);
-        when(embeddingProvider.isAvailable()).thenReturn(true);
-        when(documentConversionService.convert(fileData, "guide.md", "text/markdown"))
-                .thenReturn(new DocumentConversionResult(
-                        "第一段内容。\n\n第二段内容。\n\n第三段内容。",
-                        "Guide",
-                        "text/markdown",
-                        diagnostics));
-        when(embeddingProvider.embedAll(anyList()))
-                .thenReturn(List.of(embedding, embedding));
-        when(embedding.vector()).thenReturn(new float[]{1f});
-        when(fileStorage.store(fileData, "guide.md", "default"))
-                .thenReturn("uploads/default/guide.md");
-
-        service.ingest(fileData, "guide.md", "text/markdown", null);
-
-        ArgumentCaptor<List<VectorStore.Document>> documents = ArgumentCaptor.forClass(List.class);
-        verify(vectorStore).upsert(org.mockito.ArgumentMatchers.eq("default"), documents.capture());
-        assertThat(documents.getValue()).hasSize(2);
-        String documentId = documents.getValue().getFirst().metadata().get("document_id").toString();
-        assertThat(documentId).isNotBlank();
-        assertThat(documents.getValue()).allSatisfy(document ->
-                assertThat(document.metadata()).containsEntry("document_id", documentId));
-        assertThat(documents.getValue()).extracting(document ->
-                        document.metadata().get("chunk_index"))
-                .containsExactly(0, 1);
-        assertThat(documents.getValue()).extracting(document ->
-                        document.metadata().get("start_block_index"))
-                .containsExactly(0, 2);
-        assertThat(documents.getValue()).extracting(document ->
-                        document.metadata().get("end_block_index"))
-                .containsExactly(1, 2);
+                conversionService,
+                new ContentAddressedArtifactStorage(tempDir),
+                artifactRepository,
+                ingestJobStore,
+                knowledgeRepository);
     }
 
     @Test
-    void conversionFailureStopsBeforeEmbeddingAndStorage() {
-        byte[] fileData = "source".getBytes(java.nio.charset.StandardCharsets.UTF_8);
-        when(embeddingProvider.isAvailable()).thenReturn(true);
-        when(documentConversionService.convert(fileData, "broken.pdf", "application/pdf"))
+    void ingestPersistsArtifactsRevisionAndStableWholeDocumentChunks() {
+        byte[] bytes = "source".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        when(conversionService.convert(bytes, "report.pdf", "application/pdf"))
+                .thenReturn(converted("# Report\n\nCanonical Markdown.", bytes.length));
+
+        IngestResult result = service.ingest(
+                bytes, "report.pdf", "application/pdf", "documents");
+
+        assertThat(result.documentId()).isNotBlank();
+        assertThat(result.revisionId()).isNotBlank();
+        assertThat(result.sourceArtifactId()).isNotEqualTo(result.canonicalArtifactId());
+        assertThat(jobState.get().status()).isEqualTo(KnowledgeIngestJob.Status.INDEXED);
+        ArgumentCaptor<List<VectorStore.Document>> documents = ArgumentCaptor.forClass(List.class);
+        verify(vectorStore).upsert(eq("documents"), documents.capture());
+        assertThat(documents.getValue()).singleElement().satisfies(chunk -> {
+            assertThat(chunk.id()).hasSize(64);
+            assertThat(chunk.source()).isEqualTo("report.pdf");
+            assertThat(chunk.metadata())
+                    .containsEntry("document_id", result.documentId())
+                    .containsEntry("revision_id", result.revisionId())
+                    .containsEntry("artifact_id", result.sourceArtifactId())
+                    .containsEntry("canonical_artifact_id", result.canonicalArtifactId());
+        });
+        KnowledgeHead head = heads.get(result.documentId());
+        assertThat(head.currentRevision().body()).isEqualTo("# Report\n\nCanonical Markdown.");
+    }
+
+    @Test
+    void completeUpdateCreatesRevisionAndDeletesOnlyPreviousRevisionProjection() {
+        byte[] first = "first".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        when(conversionService.convert(first, "guide.md", "text/markdown"))
+                .thenReturn(converted("# Guide\n\nFirst.", first.length));
+        IngestResult initial = service.ingest(
+                first, "guide.md", "text/markdown", "documents");
+
+        byte[] second = "second".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        when(conversionService.convert(second, "renamed-guide.md", "text/markdown"))
+                .thenReturn(converted("# Guide v2\n\nSecond.", second.length));
+        IngestResult updated = service.ingest(
+                second, "renamed-guide.md", "text/markdown", "documents",
+                initial.documentId(), null);
+
+        assertThat(updated.documentId()).isEqualTo(initial.documentId());
+        assertThat(updated.revisionId()).isNotEqualTo(initial.revisionId());
+        assertThat(heads.get(initial.documentId()).currentRevision().revisionNumber()).isEqualTo(2);
+        verify(vectorStore).deleteDocumentRevision(
+                "documents", initial.documentId(), initial.revisionId());
+        verify(vectorStore, never()).deleteById(anyString(), anyString());
+    }
+
+    @Test
+    void transientFailureReturnsDurablePendingReceiptInsteadOfOpaqueFailure() {
+        byte[] bytes = "source".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        when(conversionService.convert(bytes, "report.pdf", "application/pdf"))
+                .thenThrow(new DocumentConversionException("parser unavailable"));
+
+        KnowledgeIngestPendingException pending = catchThrowableOfType(
+                () -> service.ingest(
+                        bytes, "report.pdf", "application/pdf", "documents"),
+                KnowledgeIngestPendingException.class);
+
+        assertThat(pending.jobId()).isEqualTo(jobState.get().id());
+        assertThat(pending.documentId()).isEqualTo(jobState.get().sourceConceptId());
+        assertThat(pending.sourceArtifactId()).isEqualTo(jobState.get().artifactId());
+        assertThat(pending.collection()).isEqualTo("documents");
+        verify(ingestJobStore).reschedule(
+                eq(jobState.get().id()), any(), eq("parser unavailable"));
+        verify(ingestJobStore, never()).markFailed(anyString(), any(), anyString());
+    }
+
+    @Test
+    void nonRetryableConversionFailureBecomesTerminalAndKeepsClientError() {
+        byte[] bytes = "source".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        when(conversionService.convert(bytes, "report.bin", "application/octet-stream"))
                 .thenThrow(new DocumentConversionException(
-                        "conversion failed", 422, "DOCUMENT_CONVERSION_FAILED"));
+                        "unsupported document", 415, "unsupported_media_type"));
 
         assertThatThrownBy(() -> service.ingest(
-                fileData, "broken.pdf", "application/pdf", "default"))
+                bytes, "report.bin", "application/octet-stream", "documents"))
                 .isInstanceOf(DocumentConversionException.class)
-                .hasMessageContaining("conversion failed");
+                .hasMessage("unsupported document");
 
-        verify(embeddingProvider, never()).embedAll(anyList());
-        verify(fileStorage, never()).store(
-                org.mockito.ArgumentMatchers.any(),
-                org.mockito.ArgumentMatchers.anyString(),
-                org.mockito.ArgumentMatchers.anyString());
-        verify(vectorStore, never()).upsert(
-                org.mockito.ArgumentMatchers.anyString(), anyList());
+        verify(ingestJobStore).markFailed(
+                eq(jobState.get().id()), any(), eq("unsupported document"));
+        verify(ingestJobStore, never()).reschedule(anyString(), any(), anyString());
+    }
+
+    private void wirePersistentState() {
+        when(artifactRepository.registerWithIngestJob(any(), any())).thenAnswer(invocation -> {
+            KnowledgeArtifact artifact = invocation.getArgument(0);
+            KnowledgeIngestJob job = invocation.getArgument(1);
+            artifacts.putIfAbsent(artifact.id(), artifact);
+            jobState.set(job);
+            return new KnowledgeArtifactRepository.Registration(artifact, job);
+        });
+        when(artifactRepository.register(any())).thenAnswer(invocation -> {
+            KnowledgeArtifact artifact = invocation.getArgument(0);
+            artifacts.putIfAbsent(artifact.id(), artifact);
+            return artifacts.get(artifact.id());
+        });
+        when(artifactRepository.findById(anyString())).thenAnswer(invocation ->
+                Optional.ofNullable(artifacts.get(invocation.getArgument(0))));
+        when(knowledgeRepository.findById(anyString())).thenAnswer(invocation ->
+                Optional.ofNullable(heads.get(invocation.getArgument(0))));
+        when(ingestJobStore.findById(anyString())).thenAnswer(invocation ->
+                Optional.ofNullable(jobState.get()));
+        when(ingestJobStore.claim(anyString(), any())).thenAnswer(invocation -> {
+            KnowledgeIngestJob current = jobState.get();
+            KnowledgeIngestJob claimed = copyJob(
+                    current, current.status(), current.attempts() + 1,
+                    Instant.now(), current.convertedArtifactId(),
+                    current.sourceRevisionId(), current.completedAt());
+            jobState.set(claimed);
+            return Optional.of(claimed);
+        });
+        when(ingestJobStore.advance(anyString(), any(), any(), any(), any(), any(), any()))
+                .thenAnswer(invocation -> {
+                    KnowledgeIngestJob current = jobState.get();
+                    KnowledgeIngestJob.Status next = invocation.getArgument(2);
+                    String converted = invocation.getArgument(3);
+                    String concept = invocation.getArgument(4);
+                    String revision = invocation.getArgument(5);
+                    Instant completed = invocation.getArgument(6);
+                    KnowledgeIngestJob advanced = new KnowledgeIngestJob(
+                            current.id(), current.artifactId(), current.tenantId(),
+                            current.collectionKey(), next, current.attempts(), current.availableAt(),
+                            null, converted == null ? current.convertedArtifactId() : converted,
+                            concept == null ? current.sourceConceptId() : concept,
+                            revision == null ? current.sourceRevisionId() : revision,
+                            null, current.createdAt(), completed);
+                    jobState.set(advanced);
+                    return advanced;
+                });
+        when(ingestJobStore.commitCompilation(anyString(), any())).thenAnswer(invocation -> {
+            KnowledgeRevisionChange change = invocation.getArgument(1);
+            heads.put(change.concept().id(), new KnowledgeHead(change.concept(), change.revision()));
+            KnowledgeIngestJob current = jobState.get();
+            KnowledgeIngestJob compiled = new KnowledgeIngestJob(
+                    current.id(), current.artifactId(), current.tenantId(), current.collectionKey(),
+                    KnowledgeIngestJob.Status.COMPILED, current.attempts(), current.availableAt(),
+                    null, current.convertedArtifactId(), change.concept().id(),
+                    change.revision().id(), null, current.createdAt(), null);
+            jobState.set(compiled);
+            return compiled;
+        });
+    }
+
+    private static KnowledgeIngestJob copyJob(
+            KnowledgeIngestJob job,
+            KnowledgeIngestJob.Status status,
+            int attempts,
+            Instant claimedAt,
+            String convertedArtifactId,
+            String sourceRevisionId,
+            Instant completedAt
+    ) {
+        return new KnowledgeIngestJob(
+                job.id(), job.artifactId(), job.tenantId(), job.collectionKey(), status,
+                attempts, job.availableAt(), claimedAt, convertedArtifactId,
+                job.sourceConceptId(), sourceRevisionId, null, job.createdAt(), completedAt);
+    }
+
+    private static DocumentConversionResult converted(String markdown, long inputBytes) {
+        return new DocumentConversionResult(
+                markdown, null, "text/markdown",
+                new DocumentConversionDiagnostics(
+                        "markitdown", null, false, List.of(),
+                        "disabled", 0, 5, inputBytes));
     }
 }

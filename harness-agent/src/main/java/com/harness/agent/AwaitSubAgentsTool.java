@@ -5,7 +5,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.harness.core.exception.ToolExecutionException;
-import com.harness.core.model.ToolResult;
+import com.harness.core.model.ResultStatus;
+import com.harness.core.model.ToolExecutionOutcome;
+import com.harness.core.model.ToolOutput;
 import com.harness.core.model.ToolSpec;
 import com.harness.core.env.EnvConfig;
 import com.harness.core.env.EnvKey;
@@ -79,12 +81,18 @@ public class AwaitSubAgentsTool implements Tool {
                 "await_subagents",
                 "Wait for sub-agent tasks to complete and get their results. " +
                         "All tasks share a single timeout deadline. Uncompleted tasks can auto-resume session.",
-                parameters
+                parameters,
+                com.harness.core.model.ToolCapability.ORCHESTRATION
         );
     }
 
     @Override
     public String execute(JsonNode arguments) {
+        return executeOutcome(arguments).content().modelContent();
+    }
+
+    @Override
+    public ToolExecutionOutcome executeOutcome(JsonNode arguments) {
         AgentRunContext runContext = SubAgentToolHelper.requireRunContext("await_subagents");
 
         List<String> taskIds = SubAgentToolHelper.parseTaskIds(arguments);
@@ -111,8 +119,9 @@ public class AwaitSubAgentsTool implements Tool {
                 default -> awaitAll(scope, taskIds, timeoutSeconds, onTimeout, result);
             }
 
-            ToolResult.setCurrentStatus(ToolResult.ResultStatus.SUCCESS);
-            return mapper.writeValueAsString(result);
+            return ToolExecutionOutcome.succeeded(
+                    ToolOutput.text(mapper.writeValueAsString(result)),
+                    ResultStatus.AVAILABLE);
 
         } catch (Exception e) {
             log.error("[AwaitSubAgents] Error: {}", e.getMessage());

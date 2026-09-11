@@ -25,6 +25,7 @@ class MilvusDocumentContextIntegrationTest {
     private static final String LOGICAL_COLLECTION = "tenant_manuals";
     private static final String OTHER_COLLECTION = "other_tenant";
     private static final String DOCUMENT_ID = "upload_manual_v1";
+    private static final String REVISION_ID = "upload_manual_v1_revision";
 
     private static MilvusClientV2 client;
     private static MilvusVectorStore store;
@@ -68,7 +69,8 @@ class MilvusDocumentContextIntegrationTest {
 
         long contextStarted = System.nanoTime();
         List<VectorStore.Document> context = store.readDocumentWindow(
-                LOGICAL_COLLECTION, DOCUMENT_ID, anchor.chunkIndex(), 1, 1);
+                LOGICAL_COLLECTION, DOCUMENT_ID, REVISION_ID,
+                anchor.chunkIndex(), 1, 1);
         long contextMicros = elapsedMicros(contextStarted);
 
         assertThat(context).extracting(VectorStore.Document::chunkIndex)
@@ -78,7 +80,8 @@ class MilvusDocumentContextIntegrationTest {
             assertThat(document.metadata()).containsKey("heading_path");
         });
         assertThat(store.readDocumentWindow(
-                OTHER_COLLECTION, DOCUMENT_ID, anchor.chunkIndex(), 1, 1)).isEmpty();
+                OTHER_COLLECTION, DOCUMENT_ID, REVISION_ID,
+                anchor.chunkIndex(), 1, 1)).isEmpty();
         assertThat(store.searchVector(
                 OTHER_COLLECTION, new float[]{1.0f, 0.0f, 0.0f, 0.0f}, 5)).isEmpty();
 
@@ -147,7 +150,9 @@ class MilvusDocumentContextIntegrationTest {
                     "original content",
                     "crud.md",
                     0.0,
-                    Map.of("document_id", "crud-document"),
+                    Map.of(
+                            "document_id", "crud-document",
+                            "revision_id", "crud-revision"),
                     new float[]{0.0f, 0.0f, 1.0f, 0.0f},
                     0)));
             flush();
@@ -168,14 +173,11 @@ class MilvusDocumentContextIntegrationTest {
                             0))))
                     .isInstanceOf(IllegalArgumentException.class);
 
-            store.updateContent(
-                    isolatedCollection,
-                    chunkId,
-                    "updated content",
-                    new float[]{0.0f, 0.0f, 0.9f, 0.1f});
+            assertThat(store.deleteDocumentRevision(
+                    isolatedCollection, "crud-document", "crud-revision"))
+                    .isGreaterThanOrEqualTo(0);
             flush();
-            assertThat(store.getById(isolatedCollection, chunkId).content())
-                    .isEqualTo("updated content");
+            assertThat(store.getById(isolatedCollection, chunkId)).isNull();
 
             store.delete(isolatedCollection);
             flush();
@@ -199,6 +201,7 @@ class MilvusDocumentContextIntegrationTest {
                         0.0,
                         Map.of(
                                 "document_id", "billing-guide-v1",
+                                "revision_id", "billing-guide-v1-revision",
                                 "heading_path", List.of("Billing")),
                         new float[]{0.0f, 1.0f, 0.0f, 0.0f},
                         0)
@@ -213,6 +216,7 @@ class MilvusDocumentContextIntegrationTest {
                 0.0,
                 Map.of(
                         "document_id", DOCUMENT_ID,
+                        "revision_id", REVISION_ID,
                         "heading_path", List.of("上传", "大小限制")),
                 embedding,
                 chunkIndex);

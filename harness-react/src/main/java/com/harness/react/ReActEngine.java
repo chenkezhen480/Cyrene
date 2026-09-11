@@ -135,7 +135,8 @@ public class ReActEngine implements ReActLoop {
     @Override
     public ReActResult execute(ReActRequest request) {
         return execute(
-                request.systemPrompt(), request.userMessage(), request.historyMessages(), request.trace(),
+                request.systemPrompt(), request.userMessage(), request.historyMessages(),
+                request.dynamicKnowledgeContext(), request.trace(),
                 request.listener(), request.cancellationToken(), request.enableThinking(),
                 request.confirmationContext(), request.finalOutputContract());
     }
@@ -152,7 +153,7 @@ public class ReActEngine implements ReActLoop {
      * @param enableThinking null = use env default, true = force thinking, false = force no thinking
      */
     private ReActResult execute(String systemPrompt, String userMessage, List<ChatMessage> historyMessages,
-                                RunTrace trace, ReActListener listener,
+                                String dynamicKnowledgeContext, RunTrace trace, ReActListener listener,
                                 com.harness.core.model.CancellationToken cancellationToken,
                                 Boolean enableThinking,
                                 ConfirmationExecutionContext confirmationContext,
@@ -169,6 +170,9 @@ public class ReActEngine implements ReActLoop {
                 ? systemPrompt + "\n\n" + STRUCTURED_OUTPUT_INSTRUCTION
                 : systemPrompt));
         messages.addAll(historyMessages);
+        if (dynamicKnowledgeContext != null) {
+            messages.add(UserMessage.from(dynamicKnowledgeContext));
+        }
         messages.add(UserMessage.from(userMessage));
 
         List<ReActStep> allSteps = new ArrayList<>();
@@ -362,20 +366,21 @@ public class ReActEngine implements ReActLoop {
             return execute(request);
         }
         return streamExecute(
-                request.systemPrompt(), request.userMessage(), request.historyMessages(), request.trace(),
+                request.systemPrompt(), request.userMessage(), request.historyMessages(),
+                request.dynamicKnowledgeContext(), request.trace(),
                 request.listener(), request.cancellationToken(), request.enableThinking(),
                 request.confirmationContext(), request.finalOutputContract());
     }
 
     private ReActResult streamExecute(String systemPrompt, String userMessage, List<ChatMessage> historyMessages,
-                                      RunTrace trace, ReActListener listener,
+                                      String dynamicKnowledgeContext, RunTrace trace, ReActListener listener,
                                 com.harness.core.model.CancellationToken cancellationToken,
                                 Boolean enableThinking,
                                 ConfirmationExecutionContext confirmationContext,
                                 FinalOutputContract finalOutputContract) {
         if (streamingChatModel == null) {
             log.warn("[L3-ReAct] Falling back to blocking mode (streaming unavailable)");
-            return execute(systemPrompt, userMessage, historyMessages, trace, listener,
+            return execute(systemPrompt, userMessage, historyMessages, dynamicKnowledgeContext, trace, listener,
                     cancellationToken, enableThinking, confirmationContext,
                     new FinalOutputContract.Text());
         }
@@ -391,6 +396,9 @@ public class ReActEngine implements ReActLoop {
                 ? systemPrompt + "\n\n" + TOOL_PLANNING_INSTRUCTION
                 : systemPrompt));
         messages.addAll(historyMessages);
+        if (dynamicKnowledgeContext != null) {
+            messages.add(UserMessage.from(dynamicKnowledgeContext));
+        }
         messages.add(UserMessage.from(userMessage));
 
         List<ReActStep> allSteps = new ArrayList<>();
@@ -978,7 +986,7 @@ public class ReActEngine implements ReActLoop {
             ToolResult result,
             com.harness.core.model.CancellationToken cancellationToken) {
         if ((cancellationToken != null && cancellationToken.isCancelled())
-                || result.status() == ToolResult.ResultStatus.CONFIRMATION_CANCELLED) {
+                || result.executionStatus() == ExecutionStatus.CANCELLED) {
             return ToolCallStatus.CANCELLED;
         }
         return result.success() ? ToolCallStatus.SUCCEEDED : ToolCallStatus.FAILED;

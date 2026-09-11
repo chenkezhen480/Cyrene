@@ -3,6 +3,7 @@ package com.harness.core.model;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 
 /**
@@ -53,19 +54,27 @@ public record AgentContext(
     }
 
     /**
-     * Optional tenant identifier supplied by the trusted backend caller.
-     * Standalone integrations share the fixed default tenant.
+     * Tenant identifier used by graph compatibility paths. Standalone integrations
+     * continue to share the fixed default tenant.
      */
     public String tenantId() {
+        return optionalTenantId().orElse(DEFAULT_TENANT_ID);
+    }
+
+    /**
+     * Trusted nullable tenant scope for knowledge and memory ownership.
+     * A missing tenant remains empty and is never converted to the graph compatibility default.
+     */
+    public Optional<String> optionalTenantId() {
         Object value = data.get(KEY_TENANT_ID);
         if (value == null || value.toString().isBlank()) {
-            return DEFAULT_TENANT_ID;
+            return Optional.empty();
         }
         String tenantId = value.toString().trim();
         if (tenantId.length() > 128) {
             throw new IllegalArgumentException("tenantId must not exceed 128 characters");
         }
-        return tenantId;
+        return Optional.of(tenantId);
     }
 
     public Boolean enableThinking() {

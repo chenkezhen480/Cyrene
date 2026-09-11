@@ -3,7 +3,9 @@ package com.harness.tool.discovery;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.harness.core.exception.ToolExecutionException;
-import com.harness.core.model.ToolResult;
+import com.harness.core.model.ResultStatus;
+import com.harness.core.model.ToolExecutionOutcome;
+import com.harness.core.model.ToolOutput;
 import com.harness.core.model.ToolSpec;
 import com.harness.core.env.EnvConfig;
 import com.harness.core.env.EnvKey;
@@ -70,15 +72,22 @@ public class CodeGrepTool implements Tool {
                                                         .put("type", "string")
                                                         .put("description", "Optional file glob filter (e.g. '*.java', '*.{js,ts}')")))
                         .<com.fasterxml.jackson.databind.node.ObjectNode>set("required",
-                                mapper.createArrayNode().add("regex"))
+                                mapper.createArrayNode().add("regex")),
+                com.harness.core.model.ToolCapability.RETRIEVAL
         );
     }
 
     @Override
     public String execute(JsonNode arguments) {
-        String regex = arguments.has("regex") ? arguments.get("regex").asText().trim() : null;
+        return executeOutcome(arguments).content().modelContent();
+    }
+
+    @Override
+    public ToolExecutionOutcome executeOutcome(JsonNode arguments) {
+        String regex = arguments != null && arguments.has("regex")
+                ? arguments.get("regex").asText().trim() : null;
         if (regex == null || regex.isEmpty()) {
-            return "ERROR: 'regex' is required";
+            throw new ToolExecutionException("code_grep", "Missing required parameter: regex");
         }
 
         // Project not initialized — rootDir is still the default "."
@@ -88,13 +97,14 @@ public class CodeGrepTool implements Tool {
                     "Project path not configured. Initialize via project discovery scan first.");
         }
 
-        String fileGlob = arguments.has("glob") ? arguments.get("glob").asText().trim() : null;
+        String fileGlob = arguments != null && arguments.has("glob")
+                ? arguments.get("glob").asText().trim() : null;
 
         Pattern pattern;
         try {
             pattern = Pattern.compile(regex, Pattern.CASE_INSENSITIVE);
         } catch (PatternSyntaxException e) {
-            return "ERROR: Invalid regex: " + e.getMessage();
+            throw new ToolExecutionException("code_grep", "Invalid regex: " + e.getMessage(), e);
         }
 
         log.debug("[CodeGrep] Searching: regex='{}', glob='{}' in {}", regex, fileGlob, rootDir);
@@ -162,15 +172,13 @@ public class CodeGrepTool implements Tool {
             });
         } catch (IOException e) {
             log.error("[CodeGrep] IO error: {}", e.getMessage());
-            return "ERROR: " + e.getMessage();
+            throw new ToolExecutionException("code_grep", e.getMessage(), e);
         }
 
         if (results.isEmpty()) {
-            ToolResult.setCurrentStatus(ToolResult.ResultStatus.EMPTY);
-            return "No matches found for regex: " + regex;
+            return outcome("No matches found for regex: " + regex, ResultStatus.EMPTY);
         }
 
-        ToolResult.setCurrentStatus(ToolResult.ResultStatus.SUCCESS);
         StringBuilder sb = new StringBuilder();
         sb.append("Found ").append(results.size()).append(" match(es)");
         if (results.size() >= maxResults) {
@@ -180,7 +188,11 @@ public class CodeGrepTool implements Tool {
         for (String r : results) {
             sb.append(r).append("\n");
         }
-        return sb.toString();
+        return outcome(sb.toString(), ResultStatus.AVAILABLE);
+    }
+
+    private static ToolExecutionOutcome outcome(String text, ResultStatus status) {
+        return ToolExecutionOutcome.succeeded(ToolOutput.text(text), status);
     }
 
     private boolean isSensitiveFile(String relativePath) {

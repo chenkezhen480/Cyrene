@@ -26,14 +26,14 @@ class MysqlMessageStoreIT {
     @BeforeAll
     static void initEnv() {
         EnvConfig.init(Map.of(
-                "HARNESS_AUDIT_DB_URL", "jdbc:mysql://localhost:3306/agent?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai",
+                "HARNESS_AUDIT_DB_URL", "jdbc:mysql://localhost:3306/zhi_du_yuan?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai",
                 "HARNESS_AUDIT_DB_USER", "root",
                 "HARNESS_AUDIT_DB_PASS", "1234",
                 "HARNESS_AUDIT_STORE", "mysql"
         ));
         // Create a test session for messages
         MysqlSessionStore sessionStore = new MysqlSessionStore();
-        Session session = sessionStore.create(TEST_USER);
+        Session session = sessionStore.create(TEST_USER, null);
         sessionId = session.id();
     }
 
@@ -65,8 +65,8 @@ class MysqlMessageStoreIT {
 
     @Test
     void save_andLoadForContext() {
-        store.save(sessionId, "user", blocks("Hello"), false);
-        store.save(sessionId, "assistant", blocks("Hi there"), false);
+        save(sessionId, "user", blocks("Hello"), false);
+        save(sessionId, "assistant", blocks("Hi there"), false);
 
         List<MemoryMessage> messages = store.loadForContext(sessionId);
 
@@ -78,9 +78,23 @@ class MysqlMessageStoreIT {
     }
 
     @Test
+    void findByIdAndSession_rejectsMessageFromAnotherSession() {
+        String firstSession = createTestSession();
+        String secondSession = createTestSession();
+        long messageId = store.save(new MessageWrite(
+                firstSession, "trace-it", "user", blocks("scoped source"), false));
+
+        assertThat(store.findByIdAndSession(messageId, firstSession))
+                .get()
+                .extracting(MemoryMessage::text)
+                .isEqualTo("scoped source");
+        assertThat(store.findByIdAndSession(messageId, secondSession)).isEmpty();
+    }
+
+    @Test
     void save_summaryMessage_markedCorrectly() {
         String sid = createTestSession();
-        store.save(sid, "assistant", blocks("Summary of old messages"), true);
+        save(sid, "assistant", blocks("Summary of old messages"), true);
 
         List<MemoryMessage> messages = store.loadForContext(sid);
         assertThat(messages).anyMatch(m -> m.isSummary() && m.text().contains("Summary"));
@@ -89,9 +103,9 @@ class MysqlMessageStoreIT {
     @Test
     void loadForContext_orderedByCreation() {
         String sid = createTestSession();
-        store.save(sid, "user", blocks("First"), false);
-        store.save(sid, "assistant", blocks("Second"), false);
-        store.save(sid, "user", blocks("Third"), false);
+        save(sid, "user", blocks("First"), false);
+        save(sid, "assistant", blocks("Second"), false);
+        save(sid, "user", blocks("Third"), false);
 
         List<MemoryMessage> messages = store.loadForContext(sid);
 
@@ -103,9 +117,9 @@ class MysqlMessageStoreIT {
     @Test
     void countUserMessages_returnsCount() {
         String sid = createTestSession();
-        store.save(sid, "user", blocks("msg1"), false);
-        store.save(sid, "assistant", blocks("reply1"), false);
-        store.save(sid, "user", blocks("msg2"), false);
+        save(sid, "user", blocks("msg1"), false);
+        save(sid, "assistant", blocks("reply1"), false);
+        save(sid, "user", blocks("msg2"), false);
 
         int count = store.countUserMessages(sid);
 
@@ -115,8 +129,8 @@ class MysqlMessageStoreIT {
     @Test
     void sumUserContentLength_sumsChars() {
         String sid = createTestSession();
-        store.save(sid, "user", blocks("Hello"), false);      // 5 chars
-        store.save(sid, "user", blocks("World!"), false);     // 6 chars
+        save(sid, "user", blocks("Hello"), false);      // 5 chars
+        save(sid, "user", blocks("World!"), false);     // 6 chars
 
         int total = store.sumUserContentLength(sid);
 
@@ -126,10 +140,10 @@ class MysqlMessageStoreIT {
     @Test
     void countConversationTurns_returnsUserAssistantPairs() {
         String sid = createTestSession();
-        store.save(sid, "user", blocks("Q1"), false);
-        store.save(sid, "assistant", blocks("A1"), false);
-        store.save(sid, "user", blocks("Q2"), false);
-        store.save(sid, "assistant", blocks("A2"), false);
+        save(sid, "user", blocks("Q1"), false);
+        save(sid, "assistant", blocks("A1"), false);
+        save(sid, "user", blocks("Q2"), false);
+        save(sid, "assistant", blocks("A2"), false);
 
         int turns = store.countConversationTurns(sid);
 
@@ -137,11 +151,47 @@ class MysqlMessageStoreIT {
     }
 
     @Test
+    void conversationBoundary_ignoresToolSummaryAndIncompleteTail() {
+        String sid = createTestSession();
+        save(sid, "user", blocks("Q1"), false);
+        save(sid, "tool", blocks("tool evidence"), false);
+        save(sid, "assistant", blocks("A1"), false);
+        save(sid, "system", blocks("compressed"), true);
+        save(sid, "user", blocks("Q2"), false);
+        save(sid, "assistant_tool_call", blocks("call"), false);
+        save(sid, "assistant", blocks("A2"), false);
+        save(sid, "user", blocks("unfinished"), false);
+
+        List<MemoryMessage> messages = store.loadForContext(sid);
+        long expectedCutoff = messages.stream()
+                .filter(message -> message.role().equals("assistant") && message.text().equals("A2"))
+                .findFirst()
+                .orElseThrow()
+                .id();
+
+        assertThat(store.findConversationBoundary(sid))
+                .isEqualTo(new MessageStore.ConversationBoundary(2, expectedCutoff));
+    }
+
+    @Test
+    void saveBatch_persistsOneRootTraceIdForAllRequestMessages() {
+        String sid = createTestSession();
+        store.saveBatch(List.of(
+                new MessageWrite(sid, "root-trace", "user", blocks("question"), false),
+                new MessageWrite(sid, "root-trace", "tool", blocks("evidence"), false),
+                new MessageWrite(sid, "root-trace", "assistant", blocks("answer"), false)));
+
+        assertThat(store.loadForContext(sid))
+                .extracting(MemoryMessage::traceId)
+                .containsOnly("root-trace");
+    }
+
+    @Test
     void countToolMessages_returnsCount() {
         String sid = createTestSession();
-        store.save(sid, "user", blocks("query"), false);
-        store.save(sid, "tool", blocks("tool result 1"), false);
-        store.save(sid, "tool", blocks("tool result 2"), false);
+        save(sid, "user", blocks("query"), false);
+        save(sid, "tool", blocks("tool result 1"), false);
+        save(sid, "tool", blocks("tool result 2"), false);
 
         int count = store.countToolMessages(sid);
 
@@ -151,14 +201,15 @@ class MysqlMessageStoreIT {
     @Test
     void deleteToolMessages_removesOnlyToolContext() {
         String sid = createTestSession();
-        store.save(sid, "user", blocks("query"), false);
-        store.save(sid, "assistant_tool_call", blocks("[Tool call] lookup({})"), false);
-        store.save(sid, "tool", blocks("tool result"), false);
-        store.save(sid, "assistant", blocks("final answer"), false);
+        save(sid, "user", blocks("query"), false);
+        save(sid, "assistant_tool_call", blocks("[Tool call] lookup({})"), false);
+        save(sid, "tool", blocks("tool result"), false);
+        save(sid, "assistant", blocks("final answer"), false);
 
-        int deleted = store.deleteToolMessages(sid);
+        MessageStore.DeletionResult result = store.deleteToolMessages(sid, id -> false);
 
-        assertThat(deleted).isEqualTo(2);
+        assertThat(result.deleted()).isEqualTo(2);
+        assertThat(result.retainedByKnowledge()).isZero();
         assertThat(store.loadForContext(sid))
                 .extracting(MemoryMessage::role)
                 .containsExactly("user", "assistant");
@@ -168,10 +219,27 @@ class MysqlMessageStoreIT {
     }
 
     @Test
+    void deleteToolMessages_retainsReferencedEvidence() {
+        String sid = createTestSession();
+        long retainedId = store.save(new MessageWrite(
+                sid, "trace-it", "tool", blocks("retained result"), false));
+        long deletableId = store.save(new MessageWrite(
+                sid, "trace-it", "tool", blocks("deletable result"), false));
+
+        MessageStore.DeletionResult result = store.deleteToolMessages(
+                sid, messageId -> messageId == retainedId);
+
+        assertThat(result.deleted()).isEqualTo(1);
+        assertThat(result.retainedByKnowledge()).isEqualTo(1);
+        assertThat(store.findByIdAndSession(retainedId, sid)).isPresent();
+        assertThat(store.findByIdAndSession(deletableId, sid)).isEmpty();
+    }
+
+    @Test
     void avgAssistantReplyLength_computesAverage() {
         String sid = createTestSession();
-        store.save(sid, "assistant", blocks("Hello"), false);      // 5 chars
-        store.save(sid, "assistant", blocks("Hello World!"), false); // 12 chars
+        save(sid, "assistant", blocks("Hello"), false);      // 5 chars
+        save(sid, "assistant", blocks("Hello World!"), false); // 12 chars
 
         int avg = store.avgAssistantReplyLength(sid);
 
@@ -181,7 +249,7 @@ class MysqlMessageStoreIT {
     @Test
     void hasUserQuestions_trueWhenUserMessages() {
         String sid = createTestSession();
-        store.save(sid, "user", blocks("What is this?"), false);
+        save(sid, "user", blocks("What is this?"), false);
 
         assertThat(store.hasUserQuestions(sid)).isTrue();
     }
@@ -189,7 +257,7 @@ class MysqlMessageStoreIT {
     @Test
     void hasUserQuestions_falseWhenNoUserMessages() {
         String sid = createTestSession();
-        store.save(sid, "assistant", blocks("Hello"), false);
+        save(sid, "assistant", blocks("Hello"), false);
 
         assertThat(store.hasUserQuestions(sid)).isFalse();
     }
@@ -197,9 +265,9 @@ class MysqlMessageStoreIT {
     @Test
     void loadPage_ascendingOrder() {
         String sid = createTestSession();
-        store.save(sid, "user", blocks("First"), false);
-        store.save(sid, "assistant", blocks("Second"), false);
-        store.save(sid, "user", blocks("Third"), false);
+        save(sid, "user", blocks("First"), false);
+        save(sid, "assistant", blocks("Second"), false);
+        save(sid, "user", blocks("Third"), false);
 
         List<MemoryMessage> page = store.loadPage(sid, 0, 10, true);
 
@@ -211,9 +279,9 @@ class MysqlMessageStoreIT {
     @Test
     void loadPage_descendingOrder_returnsChronological() {
         String sid = createTestSession();
-        store.save(sid, "user", blocks("First"), false);
-        store.save(sid, "assistant", blocks("Second"), false);
-        store.save(sid, "user", blocks("Third"), false);
+        save(sid, "user", blocks("First"), false);
+        save(sid, "assistant", blocks("Second"), false);
+        save(sid, "user", blocks("Third"), false);
 
         List<MemoryMessage> page = store.loadPage(sid, Long.MAX_VALUE, 10, false);
 
@@ -225,9 +293,9 @@ class MysqlMessageStoreIT {
     @Test
     void loadPage_withCursorAndLimit() {
         String sid = createTestSession();
-        store.save(sid, "user", blocks("First"), false);
-        store.save(sid, "assistant", blocks("Second"), false);
-        store.save(sid, "user", blocks("Third"), false);
+        save(sid, "user", blocks("First"), false);
+        save(sid, "assistant", blocks("Second"), false);
+        save(sid, "user", blocks("Third"), false);
 
         List<MemoryMessage> all = store.loadPage(sid, 0, 10, true);
         long cursor = all.get(0).id();
@@ -240,9 +308,9 @@ class MysqlMessageStoreIT {
     @Test
     void countByRole_returnsCount() {
         String sid = createTestSession();
-        store.save(sid, "user", blocks("q1"), false);
-        store.save(sid, "user", blocks("q2"), false);
-        store.save(sid, "assistant", blocks("a1"), false);
+        save(sid, "user", blocks("q1"), false);
+        save(sid, "user", blocks("q2"), false);
+        save(sid, "assistant", blocks("a1"), false);
 
         assertThat(store.countByRole(sid, "user")).isEqualTo(2);
         assertThat(store.countByRole(sid, "assistant")).isEqualTo(1);
@@ -252,11 +320,11 @@ class MysqlMessageStoreIT {
     @Test
     void loadSessionStats_returnsCompleteStats() {
         String sid = createTestSession();
-        store.save(sid, "user", blocks("What is Java?"), false);
-        store.save(sid, "assistant", blocks("Java is a programming language."), false);
-        store.save(sid, "tool", blocks("search results"), false);
-        store.save(sid, "user", blocks("Tell me more"), false);
-        store.save(sid, "assistant", blocks("Sure, here are details."), false);
+        save(sid, "user", blocks("What is Java?"), false);
+        save(sid, "assistant", blocks("Java is a programming language."), false);
+        save(sid, "tool", blocks("search results"), false);
+        save(sid, "user", blocks("Tell me more"), false);
+        save(sid, "assistant", blocks("Sure, here are details."), false);
 
         MessageStore.SessionStats stats = store.loadSessionStats(sid);
 
@@ -267,9 +335,12 @@ class MysqlMessageStoreIT {
         assertThat(stats.hasUserQuestions()).isTrue();
     }
 
+    private void save(String targetSessionId, String role, List<MessageBlock> content, boolean summary) {
+        store.save(new MessageWrite(targetSessionId, "trace-it", role, content, summary));
+    }
     private static String createTestSession() {
         MysqlSessionStore sessionStore = new MysqlSessionStore();
-        Session s = sessionStore.create(TEST_USER);
+        Session s = sessionStore.create(TEST_USER, null);
         return s.id();
     }
 }

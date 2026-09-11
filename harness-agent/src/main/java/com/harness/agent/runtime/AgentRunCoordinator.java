@@ -5,6 +5,7 @@ import com.harness.agent.KnowledgeGraphTool;
 import com.harness.agent.SpawnSubAgentTool;
 import com.harness.agent.SubAgentManager;
 import com.harness.agent.context.KnowledgeAccessService;
+import com.harness.agent.knowledge.KnowledgeToolRuntimeContext;
 import com.harness.agent.memory.AgentMemoryRuntime;
 import com.harness.agent.memory.AgentMemoryRuntime.CompressionOutcome;
 import com.harness.agent.runtime.AgentRunPreparer.AgentRunRequest;
@@ -15,6 +16,7 @@ import com.harness.core.model.AgentResult;
 import com.harness.core.model.AgentTrace;
 import com.harness.core.model.Artifact;
 import com.harness.core.model.CancellationToken;
+import com.harness.core.model.ExecutionStatus;
 import com.harness.core.model.FinalOutputContract;
 import com.harness.core.model.MessageBlock;
 import com.harness.core.model.ReActStep;
@@ -35,7 +37,6 @@ import com.harness.react.ReActResult;
 import com.harness.tool.RunToolCatalog;
 import com.harness.tool.ToolExecutor;
 import com.harness.tool.ToolRegistry;
-import com.harness.tool.builtin.UpdateMemoryTool;
 import com.harness.tool.builtin.StructuredOutputTool;
 import com.harness.tool.confirmation.ConfirmationDecision;
 import com.harness.tool.confirmation.ConfirmationExecutionContext;
@@ -105,6 +106,7 @@ public final class AgentRunCoordinator {
             PreparedAgentRun prepared = runPreparer.prepare(toRequest(command, true), trace);
             RunToolCatalog toolCatalog = createToolCatalog(
                     prepared.unavailableTools(), finalOutputContract);
+            prepared = runPreparer.complete(prepared, toolCatalog, trace);
             runId = openRunScope(
                     prepared.sessionId(), command.cancellationToken(), toolCatalog, trace);
 
@@ -115,6 +117,7 @@ public final class AgentRunCoordinator {
                     prepared.systemPrompt(),
                     prepared.enhancedText(),
                     memoryRuntime.toChatMessages(prepared.shorttermMessages()),
+                    prepared.dynamicKnowledgeContext(),
                     trace,
                     listener,
                     command.cancellationToken(),
@@ -130,13 +133,14 @@ public final class AgentRunCoordinator {
                     result.output(),
                     !(finalOutputContract instanceof FinalOutputContract.JsonSchema));
             memoryRuntime.persistToolMessages(
-                    result, prepared.sessionId(), prepared.userId());
+                    result, prepared.sessionId(), prepared.userId(), trace.traceId());
             boolean confirmationRequired = requiresConfirmation(result);
             RiskLevel risk = determineRisk(result);
             trace.recordOutput(result.output(), risk, !confirmationRequired);
             scheduleReplyAudit(trace, result.output(), true);
             memoryRuntime.persistAssistantMessage(
-                    prepared.sessionId(), prepared.userId(), assistantBlocks, true);
+                    prepared.sessionId(), prepared.userId(), trace.traceId(), assistantBlocks, true);
+            memoryRuntime.awaitMessageWrites(trace.traceId());
 
             AgentTrace agentTrace = trace.finish();
             log.info("Run complete: sessionId={}, steps={}, duration={}ms",
@@ -151,6 +155,15 @@ public final class AgentRunCoordinator {
                     result.output(), agentTrace, result.steps(),
                     result.artifacts(), assistantBlocks);
         } catch (Exception e) {
+            try {
+                memoryRuntime.awaitMessageWrites(trace.traceId());
+            } catch (RuntimeException persistenceFailure) {
+                persistenceFailure.addSuppressed(e);
+                trace.recordOutput(
+                        "Error: " + persistenceFailure.getMessage(), RiskLevel.HIGH, false);
+                trace.finish();
+                throw persistenceFailure;
+            }
             trace.recordOutput("Error: " + e.getMessage(), RiskLevel.HIGH, false);
             trace.finish();
             throw e;
@@ -165,11 +178,12 @@ public final class AgentRunCoordinator {
         String runId = null;
         try {
             PreparedAgentRun prepared = runPreparer.prepare(toRequest(command, false), trace);
-            CompressionOutcome compression = prepared.compressionOutcome();
-            emitCompressionEvents(compression, callback);
             callback.onEvent(StreamEvent.start(prepared.sessionId()));
 
             RunToolCatalog toolCatalog = createToolCatalog(prepared.unavailableTools());
+            prepared = runPreparer.complete(prepared, toolCatalog, trace);
+            CompressionOutcome compression = prepared.compressionOutcome();
+            emitCompressionEvents(compression, callback);
             runId = openRunScope(
                     prepared.sessionId(), command.cancellationToken(), toolCatalog, trace);
             List<MessageBlock> blocks = new ArrayList<>();
@@ -194,6 +208,7 @@ public final class AgentRunCoordinator {
                     prepared.systemPrompt(),
                     prepared.enhancedText(),
                     memoryRuntime.toChatMessages(prepared.shorttermMessages()),
+                    prepared.dynamicKnowledgeContext(),
                     trace,
                     listener,
                     command.cancellationToken(),
@@ -205,7 +220,7 @@ public final class AgentRunCoordinator {
             List<MessageBlock> assistantBlocks = finishAssistantBlocks(
                     blocks, text, result.output(), false);
             memoryRuntime.persistToolMessages(
-                    result, prepared.sessionId(), prepared.userId());
+                    result, prepared.sessionId(), prepared.userId(), trace.traceId());
             boolean confirmationRequired = requiresConfirmation(result);
             ConfirmationDecision decision = confirmationDecision.get();
             RiskLevel risk = decision != null ? RiskLevel.HIGH : determineRisk(result);
@@ -215,7 +230,8 @@ public final class AgentRunCoordinator {
             trace.recordOutput(result.output(), risk, userConfirmed);
             scheduleReplyAudit(trace, result.output(), false);
             memoryRuntime.persistAssistantMessage(
-                    prepared.sessionId(), prepared.userId(), assistantBlocks, false);
+                    prepared.sessionId(), prepared.userId(), trace.traceId(), assistantBlocks, false);
+            memoryRuntime.awaitMessageWrites(trace.traceId());
             finishTraceAsync(trace);
             memoryRuntime.updateActivityAsync(prepared.sessionId());
 
@@ -230,12 +246,30 @@ public final class AgentRunCoordinator {
                     prepared.sessionId(), result.steps().size(),
                     System.currentTimeMillis() - startedAt);
         } catch (CancellationException e) {
+            try {
+                memoryRuntime.awaitMessageWrites(trace.traceId());
+            } catch (RuntimeException persistenceFailure) {
+                persistenceFailure.addSuppressed(e);
+                trace.recordOutput(
+                        "Error: " + persistenceFailure.getMessage(), RiskLevel.HIGH, false);
+                finishTraceAsync(trace);
+                callback.onEvent(StreamEvent.error(friendlyErrorMessage(persistenceFailure)));
+                return;
+            }
             finishTraceAsync(trace);
             callback.onEvent(StreamEvent.cancelled());
         } catch (Exception e) {
-            trace.recordOutput("Error: " + e.getMessage(), RiskLevel.HIGH, false);
+            Exception reportedFailure = e;
+            try {
+                memoryRuntime.awaitMessageWrites(trace.traceId());
+            } catch (RuntimeException persistenceFailure) {
+                persistenceFailure.addSuppressed(e);
+                reportedFailure = persistenceFailure;
+            }
+            trace.recordOutput(
+                    "Error: " + reportedFailure.getMessage(), RiskLevel.HIGH, false);
             finishTraceAsync(trace);
-            callback.onEvent(StreamEvent.error(friendlyErrorMessage(e)));
+            callback.onEvent(StreamEvent.error(friendlyErrorMessage(reportedFailure)));
         } finally {
             closeRunScope(runId);
         }
@@ -407,6 +441,7 @@ public final class AgentRunCoordinator {
         SpawnSubAgentTool.setCurrentRunContext(new AgentRunContext(
                 runId, sessionId, cancellationToken, trace.traceId(), toolCatalog));
         Map<String, String> metadata = new HashMap<>(trace.snapshot().metadata());
+        metadata.put("run_id", runId);
         metadata.put("tool_catalog_version", String.valueOf(toolCatalog.version()));
         metadata.put("tool_count", String.valueOf(toolCatalog.size()));
         metadata.put("authorized_tools", toolCatalog.getAll().stream()
@@ -422,9 +457,9 @@ public final class AgentRunCoordinator {
             subAgentManager.finishRun(runId);
         }
         LoadSkillTool.clearCurrentSession();
-        UpdateMemoryTool.clearContext();
         KnowledgeGraphTool.clearCurrentContext();
         KnowledgeAccessService.clearCurrentContext();
+        KnowledgeToolRuntimeContext.clear();
         AuthorizedUrlContext.clear();
     }
 
@@ -520,8 +555,8 @@ public final class AgentRunCoordinator {
     private static boolean requiresConfirmation(ReActResult result) {
         return result.steps().stream()
                 .flatMap(step -> step.toolResults().stream())
-                .anyMatch(toolResult -> toolResult.status()
-                        == ToolResult.ResultStatus.CONFIRMATION_REQUIRED);
+                .anyMatch(toolResult -> toolResult.executionStatus()
+                        == ExecutionStatus.CONFIRMATION_REQUIRED);
     }
 
     private static RiskLevel determineRisk(ReActResult result) {

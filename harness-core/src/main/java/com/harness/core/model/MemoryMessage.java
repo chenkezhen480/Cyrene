@@ -12,6 +12,7 @@ import java.util.List;
 public record MemoryMessage(
         long id,
         String sessionId,
+        String traceId,
         String role,
         List<MessageBlock> content,
         boolean isSummary,

@@ -5,6 +5,7 @@ import com.harness.core.env.EnvKey;
 import io.milvus.v2.client.ConnectConfig;
 import io.milvus.v2.client.MilvusClientV2;
 import io.milvus.v2.service.database.request.CreateDatabaseReq;
+import io.milvus.v2.service.database.response.ListDatabasesResp;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -59,6 +60,11 @@ public class MilvusConnectionPool {
                 .build();
         MilvusClientV2 defaultClient = new MilvusClientV2(defaultConfig);
         try {
+            ListDatabasesResp databases = defaultClient.listDatabases();
+            if (databases.getDatabaseNames().contains(database)) {
+                log.debug("[Milvus] Milvus database '{}' already exists", database);
+                return;
+            }
             defaultClient.createDatabase(CreateDatabaseReq.builder()
                     .databaseName(database).build());
             log.info("[Milvus] Milvus database '{}' created", database);

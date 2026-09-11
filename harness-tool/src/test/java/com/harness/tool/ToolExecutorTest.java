@@ -4,7 +4,10 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.harness.core.exception.ToolExecutionException;
+import com.harness.core.model.ExecutionStatus;
+import com.harness.core.model.ResultStatus;
 import com.harness.core.model.ToolCall;
+import com.harness.core.model.ToolExecutionOutcome;
 import com.harness.core.model.ToolResult;
 import com.harness.core.model.ToolOutput;
 import com.harness.core.model.ToolSpec;
@@ -157,7 +160,8 @@ class ToolExecutorTest {
         ToolResult result = executor.executeAuthorized(toolCall("file_delete"), tool, null);
 
         assertThat(result.success()).isFalse();
-        assertThat(result.status()).isEqualTo(ToolResult.ResultStatus.CONFIRMATION_REQUIRED);
+        assertThat(result.executionStatus()).isEqualTo(ExecutionStatus.CONFIRMATION_REQUIRED);
+        assertThat(result.resultStatus()).isEqualTo(ResultStatus.PENDING);
         assertThat(executed).isFalse();
     }
 
@@ -176,7 +180,7 @@ class ToolExecutorTest {
         };
         ToolResult result = executor.executeAuthorized(toolCall("dangerous"), tool, null);
 
-        assertThat(result.status()).isEqualTo(ToolResult.ResultStatus.CONFIRMATION_REQUIRED);
+        assertThat(result.executionStatus()).isEqualTo(ExecutionStatus.CONFIRMATION_REQUIRED);
         assertThat(executed).isFalse();
     }
 
@@ -207,8 +211,8 @@ class ToolExecutorTest {
                 ToolCall.of("browser", MAPPER.createObjectNode().put("action", "click")),
                 tool,
                 null);
-        assertThat(clickResult.status())
-                .isEqualTo(ToolResult.ResultStatus.CONFIRMATION_REQUIRED);
+        assertThat(clickResult.executionStatus())
+                .isEqualTo(ExecutionStatus.CONFIRMATION_REQUIRED);
         assertThat(executed).isFalse();
     }
 
@@ -258,41 +262,42 @@ class ToolExecutorTest {
     }
 
     @Test
-    void execute_toolSetsStatus_statusIsAttached() {
-        // Tool that sets explicit status via ThreadLocal
+    void execute_explicitOutcome_statusIsAttached() {
         Tool tool = new Tool() {
             @Override public ToolSpec spec() {
                 return new ToolSpec("kb", "desc", MAPPER.createObjectNode());
             }
             @Override public String execute(JsonNode args) {
-                ToolResult.setCurrentStatus(ToolResult.ResultStatus.EMPTY);
                 return "No results found";
+            }
+            @Override public ToolExecutionOutcome executeOutcome(JsonNode args) {
+                return ToolExecutionOutcome.succeeded(
+                        ToolOutput.text(execute(args)), ResultStatus.EMPTY);
             }
         };
         ToolResult result = executor.executeAuthorized(toolCall("kb"), tool, null);
 
         assertThat(result.success()).isTrue();
-        assertThat(result.status()).isEqualTo(ToolResult.ResultStatus.EMPTY);
+        assertThat(result.resultStatus()).isEqualTo(ResultStatus.EMPTY);
     }
 
     @Test
-    void execute_toolDoesNotSetStatus_statusIsNull() {
+    void execute_textOnlyTool_defaultsToAvailable() {
         Tool tool = createTool("search", "results found");
         ToolResult result = executor.executeAuthorized(toolCall("search"), tool, null);
 
         assertThat(result.success()).isTrue();
-        assertThat(result.status()).isNull();
+        assertThat(result.resultStatus()).isEqualTo(ResultStatus.AVAILABLE);
     }
 
     @Test
-    void execute_failedToolStatus_doesNotLeakIntoNextExecution() {
+    void execute_failedTool_doesNotAffectNextExecution() {
         Tool failingTool = new Tool() {
             @Override public ToolSpec spec() {
                 return new ToolSpec("fail_with_status", "desc", MAPPER.createObjectNode());
             }
             @Override public String execute(JsonNode args) {
-                ToolResult.setCurrentStatus(ToolResult.ResultStatus.SUCCESS);
-                throw new ToolExecutionException("fail_with_status", "failed after setting status");
+                throw new ToolExecutionException("fail_with_status", "failed during execution");
             }
         };
         Tool nextTool = createTool("next", "ok");
@@ -302,6 +307,6 @@ class ToolExecutorTest {
 
         assertThat(failed.success()).isFalse();
         assertThat(next.success()).isTrue();
-        assertThat(next.status()).isNull();
+        assertThat(next.resultStatus()).isEqualTo(ResultStatus.AVAILABLE);
     }
 }

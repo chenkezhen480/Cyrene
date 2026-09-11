@@ -3,9 +3,12 @@ package com.harness.tool;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.harness.core.exception.ToolExecutionException;
 import com.harness.core.model.ApiEndpoint;
 import com.harness.core.model.ProjectApiConfig;
-import com.harness.core.model.ToolResult;
+import com.harness.core.model.ResultStatus;
+import com.harness.core.model.ToolExecutionOutcome;
+import com.harness.core.model.ToolOutput;
 import com.harness.core.model.ToolSpec;
 
 import java.util.function.Supplier;
@@ -39,28 +42,34 @@ public class GetApiEndpointDetailTool implements Tool {
         return new ToolSpec(
                 "get_api_endpoint_detail",
                 "查询单个接口的完整定义（含参数 JSON Schema、鉴权模式、返回类型等）。",
-                params
+                params,
+                com.harness.core.model.ToolCapability.READ
         );
     }
 
     @Override
     public String execute(JsonNode arguments) {
+        return executeOutcome(arguments).content().modelContent();
+    }
+
+    @Override
+    public ToolExecutionOutcome executeOutcome(JsonNode arguments) {
         String endpointId = arguments != null && arguments.has("endpointId")
                 ? arguments.get("endpointId").asText() : "";
         if (endpointId.isBlank()) {
-            return "Error: endpointId is required. Call list_api_endpoints() first.";
+            throw new ToolExecutionException(
+                    "get_api_endpoint_detail", "endpointId is required");
         }
 
         ProjectApiConfig config = configSupplier.get();
         if (config == null || config.endpoints() == null) {
-            return "Error: No API endpoints configured.";
+            return outcome("No API endpoints configured.", ResultStatus.EMPTY);
         }
 
         for (ApiEndpoint ep : config.endpoints()) {
             if (ep.id().equals(endpointId)) {
                 if (!ProjectApiPolicy.isCallable(ep)) {
-                    ToolResult.setCurrentStatus(ToolResult.ResultStatus.EMPTY);
-                    return "Error: " + ProjectApiPolicy.rejectionReason(ep);
+                    return outcome(ProjectApiPolicy.rejectionReason(ep), ResultStatus.EMPTY);
                 }
                 ObjectNode json = endpointToJson(ep);
                 // Show effective baseUrl (global config-level if endpoint doesn't have one)
@@ -68,12 +77,17 @@ public class GetApiEndpointDetailTool implements Tool {
                 if (effectiveBaseUrl != null && !effectiveBaseUrl.isBlank()) {
                     json.put("effectiveBaseUrl", effectiveBaseUrl);
                 }
-                ToolResult.setCurrentStatus(ToolResult.ResultStatus.SUCCESS);
-                return json.toString();
+                return outcome(json.toString(), ResultStatus.AVAILABLE);
             }
         }
-        ToolResult.setCurrentStatus(ToolResult.ResultStatus.EMPTY);
-        return "Error: Endpoint '" + endpointId + "' not found. Call list_api_endpoints() to see available endpoints.";
+        return outcome(
+                "Endpoint '" + endpointId
+                        + "' not found. Call list_api_endpoints() to see available endpoints.",
+                ResultStatus.EMPTY);
+    }
+
+    private static ToolExecutionOutcome outcome(String text, ResultStatus status) {
+        return ToolExecutionOutcome.succeeded(ToolOutput.text(text), status);
     }
 
     /**
