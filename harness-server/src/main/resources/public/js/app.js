@@ -427,6 +427,13 @@ const ChatPage = {
     const confirmationSubmitting = ref(false);
     const isRecording = ref(false);
     const isUploadingVoice = ref(false);
+    // 思考强度滑块：0 = auto（不发送，回退 GapAnalysis/模型级默认），1-5 对应五档
+    const CHAT_THINKING_STOPS = ['auto', 'off', 'low', 'medium', 'high', 'xhigh'];
+    const thinkingLevelIndex = ref(0);
+    const thinkingStopLabels = computed(() => [
+      t('thinkingAuto'), t('thinkingOff'), t('thinkingLow'),
+      t('thinkingMedium'), t('thinkingHigh'), t('thinkingXhigh'),
+    ]);
 
     let mediaRecorder = null;
     let microphoneStream = null;
@@ -760,6 +767,10 @@ const ChatPage = {
           userId: userId.value,
           outputMode: 'streaming',
         };
+        // Per-session thinking level; auto (index 0) omits the key and falls back server-side
+        if (thinkingLevelIndex.value > 0) {
+          context.thinkingLevel = CHAT_THINKING_STOPS[thinkingLevelIndex.value];
+        }
         // If there are uploaded files, add them to context.File (backend will resolve and extract)
         if (fileUrls.length > 0) {
           context.File = fileUrls.length === 1 ? fileUrls[0].url : fileUrls.map(f => f.url);
@@ -914,6 +925,7 @@ const ChatPage = {
       messagesEl, userId, renderMarkdown, stripArtifactLinks,
       pendingConfirmation, confirmationAcknowledged, confirmationSubmitting,
       isRecording, isUploadingVoice,
+      thinkingLevelIndex, thinkingStopLabels,
       attachedFiles, chatFileInput, triggerFileUpload, handleFileSelect, handlePaste, removeFile,
       loadSessions, selectSession, newSession, sendMessage,
       deleteSession, cancelOutput, handleKeydown,
@@ -1060,6 +1072,12 @@ const ChatPage = {
                         @paste="handlePaste"
                         rows="1"></textarea>
               <div class="chat-actions">
+                <div class="chat-thinking" :title="t('thinkingSliderTitle')">
+                  <span class="chat-thinking-label">{{ t('thinkingLabel') }}</span>
+                  <input class="chat-thinking-slider" type="range" min="0" max="5" step="1"
+                         v-model.number="thinkingLevelIndex" :disabled="isStreaming" />
+                  <span class="chat-thinking-value">{{ thinkingStopLabels[thinkingLevelIndex] }}</span>
+                </div>
                 <button class="chat-action-btn" :title="t('uploadFile')" @click="triggerFileUpload">
                   <span v-html="Icons.upload" style="width:18px;height:18px;"></span>
                 </button>
@@ -6645,6 +6663,27 @@ const ModelConfigPage = {
       }
     }
 
+    // ── slider / select 渲染：停点 0 恒为「默认」，映射空串（= 不下发，交由后端推导）──
+    function sliderStops(field) {
+      return [t('modelConfigDefaultStop'), ...(field.options || [])];
+    }
+
+    function sliderIndex(field) {
+      const value = draftValues[field.key] || '';
+      if (!value) return 0;
+      const idx = (field.options || []).indexOf(value);
+      return idx >= 0 ? idx + 1 : 0;
+    }
+
+    function setSliderValue(field, index) {
+      const idx = Number(index);
+      draftValues[field.key] = idx <= 0 ? '' : (field.options || [])[idx - 1] || '';
+    }
+
+    function sliderValueLabel(field) {
+      return sliderStops(field)[sliderIndex(field)] || t('modelConfigDefaultStop');
+    }
+
     const activeSection = computed(() => sections.value.find(
       section => section.id === activeSectionId.value
     ) || null);
@@ -6688,6 +6727,10 @@ const ModelConfigPage = {
       saveConfiguration,
       sectionLabel,
       toggleCredentialClear,
+      sliderStops,
+      sliderIndex,
+      setSliderValue,
+      sliderValueLabel,
     };
   },
   template: `
@@ -6766,6 +6809,27 @@ const ModelConfigPage = {
                     {{ clearKeys.includes(field.key) ? t('cancelClearCredential') : t('clearCredential') }}
                   </button>
                 </div>
+              </template>
+              <template v-else-if="field.control === 'slider'">
+                <div class="model-config-slider-row">
+                  <input class="model-config-slider" type="range"
+                         min="0" :max="field.options.length" step="1"
+                         :value="sliderIndex(field)"
+                         @input="setSliderValue(field, $event.target.value)" />
+                  <span class="model-config-slider-value">{{ sliderValueLabel(field) }}</span>
+                </div>
+                <div class="model-config-slider-stops">
+                  <span v-for="(stop, idx) in sliderStops(field)" :key="idx"
+                        class="model-config-slider-stop"
+                        :class="{ active: sliderIndex(field) === idx }">{{ stop }}</span>
+                </div>
+              </template>
+              <template v-else-if="field.control === 'select'">
+                <select class="input" :value="draftValues[field.key] || ''"
+                        @change="draftValues[field.key] = $event.target.value">
+                  <option value="">{{ t('modelConfigDefaultStop') }}</option>
+                  <option v-for="option in field.options" :key="option" :value="option">{{ option }}</option>
+                </select>
               </template>
               <input v-else class="input" v-model="draftValues[field.key]"
                      :placeholder="t('notConfigured')" />

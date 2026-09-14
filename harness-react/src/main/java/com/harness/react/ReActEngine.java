@@ -137,7 +137,7 @@ public class ReActEngine implements ReActLoop {
         return execute(
                 request.systemPrompt(), request.userMessage(), request.historyMessages(),
                 request.dynamicKnowledgeContext(), request.trace(),
-                request.listener(), request.cancellationToken(), request.enableThinking(),
+                request.listener(), request.cancellationToken(), request.thinkingLevel(),
                 request.confirmationContext(), request.finalOutputContract());
     }
 
@@ -150,17 +150,17 @@ public class ReActEngine implements ReActLoop {
      * @param trace run trace recorder
      * @param listener optional callback for intermediate step events (for SSE streaming)
      * @param cancellationToken optional token to check for cancellation between iterations
-     * @param enableThinking null = use env default, true = force thinking, false = force no thinking
+     * @param thinkingLevel null = 回退 GapAnalysis/模型级默认，否则强制对应思考档位
      */
     private ReActResult execute(String systemPrompt, String userMessage, List<ChatMessage> historyMessages,
                                 String dynamicKnowledgeContext, RunTrace trace, ReActListener listener,
                                 com.harness.core.model.CancellationToken cancellationToken,
-                                Boolean enableThinking,
+                                ThinkingLevel thinkingLevel,
                                 ConfirmationExecutionContext confirmationContext,
                                 FinalOutputContract finalOutputContract) {
         long loopStart = System.currentTimeMillis();
         log.debug("[L3-ReAct] Starting ReAct loop: maxIterations={}, historyMessages={}, tools={}, thinking={}",
-                maxIterations, historyMessages.size(), toolCatalog.size(), enableThinking);
+                maxIterations, historyMessages.size(), toolCatalog.size(), thinkingLevel);
 
         boolean structuredOutput = finalOutputContract instanceof FinalOutputContract.JsonSchema;
 
@@ -178,7 +178,7 @@ public class ReActEngine implements ReActLoop {
         List<ReActStep> allSteps = new ArrayList<>();
         List<Artifact> allArtifacts = new ArrayList<>();
         ChatRequestParameters finalRequestParameters =
-                buildRequestParameters(enableThinking, List.of());
+                buildRequestParameters(thinkingLevel, List.of());
         int totalToolCalls = 0;
         int reflectionChecks = 0;
         long totalInputTokens = 0;
@@ -198,7 +198,7 @@ public class ReActEngine implements ReActLoop {
                 }
 
                 ChatRequestParameters mergedParams =
-                        buildRequestParameters(enableThinking, toolSpecs);
+                        buildRequestParameters(thinkingLevel, toolSpecs);
                 ChatRequest.Builder reqBuilder = ChatRequest.builder().messages(messages);
                 if (mergedParams != null) {
                     reqBuilder.parameters(mergedParams);
@@ -368,20 +368,20 @@ public class ReActEngine implements ReActLoop {
         return streamExecute(
                 request.systemPrompt(), request.userMessage(), request.historyMessages(),
                 request.dynamicKnowledgeContext(), request.trace(),
-                request.listener(), request.cancellationToken(), request.enableThinking(),
+                request.listener(), request.cancellationToken(), request.thinkingLevel(),
                 request.confirmationContext(), request.finalOutputContract());
     }
 
     private ReActResult streamExecute(String systemPrompt, String userMessage, List<ChatMessage> historyMessages,
                                       String dynamicKnowledgeContext, RunTrace trace, ReActListener listener,
                                 com.harness.core.model.CancellationToken cancellationToken,
-                                Boolean enableThinking,
+                                ThinkingLevel thinkingLevel,
                                 ConfirmationExecutionContext confirmationContext,
                                 FinalOutputContract finalOutputContract) {
         if (streamingChatModel == null) {
             log.warn("[L3-ReAct] Falling back to blocking mode (streaming unavailable)");
             return execute(systemPrompt, userMessage, historyMessages, dynamicKnowledgeContext, trace, listener,
-                    cancellationToken, enableThinking, confirmationContext,
+                    cancellationToken, thinkingLevel, confirmationContext,
                     new FinalOutputContract.Text());
         }
 
@@ -404,7 +404,7 @@ public class ReActEngine implements ReActLoop {
         List<ReActStep> allSteps = new ArrayList<>();
         List<Artifact> allArtifacts = new ArrayList<>();
         ChatRequestParameters finalRequestParameters =
-                buildRequestParameters(enableThinking, List.of());
+                buildRequestParameters(thinkingLevel, List.of());
         int totalToolCalls = 0;
         int reflectionChecks = 0;
         long totalInputTokens = 0;
@@ -424,7 +424,7 @@ public class ReActEngine implements ReActLoop {
                 }
 
                 ChatRequestParameters mergedParams =
-                        buildRequestParameters(enableThinking, toolSpecs);
+                        buildRequestParameters(thinkingLevel, toolSpecs);
                 ChatRequest.Builder reqBuilder = ChatRequest.builder().messages(messages);
                 if (mergedParams != null) {
                     reqBuilder.parameters(mergedParams);
@@ -709,11 +709,11 @@ public class ReActEngine implements ReActLoop {
     }
 
     private ChatRequestParameters buildRequestParameters(
-            Boolean enableThinking,
+            ThinkingLevel thinkingLevel,
             List<ToolSpecification> toolSpecifications
     ) {
         return chatModelProvider.planningRequestParameters(
-                enableThinking, toolSpecifications);
+                thinkingLevel, toolSpecifications);
     }
 
     private String truncate(String s) {

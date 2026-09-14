@@ -2,6 +2,7 @@ package com.harness.react;
 
 import com.harness.core.model.CancellationToken;
 import com.harness.core.model.FinalOutputContract;
+import com.harness.core.model.ThinkingLevel;
 import com.harness.core.runtime.RunTrace;
 import com.harness.tool.confirmation.ConfirmationExecutionContext;
 import dev.langchain4j.data.message.ChatMessage;
@@ -18,7 +19,7 @@ public record ReActRequest(
         RunTrace trace,
         ReActListener listener,
         CancellationToken cancellationToken,
-        Boolean enableThinking,
+        ThinkingLevel thinkingLevel,
         ConfirmationExecutionContext confirmationContext,
         FinalOutputContract finalOutputContract
 ) {
@@ -44,11 +45,11 @@ public record ReActRequest(
             RunTrace trace,
             ReActListener listener,
             CancellationToken cancellationToken,
-            Boolean enableThinking,
+            ThinkingLevel thinkingLevel,
             ConfirmationExecutionContext confirmationContext
     ) {
         this(systemPrompt, userMessage, historyMessages, dynamicKnowledgeContext,
-                trace, listener, cancellationToken, enableThinking,
+                trace, listener, cancellationToken, thinkingLevel,
                 confirmationContext, new FinalOutputContract.Text());
     }
 
@@ -59,12 +60,12 @@ public record ReActRequest(
             RunTrace trace,
             ReActListener listener,
             CancellationToken cancellationToken,
-            Boolean enableThinking,
+            ThinkingLevel thinkingLevel,
             ConfirmationExecutionContext confirmationContext,
             FinalOutputContract finalOutputContract
     ) {
         this(systemPrompt, userMessage, historyMessages, null, trace, listener,
-                cancellationToken, enableThinking, confirmationContext,
+                cancellationToken, thinkingLevel, confirmationContext,
                 finalOutputContract);
     }
 
@@ -75,11 +76,11 @@ public record ReActRequest(
             RunTrace trace,
             ReActListener listener,
             CancellationToken cancellationToken,
-            Boolean enableThinking,
+            ThinkingLevel thinkingLevel,
             ConfirmationExecutionContext confirmationContext
     ) {
         this(systemPrompt, userMessage, historyMessages, null, trace, listener,
-                cancellationToken, enableThinking, confirmationContext,
+                cancellationToken, thinkingLevel, confirmationContext,
                 new FinalOutputContract.Text());
     }
 }

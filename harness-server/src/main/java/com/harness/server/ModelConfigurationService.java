@@ -121,6 +121,8 @@ public final class ModelConfigurationService {
                 definition.sensitive() ? null : persistedValue,
                 configured,
                 definition.sensitive(),
+                definition.control(),
+                definition.options(),
                 Objects.equals(persistedValue, activeValue));
     }
 
@@ -142,18 +144,26 @@ public final class ModelConfigurationService {
         }
     }
 
-    /** Label is returned by the backend so every client uses the same Chinese annotation. */
+    /**
+     * Label is returned by the backend so every client uses the same Chinese annotation.
+     * {@code control} ({@code text} / {@code slider} / {@code select}) and {@code options}
+     * tell structured clients how to render the field; plain-text clients can ignore them.
+     */
     public record ModelConfigurationField(
             String key,
             String label,
             String value,
             boolean configured,
             boolean sensitive,
+            String control,
+            List<String> options,
             boolean runtimeSynchronized
     ) {
         public ModelConfigurationField {
             Objects.requireNonNull(key, "key");
             Objects.requireNonNull(label, "label");
+            if (control == null || control.isBlank()) control = "text";
+            options = options == null ? List.of() : List.copyOf(options);
         }
     }
 

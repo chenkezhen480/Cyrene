@@ -83,10 +83,10 @@ public class SemaphoreChatModelProvider implements ChatModelProvider {
 
     @Override
     public ChatRequestParameters planningRequestParameters(
-            Boolean enableThinking,
+            com.harness.core.model.ThinkingLevel thinkingLevel,
             List<ToolSpecification> toolSpecifications
     ) {
-        return delegate.planningRequestParameters(enableThinking, toolSpecifications);
+        return delegate.planningRequestParameters(thinkingLevel, toolSpecifications);
     }
 
 }

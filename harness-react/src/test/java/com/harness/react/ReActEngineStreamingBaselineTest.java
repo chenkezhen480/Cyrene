@@ -2,6 +2,7 @@ package com.harness.react;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.harness.core.model.ModelUsage;
+import com.harness.core.model.ThinkingLevel;
 import com.harness.core.model.ToolCall;
 import com.harness.core.model.ToolCallStatus;
 import com.harness.core.model.ToolOutput;
@@ -72,7 +73,7 @@ class ReActEngineStreamingBaselineTest {
         ChatModelProvider provider = mock(ChatModelProvider.class);
         when(provider.chatModel()).thenReturn(mock(ChatModel.class));
         when(provider.streamingModel()).thenReturn(streamingModel);
-        when(provider.planningRequestParameters(nullable(Boolean.class), anyList()))
+        when(provider.planningRequestParameters(nullable(ThinkingLevel.class), anyList()))
                 .thenCallRealMethod();
         when(provider.modelUsage(any(), anyLong())).thenAnswer(invocation ->
                 new ModelUsage(null, null, null, null, null,
@@ -150,7 +151,7 @@ class ReActEngineStreamingBaselineTest {
                 RunTrace.noop(),
                 listener,
                 null,
-                false,
+                ThinkingLevel.OFF,
                 null);
 
         ReActResult result = engine.streamExecute(request);

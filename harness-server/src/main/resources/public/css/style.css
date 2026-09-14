@@ -1173,6 +1173,43 @@ input[type="file"].input::file-selector-button:hover {
   gap: var(--space-1);
 }
 
+/* ── Per-session thinking effort slider ── */
+.chat-thinking {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-right: var(--space-2);
+  padding: 0 var(--space-2);
+  border-right: 1px solid var(--gold-line);
+}
+
+.chat-thinking-label {
+  color: var(--ash);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.chat-thinking-slider {
+  width: 96px;
+  height: 4px;
+  accent-color: var(--gold, #d4af37);
+  cursor: pointer;
+}
+
+.chat-thinking-slider:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.chat-thinking-value {
+  min-width: 2.5em;
+  color: var(--mist);
+  font-size: 11px;
+  font-weight: 600;
+  text-align: center;
+  white-space: nowrap;
+}
+
 .chat-action-btn {
   width: 34px;
   height: 34px;
@@ -2218,6 +2255,45 @@ tr.status-dusk td {
 .model-config-key-row {
   justify-content: space-between;
   gap: var(--space-2);
+}
+
+/* ── Model config slider / select controls ── */
+.model-config-slider-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.model-config-slider {
+  flex: 1;
+  height: 4px;
+  accent-color: var(--iris, #8b7ec8);
+  cursor: pointer;
+}
+
+.model-config-slider-value {
+  min-width: 4em;
+  color: var(--ivory);
+  font-size: 12px;
+  font-weight: 600;
+  text-align: right;
+}
+
+.model-config-slider-stops {
+  display: flex;
+  justify-content: space-between;
+  gap: 2px;
+}
+
+.model-config-slider-stop {
+  color: var(--ash);
+  font-size: 10px;
+  transition: color 0.15s ease;
+}
+
+.model-config-slider-stop.active {
+  color: var(--ivory);
+  font-weight: 600;
 }
 
 .model-config-label {

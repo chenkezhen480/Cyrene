@@ -334,26 +334,26 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
      * @param requestedSessionId optional session ID (null = reuse active)
      * @param systemPromptOverride optional system prompt override (null = use env default)
      * @param cancellationToken optional cancellation token for aborting in-progress runs
-     * @param enableThinking null = use env default, true = force thinking, false = force no thinking
+     * @param thinkingLevel null = 未指定（回退 GapAnalysis/模型级默认），否则强制对应思考档位
      */
     public AgentResult run(String token, String text, List<MultimodalParser.RawAttachment> attachments,
                            String requestedSessionId, String systemPromptOverride,
                            com.harness.core.model.CancellationToken cancellationToken,
-                           Boolean enableThinking) {
-        return run(token, text, attachments, requestedSessionId, systemPromptOverride, cancellationToken, enableThinking, null);
+                           ThinkingLevel thinkingLevel) {
+        return run(token, text, attachments, requestedSessionId, systemPromptOverride, cancellationToken, thinkingLevel, null);
     }
 
     public AgentResult run(String token, String text, List<MultimodalParser.RawAttachment> attachments,
                            String requestedSessionId, String systemPromptOverride,
                            com.harness.core.model.CancellationToken cancellationToken,
-                           Boolean enableThinking, String contextUserId) {
-        return run(token, text, attachments, requestedSessionId, systemPromptOverride, cancellationToken, enableThinking, contextUserId, null);
+                           ThinkingLevel thinkingLevel, String contextUserId) {
+        return run(token, text, attachments, requestedSessionId, systemPromptOverride, cancellationToken, thinkingLevel, contextUserId, null);
     }
 
     public AgentResult run(String token, String text, List<MultimodalParser.RawAttachment> attachments,
                            String requestedSessionId, String systemPromptOverride,
                            CancellationToken cancellationToken,
-                           Boolean enableThinking, String contextUserId, AgentContext agentContext) {
+                           ThinkingLevel thinkingLevel, String contextUserId, AgentContext agentContext) {
         return modelProviderRuntime.withCurrent(ignored ->
                 runCoordinator.run(new AgentRunCommand(
                         token,
@@ -362,7 +362,7 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
                         requestedSessionId,
                         systemPromptOverride,
                         cancellationToken,
-                        enableThinking,
+                        thinkingLevel,
                         contextUserId,
                         agentContext)));
     }
@@ -374,7 +374,7 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
             String requestedSessionId,
             String systemPromptOverride,
             CancellationToken cancellationToken,
-            Boolean enableThinking,
+            ThinkingLevel thinkingLevel,
             String contextUserId,
             AgentContext agentContext,
             FinalOutputContract.JsonSchema outputContract
@@ -387,7 +387,7 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
                         requestedSessionId,
                         systemPromptOverride,
                         cancellationToken,
-                        enableThinking,
+                        thinkingLevel,
                         contextUserId,
                         agentContext,
                         outputContract)));
@@ -407,21 +407,21 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
     public void streamRun(String token, String text, List<MultimodalParser.RawAttachment> attachments,
                           String requestedSessionId, String systemPromptOverride,
                           com.harness.core.model.CancellationToken cancellationToken,
-                          StreamCallback callback, Boolean enableThinking) {
-        streamRun(token, text, attachments, requestedSessionId, systemPromptOverride, cancellationToken, callback, enableThinking, null);
+                          StreamCallback callback, ThinkingLevel thinkingLevel) {
+        streamRun(token, text, attachments, requestedSessionId, systemPromptOverride, cancellationToken, callback, thinkingLevel, null);
     }
 
     public void streamRun(String token, String text, List<MultimodalParser.RawAttachment> attachments,
                           String requestedSessionId, String systemPromptOverride,
                           com.harness.core.model.CancellationToken cancellationToken,
-                          StreamCallback callback, Boolean enableThinking, String contextUserId) {
-        streamRun(token, text, attachments, requestedSessionId, systemPromptOverride, cancellationToken, callback, enableThinking, contextUserId, null);
+                          StreamCallback callback, ThinkingLevel thinkingLevel, String contextUserId) {
+        streamRun(token, text, attachments, requestedSessionId, systemPromptOverride, cancellationToken, callback, thinkingLevel, contextUserId, null);
     }
 
     public void streamRun(String token, String text, List<MultimodalParser.RawAttachment> attachments,
                           String requestedSessionId, String systemPromptOverride,
                           CancellationToken cancellationToken,
-                          StreamCallback callback, Boolean enableThinking, String contextUserId,
+                          StreamCallback callback, ThinkingLevel thinkingLevel, String contextUserId,
                           AgentContext agentContext) {
         modelProviderRuntime.withCurrentVoid(ignored ->
                 runCoordinator.stream(new AgentRunCommand(
@@ -431,7 +431,7 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
                         requestedSessionId,
                         systemPromptOverride,
                         cancellationToken,
-                        enableThinking,
+                        thinkingLevel,
                         contextUserId,
                         agentContext), callback));
     }

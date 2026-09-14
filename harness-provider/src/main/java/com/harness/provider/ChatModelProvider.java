@@ -1,6 +1,7 @@
 package com.harness.provider;
 
 import com.harness.core.model.ModelUsage;
+import com.harness.core.model.ThinkingLevel;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.StreamingChatModel;
 import dev.langchain4j.model.chat.request.ChatRequestParameters;
@@ -16,8 +17,10 @@ import java.util.Set;
  * Handles: dialogue, tool calling, reasoning, ReAct loop.
  * Backed by LangChain4j ChatModel.
  *
- * <p>Thinking (reasoning) is controlled per-request via customParameters,
- * not via separate model instances.</p>
+ * <p>Thinking (reasoning) is controlled per-request as a five-stop
+ * {@link ThinkingLevel}; each provider maps it to its own wire parameters
+ * (e.g. OpenAI-compatible {@code reasoning_effort} or Qwen
+ * {@code enable_thinking}).</p>
  */
 public interface ChatModelProvider {
 
@@ -42,10 +45,11 @@ public interface ChatModelProvider {
 
     /**
      * Builds provider-specific planning parameters without exposing protocol types to ReAct.
-     * Providers with no portable thinking override still receive the ordinary tool catalog.
+     * {@code null} thinkingLevel means "unspecified" — the model-level default applies.
+     * Providers with no portable thinking mapping still receive the ordinary tool catalog.
      */
     default ChatRequestParameters planningRequestParameters(
-            Boolean enableThinking,
+            ThinkingLevel thinkingLevel,
             List<ToolSpecification> toolSpecifications
     ) {
         Objects.requireNonNull(toolSpecifications, "toolSpecifications");

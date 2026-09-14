@@ -27,6 +27,7 @@ import com.harness.core.model.ToolCallStatus;
 import com.harness.core.model.ToolOutput;
 import com.harness.core.model.ToolResult;
 import com.harness.core.model.ToolSpec;
+import com.harness.core.model.ThinkingLevel;
 import com.harness.core.runtime.RunTrace;
 import com.harness.input.multimodal.MultimodalParser;
 import com.harness.react.ReActListener;
@@ -113,6 +114,8 @@ public final class AgentRunCoordinator {
             List<MessageBlock> blocks = new ArrayList<>();
             StringBuilder text = new StringBuilder();
             ReActListener listener = blockingListener(blocks, text);
+            ThinkingLevel thinkingLevel = effectiveThinking(command, prepared);
+            recordThinkingLevel(trace, thinkingLevel);
             ReActResult result = createLoop(toolCatalog).execute(new ReActRequest(
                     prepared.systemPrompt(),
                     prepared.enhancedText(),
@@ -121,7 +124,7 @@ public final class AgentRunCoordinator {
                     trace,
                     listener,
                     command.cancellationToken(),
-                    effectiveThinking(command, prepared),
+                    thinkingLevel,
                     null,
                     finalOutputContract));
             result.steps().forEach(trace::addStep);
@@ -204,6 +207,8 @@ public final class AgentRunCoordinator {
                                     ? toolCall.arguments().toString()
                                     : "null"));
 
+            ThinkingLevel thinkingLevel = effectiveThinking(command, prepared);
+            recordThinkingLevel(trace, thinkingLevel);
             ReActResult result = createLoop(toolCatalog).streamExecute(new ReActRequest(
                     prepared.systemPrompt(),
                     prepared.enhancedText(),
@@ -212,7 +217,7 @@ public final class AgentRunCoordinator {
                     trace,
                     listener,
                     command.cancellationToken(),
-                    effectiveThinking(command, prepared),
+                    thinkingLevel,
                     confirmationContext));
             result.steps().forEach(trace::addStep);
             recordReactStats(trace, result);
@@ -527,13 +532,19 @@ public final class AgentRunCoordinator {
         }
     }
 
-    private static Boolean effectiveThinking(
+    private static ThinkingLevel effectiveThinking(
             AgentRunCommand command,
             PreparedAgentRun prepared
     ) {
-        return command.enableThinking() != null
-                ? command.enableThinking()
-                : prepared.gapAnalysis().needsThinking();
+        if (command.thinkingLevel() != null) {
+            return command.thinkingLevel();
+        }
+        // 请求未指定档位时回退 GapAnalysis 漏斗；布尔判定映射到档位
+        Boolean needsThinking = prepared.gapAnalysis().needsThinking();
+        if (needsThinking == null) {
+            return null;
+        }
+        return needsThinking ? ThinkingLevel.MEDIUM : ThinkingLevel.OFF;
     }
 
     private static void recordReactStats(RunTrace trace, ReActResult result) {
@@ -672,7 +683,7 @@ public final class AgentRunCoordinator {
             String requestedSessionId,
             String systemPromptOverride,
             CancellationToken cancellationToken,
-            Boolean enableThinking,
+            ThinkingLevel thinkingLevel,
             String contextUserId,
             AgentContext agentContext,
             FinalOutputContract finalOutputContract
@@ -690,14 +701,25 @@ public final class AgentRunCoordinator {
                 String requestedSessionId,
                 String systemPromptOverride,
                 CancellationToken cancellationToken,
-                Boolean enableThinking,
+                ThinkingLevel thinkingLevel,
                 String contextUserId,
                 AgentContext agentContext
         ) {
             this(token, text, attachments, requestedSessionId, systemPromptOverride,
-                    cancellationToken, enableThinking, contextUserId, agentContext,
+                    cancellationToken, thinkingLevel, contextUserId, agentContext,
                     new FinalOutputContract.Text());
         }
+    }
+
+    /**
+     * 最终思考档位落 trace：命令层显式档位（含钳制前值）与 GapAnalysis 回退的结果
+     * 都记录为 thinking_level，未指定记 auto，避免五档控制空间被 gap_needsThinking
+     * 的布尔折叠抹平。
+     */
+    private static void recordThinkingLevel(RunTrace trace, ThinkingLevel thinkingLevel) {
+        Map<String, String> metadata = new HashMap<>(trace.snapshot().metadata());
+        metadata.put("thinking_level", thinkingLevel != null ? thinkingLevel.configValue() : "auto");
+        trace.putMetadata(metadata);
     }
 
     private static void recordFinalOutputContract(

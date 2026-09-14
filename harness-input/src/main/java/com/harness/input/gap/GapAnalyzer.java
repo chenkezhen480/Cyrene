@@ -1,6 +1,7 @@
 package com.harness.input.gap;
 
 import com.harness.core.model.AgentContext;
+import com.harness.core.model.ThinkingLevel;
 import com.harness.core.env.EnvConfig;
 import com.harness.core.env.EnvKey;
 import org.slf4j.Logger;
@@ -47,10 +48,11 @@ public class GapAnalyzer {
             return GapAnalysis.defaults();
         }
 
-        // Tier 0: 显式覆盖
+        // Tier 0: 显式覆盖（thinkingLevel 兼容折叠旧 enableThinking，档位映射为布尔判定）
+        ThinkingLevel thinkingLevel = context.thinkingLevel();
         GapAnalysis explicit = GapAnalysis.from(
                 context.needsKnowledgeBase(),
-                context.enableThinking(),
+                thinkingLevel == null ? null : thinkingLevel != ThinkingLevel.OFF,
                 context.needsWebSearch()
         );
         if (explicit.isComplete()) {

@@ -78,6 +78,43 @@ class AgentContextTest {
     }
 
     @Test
+    void thinkingLevel_absent_returnsNull() {
+        assertThat(AgentContext.empty().thinkingLevel()).isNull();
+    }
+
+    @Test
+    void thinkingLevel_parsesFiveStops() {
+        assertThat(AgentContext.of(Map.of("thinkingLevel", "off")).thinkingLevel())
+                .isEqualTo(ThinkingLevel.OFF);
+        assertThat(AgentContext.of(Map.of("thinkingLevel", "low")).thinkingLevel())
+                .isEqualTo(ThinkingLevel.LOW);
+        assertThat(AgentContext.of(Map.of("thinkingLevel", "HIGH")).thinkingLevel())
+                .isEqualTo(ThinkingLevel.HIGH);
+        assertThat(AgentContext.of(Map.of("thinkingLevel", "xhigh")).thinkingLevel())
+                .isEqualTo(ThinkingLevel.XHIGH);
+    }
+
+    @Test
+    void thinkingLevel_unknownValue_treatedAsUnspecified() {
+        assertThat(AgentContext.of(Map.of("thinkingLevel", "sometimes")).thinkingLevel()).isNull();
+        assertThat(AgentContext.of(Map.of("thinkingLevel", "  ")).thinkingLevel()).isNull();
+    }
+
+    @Test
+    void thinkingLevel_foldsLegacyEnableThinking() {
+        assertThat(AgentContext.of(Map.of("enableThinking", true)).thinkingLevel())
+                .isEqualTo(ThinkingLevel.MEDIUM);
+        assertThat(AgentContext.of(Map.of("enableThinking", false)).thinkingLevel())
+                .isEqualTo(ThinkingLevel.OFF);
+    }
+
+    @Test
+    void thinkingLevel_winsOverLegacyEnableThinking() {
+        var ctx = AgentContext.of(Map.of("thinkingLevel", "low", "enableThinking", false));
+        assertThat(ctx.thinkingLevel()).isEqualTo(ThinkingLevel.LOW);
+    }
+
+    @Test
     void tenantId_usesCallerValueWhenPresent() {
         var ctx = AgentContext.of(Map.of("tenantId", " enterprise-001 "));
 

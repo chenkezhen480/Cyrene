@@ -112,11 +112,11 @@ public final class ModelProviderRuntime {
             return current().chat().modelUsage(response, latencyMs);
         }
         @Override public ChatRequestParameters planningRequestParameters(
-                Boolean enableThinking,
+                com.harness.core.model.ThinkingLevel thinkingLevel,
                 List<ToolSpecification> toolSpecifications
         ) {
             return withCurrent(providers -> providers.chat().planningRequestParameters(
-                    enableThinking, toolSpecifications));
+                    thinkingLevel, toolSpecifications));
         }
     }
 

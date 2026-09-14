@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.harness.core.exception.StructuredOutputException;
 import com.harness.core.model.FinalOutputContract;
 import com.harness.core.model.ModelUsage;
+import com.harness.core.model.ThinkingLevel;
 import com.harness.core.model.ReActStep;
 import com.harness.core.model.ToolCall;
 import com.harness.core.model.ToolResult;
@@ -74,7 +75,7 @@ class ReActEngineStructuredOutputTest {
 
         ChatModelProvider provider = mock(ChatModelProvider.class);
         when(provider.chatModel()).thenReturn(chatModel);
-        when(provider.planningRequestParameters(nullable(Boolean.class), anyList()))
+        when(provider.planningRequestParameters(nullable(ThinkingLevel.class), anyList()))
                 .thenCallRealMethod();
         when(provider.modelUsage(any(), anyLong())).thenAnswer(invocation ->
                 new ModelUsage(null, null, null, null, null,
@@ -137,7 +138,7 @@ class ReActEngineStructuredOutputTest {
                 RunTrace.noop(),
                 null,
                 null,
-                false,
+                ThinkingLevel.OFF,
                 null,
                 new FinalOutputContract.JsonSchema(
                         "customerDecision", outputSchema, true)));
@@ -209,7 +210,7 @@ class ReActEngineStructuredOutputTest {
                 RunTrace.noop(),
                 listener,
                 null,
-                false,
+                ThinkingLevel.OFF,
                 null,
                 new FinalOutputContract.Text()));
 
@@ -269,7 +270,7 @@ class ReActEngineStructuredOutputTest {
                 RunTrace.noop(),
                 null,
                 null,
-                false,
+                ThinkingLevel.OFF,
                 null,
                 new FinalOutputContract.JsonSchema(
                         "customerDecision", outputSchema, true))))
@@ -281,7 +282,7 @@ class ReActEngineStructuredOutputTest {
     private static ChatModelProvider configuredProvider(ChatModel chatModel) {
         ChatModelProvider provider = mock(ChatModelProvider.class);
         when(provider.chatModel()).thenReturn(chatModel);
-        when(provider.planningRequestParameters(nullable(Boolean.class), anyList()))
+        when(provider.planningRequestParameters(nullable(ThinkingLevel.class), anyList()))
                 .thenCallRealMethod();
         when(provider.modelUsage(any(), anyLong())).thenAnswer(invocation ->
                 new ModelUsage(null, null, null, null, null,

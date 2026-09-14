@@ -87,7 +87,7 @@ public final class StructuredOutputHandler {
                     requestedSessionId,
                     null,
                     cancellationToken,
-                    agentContext.enableThinking(),
+                    agentContext.thinkingLevel(),
                     agentContext.userId(),
                     agentContext,
                     outputContract);

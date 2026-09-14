@@ -3,6 +3,7 @@ package com.harness.react;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.harness.core.model.CancellationToken;
 import com.harness.core.model.ModelUsage;
+import com.harness.core.model.ThinkingLevel;
 import com.harness.core.model.ToolCall;
 import com.harness.core.model.ToolResult;
 import com.harness.core.model.ToolSpec;
@@ -62,7 +63,7 @@ class ReActEngineTerminationTest {
                 RunTrace.noop(),
                 null,
                 null,
-                false,
+                ThinkingLevel.OFF,
                 null));
 
         assertThat(captured.get().messages().stream()
@@ -115,7 +116,7 @@ class ReActEngineTerminationTest {
                 provider, catalog, executor, null, null, 1)
                 .execute(new ReActRequest(
                         "system", "use the tool", List.of(), RunTrace.noop(),
-                        null, null, false, null));
+                        null, null, ThinkingLevel.OFF, null));
 
         assertThat(result.output()).isEqualTo("final answer after limit");
         assertThat(result.output()).isNotEqualTo("raw tool output");
@@ -178,7 +179,7 @@ class ReActEngineTerminationTest {
                 provider(chatModel), catalog(), executor, null, null, 10)
                 .execute(new ReActRequest(
                         "system", "must use the tool", List.of(), RunTrace.noop(),
-                        null, null, false, null));
+                        null, null, ThinkingLevel.OFF, null));
 
         assertThat(executions).hasValue(6);
         assertThat(planningCalls).hasValue(6);
@@ -202,7 +203,7 @@ class ReActEngineTerminationTest {
 
         assertThatThrownBy(() -> engine.execute(new ReActRequest(
                 "system", "cancel", List.of(), RunTrace.noop(),
-                null, cancellationToken, false, null)))
+                null, cancellationToken, ThinkingLevel.OFF, null)))
                 .isInstanceOf(CancellationException.class);
         verify(chatModel, never()).chat(any(ChatRequest.class));
     }
@@ -210,7 +211,7 @@ class ReActEngineTerminationTest {
     private static ChatModelProvider provider(ChatModel chatModel) {
         ChatModelProvider provider = mock(ChatModelProvider.class);
         when(provider.chatModel()).thenReturn(chatModel);
-        when(provider.planningRequestParameters(nullable(Boolean.class), anyList()))
+        when(provider.planningRequestParameters(nullable(ThinkingLevel.class), anyList()))
                 .thenCallRealMethod();
         when(provider.modelUsage(any(), anyLong())).thenAnswer(invocation ->
                 new ModelUsage(null, null, null, null, null,

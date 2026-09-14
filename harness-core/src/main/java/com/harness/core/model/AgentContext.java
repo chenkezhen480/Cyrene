@@ -18,6 +18,7 @@ public record AgentContext(
     public static final String DEFAULT_TENANT_ID = "000000";
     public static final String KEY_OUTPUT_MODE = "outputMode";
     public static final String KEY_ENABLE_THINKING = "enableThinking";
+    public static final String KEY_THINKING_LEVEL = "thinkingLevel";
     public static final String KEY_CREDENTIALS = "credentials";
     public static final String KEY_GRAPH_REQUEST_CONTEXT = "graphRequestContext";
     public static final String KEY_KNOWLEDGE_REQUEST_CONTEXT = "knowledgeRequestContext";
@@ -82,6 +83,28 @@ public record AgentContext(
         if (val instanceof Boolean b) return b;
         if (val instanceof String s) return Boolean.parseBoolean(s);
         return null;  // not specified, use env default
+    }
+
+    /**
+     * 思考强度档位（五档滑块）。
+     * <ul>
+     *   <li>{@code thinkingLevel} 存在时按档位解析，未知值视为未指定</li>
+     *   <li>否则兼容旧 {@code enableThinking}：true→{@link ThinkingLevel#MEDIUM}，false→{@link ThinkingLevel#OFF}</li>
+     *   <li>两者都缺失时返回 null，回退 GapAnalysis 漏斗与模型级默认</li>
+     * </ul>
+     * context JSON: {"thinkingLevel": "high"}
+     */
+    public ThinkingLevel thinkingLevel() {
+        Object val = data.get(KEY_THINKING_LEVEL);
+        if (val instanceof ThinkingLevel level) return level;
+        if (val instanceof String s && !s.isBlank()) {
+            return ThinkingLevel.parseNullable(s.trim());
+        }
+        Boolean legacy = enableThinking();
+        if (legacy != null) {
+            return legacy ? ThinkingLevel.MEDIUM : ThinkingLevel.OFF;
+        }
+        return null;
     }
 
     // ==================== GapAnalysis 显式覆盖 ====================

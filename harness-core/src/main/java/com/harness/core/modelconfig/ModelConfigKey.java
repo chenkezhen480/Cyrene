@@ -19,6 +19,11 @@ public final class ModelConfigKey {
     public static final String CHAT_MAX_TOKENS = "chat.maxTokens";
     public static final String CHAT_TEMPERATURE = "chat.temperature";
     public static final String CHAT_THINKING = "chat.thinking";
+    public static final String CHAT_THINKING_LEVEL = "chat.thinkingLevel";
+    public static final String CHAT_THINKING_DIALECT = "chat.thinkingDialect";
+    public static final String CHAT_THINKING_BUDGETS = "chat.thinkingBudgets";
+    public static final String CHAT_THINKING_MAX_LEVEL = "chat.thinkingMaxLevel";
+    public static final String CHAT_THINKING_XHIGH_VALUE = "chat.thinkingXhighValue";
     public static final String CHAT_TIMEOUT_SECONDS = "chat.timeoutSeconds";
     public static final String CHAT_CONTEXT_WINDOW = "chat.contextWindow";
     public static final String CHAT_CAPABILITIES = "chat.capabilities";
@@ -72,7 +77,12 @@ public final class ModelConfigKey {
             d(CHAT_BASE_URL, "chat", "对话模型接口地址"), d(CHAT_MODEL, "chat", "对话模型名称"),
             d(CHAT_API_FORMAT, "chat", "对话接口格式"), d(CHAT_MAX_TOKENS, "chat", "最大输出 Token"),
             d(CHAT_TEMPERATURE, "chat", "生成温度"), d(CHAT_THINKING, "chat", "默认启用思考"),
-            d(CHAT_TIMEOUT_SECONDS, "chat", "请求超时秒数"), d(CHAT_CONTEXT_WINDOW, "chat", "上下文窗口"),
+            d(CHAT_THINKING_LEVEL, "chat", "思考强度", "slider", List.of("off", "low", "medium", "high", "xhigh")),
+            d(CHAT_THINKING_DIALECT, "chat", "思考参数方言", "select", List.of("effort", "qwen")),
+            d(CHAT_THINKING_BUDGETS, "chat", "思考预算（low,medium,high,xhigh，qwen 方言）"),
+            d(CHAT_THINKING_MAX_LEVEL, "chat", "思考强度上限", "select", List.of("off", "low", "medium", "high", "xhigh")),
+            d(CHAT_THINKING_XHIGH_VALUE, "chat", "xhigh 档下发值（Ollama 兼容口填 max）"),
+            d(CHAT_TIMEOUT_SECONDS, "chat", "请求超时秒数"), d(CHAT_CONTEXT_WINDOW, "chat", "上下文容量（Token）"),
             d(CHAT_CAPABILITIES, "chat", "多模态能力声明"),
             d(VISION_PROVIDER, "vision", "视觉模型服务商"), d(VISION_API_KEY, "vision", "视觉模型密钥", true),
             d(VISION_BASE_URL, "vision", "视觉模型接口地址"), d(VISION_MODEL, "vision", "视觉模型名称"),
@@ -113,5 +123,34 @@ public final class ModelConfigKey {
         return new Definition(key, section, label, sensitive);
     }
 
-    public record Definition(String key, String section, String label, boolean sensitive) {}
+    private static Definition d(String key, String section, String label, String control, List<String> options) {
+        return new Definition(key, section, label, false, control, options);
+    }
+
+    /**
+     * {@code control} describes how configuration UIs should render the field:
+     * {@code text} (free input, default), {@code slider} (ordered stops from
+     * {@code options}), or {@code select} (dropdown from {@code options}).
+     */
+    public record Definition(
+            String key,
+            String section,
+            String label,
+            boolean sensitive,
+            String control,
+            List<String> options
+    ) {
+        public Definition {
+            if (control == null || control.isBlank()) control = "text";
+            options = options == null ? List.of() : List.copyOf(options);
+        }
+
+        public Definition(String key, String section, String label) {
+            this(key, section, label, false, "text", List.of());
+        }
+
+        public Definition(String key, String section, String label, boolean sensitive) {
+            this(key, section, label, sensitive, "text", List.of());
+        }
+    }
 }
