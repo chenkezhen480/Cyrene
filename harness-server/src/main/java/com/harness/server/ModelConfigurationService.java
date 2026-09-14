@@ -31,6 +31,7 @@ public final class ModelConfigurationService {
         ModelConfig persisted = configFile.read();
         ModelConfig active = runtime.currentConfiguration();
         List<ModelConfigurationSection> sections = ModelConfigKey.DEFINITIONS.stream()
+                .filter(definition -> !definition.hidden())
                 .collect(java.util.stream.Collectors.groupingBy(
                         ModelConfigKey.Definition::section,
                         LinkedHashMap::new,
@@ -90,6 +91,10 @@ public final class ModelConfigurationService {
         clearKeys.forEach(candidateValues::remove);
         candidateValues.putAll(normalizedValues);
         ModelConfig candidate = ModelConfig.of(candidateValues);
+        if (candidate.getString(ModelConfigKey.CHAT_CONTEXT_WINDOW) != null
+                && candidate.getInt(ModelConfigKey.CHAT_CONTEXT_WINDOW, 0) <= 0) {
+            throw new IllegalArgumentException(ModelConfigKey.CHAT_CONTEXT_WINDOW + " must be a positive token count");
+        }
         ModelConfigurationRuntime.PreparedUpdate preparedUpdate = runtime.prepare(candidate);
 
         // Persist first so a published provider generation always has a durable source.

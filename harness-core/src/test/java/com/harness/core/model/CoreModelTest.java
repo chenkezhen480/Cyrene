@@ -127,20 +127,4 @@ class CoreModelTest {
                 ReActStep.InspectionResult.InspectionStatus.LOOP_DETECTED);
     }
 
-    // ---- ParsedContent ----
-
-    @Test
-    void parsedContent_recordFields() {
-        ParsedContent pc = new ParsedContent("hello world", ParsedContent.ParseStrategy.DIRECT, 1, Map.of());
-
-        assertThat(pc.text()).isEqualTo("hello world");
-        assertThat(pc.strategy()).isEqualTo(ParsedContent.ParseStrategy.DIRECT);
-        assertThat(pc.chunkCount()).isEqualTo(1);
-    }
-
-    @Test
-    void parseStrategy_enumValues() {
-        assertThat(ParsedContent.ParseStrategy.values()).containsExactly(
-                ParsedContent.ParseStrategy.DIRECT, ParsedContent.ParseStrategy.CHUNKED_REDUCE);
-    }
 }

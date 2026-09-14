@@ -114,6 +114,17 @@ public final class EnvKey {
             "HARNESS_TOOL_URL_READER_TIMEOUT_SECONDS";
     public static final String TOOL_URL_READER_ALLOW_PRIVATE_NETWORKS =
             "HARNESS_TOOL_URL_READER_ALLOW_PRIVATE_NETWORKS";
+    /**
+     * 默认 UA 里的 Chrome 主版本号；Chrome 稳定版更新后改这里即可，不必动代码。
+     */
+    public static final String TOOL_URL_READER_CHROME_VERSION =
+            "HARNESS_TOOL_URL_READER_CHROME_VERSION";
+    /**
+     * 整体覆盖 User-Agent；设置后 Chrome 版本号不再生效。
+     * 用于标明机器人身份（合规要求或希望被站点识别）。
+     */
+    public static final String TOOL_URL_READER_USER_AGENT =
+            "HARNESS_TOOL_URL_READER_USER_AGENT";
     public static final String TOOL_BROWSER_ENABLED          = "HARNESS_TOOL_BROWSER_ENABLED";
     public static final String TOOL_BROWSER_WORKER_URL       = "HARNESS_TOOL_BROWSER_WORKER_URL";
     public static final String TOOL_BROWSER_WORKER_TOKEN     = "HARNESS_TOOL_BROWSER_WORKER_TOKEN";
@@ -134,7 +145,10 @@ public final class EnvKey {
     /** ReAct 循环最大迭代次数，默认 10 */
     public static final String REACT_MAX_ITERATIONS      = "HARNESS_REACT_MAX_ITERATIONS";
     public static final String REACT_STRATEGY            = "HARNESS_REACT_STRATEGY";
-    /** 自适应反思触发阈值（连续 N 次非 PASS 结果触发反思），默认 5 */
+    /**
+     * 单工具允许的反思次数：每次失败注入一次反思提示，次数用尽后再失败一次即硬停整个 run。
+     * 成功一次清零重计。例：3 = 失败 1~3 次各反思一次，第 4 次失败硬停。默认 5。
+     */
     public static final String REACT_REFLECTION_THRESHOLD = "HARNESS_REACT_REFLECTION_THRESHOLD";
 
     // ==================== Structured Output ====================
@@ -191,8 +205,6 @@ public final class EnvKey {
     public static final String MULTIMODAL_URL_BLOCK_PRIVATE_IPS = "HARNESS_MULTIMODAL_URL_BLOCK_PRIVATE_IPS";
 
     // ==================== Input (File Parsing) ====================
-    /** 文件大小阈值 (KB)，超过此值触发大文件解析，默认 100 */
-    public static final String INPUT_FILE_SIZE_THRESHOLD_KB     = "HARNESS_INPUT_FILE_SIZE_THRESHOLD_KB";
     /** 分块目标 token 数，默认 1024 */
     public static final String INPUT_CHUNK_TOKEN_SIZE           = "HARNESS_INPUT_CHUNK_TOKEN_SIZE";
     /** MarkItDown document parser internal service URL. */
@@ -215,7 +227,7 @@ public final class EnvKey {
     public static final String DOCUMENT_PARSER_PORT             = "HARNESS_DOCUMENT_PARSER_PORT";
     /** Internal bind host used by the document parser container. */
     public static final String DOCUMENT_PARSER_HOST             = "HARNESS_DOCUMENT_PARSER_HOST";
-    /** 每个摘要块使用的上下文窗口比例，默认 0.4 */
+    /** 独立文件摘要请求使用的主模型上下文比例，默认 0.6 */
     public static final String LARGE_FILE_CONTEXT_RATIO        = "HARNESS_LARGE_FILE_CONTEXT_RATIO";
     /** 大文件解析的最大并行摘要线程数，默认 3 */
     public static final String LARGE_FILE_SUMMARY_CONCURRENCY  = "HARNESS_LARGE_FILE_SUMMARY_CONCURRENCY";

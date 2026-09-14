@@ -15,12 +15,14 @@ import com.harness.react.ReActResult;
 import com.harness.tool.Tool;
 import com.harness.tool.ToolExecutor;
 import com.harness.tool.ToolRegistry;
+import com.harness.tool.web.AuthorizedUrlContext;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -83,6 +85,48 @@ class SubAgentManagerCompletionContractTest {
             assertThat(requestCaptor.getValue().finalOutputContract())
                     .isInstanceOf(FinalOutputContract.JsonSchema.class);
         } finally {
+            manager.shutdown();
+        }
+    }
+
+    @Test
+    void subAgentThreadInheritsParentAuthorizedUrls() throws Exception {
+        ReActLoopFactory loopFactory = mock(ReActLoopFactory.class);
+        ReActLoop loop = mock(ReActLoop.class);
+        when(loopFactory.create(any(), any())).thenReturn(loop);
+        AtomicBoolean subAgentSawParentUrl = new AtomicBoolean();
+        when(loop.execute(any())).thenAnswer(invocation -> {
+            // Runs on the sub-agent-worker thread, not the parent thread.
+            AuthorizedUrlContext.requireAuthorized(
+                    "https://example.com/user-given", "read_url_content");
+            subAgentSawParentUrl.set(true);
+            return new ReActResult("done", List.of(), List.of());
+        });
+        RunTrace trace = mock(RunTrace.class);
+        ArtifactStore artifactStore = mock(ArtifactStore.class);
+        when(artifactStore.get(any())).thenReturn(Optional.empty());
+        SubAgentManager manager = new SubAgentManager(
+                loopFactory, () -> trace, mock(ToolExecutor.class), artifactStore,
+                new SessionInbox(), mock(SessionResumeDispatcher.class),
+                mock(com.harness.provider.ChatModelProvider.class));
+
+        AuthorizedUrlContext.setFromUserText("请读取 https://example.com/user-given");
+        try {
+            String runId = "run-url";
+            manager.openScope(runId);
+            AgentRunContext runContext = new AgentRunContext(
+                    runId, "session-url", new CancellationToken(), "parent-trace",
+                    new ToolRegistry().snapshot());
+            SubAgentTask task = new SubAgentTask(
+                    "task-url", "description", "context", "persona", "prompt",
+                    List.of(), List.of(), null);
+
+            manager.submitTask(runContext, task, "session-url")
+                    .completion().get(5, TimeUnit.SECONDS);
+
+            assertThat(subAgentSawParentUrl).isTrue();
+        } finally {
+            AuthorizedUrlContext.clear();
             manager.shutdown();
         }
     }

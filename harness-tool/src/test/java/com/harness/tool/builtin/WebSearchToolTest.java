@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.harness.core.exception.ToolExecutionException;
 import com.harness.core.model.ResultStatus;
+import com.harness.tool.web.AuthorizedUrlContext;
 import com.sun.net.httpserver.HttpServer;
 import okhttp3.HttpUrl;
 import okhttp3.OkHttpClient;
@@ -78,6 +79,29 @@ class WebSearchToolTest {
                 .path("engine").asText()).isEqualTo("google");
         assertThat(envelope.path("meta").path("upstreamResultCount").asInt()).isEqualTo(4);
         assertThat(envelope.path("meta").path("returnedResultCount").asInt()).isEqualTo(2);
+    }
+
+    @Test
+    void formatResponse_authorizesReturnedResultUrlsForReading() throws Exception {
+        AuthorizedUrlContext.setFromUserText("帮我查一下 Tsaritsa 的背景");
+        try {
+            tool(List.of("bing"), 8).formatResponse("""
+                    {
+                      "results": [
+                        {
+                          "title":"Tsaritsa",
+                          "url":"https://villains.fandom.com/wiki/Tsaritsa",
+                          "engine":"bing"
+                        }
+                      ]
+                    }
+                    """, "Tsaritsa");
+
+            AuthorizedUrlContext.requireAuthorized(
+                    "https://villains.fandom.com/wiki/Tsaritsa", "read_url_content");
+        } finally {
+            AuthorizedUrlContext.clear();
+        }
     }
 
     @Test

@@ -183,7 +183,7 @@ public final class KnowledgeDiscoveryRouter {
                 .filter(Objects::nonNull)
                 .collect(java.util.stream.Collectors.toUnmodifiableSet());
         if (schemaIds.isEmpty()) return Set.of();
-        if (graphExecutor == null) return Set.of();
+        if (graphExecutor == null || !context.authorizedTools().contains(KnowledgeGraphTool.TOOL_NAME)) return Set.of();
         return graphExecutor.readableWikiSchemas(context.tenantId(), schemaIds);
     }
 
@@ -206,7 +206,7 @@ public final class KnowledgeDiscoveryRouter {
             }
         }
         if (candidates.isEmpty()) return Set.of();
-        if (graphExecutor == null) return Set.of();
+        if (graphExecutor == null || !context.authorizedTools().contains(KnowledgeGraphTool.TOOL_NAME)) return Set.of();
         return graphExecutor.readableWikiGraphSpaces(context.tenantId(), candidates);
     }
 
@@ -316,7 +316,7 @@ public final class KnowledgeDiscoveryRouter {
                 Map.of());
     }
 
-    private static DiscoveredKnowledge conceptResult(
+    private DiscoveredKnowledge conceptResult(
             KnowledgeProjectionHit hit,
             KnowledgeHead head
     ) {
@@ -377,12 +377,24 @@ public final class KnowledgeDiscoveryRouter {
         }
     }
 
-    private static Map<String, Object> graphRouteHint(
+    private Map<String, Object> graphRouteHint(
             KnowledgeProjection projection,
             KnowledgeHead head
     ) {
         if (head.routeType() != KnowledgeRouteTarget.GRAPH) return Map.of();
         Map<String, Object> hint = new LinkedHashMap<>();
+        hint.put("recommendedTool", KnowledgeGraphTool.TOOL_NAME);
+        projectionStore.findRevisionSnapshot(head.currentVersion()).ifPresent(snapshot -> {
+            if (snapshot.conceptType() != projection.conceptType()
+                    || !snapshot.revision().conceptId().equals(head.concept().id())
+                    || !snapshot.revision().id().equals(head.currentVersion())) {
+                throw new SecurityException("Graph capability card does not match the authorized Wiki revision");
+            }
+            for (String field : List.of("entityTypes", "relationTypes", "typicalQueries")) {
+                Object value = snapshot.revision().metadata().get(field);
+                if (value != null) hint.put(field, value);
+            }
+        });
         if (projection.conceptType() == KnowledgeConceptType.GRAPH_SPACE) {
             String graphId = head.routeText("graphId");
             String schemaId = head.routeText("schemaId");

@@ -16,27 +16,56 @@ class AdaptiveReflectorTest {
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     @Test
-    void fifthFailureReflectsAndSixthFailureReachesHardLimit() {
+    void reflectsOnEveryFailureUpToTheBudgetThenHardStops() {
         AdaptiveReflector reflector = new AdaptiveReflector(5);
         List<ReActStep> steps = new ArrayList<>();
         ReActStep.InspectionResult inspection = new ReActStep.InspectionResult(
                 ReActStep.InspectionResult.InspectionStatus.TOOL_ERROR,
                 "invalid graph parameters");
 
-        for (int attempt = 1; attempt <= 4; attempt++) {
-            assertThat(evaluate(reflector, steps, inspection, attempt)).isNull();
+        // 每次失败都注入反思，模型不会再有「闷头连败」的窗口。
+        for (int attempt = 1; attempt <= 5; attempt++) {
+            AdaptiveReflector.ReflectionSignal reflection =
+                    evaluate(reflector, steps, inspection, attempt);
+
+            assertThat(reflection).isNotNull();
+            assertThat(reflection.hardLimit()).isFalse();
+            // 首次失败无从比较参数，之后同参数连败走 stuck 分支。
+            assertThat(reflection.prompt()).contains(attempt == 1
+                    ? "has failed 1 consecutive times"
+                    : "has been called " + attempt + " times in a row");
         }
 
-        AdaptiveReflector.ReflectionSignal reflection =
-                evaluate(reflector, steps, inspection, 5);
-        assertThat(reflection).isNotNull();
-        assertThat(reflection.hardLimit()).isFalse();
-
+        // 预算（5 次反思）用尽后，再失败一次即硬停。
         AdaptiveReflector.ReflectionSignal hardLimit =
                 evaluate(reflector, steps, inspection, 6);
         assertThat(hardLimit).isNotNull();
         assertThat(hardLimit.hardLimit()).isTrue();
         assertThat(hardLimit.prompt()).contains("failed 6 consecutive times");
+    }
+
+    @Test
+    void aSuccessfulCallClearsTheFailureCounter() {
+        AdaptiveReflector reflector = new AdaptiveReflector(2);
+        List<ReActStep> steps = new ArrayList<>();
+        ReActStep.InspectionResult inspection = new ReActStep.InspectionResult(
+                ReActStep.InspectionResult.InspectionStatus.TOOL_ERROR,
+                "invalid graph parameters");
+
+        assertThat(evaluate(reflector, steps, inspection, 1).hardLimit()).isFalse();
+        assertThat(evaluate(reflector, steps, inspection, 2).hardLimit()).isFalse();
+
+        // 失败 3 次本会硬停，但中间成功一次把计数清零，重新获得完整预算。
+        ToolCall call = new ToolCall(
+                "call-ok", "knowledge_graph_search", MAPPER.createObjectNode());
+        ToolResult success = ToolResult.ok(call.id(), call.toolName(), "ok", 1);
+        steps.add(new ReActStep(
+                3, null, call.toolName(), List.of(call), List.of(success), "", inspection));
+        assertThat(reflector.shouldReflect(
+                inspection, List.of(call), List.of(success), steps, "must query the graph"))
+                .isNull();
+
+        assertThat(evaluate(reflector, steps, inspection, 4).hardLimit()).isFalse();
     }
 
     private static AdaptiveReflector.ReflectionSignal evaluate(

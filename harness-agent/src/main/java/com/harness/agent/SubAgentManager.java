@@ -21,11 +21,13 @@ import com.harness.tool.RunToolCatalog;
 import com.harness.tool.HttpApiTool;
 import com.harness.tool.ToolExecutor;
 import com.harness.tool.builtin.StructuredOutputTool;
+import com.harness.tool.web.AuthorizedUrlContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -231,6 +233,7 @@ public class SubAgentManager {
                 KnowledgeAccessService.captureCurrentContext();
         final KnowledgeToolRuntimeContext unifiedKnowledgeContext =
                 KnowledgeToolRuntimeContext.captureCurrent();
+        final Set<String> parentAuthorizedUrls = AuthorizedUrlContext.snapshot();
 
         CompletableFuture<SubAgentResult> future = CompletableFuture.supplyAsync(() -> {
             Thread currentThread = Thread.currentThread();
@@ -243,6 +246,9 @@ public class SubAgentManager {
             HttpApiTool.setCurrentCredentials(parentCredentials);
             KnowledgeGraphTool.restoreCurrentContext(graphContext);
             KnowledgeAccessService.restoreCurrentContext(knowledgeContext);
+            // 子 agent 在独立线程池执行，ThreadLocal 不会跨线程传递，必须显式继承父运行的
+            // URL 授权集；否则子 agent 的所有 URL 工具都会 fail-closed。
+            AuthorizedUrlContext.set(parentAuthorizedUrls);
 
             long start = System.currentTimeMillis();
             String taskId = record.taskId();
@@ -335,6 +341,7 @@ public class SubAgentManager {
                 KnowledgeGraphTool.clearCurrentContext();
                 KnowledgeAccessService.clearCurrentContext();
                 KnowledgeToolRuntimeContext.clear();
+                AuthorizedUrlContext.clear();
                 taskToken.untrackThread(currentThread);
                 activeTasks.decrementAndGet();
 

@@ -13,9 +13,6 @@ import com.harness.core.knowledge.KnowledgeRevision;
 import com.harness.core.knowledge.KnowledgeRouteTarget;
 import com.harness.core.knowledge.KnowledgeStatus;
 import com.harness.core.model.KnowledgeRequestContext;
-import com.harness.core.model.ResultStatus;
-import com.harness.core.model.ToolExecutionOutcome;
-import com.harness.core.model.ToolOutput;
 import com.harness.core.model.ToolSpec;
 import com.harness.tool.Tool;
 import com.harness.tool.ToolRegistry;
@@ -198,91 +195,63 @@ class KnowledgeReadToolTest {
     }
 
     @Test
-    void graphHandleRoutesThroughNeo4jExecutorAfterMysqlReauthorization() throws Exception {
+    void graphHandlesReturnCapabilityCardsWithoutQueryingNeo4j() throws Exception {
         KnowledgeGraphTool graphExecutor = mock(KnowledgeGraphTool.class);
-        KnowledgeHead schema = head(
-                "schema-concept", "schema-revision", "tenant-a",
-                KnowledgeNamespaceType.GRAPH, "schema-a",
-                KnowledgeConceptType.GRAPH_SCHEMA, "schema wiki body");
+        KnowledgeHead schema = head("schema-concept", "schema-revision", "tenant-a",
+                KnowledgeNamespaceType.GRAPH, "schema-a", KnowledgeConceptType.GRAPH_SCHEMA,
+                "Schema capability card", Map.of("entityTypes", List.of("Student"),
+                        "relationTypes", List.of("BELONGS_TO"), "typicalQueries", List.of("Which class?")));
         when(repository.findAuthorityById(schema.concept().id())).thenReturn(Optional.of(schema));
-        when(graphExecutor.executeForWiki(
-                org.mockito.ArgumentMatchers.eq("schema-a"),
-                org.mockito.ArgumentMatchers.isNull(),
-                org.mockito.ArgumentMatchers.any()))
-                .thenReturn(ToolExecutionOutcome.succeeded(
-                        ToolOutput.text("{\"status\":\"success\",\"data\":{\"graphSpaces\":[]}}"),
-                        ResultStatus.EMPTY));
-        KnowledgeReadTool graphTool = new KnowledgeReadTool(
-                repository, projectionStore, codec, documentExecutor, graphExecutor, objectMapper,
-                Clock.fixed(NOW, ZoneOffset.UTC));
-        KnowledgeHandle handle = KnowledgeHandle.concept(
-                KnowledgeConceptType.GRAPH_SCHEMA, schema.concept().id(),
-                schema.currentRevision().id(), KnowledgeRouteTarget.GRAPH);
-
-        var output = objectMapper.readTree(graphTool.execute(objectMapper.createObjectNode()
-                .put("handle", codec.encode(handle))
-                .put("graphAction", "listGraphSpaces")));
-
-        assertThat(output.path("status").asText()).isEqualTo("EMPTY");
-        assertThat(output.at("/data/schemaId").asText()).isEqualTo("schema-a");
-        assertThat(output.at("/data/graphResult/data/graphSpaces").isArray()).isTrue();
-        verify(graphExecutor).executeForWiki(
-                org.mockito.ArgumentMatchers.eq("schema-a"),
-                org.mockito.ArgumentMatchers.isNull(),
-                org.mockito.ArgumentMatchers.any());
-    }
-
-    @Test
-    void graphSpaceHandlePinsTheExactGraphId() throws Exception {
-        KnowledgeGraphTool graphExecutor = mock(KnowledgeGraphTool.class);
-        KnowledgeHead graphSpace = head(
-                "space-concept", "space-revision", "tenant-a",
-                KnowledgeNamespaceType.GRAPH, "graph-a:schema-a",
-                KnowledgeConceptType.GRAPH_SPACE, "graph space wiki body",
-                Map.of("graphId", "graph-a", "schemaId", "schema-a"));
-        when(repository.findAuthorityById(graphSpace.concept().id()))
-                .thenReturn(Optional.of(graphSpace));
-        when(graphExecutor.executeForWiki(
-                org.mockito.ArgumentMatchers.eq("schema-a"),
-                org.mockito.ArgumentMatchers.eq("graph-a"),
-                org.mockito.ArgumentMatchers.any()))
-                .thenReturn(ToolExecutionOutcome.succeeded(
-                        ToolOutput.text("{\"status\":\"success\",\"data\":{\"nodes\":[]}}"),
-                        ResultStatus.EMPTY));
-        KnowledgeReadTool graphTool = new KnowledgeReadTool(
-                repository, projectionStore, codec, documentExecutor, graphExecutor, objectMapper,
-                Clock.fixed(NOW, ZoneOffset.UTC));
-        KnowledgeHandle handle = KnowledgeHandle.concept(
-                KnowledgeConceptType.GRAPH_SPACE, graphSpace.concept().id(),
-                graphSpace.currentRevision().id(), KnowledgeRouteTarget.GRAPH);
+        when(graphExecutor.readableWikiSchemas("tenant-a", Set.of("schema-a")))
+                .thenReturn(Set.of("schema-a"));
+        when(projectionStore.findRevisionSnapshot("schema-revision")).thenReturn(Optional.of(
+                new com.harness.tool.knowledge.authority.KnowledgeRevisionSnapshot(
+                        KnowledgeConceptType.GRAPH_SCHEMA, null, schema.currentRevision(), List.of(), List.of())));
+        KnowledgeReadTool graphTool = new KnowledgeReadTool(repository, projectionStore, codec,
+                documentExecutor, graphExecutor, objectMapper, Clock.fixed(NOW, ZoneOffset.UTC));
+        KnowledgeHandle handle = KnowledgeHandle.concept(KnowledgeConceptType.GRAPH_SCHEMA,
+                schema.concept().id(), schema.currentVersion(), KnowledgeRouteTarget.GRAPH);
 
         var output = objectMapper.readTree(graphTool.execute(objectMapper.createObjectNode()
                 .put("handle", codec.encode(handle))));
 
+        assertThat(output.path("status").asText()).isEqualTo("SUCCESS");
         assertThat(output.at("/data/schemaId").asText()).isEqualTo("schema-a");
-        assertThat(output.at("/data/graphId").asText()).isEqualTo("graph-a");
-        verify(graphExecutor).executeForWiki(
-                org.mockito.ArgumentMatchers.eq("schema-a"),
-                org.mockito.ArgumentMatchers.eq("graph-a"),
-                org.mockito.ArgumentMatchers.any());
+        assertThat(output.at("/data/body").asText()).isEqualTo("Schema capability card");
+        assertThat(output.at("/data/recommendedTool").asText()).isEqualTo("query_graph");
+        assertThat(output.at("/data/capabilities/entityTypes/0").asText()).isEqualTo("Student");
+        assertThat(output.path("data").has("graphResult")).isFalse();
+        verify(graphExecutor, never()).executeOutcome(org.mockito.ArgumentMatchers.any());
     }
 
     @Test
-    void unifiedReadSchemaOwnsGraphTraversalParameters() {
+    void graphSpaceCardRechecksExactGraphAccess() {
         KnowledgeGraphTool graphExecutor = mock(KnowledgeGraphTool.class);
-        KnowledgeReadTool graphTool = new KnowledgeReadTool(
-                repository, projectionStore, codec, documentExecutor, graphExecutor, objectMapper,
-                Clock.fixed(NOW, ZoneOffset.UTC));
+        KnowledgeHead space = head("space", "space-revision", "tenant-a", KnowledgeNamespaceType.GRAPH,
+                "graph-a:schema-a", KnowledgeConceptType.GRAPH_SPACE, "Card",
+                Map.of("graphId", "graph-a", "schemaId", "schema-a"));
+        when(repository.findAuthorityById("space")).thenReturn(Optional.of(space));
+        when(graphExecutor.readableWikiGraphSpaces("tenant-a", Map.of("space",
+                new com.harness.agent.graph.GraphSpaceReference("graph-a", "schema-a"))))
+                .thenReturn(Set.of());
+        KnowledgeReadTool graphTool = new KnowledgeReadTool(repository, projectionStore, codec,
+                documentExecutor, graphExecutor, objectMapper, Clock.fixed(NOW, ZoneOffset.UTC));
+        KnowledgeHandle handle = KnowledgeHandle.concept(KnowledgeConceptType.GRAPH_SPACE,
+                "space", "space-revision", KnowledgeRouteTarget.GRAPH);
 
-        var properties = graphTool.spec().parameters().path("properties");
+        assertThatThrownBy(() -> graphTool.execute(objectMapper.createObjectNode().put("handle", codec.encode(handle))))
+                .hasMessageContaining("not readable");
+        verify(projectionStore, never()).findRevisionSnapshot(org.mockito.ArgumentMatchers.anyString());
+    }
 
-        assertThat(properties.path("graphAction").path("enum").toString())
-                .isEqualTo("[\"listGraphSpaces\",\"findNodes\",\"findNeighborhood\"]");
-        assertThat(properties.has("graphId")).isTrue();
-        assertThat(properties.has("name")).isTrue();
-        assertThat(properties.has("subjectIds")).isTrue();
-        assertThat(properties.has("relationTypes")).isTrue();
-        assertThat(properties.has("maxDepth")).isTrue();
+    @Test
+    void knowledgeReadRejectsGraphTraversalArguments() {
+        var properties = tool.spec().parameters().path("properties");
+        assertThat(properties.has("graphAction")).isFalse();
+        assertThat(properties.has("subjectIds")).isFalse();
+        assertThatThrownBy(() -> tool.execute(objectMapper.createObjectNode()
+                .put("handle", "unused").put("graphAction", "findNodes")))
+                .hasMessageContaining("Unknown knowledge read argument");
     }
 
     private void activateDocumentScope() {

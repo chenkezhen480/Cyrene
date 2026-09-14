@@ -14,7 +14,7 @@ class KnowledgeRevisionSnapshotTest {
         var now = Instant.parse("2026-09-10T00:00:00.123456789Z");
         var revision = new KnowledgeRevision("rev", "doc", 1, "Title", "Summary", "正文\n\n🙂",
                 "ingest", now, "hash", Map.of("graphId", "graph"), now);
-        var source = new KnowledgeSource("rev", KnowledgeSourceType.SESSION_MESSAGE, "17", "message:17", now, now);
+        var source = new KnowledgeSource("rev", KnowledgeSourceType.SESSION_MESSAGE, "17", "cyrene://messages/17", now, now);
         var snapshot = new KnowledgeRevisionSnapshot(KnowledgeConceptType.SOURCE_DOCUMENT, "docs", revision,
                 List.of(source), List.of());
         var stored = KnowledgeRevisionSnapshot.fromJson(mapper, snapshot.withBody("").toJson(mapper));

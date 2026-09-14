@@ -1,7 +1,6 @@
 package com.harness.input;
 
 import com.harness.core.model.AgentMessage;
-import com.harness.core.model.ParsedContent;
 import com.harness.input.auth.Authenticator;
 import com.harness.input.multimodal.MultimodalParser;
 import org.slf4j.Logger;
@@ -66,23 +65,14 @@ public class InputProcessor implements InputStage {
             throw new com.harness.core.exception.AgentException("Input text is required");
         }
 
-        // Step 3: Parse multimodal (with large-file content extraction)
-        List<MultimodalParser.ParsedAttachment> parsedAttachments =
-                attachments != null ? multimodalParser.parseWithContent(attachments) : Collections.emptyList();
-
-        List<AgentMessage.Attachment> agentAttachments = parsedAttachments.stream()
-                .map(MultimodalParser.ParsedAttachment::attachment)
-                .toList();
-
-        // Keep nulls to preserve 1:1 index mapping with attachments (used by skill detection for URL attachments)
-        List<ParsedContent> parsedContents = parsedAttachments.stream()
-                .map(MultimodalParser.ParsedAttachment::parsedContent)
-                .toList();
+        // Step 3: Validate attachments; document reading is deferred to read_file.
+        List<AgentMessage.Attachment> agentAttachments =
+                attachments != null ? multimodalParser.parse(attachments) : Collections.emptyList();
 
         // Step 4: Build unified message
         AgentMessage message = new AgentMessage(AgentMessage.Role.USER, text, agentAttachments, null, null);
 
-        log.debug("[L1-Input] Done: userId={}, attachments={}, parsedContents={}", userId, agentAttachments.size(), parsedContents.size());
-        return new ProcessedInput(userId, message, parsedContents);
+        log.debug("[L1-Input] Done: userId={}, attachments={}", userId, agentAttachments.size());
+        return new ProcessedInput(userId, message);
     }
 }

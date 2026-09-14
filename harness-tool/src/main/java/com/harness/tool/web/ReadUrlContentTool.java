@@ -42,12 +42,32 @@ public final class ReadUrlContentTool implements CancellableTool {
     private static final String TOOL_NAME = "read_url_content";
     private static final int MAX_REDIRECTS = 5;
     private static final ObjectMapper MAPPER = new ObjectMapper();
+    /**
+     * 默认伪装成 Chrome 桌面版。部分站点（Cloudflare 类防护）对非浏览器 UA 直接回 403，
+     * 自报家门会导致公开页面也读不到。Chrome 主版本走配置，稳定版更新时改环境变量即可，
+     * 不需要动代码；要整体标明身份则用 HARNESS_TOOL_URL_READER_USER_AGENT 覆盖。
+     */
+    private static final String USER_AGENT_TEMPLATE =
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                    + "(KHTML, like Gecko) Chrome/%d.0.0.0 Safari/537.36";
+    /** 跟随 Chrome 稳定版：153 发布于 2026-09-08。 */
+    private static final int DEFAULT_CHROME_VERSION = 153;
+
+    /**
+     * 与真实 Chrome 桌面版一致的请求头。UA 声明是 Chrome 却发着爬虫风格的 Accept，
+     * 严格的 WAF 会拿这种矛盾做指纹判定；通配项仍保留 q=0.8，JSON/XML 接口照样可读。
+     */
+    private static final String BROWSER_ACCEPT =
+            "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,"
+                    + "image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7";
+    private static final String BROWSER_ACCEPT_LANGUAGE = "zh-CN,zh;q=0.9,en;q=0.8";
 
     private final OkHttpClient http;
     private final UrlSafetyPolicy urlSafetyPolicy;
     private final int maxResponseBytes;
     private final int defaultPageChars;
     private final int maxPageChars;
+    private final String userAgent;
     private final Set<Call> activeCalls = ConcurrentHashMap.newKeySet();
 
     public ReadUrlContentTool() {
@@ -68,6 +88,12 @@ public final class ReadUrlContentTool implements CancellableTool {
                 EnvKey.TOOL_URL_READER_PAGE_CHARS, 12_000);
         this.maxPageChars = config.getInt(
                 EnvKey.TOOL_URL_READER_MAX_PAGE_CHARS, 50_000);
+        String configuredUserAgent = config.getString(
+                EnvKey.TOOL_URL_READER_USER_AGENT, "");
+        this.userAgent = configuredUserAgent.isBlank()
+                ? chromeUserAgent(config.getInt(
+                        EnvKey.TOOL_URL_READER_CHROME_VERSION, DEFAULT_CHROME_VERSION))
+                : configuredUserAgent.trim();
         validateLimits();
     }
 
@@ -77,11 +103,31 @@ public final class ReadUrlContentTool implements CancellableTool {
             int maxResponseBytes,
             int defaultPageChars,
             int maxPageChars) {
+        this(http, urlSafetyPolicy, maxResponseBytes, defaultPageChars, maxPageChars,
+                chromeUserAgent(DEFAULT_CHROME_VERSION));
+    }
+
+    /** 按 Chrome 主版本拼默认 UA；版本非法时回退到内置默认值。 */
+    static String chromeUserAgent(int chromeVersion) {
+        return USER_AGENT_TEMPLATE.formatted(
+                chromeVersion > 0 ? chromeVersion : DEFAULT_CHROME_VERSION);
+    }
+
+    ReadUrlContentTool(
+            OkHttpClient http,
+            UrlSafetyPolicy urlSafetyPolicy,
+            int maxResponseBytes,
+            int defaultPageChars,
+            int maxPageChars,
+            String userAgent) {
         this.http = http;
         this.urlSafetyPolicy = urlSafetyPolicy;
         this.maxResponseBytes = maxResponseBytes;
         this.defaultPageChars = defaultPageChars;
         this.maxPageChars = maxPageChars;
+        this.userAgent = userAgent == null || userAgent.isBlank()
+                ? chromeUserAgent(DEFAULT_CHROME_VERSION)
+                : userAgent.trim();
         validateLimits();
     }
 
@@ -90,7 +136,8 @@ public final class ReadUrlContentTool implements CancellableTool {
         ObjectNode properties = MAPPER.createObjectNode();
         properties.set("url", MAPPER.createObjectNode()
                 .put("type", "string")
-                .put("description", "The exact single http/https URL supplied by the user"));
+                .put("description", "The exact single http/https URL supplied by the user "
+                        + "or returned by an earlier web_search in this run"));
         properties.set("cursor", MAPPER.createObjectNode()
                 .put("type", "string")
                 .put("description", "Pagination cursor returned by the previous call"));
@@ -99,9 +146,13 @@ public final class ReadUrlContentTool implements CancellableTool {
                 .put("description", "Maximum characters to return for this page"));
         return new ToolSpec(
                 TOOL_NAME,
-                "Read and extract the main text from one URL explicitly supplied by the user. "
+                "Read and extract the main text from one URL supplied by the user or returned "
+                        + "by an earlier web_search in this run. "
                         + "This is not a crawler: do not invent URLs and do not traverse page links. "
-                        + "Use cursor pagination when hasMore is true.",
+                        + "Use cursor pagination when hasMore is true. "
+                        + "If it fails with HTTP 403/404, a timeout, or empty content, the site "
+                        + "probably blocks non-browser clients: open the same URL with "
+                        + "browser_control instead of retrying this tool.",
                 MAPPER.createObjectNode()
                         .put("type", "object")
                         .<ObjectNode>set("properties", properties)
@@ -180,8 +231,9 @@ public final class ReadUrlContentTool implements CancellableTool {
         for (int redirectCount = 0; redirectCount <= MAX_REDIRECTS; redirectCount++) {
             Request request = new Request.Builder()
                     .url(current.toString())
-                    .header("Accept", "text/html, text/plain, application/json;q=0.9")
-                    .header("User-Agent", "Cyrene-Agent-URL-Reader/1.0")
+                    .header("Accept", BROWSER_ACCEPT)
+                    .header("Accept-Language", BROWSER_ACCEPT_LANGUAGE)
+                    .header("User-Agent", userAgent)
                     .get()
                     .build();
             Call call = http.newCall(request);
@@ -239,26 +291,26 @@ public final class ReadUrlContentTool implements CancellableTool {
         }
         Document document = Jsoup.parse(body, finalUrl);
         document.select("script, style, noscript, svg, canvas, template").remove();
-        Element contentRoot = firstNonNull(
+        String title = document.title().trim();
+        // 候选链取第一个抽得出非空文本的容器：命中空的 <article>/<main> 时继续往下退，
+        // 而不是把一份有正文的页面直接判成空结果。
+        Element[] candidates = {
                 document.selectFirst("article"),
                 document.selectFirst("main"),
                 document.selectFirst("[role=main]"),
-                document.body());
-        if (contentRoot == null) {
-            return new ExtractedContent(document.title(), "");
-        }
-        contentRoot.select("nav, footer, aside, form").remove();
-        return new ExtractedContent(
-                document.title().trim(), normalizeText(contentRoot.wholeText()));
-    }
-
-    private Element firstNonNull(Element... elements) {
-        for (Element element : elements) {
-            if (element != null) {
-                return element;
+                document.body()
+        };
+        for (Element candidate : candidates) {
+            if (candidate == null) {
+                continue;
+            }
+            candidate.select("nav, footer, aside, form").remove();
+            String text = normalizeText(candidate.wholeText());
+            if (!text.isBlank()) {
+                return new ExtractedContent(title, text);
             }
         }
-        return null;
+        return new ExtractedContent(title, "");
     }
 
     private String normalizeText(String value) {

@@ -245,6 +245,12 @@ public class ChatHandler {
                     cancellationToken.cancel();
                 }
 
+                // Runs after the try-with-resources has closed the response body. If the UI
+                // looks stuck while this line is missing from the log, the SSE stream was
+                // never closed on the wire, and the client is still waiting for EOF.
+                log.info("[Server] SSE response stream closed: requestId={}, completedNormally={}, duration={}ms",
+                        requestId, completedNormally.get(), System.currentTimeMillis() - start);
+
                 HttpApiTool.clearCurrentCredentials();
                 activeRequests.remove(requestId);
                 String alias = resolvedSessionIdRef.get();

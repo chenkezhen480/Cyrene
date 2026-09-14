@@ -126,6 +126,24 @@ class ModelConfigurationServiceTest {
     }
 
     @Test
+    void contextCapacityIsVisiblePersistedAndValidatedAsATokenCount() throws Exception {
+        ModelConfig initial = ModelConfig.of(Map.of(ModelConfigKey.CHAT_MODEL, "test-model"));
+        TestRuntime runtime = new TestRuntime(initial);
+        ModelConfigurationService service = service(initial, runtime);
+        var response = service.update(new ModelConfigurationService.ModelConfigurationUpdateRequest(
+                Map.of(ModelConfigKey.CHAT_CONTEXT_WINDOW, "1000000"), List.of()));
+        assertThat(field(response, ModelConfigKey.CHAT_CONTEXT_WINDOW).value()).isEqualTo("1000000");
+        assertThat(field(response, ModelConfigKey.CHAT_CONTEXT_WINDOW).label()).contains("Token");
+        assertThat(Files.readString(configPath())).contains("chat.contextWindow=1000000");
+        for (String invalid : List.of("0", "-1", "1.5", "1M")) {
+            assertThatThrownBy(() -> service.update(new ModelConfigurationService.ModelConfigurationUpdateRequest(
+                    Map.of(ModelConfigKey.CHAT_CONTEXT_WINDOW, invalid), List.of())))
+                    .isInstanceOf(IllegalArgumentException.class);
+            assertThat(runtime.currentConfiguration().getInt(ModelConfigKey.CHAT_CONTEXT_WINDOW, 0)).isEqualTo(1000000);
+        }
+    }
+
+    @Test
     void handlerReturnsTheTypedConfigurationResponse() throws Exception {
         ModelConfig config = ModelConfig.of(Map.of(ModelConfigKey.CHAT_PROVIDER, "openai"));
         Context context = mock(Context.class);
@@ -152,6 +170,35 @@ class ModelConfigurationServiceTest {
 
     private Path configPath() {
         return temporaryDirectory.resolve("model.conf");
+    }
+
+    @Test
+    void hiddenKeysAreLeftOutOfTheUiButStayValidInModelConf() throws Exception {
+        ModelConfig config = ModelConfig.of(Map.of(ModelConfigKey.CHAT_PROVIDER, "openai"));
+        ModelConfigurationService service = service(config, new TestRuntime(config));
+
+        ModelConfigurationService.ModelConfigurationResponse response = service.current();
+
+        // 只有少数后端用得上的思考参数、以及被 thinkingLevel 取代的旧布尔键，都不进配置页；
+        // 常规档位照常显示。
+        for (String hiddenKey : List.of(
+                ModelConfigKey.CHAT_THINKING,
+                ModelConfigKey.CHAT_THINKING_DIALECT,
+                ModelConfigKey.CHAT_THINKING_BUDGETS,
+                ModelConfigKey.CHAT_THINKING_MAX_LEVEL,
+                ModelConfigKey.CHAT_THINKING_XHIGH_VALUE)) {
+            assertThatThrownBy(() -> field(response, hiddenKey))
+                    .isInstanceOf(java.util.NoSuchElementException.class);
+        }
+        assertThat(field(response, ModelConfigKey.CHAT_THINKING_LEVEL).key())
+                .isEqualTo(ModelConfigKey.CHAT_THINKING_LEVEL);
+
+        // 隐藏 ≠ 删除：仍然 isKnown，写在 model.conf 里照常加载，否则手工配置会直接启动失败。
+        assertThat(ModelConfigKey.isKnown(ModelConfigKey.CHAT_THINKING_BUDGETS)).isTrue();
+        assertThat(ModelConfig.of(Map.of(
+                ModelConfigKey.CHAT_THINKING_BUDGETS, "1024,2048,4096,8192"))
+                .getCommaList(ModelConfigKey.CHAT_THINKING_BUDGETS))
+                .containsExactly("1024", "2048", "4096", "8192");
     }
 
     private static ModelConfigurationService.ModelConfigurationField field(

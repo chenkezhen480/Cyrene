@@ -18,19 +18,20 @@ import java.util.Map;
  * Tracks consecutive non-PASS results **per tool**. Each tool has its own
  * failure counter — one tool passing does not reset another tool's count.
  *
- * When any single tool hits the threshold, a reflection prompt is injected.
- * The prompt adapts based on whether the tool keeps being called with the
- * same arguments (stuck) or different arguments (struggling).
+ * Every failure injects one reflection prompt, so the model is never left
+ * failing silently. The prompt adapts based on whether the tool keeps being
+ * called with the same arguments (stuck) or different arguments (struggling).
  *
- * Reflection gives the model one final opportunity to adjust strategy. If the
- * same tool fails once more after reflection, a hard-limit signal terminates
- * further tool planning for the run.
+ * {@code threshold} is therefore the reflection budget: once a tool has
+ * already consumed that many reflections, its next failure emits a hard-limit
+ * signal that terminates further tool planning for the run.
  */
 public class AdaptiveReflector {
 
     private static final Logger log = LoggerFactory.getLogger(AdaptiveReflector.class);
     private static final int DEFAULT_THRESHOLD = 5;
 
+    /** 单工具允许的反思次数；用尽后再失败一次即硬停。 */
     private final int threshold;
 
     /** Per-tool consecutive non-PASS count. Key = tool name. */
@@ -74,26 +75,30 @@ public class AdaptiveReflector {
             }
         }
 
-        // The threshold triggers reflection; one additional failure triggers a hard stop.
+        // 计数即反思次数：每次失败都注入一次反思；反思预算用尽后再失败一次即硬停。
         for (Map.Entry<String, Integer> entry : toolFailureCounts.entrySet()) {
             String toolName = entry.getKey();
             int failureCount = entry.getValue();
-            if (failureCount >= threshold + 1) {
+            if (failureCount <= 0) {
+                continue;
+            }
+            if (failureCount > threshold) {
                 String prompt = buildHardLimitPrompt(toolName, failureCount, userInput);
                 log.warn("[AdaptiveReflector] Hard failure limit reached: tool '{}' failed {} consecutive times",
                         toolName, failureCount);
                 return new ReflectionSignal(prompt, true);
             }
-            if (failureCount == threshold) {
 
-                // Determine if it's the same args or different args each time
-                boolean stuckOnSameArgs = detectStuckOnSameArgs(toolName, allSteps, threshold);
-                String prompt = buildPrompt(toolName, stuckOnSameArgs, allSteps, userInput);
+            // Determine if it's the same args or different args each time.
+            // 一次失败无从比较，至少要有两次调用才谈得上「重复同样参数」。
+            boolean stuckOnSameArgs = failureCount >= 2
+                    && detectStuckOnSameArgs(toolName, allSteps, failureCount);
+            String prompt = buildPrompt(
+                    toolName, failureCount, stuckOnSameArgs, allSteps, userInput);
 
-                log.info("[AdaptiveReflector] Reflection triggered: tool '{}' hit {} consecutive non-PASS (stuck={})",
-                        toolName, threshold, stuckOnSameArgs);
-                return new ReflectionSignal(prompt, false);
-            }
+            log.info("[AdaptiveReflector] Reflection {} of {} injected: tool '{}' consecutive non-PASS (stuck={})",
+                    failureCount, threshold, toolName, stuckOnSameArgs);
+            return new ReflectionSignal(prompt, false);
         }
 
         return null;
@@ -140,14 +145,14 @@ public class AdaptiveReflector {
             "no files matched", "0 files", "found 0 files", "0 match", "found 0 match"
     );
 
-    private String buildPrompt(String toolName, boolean stuckOnSameArgs,
+    private String buildPrompt(String toolName, int failureCount, boolean stuckOnSameArgs,
                                 List<ReActStep> allSteps, String userInput) {
         String toolSummary = summarizeToolsUsed(allSteps);
 
         if (stuckOnSameArgs) {
             return String.format("""
                     [System Reflection]
-                    Tool '%s' has been called %d times with the same arguments and is not producing useful results.
+                    Tool '%s' has been called %d times in a row with the same arguments and is not producing useful results.
 
                     You MUST either:
                     1. Try a DIFFERENT tool or approach
@@ -157,7 +162,7 @@ public class AdaptiveReflector {
                     Do NOT call '%s' again with the same arguments.
                     Tools available: %s
                     Original task: %s
-                    """, toolName, threshold, toolName, toolSummary, userInput);
+                    """, toolName, failureCount, toolName, toolSummary, userInput);
         }
 
         return String.format("""
@@ -172,14 +177,14 @@ public class AdaptiveReflector {
 
                 Tools available: %s
                 Original task: %s
-                """, toolName, threshold, toolName, toolSummary, userInput);
+                """, toolName, failureCount, toolName, toolSummary, userInput);
     }
 
     private String buildHardLimitPrompt(String toolName, int failureCount, String userInput) {
         return String.format("""
                 [System Tool Failure Limit]
-                Tool '%s' has failed %d consecutive times. The fifth failure already triggered
-                reflection, and the permitted final retry also failed.
+                Tool '%s' has failed %d consecutive times, and the reflection prompts did not
+                get it unblocked.
 
                 Do not call any more tools. Produce the best final answer possible from the
                 information already gathered, and clearly state what could not be completed.

@@ -21,6 +21,7 @@ import com.harness.tool.knowledge.KnowledgeIngestWorker;
 import com.harness.tool.knowledge.KnowledgeDocumentLifecycleService;
 import com.harness.tool.knowledge.PersistentGraphSchemaWikiCompiler;
 import com.harness.tool.knowledge.PersistentGraphSpaceWikiCompiler;
+import com.harness.tool.knowledge.GraphCapabilityDescriber;
 import com.harness.tool.knowledge.authority.ContentAddressedArtifactStorage;
 import com.harness.tool.knowledge.authority.MysqlKnowledgeArtifactRepository;
 import com.harness.tool.knowledge.authority.MysqlKnowledgeIngestJobStore;
@@ -121,6 +122,7 @@ public class Main {
                 agent.embeddingModel(),
                 agent.vectorStore(),
                 agent.documentConversionService(),
+                agent.documentSummarizer(),
                 new ContentAddressedArtifactStorage(Path.of(knowledgeUploadDir)),
                 knowledgeArtifactRepository,
                 new MysqlKnowledgeIngestJobStore(agent.knowledgeRepository()),
@@ -214,6 +216,15 @@ public class Main {
         app.delete("/api/knowledge/{collection}", knowledgeMgmtHandler::deleteCollection);
         app.delete("/api/knowledge/{collection}/{documentId}", knowledgeMgmtHandler::deleteDocument);
 
+        KnowledgeWikiHandler wikiHandler = new KnowledgeWikiHandler(
+                new com.harness.tool.knowledge.KnowledgeWikiService(agent.knowledgeRepository(), agent.vectorStore()),
+                agent.graphSpaceAccessService());
+        app.get("/api/wiki", wikiHandler::list);
+        app.get("/api/wiki/export", wikiHandler::exportAll);
+        app.get("/api/wiki/{conceptId}", wikiHandler::get);
+        app.put("/api/wiki/{conceptId}", wikiHandler::update);
+        app.get("/api/wiki/{conceptId}/export", wikiHandler::export);
+
         KnowledgeOkfSourceAccess okfSourceAccess = new KnowledgeOkfSourceAccess(
                 agent.knowledgeRepository(), knowledgeArtifactRepository,
                 agent.sessionStore(), agent.messageStore(), traceStore,
@@ -244,6 +255,8 @@ public class Main {
                 mapper
         ));
         GraphMutationCommitter graphMutationCommitter;
+        GraphCapabilityDescriber graphCapabilityDescriber = new GraphCapabilityDescriber(
+                agent::chatModel, agent.embeddingModel().tokenEstimator());
         if ("none".equals(agent.knowledgeGraphStore().providerName())) {
             graphMutationCommitter = agent.knowledgeGraphStore()::applyChanges;
         } else {
@@ -251,7 +264,7 @@ public class Main {
                     new GraphMutationSagaService(
                             agent.knowledgeGraphStore()::applyChanges,
                             new PersistentGraphSpaceWikiCompiler(
-                                    agent.knowledgeRepository()),
+                                    agent.knowledgeRepository(), agent.graphSchemaRegistry(), graphCapabilityDescriber),
                             new MysqlKnowledgeGraphMutationJobStore());
             GraphMutationSagaWorker graphMutationSagaWorker =
                     new GraphMutationSagaWorker(graphMutationSagaService);
@@ -276,7 +289,7 @@ public class Main {
                 agent.knowledgeGraphStore(),
                 agent.graphSettings(),
                 graphRequestExecutor,
-                new PersistentGraphSchemaWikiCompiler(agent.knowledgeRepository())
+                new PersistentGraphSchemaWikiCompiler(agent.knowledgeRepository(), graphCapabilityDescriber)
         );
         app.get("/api/graph/status", graphHandler::status);
         app.get("/api/graph/graphs", graphHandler::listGraphSpaces);

@@ -183,6 +183,36 @@ const CyreneAPI = (() => {
     return request('GET', `/api/knowledge/${encodeURIComponent(collection)}?${params}`);
   }
 
+  function listWiki(userId, { type = 'SOURCE_DOCUMENT', collection = '', limit = 20, cursor = '' } = {}) {
+    const params = new URLSearchParams({ userId, type, limit: String(limit) });
+    if (collection) params.set('collection', collection);
+    if (cursor) params.set('cursor', cursor);
+    return request('GET', `/api/wiki?${params}`);
+  }
+
+  function getWiki(conceptId, userId) {
+    return request('GET', `/api/wiki/${encodeURIComponent(conceptId)}?${new URLSearchParams({ userId })}`);
+  }
+
+  function updateWiki(conceptId, userId, draft) {
+    return request('PUT', `/api/wiki/${encodeURIComponent(conceptId)}?${new URLSearchParams({ userId })}`, draft);
+  }
+
+  function exportWiki(conceptId, userId) {
+    return downloadWikiBlob(`/api/wiki/${encodeURIComponent(conceptId)}/export`, userId);
+  }
+
+  function exportAllWiki(userId) {
+    return downloadWikiBlob('/api/wiki/export', userId);
+  }
+
+  function downloadWikiBlob(path, userId) {
+    const headers = {};
+    if (_token) headers['Authorization'] = `Bearer ${_token}`;
+    return fetch(`${path}?${new URLSearchParams({ userId })}`, { headers })
+      .then(requireOkResponse).then(response => response.blob());
+  }
+
   // ── Knowledge Graph ──
   function getGraphStatus() {
     return request('GET', '/api/graph/status');
@@ -372,7 +402,7 @@ const CyreneAPI = (() => {
     chat, cancelChat, approveConfirmation, rejectConfirmation, uploadFile,
     getModelConfiguration, updateModelConfiguration,
     createSession, listSessions, getSession, getMessages, getSessionStats, closeSession,
-    listCollections, uploadKnowledge, listKnowledge,
+    listCollections, uploadKnowledge, listKnowledge, listWiki, getWiki, updateWiki, exportWiki, exportAllWiki,
     getGraphStatus, listGraphSchemas, getGraphSchema,
     listGraphSchemaConfigs, getGraphSchemaConfig, createGraphSchemaConfig, updateGraphSchemaConfig,
     enableGraphSchemaConfig, disableGraphSchemaConfig, deleteGraphSchemaConfig,

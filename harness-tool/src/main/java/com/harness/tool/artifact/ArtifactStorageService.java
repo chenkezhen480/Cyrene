@@ -42,6 +42,7 @@ public class ArtifactStorageService {
         if (data.length > maxSizeBytes) {
             throw new IllegalArgumentException("File size " + data.length + " exceeds limit " + maxSizeBytes);
         }
+        validateName(name);
         String id = UUID.randomUUID().toString();
         Path fileDir = artifactDir.resolve(id);
         try {
@@ -49,7 +50,12 @@ public class ArtifactStorageService {
             Path filePath = fileDir.resolve(name);
             Files.write(filePath, data);
             return saveMetadata(id, sessionId, name, mimeType, data.length, filePath);
-        } catch (IOException e) {
+        } catch (IOException | RuntimeException e) {
+            try {
+                store.delete(id);
+            } catch (RuntimeException cleanupFailure) {
+                e.addSuppressed(cleanupFailure);
+            }
             cleanup(fileDir);
             throw new RuntimeException("Failed to store artifact: " + name, e);
         }
@@ -59,6 +65,7 @@ public class ArtifactStorageService {
      * Store artifact from an existing file path (moves the file).
      */
     public Artifact storeFromPath(Path source, String name, String mimeType, String sessionId) {
+        validateName(name);
         try {
             long size = Files.size(source);
             if (size > maxSizeBytes) {
@@ -72,6 +79,14 @@ public class ArtifactStorageService {
             return saveMetadata(id, sessionId, name, mimeType, size, target);
         } catch (IOException e) {
             throw new RuntimeException("Failed to store artifact from path: " + source, e);
+        }
+    }
+
+    private static void validateName(String name) {
+        if (name == null || name.isBlank() || name.equals(".") || name.equals("..")
+                || name.indexOf('/') >= 0 || name.indexOf('\\') >= 0 || Path.of(name).isAbsolute()
+                || Path.of(name).getNameCount() != 1) {
+            throw new IllegalArgumentException("Artifact name must be a single file name");
         }
     }
 

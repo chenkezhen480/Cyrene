@@ -19,7 +19,7 @@ public record KnowledgeRevisionSnapshot(
                         (long) i + 1, v.revisionId(), v.verifiedBy(), v.verificationType(),
                         v.result(), v.reason(), v.verifiedAt()); }).toList();
     }
-    @com.fasterxml.jackson.annotation.JsonProperty("sourceKeys")
+    @com.fasterxml.jackson.annotation.JsonProperty(value = "sourceKeys", access = com.fasterxml.jackson.annotation.JsonProperty.Access.READ_ONLY)
     public List<String> sourceKeys() {
         return sources.stream().map(s -> s.sourceType().name() + ":" + s.sourceId()).distinct().toList();
     }

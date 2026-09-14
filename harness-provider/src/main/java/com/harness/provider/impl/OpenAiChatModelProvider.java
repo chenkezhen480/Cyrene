@@ -115,7 +115,7 @@ public class OpenAiChatModelProvider implements ChatModelProvider {
     }
 
     /**
-     * 模型级默认档位：{@code chat.thinkingLevel} 优先；否则迁移旧
+     * 模型级默认档位：{@code chat.thinkingLevel} 优先；否则迁移<strong>已废弃</strong>的
      * {@code chat.thinking}（true→MEDIUM / false→OFF）；两者皆无时——
      * QWEN 方言保持旧线级行为（enable_thinking=true，即 MEDIUM），
      * EFFORT 方言不发参数、交由模型默认（旧布尔参数在 effort 系后端本就被忽略）。
@@ -125,6 +125,7 @@ public class OpenAiChatModelProvider implements ChatModelProvider {
         if (level != null && !level.isBlank()) {
             return ThinkingLevel.parse(level.trim());
         }
+        // 已废弃键：仅当 chat.thinkingLevel 未配置时才走到这里，供老配置平滑过渡。
         if (cfg.getString(ModelConfigKey.CHAT_THINKING) != null) {
             return cfg.getBool(ModelConfigKey.CHAT_THINKING, true)
                     ? ThinkingLevel.MEDIUM

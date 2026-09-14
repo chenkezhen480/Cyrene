@@ -182,7 +182,8 @@ public final class AgentToolRuntime {
                     graphSchemaRegistry,
                     graphSettings,
                     new ObjectMapper());
-            log.info("Graph knowledge executor initialized for unified knowledge tools");
+            toolRegistry.register(graphKnowledgeExecutor);
+            log.info("Independent graph query tool registered");
         } else {
             log.info("Graph knowledge executor disabled (provider=none)");
         }

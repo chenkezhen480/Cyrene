@@ -139,7 +139,7 @@ public class ToolExecutor {
             long duration = System.currentTimeMillis() - start;
             log.error("[L3-Tool] [{}] failed in {}ms: {}", name, duration, e.getMessage());
             return ToolResult.fail(toolCall.id(), name, e.getMessage(), duration);
-        } catch (Exception e) {
+        } catch (Exception | LinkageError e) {
             long duration = System.currentTimeMillis() - start;
             log.error("[L3-Tool] [{}] unexpected error in {}ms: {}", name, duration, e.getMessage(), e);
             return ToolResult.fail(toolCall.id(), name, "Unexpected error: " + e.getMessage(), duration);

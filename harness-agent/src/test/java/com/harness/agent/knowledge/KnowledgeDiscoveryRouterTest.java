@@ -159,13 +159,14 @@ class KnowledgeDiscoveryRouterTest {
                 .singleElement()
                 .satisfies(result -> {
                     assertThat(result.routeTarget()).isEqualTo(KnowledgeRouteTarget.GRAPH);
-                    assertThat(result.graphRouteHint()).containsEntry("schemaId", "schema-a");
+                    assertThat(result.graphRouteHint()).containsEntry("schemaId", "schema-a")
+                            .containsEntry("recommendedTool", "query_graph");
                 });
 
         KnowledgeToolRuntimeContext mismatched = new KnowledgeToolRuntimeContext(
                 "tenant-a", "user-a", null,
                 new GraphRequestContext("graph-a", "schema-other", Set.of(), Set.of()),
-                Set.of("knowledge_search", "knowledge_read"));
+                Set.of("knowledge_search", "knowledge_read", "query_graph"));
         assertThat(router.search(
                 "schema", Set.of(KnowledgeConceptType.GRAPH_SCHEMA), 10, mismatched))
                 .isEmpty();
@@ -173,12 +174,17 @@ class KnowledgeDiscoveryRouterTest {
         KnowledgeToolRuntimeContext scoped = new KnowledgeToolRuntimeContext(
                 "tenant-a", "user-a", null,
                 new GraphRequestContext("graph-a", "schema-a", Set.of(), Set.of()),
-                Set.of("knowledge_search", "knowledge_read"));
+                Set.of("knowledge_search", "knowledge_read", "query_graph"));
         assertThat(router.search(
                 "schema", Set.of(KnowledgeConceptType.GRAPH_SCHEMA), 10, scoped))
                 .singleElement()
                 .extracting(DiscoveredKnowledge::conceptId)
                 .isEqualTo("schema-concept");
+        org.mockito.Mockito.clearInvocations(graphExecutor);
+        var detached = new KnowledgeToolRuntimeContext("tenant-a", "user-a", null, null,
+                Set.of("knowledge_search", "knowledge_read"));
+        assertThat(router.search("schema", Set.of(KnowledgeConceptType.GRAPH_SCHEMA), 10, detached)).isEmpty();
+        org.mockito.Mockito.verifyNoInteractions(graphExecutor);
     }
 
     @Test
@@ -201,7 +207,8 @@ class KnowledgeDiscoveryRouterTest {
                     assertThat(result.routeTarget()).isEqualTo(KnowledgeRouteTarget.GRAPH);
                     assertThat(result.graphRouteHint())
                             .containsEntry("graphId", "graph-a")
-                            .containsEntry("schemaId", "schema-a");
+                            .containsEntry("schemaId", "schema-a")
+                            .containsEntry("recommendedTool", "query_graph");
                 });
     }
 
@@ -248,7 +255,7 @@ class KnowledgeDiscoveryRouterTest {
     private static KnowledgeToolRuntimeContext context() {
         return new KnowledgeToolRuntimeContext(
                 "tenant-a", "user-a", null, null,
-                Set.of("knowledge_search", "knowledge_read"));
+                Set.of("knowledge_search", "knowledge_read", "query_graph"));
     }
 
     private static KnowledgeHead head(

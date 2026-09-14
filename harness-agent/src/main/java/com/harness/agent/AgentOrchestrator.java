@@ -43,6 +43,9 @@ import com.harness.graph.store.KnowledgeGraphStore;
 import com.harness.input.InputProcessor;
 import com.harness.input.auth.Authenticator;
 import com.harness.input.document.DocumentConversionService;
+import com.harness.input.document.DocumentSummarizer;
+import com.harness.core.text.UnicodeAwareTextTokenEstimator;
+import com.harness.tool.builtin.FileReadTool;
 import com.harness.input.document.MarkItDownDocumentConversionService;
 import com.harness.input.multimodal.MultimodalParser;
 import com.harness.agent.context.ContextBuilder;
@@ -79,6 +82,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -103,6 +107,7 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
     private final AgentToolRuntime toolRuntime;
     private final AgentPromptBuilder promptBuilder;
     private final DocumentConversionService documentConversionService;
+    private final DocumentSummarizer documentSummarizer;
     private final AgentRunPreparer runPreparer;
     private final AgentRunCoordinator runCoordinator;
     private final ContextBuilder contextBuilder;
@@ -154,15 +159,15 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
                 initialModelProviders, initialModelConfig);
         ModelProviders modelProviders = modelProviderRuntime.delegates();
         this.documentConversionService = MarkItDownDocumentConversionService.fromEnvironment();
+        this.documentSummarizer = new DocumentSummarizer(
+                () -> modelProviderRuntime.current().chat(), UnicodeAwareTextTokenEstimator.INSTANCE);
 
         this.traceStore = TraceStoreFactory.create();
         this.runtime = new AgentRuntime(
                 modelProviders,
                 new InputProcessor(
                         new Authenticator(),
-                        new MultimodalParser(
-                                modelProviders.chat(),
-                                documentConversionService)),
+                        new MultimodalParser()),
                 new DefaultReActLoopFactory(modelProviderRuntime),
                 new TraceCollectorFactory(traceStore));
 
@@ -204,8 +209,9 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
                 initialModelConfig);
         this.toolRegistry = toolRuntime.tools();
         this.skillRegistry = toolRuntime.skills();
-        this.promptBuilder = new AgentPromptBuilder(
-                skillRegistry, documentConversionService);
+        this.promptBuilder = new AgentPromptBuilder(skillRegistry, artifactStorageService);
+        toolRegistry.register(new FileReadTool(
+                artifactStore, documentConversionService, documentSummarizer, null));
 
         int confirmationTimeoutSeconds = EnvConfig.get().getInt(
                 EnvKey.RISK_CONFIRMATION_TIMEOUT_SECONDS, 300);
@@ -286,7 +292,7 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
                 Clock.systemUTC());
         toolRegistry.register(new com.harness.agent.memory.SaveMemoryTool(
                 memoryRuntime.knowledgeRepository(), objectMapper, Clock.systemUTC(),
-                memoryRuntime::signalKnowledgeIndex));
+                memoryRuntime::signalKnowledgeIndex, com.harness.core.knowledge.PreferenceKeyRegistry.standard()));
         if ("none".equalsIgnoreCase(ragProvider)) {
             log.info("Knowledge search tools disabled (ragProvider=none); "
                     + "memory capture and MySQL preference injection remain enabled");
@@ -583,8 +589,40 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
         AuthorizedUrlContext.clear();
     }
 
+    /**
+     * resume 轮的 URL 授权作用域初始化。独立成包级方法是为了能被测试直接驱动：
+     * {@code resumeSession} 自己构造不出来（构造函数需要 DB 与 model.conf）。
+     */
+    static void initializeUrlScopeForResume(List<MemoryMessage> history) {
+        AuthorizedUrlContext.clear();
+        AuthorizedUrlContext.set(authorizedUrlsFromUserHistory(history));
+    }
+
+    /**
+     * 从会话历史重建 resume 轮的 URL 授权作用域。
+     *
+     * 只认 {@link MemoryMessage#role()} 为 user 的**持久化原始消息**。不能改用
+     * {@code UserMessage} 类型判断：resumeSession 会把运行时事件包成
+     * {@code UserMessage.from(eventMessage)} 注入进模型历史，而那段文本包含子 Agent 的输出。
+     * 从它播种 = 让子 Agent 生成的 URL 自动获得用户级授权，URL 边界直接失效。
+     */
+    static Set<String> authorizedUrlsFromUserHistory(List<MemoryMessage> messages) {
+        if (messages == null) {
+            return Set.of();
+        }
+        Set<String> urls = new LinkedHashSet<>();
+        for (MemoryMessage message : messages) {
+            if (message != null && "user".equalsIgnoreCase(message.role())) {
+                urls.addAll(AuthorizedUrlContext.extractFromUserText(message.text()));
+            }
+        }
+        return Set.copyOf(urls);
+    }
+
     private Set<String> detachedResumeUnavailableTools(AgentContext context) {
         Set<String> unavailable = new HashSet<>();
+        unavailable.add(KnowledgeGraphTool.TOOL_NAME);
+        unavailable.add(FileReadTool.TOOL_NAME);
         if (Boolean.FALSE.equals(context.needsKnowledgeBase())) {
             unavailable.add(KnowledgeSearchTool.TOOL_NAME);
             unavailable.add(KnowledgeReadTool.TOOL_NAME);
@@ -637,6 +675,8 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
     }
 
     // Expose model providers required by direct non-tool integrations.
+    public DocumentSummarizer documentSummarizer() { return documentSummarizer; }
+
     public ChatModelProvider chatModel() { return runtime.providers().chat(); }
     public VisionModelProvider visionModel() { return runtime.providers().vision(); }
     public DocumentConversionService documentConversionService() { return documentConversionService; }
@@ -745,7 +785,11 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
             String resumeRunId = null;
 
             try {
-                AuthorizedUrlContext.clear();
+                // resume 跑在 session-resume-dispatcher 线程上，不经过 AgentRunPreparer，
+                // URL 授权作用域不会自动建立；从会话历史里持久化的 user 消息重建。
+                // clear() 保留：dispatcher 是单线程跨会话复用的，播种前先清干净，
+                // 否则一旦这里的重建中途抛异常，上一个会话的 URL 集就会残留给下一个会话。
+                initializeUrlScopeForResume(shorttermMessages);
                 KnowledgeGraphTool.clearCurrentContext();
                 KnowledgeAccessService.clearCurrentContext();
                 KnowledgeToolRuntimeContext.clear();

@@ -24,6 +24,8 @@ function renderMarkdown(text) {
 // Strip artifact markdown links from text to prevent double-rendering
 // when both TEXT and ARTIFACT blocks are present
 const ARTIFACT_LINK_RE = /!\[.*?\]\(\/api\/artifacts\/[^)]+\)/g;
+// 服务端长时间不吐任何事件就主动放弃：响应流若因任何原因不关闭，界面会被永久锁住。
+const STREAM_IDLE_TIMEOUT_MS = 90_000;
 const CRYSTAL_SVG = '<svg width="15" height="15" viewBox="0 0 16 16" fill="none" style="vertical-align:-2px;margin-right:3px"><defs><radialGradient id="cg"><stop offset="0%" stop-color="rgba(232,160,191,0.6)"/><stop offset="100%" stop-color="rgba(139,126,200,0.15)"/></radialGradient></defs><path d="M8 0.5L9.5 5 14 3.5 11 7.5 15.5 8 11 8.5 14 12.5 9.5 11 8 15.5 6.5 11 2 12.5 5 8.5 0.5 8 5 7.5 2 3.5 6.5 5z" fill="url(#cg)" stroke="var(--iris)" stroke-width="0.5" stroke-linejoin="round"/><circle cx="8" cy="8" r="1.8" fill="rgba(232,160,191,0.7)"/><circle cx="8" cy="8" r="0.8" fill="white" opacity="0.6"/></svg>';
 function stripArtifactLinks(text) {
   if (!text) return '';
@@ -760,6 +762,7 @@ const ChatPage = {
         compressions: [],
       });
       const msgIdx = messages.value.length - 1;
+      let reader = null;
 
       try {
         // Build context with file URLs
@@ -771,14 +774,14 @@ const ChatPage = {
         if (thinkingLevelIndex.value > 0) {
           context.thinkingLevel = CHAT_THINKING_STOPS[thinkingLevelIndex.value];
         }
-        // If there are uploaded files, add them to context.File (backend will resolve and extract)
+        // Pass file references; read_file analyzes documents in isolated model requests.
         if (fileUrls.length > 0) {
           context.File = fileUrls.length === 1 ? fileUrls[0].url : fileUrls.map(f => f.url);
         }
 
         const resp = await CyreneAPI.chat(currentSessionId.value, text, context);
 
-        const reader = resp.body.getReader();
+        reader = resp.body.getReader();
         const decoder = new TextDecoder();
         const sseParser = CyreneSSE.createParser(({ type, data }) => {
           let parsed;
@@ -842,6 +845,8 @@ const ChatPage = {
                     if (Array.isArray(parsed.blocks)) {
                       messages.value[msgIdx].content = parsed.blocks;
                     }
+                    // 服务端已收工，本轮就此结束 —— 不等响应流关闭，否则流不关界面会一直转。
+                    isStreaming.value = false;
                     break;
                   case 'cancelled':
                     // Keep streamed content as-is (tool call blocks + tokens already in place)
@@ -855,8 +860,16 @@ const ChatPage = {
           }
         });
 
+        let idleTimer = null;
+        const idleTimeout = () => new Promise((_, reject) => {
+          idleTimer = setTimeout(
+            () => reject(new Error(t('streamIdleTimeout'))), STREAM_IDLE_TIMEOUT_MS);
+        });
+
         while (true) {
-          const { done, value } = await reader.read();
+          const { done, value } = await Promise.race([reader.read(), idleTimeout()]);
+          clearTimeout(idleTimer);
+          idleTimer = null;
           if (done) break;
 
           sseParser.feed(decoder.decode(value, { stream: true }));
@@ -876,6 +889,9 @@ const ChatPage = {
         confirmationAcknowledged.value = false;
         showToast(e.message, 'error');
       } finally {
+        if (reader) {
+          reader.cancel().catch(() => {});
+        }
         isStreaming.value = false;
         scrollToBottom();
       }
@@ -1148,10 +1164,12 @@ const KnowledgePage = {
   setup() {
     const Icons = inject('Icons');
     const t = inject('t');
+    const userId = inject('userId');
     const collections = ref([]);
     const collectionPageInfo = ref({ limit: 50, nextCursor: '', hasMore: false });
     const loadingCollections = ref(false);
     const selectedCollection = ref('');
+    const collectionInput = ref('');
     const documents = ref([]);
     const pageInfo = ref({ limit: 50, nextCursor: '', hasMore: false });
     const fileNameFilter = ref('');
@@ -1161,246 +1179,375 @@ const KnowledgePage = {
     const uploading = ref(false);
     const uploadCollection = ref('');
     const fileInput = ref(null);
+    const selectedFiles = ref([]);
+    const uploadQueue = ref([]);
+    const uploadedCount = computed(() => uploadQueue.value.filter(item => !['waiting', 'uploading'].includes(item.status)).length);
+    const wikiDrawer = ref(null);
+    const wikiExportError = ref('');
+    const wikiType = ref('SOURCE_DOCUMENT');
+    const wikiTypes = [
+      { value: 'SOURCE_DOCUMENT', label: 'wikiTypeSource' },
+      { value: 'GRAPH_SCHEMA', label: 'wikiTypeGraphSchema' },
+      { value: 'USER_EPISODE', label: 'wikiTypeEpisode' },
+      { value: 'OPERATION_PLAYBOOK', label: 'wikiTypeOperation' },
+    ];
+    const wikiCards = ref([]);
+    const wikiPageInfo = ref({ limit: 20, nextCursor: '', hasMore: false });
+    const wikiLoading = ref(false);
+    const wikiError = ref('');
+    const selectedWiki = ref(null);
+    const editingWiki = ref(false);
+    const wikiSaving = ref(false);
+    const wikiExporting = ref(false);
+    const draftTitle = ref('');
+    const draftSummary = ref('');
+    const wikiDirty = computed(() => selectedWiki.value !== null
+      && (draftTitle.value !== selectedWiki.value.title || draftSummary.value !== selectedWiki.value.summary));
+    const wikiPreview = computed(() => {
+      const card = selectedWiki.value;
+      if (!card) return '';
+      let markdown = `# ${draftTitle.value}\n\n${draftSummary.value}\n\n- Wiki ID: \`${card.conceptId}\`\n- Type: \`${card.conceptType}\`\n- Version: ${card.version}\n`;
+      if (card.namespaceKey !== null) markdown += `- Namespace: \`${card.namespaceKey}\`\n`;
+      if (card.capability) markdown += `\n## Graph Capability / Schema Card\n\n${card.capability}`;
+      return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"><style>
+        html{color-scheme:dark}body{margin:0;padding:16px;color:#e5dcd0;font:14px/1.75 system-ui,sans-serif;overflow-wrap:anywhere}h1{font-size:22px;color:#c9a96e}h2{font-size:18px}h3{font-size:16px}a{color:#c9a96e}pre{white-space:pre-wrap}code{background:#241e30;padding:2px 4px;border-radius:4px}table{border-collapse:collapse;width:100%}th,td{border:1px solid #44384c;padding:6px}blockquote{margin-left:0;border-left:2px solid #c9a96e;padding-left:12px}
+      </style></head><body>${renderMarkdown(markdown)}</body></html>`;
+    });
     let searchTimer = null;
     let documentQueryVersion = 0;
+    let wikiQueryVersion = 0;
+
+    function requireWikiCard(card) {
+      if (!card || typeof card.conceptId !== 'string' || typeof card.revisionId !== 'string'
+          || typeof card.conceptType !== 'string' || !Number.isInteger(card.version)
+          || typeof card.title !== 'string' || typeof card.summary !== 'string'
+          || typeof card.capability !== 'string' || !(card.namespaceKey === null || typeof card.namespaceKey === 'string')) {
+        throw new Error(t('invalidWikiResponse'));
+      }
+      return card;
+    }
 
     async function loadCollections({ append = false, cursor = '' } = {}) {
       if (loadingCollections.value) return;
       loadingCollections.value = true;
       try {
-        const page = requirePageResponse(
-          await CyreneAPI.listCollections({
-            limit: collectionPageInfo.value.limit,
-            cursor,
-          }),
-          item => typeof item === 'string',
-          t('invalidCollectionListResponse')
-        );
+        const page = requirePageResponse(await CyreneAPI.listCollections({ limit: 50, cursor }),
+          item => typeof item === 'string', t('invalidCollectionListResponse'));
         collections.value = append ? [...collections.value, ...page.items] : page.items;
         collectionPageInfo.value = page.pageInfo;
-      } catch (e) {
-        if (!append) collections.value = [];
-        showToast(t('loadFailed') + e.message, 'error');
-      } finally {
-        loadingCollections.value = false;
-      }
-    }
-
-    function loadMoreCollections() {
-      if (!collectionPageInfo.value.hasMore || loadingCollections.value) return;
-      loadCollections({ append: true, cursor: collectionPageInfo.value.nextCursor });
+      } catch (e) { showToast(t('loadFailed') + e.message, 'error'); }
+      finally { loadingCollections.value = false; }
     }
 
     async function loadDocuments({ append = false, cursor = '' } = {}) {
+      const version = ++documentQueryVersion;
       if (!selectedCollection.value) {
         documents.value = [];
         pageInfo.value = { limit: 50, nextCursor: '', hasMore: false };
+        loadingDocuments.value = false;
+        loadingMore.value = false;
         return;
       }
-      const queryVersion = ++documentQueryVersion;
       if (append) loadingMore.value = true;
       else loadingDocuments.value = true;
       documentListError.value = '';
       try {
-        const page = requirePageResponse(
-          await CyreneAPI.listKnowledge(selectedCollection.value, {
-            fileName: fileNameFilter.value.trim(),
-            limit: pageInfo.value.limit,
-            cursor,
-          }),
-          item => typeof item?.id === 'string'
-            && typeof item.fileName === 'string'
-            && Number.isInteger(item.chunkIndex),
-          t('invalidKnowledgeListResponse')
-        );
-        if (queryVersion !== documentQueryVersion) return;
+        const page = requirePageResponse(await CyreneAPI.listKnowledge(selectedCollection.value, {
+          fileName: fileNameFilter.value.trim(), limit: 50, cursor,
+        }), item => typeof item?.id === 'string' && typeof item.fileName === 'string'
+          && typeof item.documentId === 'string' && Number.isInteger(item.chunkIndex), t('invalidKnowledgeListResponse'));
+        if (version !== documentQueryVersion) return;
         documents.value = append ? [...documents.value, ...page.items] : page.items;
         pageInfo.value = page.pageInfo;
       } catch (e) {
-        if (queryVersion !== documentQueryVersion) return;
-        if (!append) documents.value = [];
+        if (version !== documentQueryVersion) return;
         documentListError.value = e.message;
-        showToast(t('loadFailed') + e.message, 'error');
       } finally {
-        if (queryVersion === documentQueryVersion) {
-          loadingDocuments.value = false;
-          loadingMore.value = false;
-        }
+        if (version === documentQueryVersion) { loadingDocuments.value = false; loadingMore.value = false; }
       }
     }
 
-    function loadMoreDocuments() {
-      if (!pageInfo.value.hasMore || loadingDocuments.value || loadingMore.value) return;
-      loadDocuments({ append: true, cursor: pageInfo.value.nextCursor });
+    function confirmWikiChange() {
+      return !wikiDirty.value || window.confirm(t('wikiDiscardChanges'));
     }
 
-    function clearFileNameFilter() {
-      if (!fileNameFilter.value) {
-        loadDocuments();
-        return;
-      }
-      fileNameFilter.value = '';
+    function applyCollection(value = collectionInput.value) {
+      collectionInput.value = value.trim();
+      if (selectedCollection.value === collectionInput.value) { loadDocuments(); }
+      else selectedCollection.value = collectionInput.value;
     }
 
-    async function uploadFile() {
-      const file = fileInput.value?.files?.[0];
-      if (!file) return;
-      if (!uploadCollection.value.trim()) {
-        showToast(t('enterCollectionName'), 'error');
-        return;
-      }
+    async function uploadFiles() {
+      const collection = uploadCollection.value.trim();
+      if (!collection || !selectedFiles.value.length || uploading.value) return;
       uploading.value = true;
+      uploadQueue.value = selectedFiles.value.map(file => ({ file, name: file.name, status: 'waiting', message: '' }));
       try {
-        const result = await CyreneAPI.uploadKnowledge(file, uploadCollection.value.trim());
-        const pending = result.status === 'pending';
-        showToast(pending ? t('uploadQueued') : t('uploadSuccess'),
-          pending ? 'info' : 'success');
-        selectedCollection.value = uploadCollection.value.trim();
-        loadCollections();
-        loadDocuments();
-      } catch (e) {
-        showToast(t('uploadFailed') + e.message, 'error');
-      } finally {
-        uploading.value = false;
+        for (const item of uploadQueue.value) {
+          item.status = 'uploading';
+          try {
+            const result = await CyreneAPI.uploadKnowledge(item.file, collection);
+            if (!['indexed', 'pending'].includes(result?.status) || typeof result.documentId !== 'string' || typeof result.jobId !== 'string') {
+              throw new Error(t('invalidKnowledgeUploadResponse'));
+            }
+            item.status = result.status;
+            if (result.status === 'pending') item.message = result.message;
+          } catch (e) { item.status = 'failed'; item.message = e.message; }
+        }
+        selectedFiles.value = [];
+        if (fileInput.value) fileInput.value.value = '';
+        uploadCollection.value = collection;
+        collectionInput.value = collection;
+        if (selectedCollection.value === collection) await loadDocuments();
+        else selectedCollection.value = collection;
+        await Promise.all([loadCollections(), loadWiki()]);
+      } finally { uploading.value = false; }
+    }
+
+    function openWiki(card, showDrawer = true) {
+      if (!confirmWikiChange()) return;
+      selectedWiki.value = requireWikiCard(card);
+      if (showDrawer) openWikiDrawer();
+      draftTitle.value = card.title;
+      draftSummary.value = card.summary;
+      editingWiki.value = false;
+      wikiError.value = '';
+    }
+
+    async function openDocumentWiki(document) {
+      if (wikiSaving.value) return;
+      try { openWiki(requireWikiCard(await CyreneAPI.getWiki(document.documentId, userId.value))); }
+      catch (e) { wikiError.value = e.message; }
+    }
+
+    async function loadWiki({ append = false, cursor = '' } = {}) {
+      const version = ++wikiQueryVersion;
+      wikiLoading.value = true;
+      wikiError.value = '';
+      try {
+        const page = requirePageResponse(await CyreneAPI.listWiki(userId.value, {
+          type: wikiType.value, limit: 20, cursor,
+        }), card => { requireWikiCard(card); return true; }, t('invalidWikiResponse'));
+        if (version !== wikiQueryVersion) return;
+        wikiCards.value = append ? [...wikiCards.value, ...page.items] : page.items;
+        wikiPageInfo.value = page.pageInfo;
+        if (!selectedWiki.value && page.items.length) openWiki(page.items[0], false);
+        else if (selectedWiki.value && !wikiDirty.value) {
+          const current = page.items.find(card => card.conceptId === selectedWiki.value.conceptId);
+          if (current) openWiki(current, false);
+        }
+      } catch (e) { if (version === wikiQueryVersion) wikiError.value = e.message; }
+      finally { if (version === wikiQueryVersion) wikiLoading.value = false; }
+    }
+
+    function changeWikiType(event) {
+      if (!confirmWikiChange()) { event.target.value = wikiType.value; return; }
+      wikiType.value = event.target.value;
+      selectedWiki.value = null;
+      wikiCards.value = [];
+      loadWiki();
+    }
+
+    async function saveWiki() {
+      if (!selectedWiki.value || wikiSaving.value || !draftTitle.value.trim() || !draftSummary.value.trim()) return;
+      wikiSaving.value = true;
+      wikiError.value = '';
+      try {
+        const updated = requireWikiCard(await CyreneAPI.updateWiki(selectedWiki.value.conceptId, userId.value, {
+          revisionId: selectedWiki.value.revisionId, title: draftTitle.value, summary: draftSummary.value,
+        }));
+        selectedWiki.value = updated;
+        draftTitle.value = updated.title;
+        draftSummary.value = updated.summary;
+        wikiCards.value = wikiCards.value.map(card => card.conceptId === updated.conceptId ? updated : card);
+        showToast(t('wikiSaved'), 'success');
+      } catch (e) { wikiError.value = e.message; }
+      finally { wikiSaving.value = false; }
+    }
+
+    function openWikiDrawer() {
+      if (wikiDrawer.value && !wikiDrawer.value.open) wikiDrawer.value.showModal();
+    }
+
+    function closeWikiDrawer() {
+      if (wikiSaving.value || wikiExporting.value || !confirmWikiChange()) return;
+      if (selectedWiki.value) {
+        draftTitle.value = selectedWiki.value.title;
+        draftSummary.value = selectedWiki.value.summary;
       }
+      editingWiki.value = false;
+      wikiDrawer.value.close();
+    }
+
+    function handleWikiBackdrop(event) {
+      if (event.target === wikiDrawer.value) closeWikiDrawer();
+    }
+
+    async function downloadWiki(all = false) {
+      if ((!all && !selectedWiki.value) || wikiDirty.value || wikiExporting.value || wikiSaving.value) return;
+      wikiExporting.value = true;
+      wikiError.value = '';
+      wikiExportError.value = '';
+      try {
+        const blob = all ? await CyreneAPI.exportAllWiki(userId.value)
+          : await CyreneAPI.exportWiki(selectedWiki.value.conceptId, userId.value);
+        const url = URL.createObjectURL(blob);
+        try {
+          const link = document.createElement('a');
+          link.href = url;
+          link.download = all ? 'llm-wiki.md' : `wiki-${selectedWiki.value.conceptId}.md`;
+          link.click();
+        } finally { URL.revokeObjectURL(url); }
+      } catch (e) { wikiError.value = e.message; wikiExportError.value = e.message; }
+      finally { wikiExporting.value = false; }
     }
 
     watch(selectedCollection, () => {
       clearTimeout(searchTimer);
-      documentQueryVersion++;
       documents.value = [];
       pageInfo.value = { limit: 50, nextCursor: '', hasMore: false };
-      documentListError.value = '';
       loadDocuments();
     });
     watch(fileNameFilter, () => {
       clearTimeout(searchTimer);
       documentQueryVersion++;
-      loadingDocuments.value = true;
-      loadingMore.value = false;
       searchTimer = setTimeout(() => loadDocuments(), 300);
     });
-    onMounted(loadCollections);
-    onUnmounted(() => {
-      clearTimeout(searchTimer);
-      documentQueryVersion++;
-    });
+    watch(userId, () => { selectedWiki.value = null; wikiCards.value = []; loadWiki(); });
+    onMounted(() => { loadCollections(); loadWiki(); });
+    onUnmounted(() => { clearTimeout(searchTimer); documentQueryVersion++; wikiQueryVersion++; });
 
-    return {
-      Icons, t, collections, collectionPageInfo, loadingCollections,
-      selectedCollection, documents, pageInfo, fileNameFilter,
-      loadingDocuments, loadingMore, documentListError,
-      uploading, uploadCollection, fileInput,
-      loadCollections, loadMoreCollections, loadDocuments, loadMoreDocuments, clearFileNameFilter,
-      uploadFile,
-    };
+    return { Icons, t, collections, collectionPageInfo, loadingCollections, selectedCollection, collectionInput,
+      documents, pageInfo, fileNameFilter, loadingDocuments, loadingMore, documentListError,
+      uploading, uploadCollection, fileInput, selectedFiles, uploadQueue, uploadedCount,
+      wikiType, wikiTypes, wikiCards, wikiPageInfo, wikiLoading, wikiError, selectedWiki, editingWiki,
+      wikiDrawer, wikiExportError, wikiSaving, wikiExporting, draftTitle, draftSummary, wikiDirty, wikiPreview,
+      loadCollections, loadDocuments, applyCollection, uploadFiles, openWiki, openDocumentWiki,
+      loadWiki, changeWikiType, saveWiki, downloadWiki, openWikiDrawer, closeWikiDrawer, handleWikiBackdrop };
   },
   template: `
-    <div>
-      <!-- Upload section -->
-      <div class="card card-gold mb-4">
-        <div class="card-header">
-          <div class="card-title">{{ t('uploadKnowledge') }}</div>
-        </div>
-        <div class="card-body">
-          <div style="display: flex; gap: var(--space-3); align-items: flex-end;">
-            <div class="input-group" style="flex: 1;">
-              <label class="input-label">{{ t('collectionName') }}</label>
-              <input class="input" v-model="uploadCollection" placeholder="my-knowledge" />
-            </div>
-            <div class="input-group" style="flex: 1;">
-              <label class="input-label">{{ t('chooseFile') }}</label>
-              <input type="file" ref="fileInput" class="input" style="padding: 8px;" />
-            </div>
-            <button class="btn btn-primary" @click="uploadFile" :disabled="uploading" style="white-space: nowrap;">
-              {{ uploading ? t('uploading') : t('upload') }}
-            </button>
-          </div>
-        </div>
+    <div class="knowledge-workspace">
+      <div class="knowledge-page-toolbar">
+        <button class="btn btn-ghost" @click="downloadWiki(true)" :disabled="wikiExporting || wikiSaving || wikiDirty" :title="wikiDirty ? t('wikiSaveBeforeExport') : t('exportAllWikiHint')">{{ wikiExporting ? t('exportingWiki') : t('exportAllWikiMd') }}</button>
+        <button class="btn btn-primary" @click="openWikiDrawer" aria-haspopup="dialog" aria-controls="knowledgeWikiDrawer">LLM Wiki</button>
       </div>
-
-      <!-- Browse section -->
-      <div class="card">
-        <div class="card-header">
-          <div class="card-title">{{ t('browseKnowledge') }}</div>
-          <div style="display: flex; gap: var(--space-2); align-items: center;">
-            <button class="btn btn-ghost btn-sm" @click="loadCollections">
-              <span v-html="Icons.refresh" style="width:14px;height:14px;"></span>
-            </button>
-          </div>
-        </div>
-        <div class="card-body">
-          <!-- Collection list -->
-          <div v-if="collections.length && !selectedCollection" style="display: flex; flex-wrap: wrap; gap: var(--space-2); margin-bottom: var(--space-4);">
-            <div v-for="col in collections" :key="col"
-                 class="nav-item" style="cursor: pointer; padding: var(--space-2) var(--space-3);"
-                 @click="selectedCollection = col">
-              <span class="text-sm">📁 {{ col }}</span>
+      <div v-if="wikiExportError" class="knowledge-list-error text-sm" role="alert">{{ wikiExportError }}</div>
+      <div class="knowledge-main">
+        <section class="card card-gold">
+          <div class="card-header"><div class="card-title">{{ t('uploadKnowledge') }}</div></div>
+          <div class="card-body">
+            <div class="knowledge-upload-form">
+              <div class="input-group">
+                <label class="input-label" for="knowledgeUploadCollection">{{ t('collectionName') }}</label>
+                <input id="knowledgeUploadCollection" class="input" v-model="uploadCollection" list="knowledgeCollections" :disabled="uploading" :placeholder="t('collectionInputPlaceholder')" />
+              </div>
+              <div class="input-group">
+                <label class="input-label" for="knowledgeUploadFiles">{{ t('chooseFiles') }}</label>
+                <input id="knowledgeUploadFiles" type="file" ref="fileInput" class="input" multiple :disabled="uploading" @change="selectedFiles = Array.from($event.target.files)" />
+              </div>
+              <button class="btn btn-primary" @click="uploadFiles" :disabled="uploading || !selectedFiles.length || !uploadCollection.trim()">
+                {{ uploading ? t('uploading') : t('upload') }}<span v-if="selectedFiles.length"> ({{ selectedFiles.length }})</span>
+              </button>
+            </div>
+            <p class="text-xs text-ash mt-4">{{ t('multiFileHint') }}</p>
+            <div v-if="uploadQueue.length" class="knowledge-upload-results" aria-live="polite">
+              <div class="text-sm">{{ t('uploadProcessed') }} {{ uploadedCount }}/{{ uploadQueue.length }}</div>
+              <div v-for="(item, index) in uploadQueue" :key="index" class="knowledge-upload-result">
+                <span class="text-sm">{{ item.name }}</span>
+                <span class="text-xs" :class="{ 'knowledge-list-error': item.status === 'failed' }">{{ t('uploadState_' + item.status) }}</span>
+                <div v-if="item.message" class="text-xs knowledge-upload-message">{{ item.message }}</div>
+              </div>
             </div>
           </div>
-
-          <!-- Selected collection -->
-          <div v-if="selectedCollection" style="margin-bottom: var(--space-3);">
-            <div class="knowledge-filter-row">
-              <div>
-                <button class="btn btn-ghost btn-sm" @click="selectedCollection = ''">
-                  {{ t('back') }}
-                </button>
-                <span class="text-sm text-ash" style="margin-left: var(--space-2);">{{ t('current') }}{{ selectedCollection }}</span>
-              </div>
+        </section>
+        <section class="card">
+          <div class="card-header">
+            <div class="card-title">{{ t('browseKnowledge') }}</div>
+            <button class="btn btn-ghost btn-sm" @click="loadCollections" :disabled="loadingCollections" :aria-label="t('reload')"><span v-html="Icons.refresh"></span></button>
+          </div>
+          <div class="card-body">
+            <form class="knowledge-collection-form" @submit.prevent="applyCollection()">
+              <label class="input-label" for="knowledgeCollectionName">{{ t('collectionName') }}</label>
               <div class="knowledge-file-filter">
-                <input class="input" v-model="fileNameFilter"
-                       :placeholder="t('knowledgeFileNamePlaceholder')" />
-                <button v-if="fileNameFilter" class="btn btn-ghost btn-sm"
-                        @click="clearFileNameFilter" :disabled="loadingDocuments">
-                  {{ t('clearFilter') }}
-                </button>
+                <input id="knowledgeCollectionName" class="input" v-model="collectionInput" list="knowledgeCollections" :placeholder="t('collectionInputPlaceholder')" :disabled="wikiSaving" />
+                <button type="submit" class="btn btn-primary btn-sm" :disabled="wikiSaving">{{ t('browse') }}</button>
               </div>
+            </form>
+            <datalist id="knowledgeCollections"><option v-for="collection in collections" :key="collection" :value="collection"></option></datalist>
+            <div v-if="!selectedCollection" class="knowledge-collections">
+              <button v-for="collection in collections" :key="collection" class="btn btn-ghost btn-sm" @click="applyCollection(collection)">{{ collection }}</button>
+              <button v-if="collectionPageInfo.hasMore" class="btn btn-ghost btn-sm" @click="loadCollections({ append: true, cursor: collectionPageInfo.nextCursor })" :disabled="loadingCollections">{{ t('loadMoreCollections') }}</button>
             </div>
+            <template v-else>
+              <div class="knowledge-filter-row mt-4">
+                <span class="text-xs text-ash">{{ t('current') }} {{ selectedCollection }}</span>
+                <button class="btn btn-ghost btn-sm" @click="applyCollection('')" :disabled="wikiSaving">{{ t('back') }}</button>
+              </div>
+              <input class="input mt-4" v-model="fileNameFilter" :placeholder="t('knowledgeFileNamePlaceholder')" :aria-label="t('knowledgeFileNamePlaceholder')" />
+            </template>
+            <div v-if="loadingDocuments" class="knowledge-list-state text-ash">{{ t('loadingChunks') }}</div>
+            <div v-else-if="documentListError" class="knowledge-list-state knowledge-list-error" role="alert">{{ documentListError }}</div>
+            <div v-else-if="documents.length" class="knowledge-table mt-4">
+              <table><thead><tr><th>{{ t('chunksSource') }}</th><th>{{ t('chunksCount') }}</th><th>Wiki</th></tr></thead>
+                <tbody><tr v-for="doc in documents" :key="doc.id">
+                  <td class="text-sm">{{ doc.fileName }}</td><td class="text-xs text-ash">#{{ doc.chunkIndex }}</td>
+                  <td><button class="btn btn-ghost btn-sm" @click="openDocumentWiki(doc)" :disabled="!doc.documentId || wikiSaving">{{ t('view') }}</button></td>
+                </tr></tbody>
+              </table>
+              <button v-if="pageInfo.hasMore" class="btn btn-ghost btn-sm w-full mt-4" @click="loadDocuments({ append: true, cursor: pageInfo.nextCursor })" :disabled="loadingMore">{{ loadingMore ? t('loadingChunks') : t('loadMoreChunks') }}</button>
+            </div>
+            <empty-state v-else-if="!selectedCollection && !collections.length" :icon="Icons.knowledge" :title="t('seedsNotSown')" :hint="t('uploadToBuild')" />
+            <p v-else-if="selectedCollection" class="knowledge-list-state text-ash">{{ fileNameFilter ? t('noMatchingChunks') : t('noDocsInCollection') }}</p>
           </div>
-          <button v-if="!selectedCollection && collectionPageInfo.hasMore"
-                  class="btn btn-ghost btn-sm"
-                  :disabled="loadingCollections"
-                  @click="loadMoreCollections">
-            {{ loadingCollections ? t('loadingCollections') : t('loadMoreCollections') }}
-          </button>
-
-          <div v-if="loadingDocuments" class="text-sm text-ash knowledge-list-state">
-            {{ t('loadingChunks') }}
-          </div>
-          <div v-else-if="documentListError" class="text-sm knowledge-list-state knowledge-list-error">
-            {{ documentListError }}
-          </div>
-          <template v-else-if="documents.length">
-            <table>
-              <thead>
-                <tr>
-                  <th>{{ t('chunksSource') }}</th>
-                  <th>{{ t('chunksCount') }}</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="doc in documents" :key="doc.id">
-                  <td class="text-sm">{{ doc.fileName || doc.id }}</td>
-                  <td class="text-ash text-xs">#{{ doc.chunkIndex }}</td>
-                </tr>
-              </tbody>
-            </table>
-            <button v-if="pageInfo.hasMore" class="btn btn-ghost btn-sm w-full mt-4"
-                    @click="loadMoreDocuments" :disabled="loadingMore">
-              {{ loadingMore ? t('loadingChunks') : t('loadMoreChunks') }}
-            </button>
-          </template>
-          <empty-state v-else-if="!selectedCollection && !collections.length"
-            :icon="Icons.knowledge"
-            :title="t('seedsNotSown')"
-            :hint="t('uploadToBuild')" />
-          <div v-else-if="selectedCollection && !documents.length" class="text-sm text-ash" style="padding: var(--space-4); text-align: center;">
-            {{ fileNameFilter ? t('noMatchingChunks') : t('noDocsInCollection') }}
+        </section>
+      </div>
+      <dialog id="knowledgeWikiDrawer" ref="wikiDrawer" class="knowledge-wiki-drawer" aria-labelledby="knowledgeWikiTitle" @cancel.prevent="closeWikiDrawer" @click="handleWikiBackdrop">
+      <section class="card knowledge-wiki-card">
+        <div class="card-header">
+          <div id="knowledgeWikiTitle" class="card-title">LLM Wiki</div>
+          <div class="knowledge-wiki-toolbar">
+            <button class="btn btn-ghost btn-sm" @click="downloadWiki(true)" :disabled="wikiExporting || wikiSaving || wikiDirty" :title="t('exportAllWikiHint')">{{ wikiExporting ? t('exportingWiki') : t('exportAllWikiMd') }}</button>
+            <button class="btn btn-ghost btn-sm" @click="loadWiki" :disabled="wikiLoading || wikiSaving" :aria-label="t('reload')"><span v-html="Icons.refresh"></span></button>
+            <button class="btn btn-ghost btn-sm" @click="closeWikiDrawer" :disabled="wikiSaving || wikiExporting" :aria-label="t('closeWiki')">×</button>
           </div>
         </div>
-      </div>
-
+        <div class="card-body knowledge-wiki-body">
+          <p class="text-xs text-ash">{{ t('wikiHint') }}</p>
+          <select class="input" :value="wikiType" @change="changeWikiType($event)" :disabled="wikiSaving" :aria-label="t('wikiType')">
+            <option v-for="type in wikiTypes" :key="type.value" :value="type.value">{{ t(type.label) }}</option>
+          </select>
+          <div class="knowledge-wiki-list">
+            <button v-for="card in wikiCards" :key="card.conceptId" class="knowledge-wiki-item" :class="{ active: selectedWiki?.conceptId === card.conceptId }" @click="openWiki(card)" :disabled="wikiSaving">
+              <span>{{ card.title }}</span><span class="text-xs text-ash">{{ card.namespaceKey }} · v{{ card.version }}</span>
+            </button>
+            <button v-if="wikiPageInfo.hasMore" class="btn btn-ghost btn-sm w-full" @click="loadWiki({ append: true, cursor: wikiPageInfo.nextCursor })" :disabled="wikiLoading">{{ t('loadMoreWiki') }}</button>
+          </div>
+          <div v-if="wikiLoading" class="text-xs text-ash">{{ t('loadingWiki') }}</div>
+          <div v-if="wikiError" class="knowledge-list-error text-sm" role="alert">{{ wikiError }}</div>
+          <template v-if="selectedWiki">
+            <div class="knowledge-wiki-toolbar">
+              <div class="knowledge-wiki-tabs">
+                <button class="btn btn-ghost btn-sm" :class="{ 'wiki-tab-active': !editingWiki }" @click="editingWiki = false">{{ t('wikiPreview') }}</button>
+                <button class="btn btn-ghost btn-sm" :class="{ 'wiki-tab-active': editingWiki }" @click="editingWiki = true">{{ t('edit') }}</button>
+              </div>
+              <button class="btn btn-ghost btn-sm" @click="downloadWiki(false)" :disabled="wikiExporting || wikiSaving || wikiDirty" :title="wikiDirty ? t('wikiSaveBeforeExport') : ''">{{ wikiExporting ? t('exportingWiki') : t('exportWikiMd') }}</button>
+            </div>
+            <iframe v-if="!editingWiki" class="knowledge-wiki-preview" :srcdoc="wikiPreview" sandbox="" :title="t('wikiPreview')"></iframe>
+            <div v-else class="knowledge-wiki-editor">
+              <label class="input-label" for="wikiTitle">{{ t('wikiTitle') }}</label>
+              <input id="wikiTitle" class="input" v-model="draftTitle" maxlength="512" :disabled="wikiSaving" />
+              <label class="input-label mt-4" for="wikiSummary">{{ t('wikiSummary') }}</label>
+              <textarea id="wikiSummary" class="input knowledge-wiki-summary" v-model="draftSummary" maxlength="2048" :disabled="wikiSaving"></textarea>
+              <div class="knowledge-wiki-toolbar mt-4">
+                <span class="text-xs text-ash">{{ draftSummary.length }}/2048<span v-if="wikiDirty"> · {{ t('wikiUnsaved') }}</span></span>
+                <button class="btn btn-primary btn-sm" @click="saveWiki" :disabled="wikiSaving || !wikiDirty || !draftTitle.trim() || !draftSummary.trim()">{{ wikiSaving ? t('saving') : t('save') }}</button>
+              </div>
+            </div>
+          </template>
+          <empty-state v-else-if="!wikiLoading && !wikiError" :icon="Icons.knowledge" :title="t('noWikiCards')" :hint="t('wikiEmptyHint')" />
+        </div>
+      </section>
+      </dialog>
     </div>
   `
 };
@@ -6634,7 +6781,7 @@ const ModelConfigPage = {
               return;
             }
             if (draftValues[field.key] === originalValues[field.key]) return;
-            const value = draftValues[field.key]?.trim();
+            const value = String(draftValues[field.key] ?? '').trim();
             if (value) values[field.key] = value;
             else removals.add(field.key);
           });
@@ -6832,6 +6979,9 @@ const ModelConfigPage = {
                 </select>
               </template>
               <input v-else class="input" v-model="draftValues[field.key]"
+                     :type="field.key === 'chat.contextWindow' ? 'number' : 'text'"
+                     :min="field.key === 'chat.contextWindow' ? 1 : undefined"
+                     :step="field.key === 'chat.contextWindow' ? 1 : undefined"
                      :placeholder="t('notConfigured')" />
 
               <span v-if="field.sensitive && field.configured" class="model-config-control-meta">

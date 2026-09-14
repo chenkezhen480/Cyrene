@@ -146,6 +146,29 @@ class ToolExecutorTest {
     }
 
     @Test
+    void execute_toolClassMissing_returnsFailAndAllowsNextExecution() {
+        String missingClass = "com/harness/tool/builtin/SearxngResponseDiagnostics";
+        Tool tool = new Tool() {
+            @Override public ToolSpec spec() {
+                return new ToolSpec("web_search", "desc", MAPPER.createObjectNode());
+            }
+            @Override public String execute(JsonNode args) {
+                throw new NoClassDefFoundError(missingClass);
+            }
+        };
+        ToolCall call = toolCall("web_search");
+
+        ToolResult result = executor.executeAuthorized(call, tool, null);
+
+        assertThat(result.success()).isFalse();
+        assertThat(result.toolCallId()).isEqualTo(call.id());
+        assertThat(result.executionStatus()).isEqualTo(ExecutionStatus.FAILED);
+        assertThat(result.error()).contains(missingClass);
+        assertThat(executor.executeAuthorized(
+                toolCall("next"), createTool("next", "ok"), null).success()).isTrue();
+    }
+
+    @Test
     void execute_configuredConfirmationRequired_blocksToolExecution() {
         AtomicBoolean executed = new AtomicBoolean();
         Tool tool = new Tool() {

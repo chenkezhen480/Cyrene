@@ -25,6 +25,7 @@ import java.time.Clock;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 
 /** Re-authorizes every untrusted knowledge handle and performs bounded reads. */
 public final class KnowledgeReadTool implements Tool {
@@ -64,32 +65,14 @@ public final class KnowledgeReadTool implements Tool {
                 .put("type", "string").put("minLength", 1).put("maxLength", 4096));
         properties.set("before", integerProperty(0, documentExecutor.contextWindowMax()));
         properties.set("after", integerProperty(0, documentExecutor.contextWindowMax()));
-        if (graphExecutor != null) {
-            ObjectNode graphAction = objectMapper.createObjectNode()
-                    .put("type", "string")
-                    .put("description", "Graph route selected after reading a graph Wiki handle.");
-            graphAction.putArray("enum")
-                    .add("listGraphSpaces")
-                    .add("findNodes")
-                    .add("findNeighborhood");
-            properties.set("graphAction", graphAction);
-            properties.set("graphId", stringProperty());
-            properties.set("name", stringProperty());
-            properties.set("label", stringProperty());
-            properties.set("subjectIds", stringArrayProperty());
-            properties.set("cursor", stringProperty());
-            properties.set("relationTypes", stringArrayProperty());
-            properties.set("queryId", stringProperty());
-            properties.set("maxDepth", integerProperty(1, Integer.MAX_VALUE));
-            properties.set("limit", integerProperty(1, Integer.MAX_VALUE));
-        }
         ObjectNode schema = objectMapper.createObjectNode().put("type", "object");
         schema.set("properties", properties);
         schema.putArray("required").add("handle");
         schema.put("additionalProperties", false);
         return new ToolSpec(
                 TOOL_NAME,
-                "Read one typed Wiki handle after rechecking its current revision, tenant, collection, and tool authorization.",
+                "Read one typed Wiki handle after rechecking its current revision, tenant, collection, and tool authorization. "
+                        + "Graph handles return capability/Schema cards only; use query_graph for graph facts.",
                 schema,
                 com.harness.core.model.ToolCapability.RETRIEVAL);
     }
@@ -102,6 +85,14 @@ public final class KnowledgeReadTool implements Tool {
     @Override
     public ToolExecutionOutcome executeOutcome(JsonNode arguments) {
         try {
+            if (arguments == null || !arguments.isObject()) {
+                throw new IllegalArgumentException("Knowledge read arguments must be an object");
+            }
+            arguments.fieldNames().forEachRemaining(field -> {
+                if (!Set.of("handle", "before", "after").contains(field)) {
+                    throw new IllegalArgumentException("Unknown knowledge read argument: " + field);
+                }
+            });
             KnowledgeToolRuntimeContext context =
                     KnowledgeToolRuntimeContext.requireCurrent(TOOL_NAME);
             if (!context.authorizedTools().contains(TOOL_NAME)) {
@@ -111,23 +102,19 @@ public final class KnowledgeReadTool implements Tool {
             KnowledgeHead head = repository.findAuthorityById(handle.conceptId()).orElseThrow(
                     () -> new SecurityException("Knowledge handle does not resolve to a current Concept"));
             authorizeHead(handle, head, context);
-            RoutedRead read = switch (head.routeType()) {
-                case USER_MEMORY, OPERATION_MEMORY ->
-                        new RoutedRead(readMemory(head), ResultStatus.AVAILABLE);
-                case DOCUMENT -> new RoutedRead(
-                        readDocument(handle, head, arguments, context), ResultStatus.AVAILABLE);
-                case GRAPH -> readGraph(head, arguments);
+            Object data = switch (head.routeType()) {
+                case USER_MEMORY, OPERATION_MEMORY -> readMemory(head);
+                case DOCUMENT -> readDocument(handle, head, arguments, context);
+                case GRAPH -> readGraphCard(head, context);
             };
             Map<String, Object> metadata = Map.of(
                             "conceptId", head.concept().id(),
                             "revisionId", head.currentRevision().id(),
                             "knowledgeKind", head.concept().conceptType().name());
-            ToolEnvelope<Object> envelope = read.resultStatus() == ResultStatus.EMPTY
-                    ? ToolEnvelope.empty(read.data(), null, metadata)
-                    : ToolEnvelope.success(read.data(), null, metadata);
+            ToolEnvelope<Object> envelope = ToolEnvelope.success(data, null, metadata);
             return ToolExecutionOutcome.succeeded(
                     ToolOutput.text(objectMapper.writeValueAsString(envelope)),
-                    read.resultStatus());
+                    ResultStatus.AVAILABLE);
         } catch (ToolExecutionException exception) {
             throw exception;
         } catch (Exception exception) {
@@ -233,7 +220,7 @@ public final class KnowledgeReadTool implements Tool {
                         handle.collectionKey(), handle.documentId(), chunk.chunkIndex())))).toList());
     }
 
-    private RoutedRead readGraph(KnowledgeHead head, JsonNode arguments) throws Exception {
+    private GraphCapabilityRead readGraphCard(KnowledgeHead head, KnowledgeToolRuntimeContext context) {
         KnowledgeConceptType conceptType = head.concept().conceptType();
         if (conceptType != KnowledgeConceptType.GRAPH_SCHEMA
                 && conceptType != KnowledgeConceptType.GRAPH_SPACE) {
@@ -249,20 +236,25 @@ public final class KnowledgeReadTool implements Tool {
         if (conceptType == KnowledgeConceptType.GRAPH_SPACE && graphId == null) {
             throw new SecurityException("Graph Space Concept is missing graphId metadata");
         }
-        ToolExecutionOutcome graphOutcome = graphExecutor.executeForWiki(
-                schemaId, graphId, arguments);
-        if (graphOutcome.executionStatus()
-                != com.harness.core.model.ExecutionStatus.SUCCEEDED) {
-            throw new IllegalStateException(graphOutcome.error());
+        boolean readable = graphId == null
+                ? graphExecutor.readableWikiSchemas(context.tenantId(), Set.of(schemaId)).contains(schemaId)
+                : graphExecutor.readableWikiGraphSpaces(context.tenantId(), Map.of(
+                        head.concept().id(), new com.harness.agent.graph.GraphSpaceReference(graphId, schemaId)))
+                        .contains(head.concept().id());
+        if (!readable) {
+            throw new SecurityException("Graph capability is not readable in the current scope");
         }
-        return new RoutedRead(
-                new GraphRead(
-                        head.concept().id(),
-                        head.currentRevision().id(),
-                        schemaId,
-                        graphId,
-                        objectMapper.readTree(graphOutcome.content().modelContent())),
-                graphOutcome.resultStatus());
+        var snapshot = projectionStore.findRevisionSnapshot(head.currentVersion()).orElseThrow(
+                () -> new IllegalStateException("Current graph capability card is not indexed yet"));
+        var revision = snapshot.revision();
+        if (snapshot.conceptType() != conceptType
+                || !revision.conceptId().equals(head.concept().id())
+                || !revision.id().equals(head.currentVersion())) {
+            throw new SecurityException("Graph capability card does not match the authorized Wiki revision");
+        }
+        return new GraphCapabilityRead(conceptType, head.concept().id(), revision.id(),
+                revision.title(), revision.description(), revision.body(), schemaId, graphId,
+                KnowledgeGraphTool.TOOL_NAME, revision.metadata());
     }
 
     private static String graphSchemaId(KnowledgeHead head) {
@@ -272,16 +264,6 @@ public final class KnowledgeReadTool implements Tool {
     private ObjectNode integerProperty(int minimum, int maximum) {
         return objectMapper.createObjectNode().put("type", "integer")
                 .put("minimum", minimum).put("maximum", maximum);
-    }
-
-    private ObjectNode stringProperty() {
-        return objectMapper.createObjectNode().put("type", "string");
-    }
-
-    private ObjectNode stringArrayProperty() {
-        return objectMapper.createObjectNode()
-                .put("type", "array")
-                .set("items", stringProperty());
     }
 
     private static String requiredText(JsonNode arguments, String field) {
@@ -324,15 +306,18 @@ public final class KnowledgeReadTool implements Tool {
     public record DocumentChunk(String chunkId, String fileName, int chunkIndex,
                                 List<String> headingPath, String content, String handle) { }
 
-    public record GraphRead(
+    public record GraphCapabilityRead(
+            KnowledgeConceptType knowledgeKind,
             String conceptId,
             String revisionId,
+            String title,
+            String summary,
+            String body,
             String schemaId,
             String graphId,
-            JsonNode graphResult
+            String recommendedTool,
+            Map<String, Object> capabilities
     ) {
     }
 
-    private record RoutedRead(Object data, ResultStatus resultStatus) {
-    }
 }

@@ -69,6 +69,20 @@ class ModelProviderFactoryTest {
     }
 
     @Test
+    void configuredContextCapacityOverridesModelNameEstimates() {
+        Map<String, String> values = new java.util.HashMap<>(Map.of(
+                ModelConfigKey.CHAT_PROVIDER, "openai", ModelConfigKey.CHAT_API_KEY, "unit-test-key",
+                ModelConfigKey.CHAT_BASE_URL, "http://localhost:12345/v1", ModelConfigKey.CHAT_MODEL, "qwen-test",
+                ModelConfigKey.CHAT_CONTEXT_WINDOW, "1000000"));
+        assertThat(ModelProviderFactory.createChat(ModelConfig.of(values)).contextWindow()).isEqualTo(1000000);
+        for (String invalid : java.util.List.of("0", "-1")) {
+            values.put(ModelConfigKey.CHAT_CONTEXT_WINDOW, invalid);
+            assertThatThrownBy(() -> ModelProviderFactory.createChat(ModelConfig.of(values)))
+                    .hasMessageContaining("chat.contextWindow").hasMessageContaining("positive");
+        }
+    }
+
+    @Test
     void optionalProvidersRequireKnownProviderOrExplicitNone() {
         ModelConfig unknown = ModelConfig.of(Map.of(
                 ModelConfigKey.VOICE_PROVIDER, "unknown-provider"));

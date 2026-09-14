@@ -4,7 +4,7 @@
 
 > Add an autonomous ReAct Agent to an existing business system, its domain knowledge, and its authorization model instead of building an isolated AI application from scratch.
 
-Cyrene Agent is an enterprise Agent development framework built with Java 21. It is designed for vertical-domain developers who need to give an existing system a natural-language interface, project API control, enterprise knowledge retrieval, relational-data retrieval, validated structured output, sub-agent collaboration, and end-to-end tracing. The current version is `0.6.0`.
+Cyrene Agent is an enterprise Agent development framework built with Java 21. It is designed for vertical-domain developers who need to give an existing system a natural-language interface, project API control, enterprise knowledge retrieval, relational-data retrieval, validated structured output, sub-agent collaboration, and end-to-end tracing. The current version is `0.6.1`.
 
 ## Why Cyrene Agent
 
@@ -149,7 +149,7 @@ docker compose --env-file .env -f docker/docker-compose.yml --profile graph up -
 
 ```bash
 mvn clean package -pl harness-server -am -DskipTests
-java -jar harness-server/target/harness-server-0.6.0.jar
+java -jar harness-server/target/harness-server-0.6.1.jar
 ```
 
 The service listens on `8080` by default. Open the Web console to discover project APIs, upload knowledge, manage graph data, and talk to the Agent.

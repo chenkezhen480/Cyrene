@@ -201,6 +201,44 @@ public class MilvusVectorStore implements VectorStore {
         }
     }
 
+    @Override
+    public long copyDocumentRevision(String collection, String documentId, String previousRevisionId, String revisionId) {
+        QueryIterator iterator = null;
+        long copied = 0;
+        try {
+            iterator = client.queryIterator(QueryIteratorReq.builder().collectionName(collectionName)
+                    .consistencyLevel(io.milvus.v2.common.ConsistencyLevel.STRONG)
+                    .expr(equalsExpression("collection", requireCollection(collection))
+                            + " and metadata[\"document_id\"] == " + stringLiteral(requireId(documentId))
+                            + " and metadata[\"revision_id\"] == " + stringLiteral(requireId(previousRevisionId)))
+                    .outputFields(List.of("content", "source", "collection", "embedding", "chunk_index", "metadata"))
+                    .batchSize(100L).build());
+            var gson = new com.google.gson.Gson();
+            while (true) {
+                var batch = iterator.next();
+                if (batch.isEmpty()) break;
+                List<JsonObject> rows = new ArrayList<>();
+                for (var record : batch) {
+                    JsonObject row = gson.toJsonTree(record.getFieldValues()).getAsJsonObject();
+                    var raw = row.get("metadata");
+                    var metadata = raw.isJsonPrimitive() ? com.google.gson.JsonParser.parseString(raw.getAsString()).getAsJsonObject() : raw.getAsJsonObject();
+                    metadata.addProperty("revision_id", requireId(revisionId));
+                    row.add("metadata", metadata);
+                    row.addProperty("id", com.harness.core.knowledge.KnowledgeIdentity.documentChunkId(
+                            revisionId, row.get("chunk_index").getAsInt(),
+                            com.harness.core.knowledge.KnowledgeIdentity.sha256(row.get("content").getAsString())));
+                    rows.add(row);
+                }
+                client.upsert(UpsertReq.builder().collectionName(collectionName).data(rows).build());
+                copied += rows.size();
+            }
+            if (copied == 0) throw new IllegalStateException("Source Document has no chunks to preserve");
+            return copied;
+        } catch (Exception failure) {
+            throw new IllegalStateException("Cannot preserve Source Document chunks for Wiki edit", failure);
+        } finally { if (iterator != null) iterator.close(); }
+    }
+
     // ==================== 2. 查询能力 ====================
 
     @Override

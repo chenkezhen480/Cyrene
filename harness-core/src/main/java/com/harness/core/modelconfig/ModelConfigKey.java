@@ -18,6 +18,13 @@ public final class ModelConfigKey {
     public static final String CHAT_API_FORMAT = "chat.apiFormat";
     public static final String CHAT_MAX_TOKENS = "chat.maxTokens";
     public static final String CHAT_TEMPERATURE = "chat.temperature";
+    /**
+     * 已废弃：被 {@link #CHAT_THINKING_LEVEL} 取代 —— 档位里的 {@code off} 就是关闭思考，
+     * 布尔语义完全重复，且只要 {@code chat.thinkingLevel} 有值就永远不会被读取。
+     * 仅保留用于兼容 0.5.x 已写下的 {@code chat.thinking} 与老环境变量
+     * {@code HARNESS_MODEL_CHAT_THINKING} 的迁移（见 {@code ModelConfigInitializer}），
+     * 配置页面不再展示，新配置一律使用 {@code chat.thinkingLevel}。
+     */
     public static final String CHAT_THINKING = "chat.thinking";
     public static final String CHAT_THINKING_LEVEL = "chat.thinkingLevel";
     public static final String CHAT_THINKING_DIALECT = "chat.thinkingDialect";
@@ -76,12 +83,13 @@ public final class ModelConfigKey {
             d(CHAT_PROVIDER, "chat", "对话模型服务商"), d(CHAT_API_KEY, "chat", "对话模型密钥", true),
             d(CHAT_BASE_URL, "chat", "对话模型接口地址"), d(CHAT_MODEL, "chat", "对话模型名称"),
             d(CHAT_API_FORMAT, "chat", "对话接口格式"), d(CHAT_MAX_TOKENS, "chat", "最大输出 Token"),
-            d(CHAT_TEMPERATURE, "chat", "生成温度"), d(CHAT_THINKING, "chat", "默认启用思考"),
+            d(CHAT_TEMPERATURE, "chat", "生成温度"),
+            hidden(d(CHAT_THINKING, "chat", "默认启用思考（已废弃，改用思考强度）")),
             d(CHAT_THINKING_LEVEL, "chat", "思考强度", "slider", List.of("off", "low", "medium", "high", "xhigh")),
-            d(CHAT_THINKING_DIALECT, "chat", "思考参数方言", "select", List.of("effort", "qwen")),
-            d(CHAT_THINKING_BUDGETS, "chat", "思考预算（low,medium,high,xhigh，qwen 方言）"),
-            d(CHAT_THINKING_MAX_LEVEL, "chat", "思考强度上限", "select", List.of("off", "low", "medium", "high", "xhigh")),
-            d(CHAT_THINKING_XHIGH_VALUE, "chat", "xhigh 档下发值（Ollama 兼容口填 max）"),
+            hidden(d(CHAT_THINKING_DIALECT, "chat", "思考参数方言", "select", List.of("effort", "qwen"))),
+            hidden(d(CHAT_THINKING_BUDGETS, "chat", "思考预算（low,medium,high,xhigh，qwen 方言）")),
+            hidden(d(CHAT_THINKING_MAX_LEVEL, "chat", "思考强度上限", "select", List.of("off", "low", "medium", "high", "xhigh"))),
+            hidden(d(CHAT_THINKING_XHIGH_VALUE, "chat", "xhigh 档下发值（Ollama 兼容口填 max）")),
             d(CHAT_TIMEOUT_SECONDS, "chat", "请求超时秒数"), d(CHAT_CONTEXT_WINDOW, "chat", "上下文容量（Token）"),
             d(CHAT_CAPABILITIES, "chat", "多模态能力声明"),
             d(VISION_PROVIDER, "vision", "视觉模型服务商"), d(VISION_API_KEY, "vision", "视觉模型密钥", true),
@@ -124,7 +132,22 @@ public final class ModelConfigKey {
     }
 
     private static Definition d(String key, String section, String label, String control, List<String> options) {
-        return new Definition(key, section, label, false, control, options);
+        return new Definition(key, section, label, false, control, options, false);
+    }
+
+    /**
+     * 在模型配置页隐藏该键。键本身仍然有效：{@code isKnown} 返回 true，
+     * {@code model.conf} 可照常读写，只是 UI 不渲染，避免少数后端才用到的参数干扰常规配置。
+     */
+    private static Definition hidden(Definition definition) {
+        return new Definition(
+                definition.key(),
+                definition.section(),
+                definition.label(),
+                definition.sensitive(),
+                definition.control(),
+                definition.options(),
+                true);
     }
 
     /**
@@ -138,7 +161,8 @@ public final class ModelConfigKey {
             String label,
             boolean sensitive,
             String control,
-            List<String> options
+            List<String> options,
+            boolean hidden
     ) {
         public Definition {
             if (control == null || control.isBlank()) control = "text";
@@ -146,11 +170,11 @@ public final class ModelConfigKey {
         }
 
         public Definition(String key, String section, String label) {
-            this(key, section, label, false, "text", List.of());
+            this(key, section, label, false, "text", List.of(), false);
         }
 
         public Definition(String key, String section, String label, boolean sensitive) {
-            this(key, section, label, sensitive, "text", List.of());
+            this(key, section, label, sensitive, "text", List.of(), false);
         }
     }
 }

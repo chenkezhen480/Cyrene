@@ -31,6 +31,8 @@ public interface KnowledgeRepository {
 
     KnowledgeRevisionSnapshot findSnapshot(String revisionId);
 
+    KnowledgeRevisionSnapshot findMetadataSnapshot(String revisionId);
+
     Optional<KnowledgeHead> findById(String conceptId);
 
     Map<String, KnowledgeHead> findByIds(List<String> conceptIds);
@@ -43,6 +45,10 @@ public interface KnowledgeRepository {
             KnowledgeStatus status,
             KnowledgeConceptCursor cursor,
             int limit);
+
+    /** Unscoped management export only; Agent retrieval must use scoped queries. */
+    PageResponse<KnowledgeConcept> findManagementPage(
+            KnowledgeConceptType conceptType, KnowledgeStatus status, KnowledgeConceptCursor cursor, int limit);
 
     PageResponse<KnowledgeConcept> findPageInNamespace(
             String tenantId,

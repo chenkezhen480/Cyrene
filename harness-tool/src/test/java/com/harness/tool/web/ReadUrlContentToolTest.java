@@ -2,6 +2,8 @@ package com.harness.tool.web;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.harness.core.model.ResultStatus;
+import com.harness.core.model.ToolExecutionOutcome;
 import com.sun.net.httpserver.HttpServer;
 import okhttp3.OkHttpClient;
 import org.junit.jupiter.api.AfterEach;
@@ -23,10 +25,16 @@ class ReadUrlContentToolTest {
     private HttpServer server;
     private String baseUrl;
     private AtomicReference<String> article;
+    private AtomicReference<String> receivedUserAgent;
+    private AtomicReference<String> receivedAccept;
+    private AtomicReference<String> receivedAcceptLanguage;
     private ReadUrlContentTool tool;
 
     @BeforeEach
     void setUp() throws Exception {
+        receivedUserAgent = new AtomicReference<>();
+        receivedAccept = new AtomicReference<>();
+        receivedAcceptLanguage = new AtomicReference<>();
         article = new AtomicReference<>("""
                 <html><head><title>Example article</title></head><body>
                 <nav>Navigation should not appear</nav>
@@ -47,10 +55,35 @@ class ReadUrlContentToolTest {
             exchange.sendResponseHeaders(302, -1);
             exchange.close();
         });
+        serveHtml("/empty-article", """
+                <html><head><title>Paged article</title></head><body>
+                <article></article>
+                <div id="mw-content-text"><p>Body level content must survive.</p></div>
+                </body></html>
+                """);
+        serveHtml("/blank-page", """
+                <html><head><title>Blank</title></head><body>
+                <script>var x = 1;</script>
+                </body></html>
+                """);
+        server.createContext("/echo-ua", exchange -> {
+            receivedUserAgent.set(exchange.getRequestHeaders().getFirst("User-Agent"));
+            receivedAccept.set(exchange.getRequestHeaders().getFirst("Accept"));
+            receivedAcceptLanguage.set(
+                    exchange.getRequestHeaders().getFirst("Accept-Language"));
+            byte[] body = "<html><body><article>ok</article></body></html>"
+                    .getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "text/html; charset=utf-8");
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        });
         server.start();
         baseUrl = "http://127.0.0.1:" + server.getAddress().getPort();
         AuthorizedUrlContext.setFromUserText(
-                "Read " + baseUrl + "/article and " + baseUrl + "/redirect");
+                "Read " + baseUrl + "/article and " + baseUrl + "/redirect"
+                        + " and " + baseUrl + "/empty-article and " + baseUrl + "/blank-page"
+                        + " and " + baseUrl + "/echo-ua");
         tool = new ReadUrlContentTool(
                 new OkHttpClient.Builder()
                         .followRedirects(false)
@@ -60,6 +93,16 @@ class ReadUrlContentToolTest {
                 64 * 1024,
                 24,
                 100);
+    }
+
+    private void serveHtml(String path, String html) {
+        server.createContext(path, exchange -> {
+            byte[] body = html.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "text/html; charset=utf-8");
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        });
     }
 
     @AfterEach
@@ -89,6 +132,62 @@ class ReadUrlContentToolTest {
         assertThat(second.path("pageStart").asInt()).isEqualTo(first.path("pageEnd").asInt());
         assertThat(second.path("content").asText()).isNotBlank();
         assertThat(second.path("hasMore").asBoolean()).isFalse();
+    }
+
+    @Test
+    void fallsBackToPageBodyWhenPrimaryContainersAreEmpty() throws Exception {
+        // 空的 <article/> 曾让整页被判成 EMPTY，而 EMPTY 在 AdaptiveReflector 里算一次失败。
+        ToolExecutionOutcome outcome = tool.executeOutcome(
+                MAPPER.createObjectNode()
+                        .put("url", baseUrl + "/empty-article")
+                        .put("maxChars", 100));
+
+        assertThat(outcome.resultStatus()).isEqualTo(ResultStatus.AVAILABLE);
+        assertThat(MAPPER.readTree(outcome.content().modelContent())
+                .path("content").asText()).contains("Body level content must survive.");
+    }
+
+    @Test
+    void reportsEmptyOnlyWhenTheWholePageHasNoText() throws Exception {
+        ToolExecutionOutcome outcome = tool.executeOutcome(
+                MAPPER.createObjectNode().put("url", baseUrl + "/blank-page"));
+
+        assertThat(outcome.resultStatus()).isEqualTo(ResultStatus.EMPTY);
+    }
+
+    @Test
+    void buildsDefaultUserAgentFromChromeVersion() {
+        assertThat(ReadUrlContentTool.chromeUserAgent(160))
+                .contains("Chrome/160.0.0.0")
+                .contains("Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
+        assertThat(ReadUrlContentTool.chromeUserAgent(0))
+                .contains("Chrome/153.0.0.0");
+    }
+
+    @Test
+    void sendsBrowserConsistentHeaders() throws Exception {
+        tool.execute(MAPPER.createObjectNode().put("url", baseUrl + "/echo-ua"));
+
+        assertThat(receivedAccept.get())
+                .startsWith("text/html,application/xhtml+xml")
+                .contains("*/*;q=0.8");
+        assertThat(receivedAcceptLanguage.get()).isEqualTo("zh-CN,zh;q=0.9,en;q=0.8");
+        assertThat(receivedUserAgent.get()).contains("Chrome/153.0.0.0");
+    }
+
+    @Test
+    void sendsTheConfiguredUserAgent() throws Exception {
+        ReadUrlContentTool custom = new ReadUrlContentTool(
+                new OkHttpClient.Builder()
+                        .followRedirects(false)
+                        .followSslRedirects(false)
+                        .build(),
+                new UrlSafetyPolicy(true, List.of()),
+                64 * 1024, 24, 100, "My-Agent/9.9");
+
+        custom.execute(MAPPER.createObjectNode().put("url", baseUrl + "/echo-ua"));
+
+        assertThat(receivedUserAgent.get()).isEqualTo("My-Agent/9.9");
     }
 
     @Test

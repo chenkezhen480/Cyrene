@@ -36,6 +36,8 @@ public interface VectorStore {
     /** Delete every chunk projected from one immutable Source Document Revision. */
     long deleteDocumentRevision(String collection, String documentId, String revisionId);
 
+    long copyDocumentRevision(String collection, String documentId, String previousRevisionId, String revisionId);
+
     // ==================== 2. 查询能力 ====================
 
     /**

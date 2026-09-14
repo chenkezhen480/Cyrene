@@ -39,6 +39,7 @@ import com.harness.tool.RunToolCatalog;
 import com.harness.tool.ToolExecutor;
 import com.harness.tool.ToolRegistry;
 import com.harness.tool.builtin.StructuredOutputTool;
+import com.harness.tool.builtin.FileReadTool;
 import com.harness.tool.confirmation.ConfirmationDecision;
 import com.harness.tool.confirmation.ConfirmationExecutionContext;
 import com.harness.tool.confirmation.ConfirmationRequest;
@@ -106,7 +107,7 @@ public final class AgentRunCoordinator {
             recordFinalOutputContract(trace, finalOutputContract);
             PreparedAgentRun prepared = runPreparer.prepare(toRequest(command, true), trace);
             RunToolCatalog toolCatalog = createToolCatalog(
-                    prepared.unavailableTools(), finalOutputContract);
+                    prepared.sessionId(), prepared.unavailableTools(), finalOutputContract);
             prepared = runPreparer.complete(prepared, toolCatalog, trace);
             runId = openRunScope(
                     prepared.sessionId(), command.cancellationToken(), toolCatalog, trace);
@@ -183,7 +184,7 @@ public final class AgentRunCoordinator {
             PreparedAgentRun prepared = runPreparer.prepare(toRequest(command, false), trace);
             callback.onEvent(StreamEvent.start(prepared.sessionId()));
 
-            RunToolCatalog toolCatalog = createToolCatalog(prepared.unavailableTools());
+            RunToolCatalog toolCatalog = createToolCatalog(prepared.sessionId(), prepared.unavailableTools(), new FinalOutputContract.Text());
             prepared = runPreparer.complete(prepared, toolCatalog, trace);
             CompressionOutcome compression = prepared.compressionOutcome();
             emitCompressionEvents(compression, callback);
@@ -469,18 +470,18 @@ public final class AgentRunCoordinator {
     }
 
     private RunToolCatalog createToolCatalog(
+            String sessionId,
             Set<String> unavailableTools,
             FinalOutputContract finalOutputContract
     ) {
         RunToolCatalog catalog = toolRegistry.snapshot().excluding(unavailableTools);
+        if (catalog.get(FileReadTool.TOOL_NAME) instanceof FileReadTool fileTool) {
+            catalog = catalog.replacing(fileTool.forSession(sessionId));
+        }
         if (finalOutputContract instanceof FinalOutputContract.JsonSchema jsonSchema) {
             return catalog.replacing(StructuredOutputTool.terminal(jsonSchema));
         }
         return catalog;
-    }
-
-    private RunToolCatalog createToolCatalog(Set<String> unavailableTools) {
-        return createToolCatalog(unavailableTools, new FinalOutputContract.Text());
     }
 
     private ReActLoop createLoop(RunToolCatalog toolCatalog) {

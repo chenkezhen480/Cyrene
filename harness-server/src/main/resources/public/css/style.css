@@ -3731,6 +3731,34 @@ tr.status-dusk td {
   color: var(--error);
 }
 
+.knowledge-workspace { display: grid; gap: var(--space-4); min-width: 0; }
+.knowledge-page-toolbar { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: var(--space-3); }
+.knowledge-main { display: grid; gap: var(--space-4); min-width: 0; }
+.knowledge-upload-form { display: flex; flex-wrap: wrap; align-items: end; gap: var(--space-3); }
+.knowledge-upload-form .input-group { flex: 1 1 180px; min-width: 0; }
+.knowledge-upload-form input[type=file] { padding: 8px; max-width: 100%; }
+.knowledge-upload-results { margin-top: var(--space-3); display: grid; gap: var(--space-2); }
+.knowledge-upload-result { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--space-2); padding: var(--space-2) 0; border-bottom: 1px solid var(--gold-line); overflow-wrap: anywhere; }
+.knowledge-upload-message { grid-column: 1 / -1; color: var(--ash); }
+.knowledge-collection-form .knowledge-file-filter { width: 100%; }
+.knowledge-collections { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-3); }
+.knowledge-table { overflow-x: auto; }
+.knowledge-wiki-drawer { position: fixed; inset: 0 0 0 auto; margin: 0; padding: 0; width: min(720px, 100vw); max-width: 100vw; height: 100dvh; max-height: 100dvh; border: 0; border-left: 1px solid var(--gold-line); background: var(--surface); color: var(--mist); box-shadow: var(--shadow-elevated); }
+.knowledge-wiki-drawer::backdrop { background: rgba(13, 9, 21, .65); }
+body:has(.knowledge-wiki-drawer[open]) { overflow: hidden; }
+.knowledge-wiki-card { height: 100%; display: flex; flex-direction: column; min-width: 0; border: 0; border-radius: 0; }
+.knowledge-wiki-card .card-header { flex-shrink: 0; flex-wrap: wrap; gap: var(--space-2); }
+.knowledge-wiki-body { display: flex; flex-direction: column; gap: var(--space-3); flex: 1; min-height: 0; overflow-y: auto; }
+.knowledge-wiki-list { max-height: 180px; overflow: auto; flex-shrink: 0; }
+.knowledge-wiki-item { display: flex; flex-direction: column; align-items: start; gap: var(--space-1); width: 100%; padding: var(--space-2) var(--space-3); border: 1px solid transparent; border-radius: var(--radius-sm); background: transparent; color: var(--mist); text-align: left; cursor: pointer; overflow-wrap: anywhere; }
+.knowledge-wiki-item:hover, .knowledge-wiki-item.active { background: rgba(201,169,110,.08); border-color: var(--gold-line); }
+.knowledge-wiki-toolbar { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: var(--space-2); }
+.knowledge-wiki-tabs { display: flex; gap: var(--space-1); }
+.wiki-tab-active { color: var(--gold) !important; }
+.knowledge-wiki-preview { width: 100%; flex: 1; min-height: 240px; border: 1px solid var(--gold-line); border-radius: var(--radius-sm); }
+.knowledge-wiki-editor { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.knowledge-wiki-summary { flex: 1; min-height: 220px; resize: vertical; line-height: 1.65; }
+
 /* ── Responsive ── */
 @media (max-width: 768px) {
   :root {

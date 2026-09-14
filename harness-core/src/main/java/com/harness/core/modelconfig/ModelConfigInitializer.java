@@ -25,6 +25,8 @@ public final class ModelConfigInitializer {
             m("HARNESS_MODEL_CHAT_API_FORMAT", ModelConfigKey.CHAT_API_FORMAT),
             m("HARNESS_MODEL_CHAT_MAX_TOKENS", ModelConfigKey.CHAT_MAX_TOKENS),
             m("HARNESS_MODEL_CHAT_TEMPERATURE", ModelConfigKey.CHAT_TEMPERATURE),
+            // 已废弃的旧布尔键：仅做键名搬运，值交给 provider 的回退分支解释（true→medium / false→off）。
+            // 新部署请直接用 chat.thinkingLevel；此处保留只为 0.5.x 环境变量的平滑迁移。
             m("HARNESS_MODEL_CHAT_THINKING", ModelConfigKey.CHAT_THINKING),
             m("HARNESS_MODEL_CHAT_TIMEOUT_SECONDS", ModelConfigKey.CHAT_TIMEOUT_SECONDS),
             m("HARNESS_MODEL_CHAT_CONTEXT_WINDOW", ModelConfigKey.CHAT_CONTEXT_WINDOW),

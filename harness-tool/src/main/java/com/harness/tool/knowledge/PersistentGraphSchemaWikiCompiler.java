@@ -31,12 +31,14 @@ import java.util.TreeMap;
 /** Transactionally writes Graph Schema Wiki revisions and their Catalog outbox tasks. */
 public final class PersistentGraphSchemaWikiCompiler implements GraphSchemaWikiCompiler {
 
-    private static final String COMPILER_ID = "cyrene-graph-schema-wiki-compiler/v1";
+    private static final String COMPILER_ID = "cyrene-graph-schema-wiki-compiler/v2";
 
     private final KnowledgeRepository repository;
+    private final GraphCapabilityDescriber capabilityDescriber;
 
-    public PersistentGraphSchemaWikiCompiler(KnowledgeRepository repository) {
+    public PersistentGraphSchemaWikiCompiler(KnowledgeRepository repository, GraphCapabilityDescriber capabilityDescriber) {
         this.repository = Objects.requireNonNull(repository, "repository");
+        this.capabilityDescriber = Objects.requireNonNull(capabilityDescriber, "capabilityDescriber");
     }
 
     @Override
@@ -51,17 +53,21 @@ public final class PersistentGraphSchemaWikiCompiler implements GraphSchemaWikiC
         long expectedVersion = existing == null ? 0 : existing.concept().version();
         long revisionNumber = expectedVersion + 1;
         String body = renderBody(schema);
-        String contentHash = KnowledgeIdentity.sha256(body);
+        String sourceHash = KnowledgeIdentity.sha256(body);
         if (existing != null
                 && existing.concept().status() == KnowledgeStatus.STABLE
-                && contentHash.equals(existing.currentRevision().contentHash())) {
+                && sourceHash.equals(existing.currentRevision().metadata().get("capabilitySourceHash"))) {
             return;
         }
+        String summary = capabilityDescriber.describe(definition);
+        body += "\n## AI capability description\n" + summary + '\n';
+        String contentHash = KnowledgeIdentity.sha256(body);
+        Map<String, Object> metadata = new LinkedHashMap<>(metadata(schema));
+        metadata.put("capabilitySourceHash", sourceHash);
         KnowledgeRevision revision = new KnowledgeRevision(
                 KnowledgeIdentity.revisionId(conceptId, revisionNumber, contentHash),
                 conceptId, revisionNumber, "Graph Schema " + schemaId,
-                "Schema Registry definition and searchable graph-domain contract.",
-                body, COMPILER_ID, now, contentHash, metadata(schema), now);
+                summary, body, COMPILER_ID, now, contentHash, metadata, now);
         KnowledgeConcept concept = new KnowledgeConcept(
                 conceptId, null, null, KnowledgeNamespaceType.GRAPH, schemaId,
                 KnowledgeConceptType.GRAPH_SCHEMA, schemaId, KnowledgeStatus.STABLE,
@@ -137,7 +143,18 @@ public final class PersistentGraphSchemaWikiCompiler implements GraphSchemaWikiC
                 .append("- Source: ").append(schema.source()).append('\n')
                 .append("- Format: ").append(schema.format()).append('\n')
                 .append("- Editable: ").append(schema.editable()).append('\n')
-                .append("- Resource: ").append(resourceUri(definition.schemaId()))
+                .append("- Resource: ").append(resourceUri(definition.schemaId())).append('\n');
+        appendSchemaDefinition(body, definition);
+        body.append("\nRecommended tool: query_graph\n")
+                .append("This card describes graph capabilities only. Entity and relationship facts stay in Neo4j.\n");
+        return body.toString();
+    }
+
+    static void appendSchemaDefinition(StringBuilder body, GraphSchemaDefinition definition) {
+        body.append("- Schema version: ").append(definition.version()).append('\n')
+                .append("- Schema mode: ").append(definition.mode()).append('\n')
+                .append("- Default max depth: ").append(definition.defaultMaxDepth()).append('\n')
+                .append("- Max depth: ").append(definition.maxDepth())
                 .append("\n\n## Node types\n");
         new TreeMap<>(definition.nodeTypes()).forEach((label, nodeType) ->
                 appendNodeType(body, label, nodeType));
@@ -148,7 +165,22 @@ public final class PersistentGraphSchemaWikiCompiler implements GraphSchemaWikiC
             new TreeMap<>(definition.relationTypes()).forEach((type, relationType) ->
                     appendRelationType(body, type, relationType));
         }
-        return body.toString();
+        body.append("\n## Typical queries\n");
+        typicalQueries(definition).forEach(query -> body.append("- ").append(query).append('\n'));
+    }
+
+    static List<String> typicalQueries(GraphSchemaDefinition definition) {
+        java.util.ArrayList<String> queries = new java.util.ArrayList<>();
+        new TreeMap<>(definition.nodeTypes()).forEach((label, type) ->
+                queries.add("Find " + label + " entities by name."));
+        new TreeMap<>(definition.relationTypes()).forEach((type, relation) ->
+                queries.add("Which " + String.join(", ", new java.util.TreeSet<>(relation.targetLabels()))
+                        + " entities are connected to " + String.join(", ", new java.util.TreeSet<>(relation.sourceLabels()))
+                        + " by " + type + "?"));
+        if (!definition.relationTypes().isEmpty()) {
+            queries.add("What relationships and bounded paths connect these entities?");
+        }
+        return List.copyOf(queries);
     }
 
     private static void appendNodeType(
@@ -193,6 +225,8 @@ public final class PersistentGraphSchemaWikiCompiler implements GraphSchemaWikiC
             body.append(entry.getKey()).append(':').append(property.type());
             if (property.required()) body.append(" required");
             if (property.sensitive()) body.append(" sensitive");
+            if (property.queryable()) body.append(" queryable");
+            if (property.sortable()) body.append(" sortable");
             first = false;
         }
         body.append(']');
@@ -211,6 +245,10 @@ public final class PersistentGraphSchemaWikiCompiler implements GraphSchemaWikiC
         metadata.put("resourceUri", resourceUri(definition.schemaId()));
         metadata.put("nodeTypeCount", definition.nodeTypes().size());
         metadata.put("relationTypeCount", definition.relationTypes().size());
+        metadata.put("entityTypes", new java.util.TreeSet<>(definition.nodeTypes().keySet()).stream().toList());
+        metadata.put("relationTypes", new java.util.TreeSet<>(definition.relationTypes().keySet()).stream().toList());
+        metadata.put("typicalQueries", typicalQueries(definition));
+        metadata.put("recommendedTool", "query_graph");
         return Map.copyOf(metadata);
     }
 

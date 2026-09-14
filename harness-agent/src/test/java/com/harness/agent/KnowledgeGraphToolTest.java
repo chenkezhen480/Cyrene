@@ -107,15 +107,16 @@ class KnowledgeGraphToolTest {
                 .thenReturn(Optional.of(org.mockito.Mockito.mock(GraphSchemaDefinition.class)));
         KnowledgeGraphTool.setCurrentContext("tenant-1", null);
 
-        var outcome = tool.executeForWiki(
-                "student-capability-v1",
-                objectMapper.createObjectNode()
-                        .put("graphAction", KnowledgeGraphTool.ACTION_LIST_GRAPH_SPACES));
+        var outcome = tool.executeOutcome(objectMapper.createObjectNode()
+                        .put("action", KnowledgeGraphTool.ACTION_LIST_GRAPH_SPACES));
         String output = outcome.content().modelContent();
 
         var envelope = objectMapper.readTree(output);
         assertThat(envelope.path("status").asText()).isEqualTo("SUCCESS");
         assertThat(envelope.path("data").path("graphSpaces")).hasSize(1);
+        assertThat(envelope.at("/data/schemas").has("student-capability-v1")).isTrue();
+        assertThat(tool.spec().name()).isEqualTo("query_graph");
+        assertThat(tool.spec().parameters().path("properties").has("handle")).isFalse();
         assertThat(envelope.at("/data/graphSpaces/0/graphId").asText())
                 .isEqualTo("students");
         assertThat(envelope.at("/data/graphSpaces/0/schemaId").asText())
@@ -134,16 +135,15 @@ class KnowledgeGraphToolTest {
         KnowledgeGraphTool.setCurrentContext("tenant-1", null);
 
         var firstArguments = objectMapper.createObjectNode()
-                .put("graphAction", KnowledgeGraphTool.ACTION_LIST_GRAPH_SPACES)
+                .put("action", KnowledgeGraphTool.ACTION_LIST_GRAPH_SPACES)
                 .put("limit", 10);
         var repeatedArguments = objectMapper.createObjectNode()
                 .put("limit", 10)
-                .put("graphAction", KnowledgeGraphTool.ACTION_LIST_GRAPH_SPACES);
+                .put("action", KnowledgeGraphTool.ACTION_LIST_GRAPH_SPACES);
 
-        tool.executeForWiki("student-capability-v1", firstArguments);
+        tool.executeOutcome(firstArguments.put("schemaId", "student-capability-v1"));
 
-        assertThatThrownBy(() -> tool.executeForWiki(
-                "student-capability-v1", repeatedArguments))
+        assertThatThrownBy(() -> tool.executeOutcome(repeatedArguments.put("schemaId", "student-capability-v1")))
                 .isInstanceOf(ToolExecutionException.class)
                 .hasMessageContaining("identical knowledge graph call already ran");
         verify(graphSpaceAccessService).listReadable("tenant-1", 10, "");
@@ -159,10 +159,8 @@ class KnowledgeGraphToolTest {
                 ));
         KnowledgeGraphTool.setCurrentContext("tenant-1", null);
 
-        var outcome = tool.executeForWiki(
-                "deleted-schema",
-                objectMapper.createObjectNode()
-                        .put("graphAction", KnowledgeGraphTool.ACTION_LIST_GRAPH_SPACES));
+        var outcome = tool.executeOutcome(objectMapper.createObjectNode()
+                        .put("action", KnowledgeGraphTool.ACTION_LIST_GRAPH_SPACES).put("schemaId", "deleted-schema"));
         String output = outcome.content().modelContent();
 
         var envelope = objectMapper.readTree(output);
@@ -194,10 +192,8 @@ class KnowledgeGraphToolTest {
                         : Optional.empty());
         KnowledgeGraphTool.setCurrentContext("tenant-1", null);
 
-        String output = tool.executeForWiki(
-                "student-schema",
-                objectMapper.createObjectNode()
-                        .put("graphAction", KnowledgeGraphTool.ACTION_LIST_GRAPH_SPACES))
+        String output = tool.executeOutcome(objectMapper.createObjectNode()
+                        .put("action", KnowledgeGraphTool.ACTION_LIST_GRAPH_SPACES).put("schemaId", "student-schema"))
                 .content().modelContent();
 
         var graphSpaces = objectMapper.readTree(output).at("/data/graphSpaces");
@@ -210,7 +206,7 @@ class KnowledgeGraphToolTest {
     }
 
     @Test
-    void wikiRouteListsOnlyGraphSpacesBoundToItsSchema() throws Exception {
+    void schemaFilterListsOnlyMatchingGraphSpaces() throws Exception {
         GraphSchemaDefinition registeredSchema =
                 org.mockito.Mockito.mock(GraphSchemaDefinition.class);
         when(graphSpaceAccessService.listReadable("tenant-1", 10, ""))
@@ -222,9 +218,7 @@ class KnowledgeGraphToolTest {
                 .thenReturn(Optional.of(registeredSchema));
         KnowledgeGraphTool.setCurrentContext("tenant-1", null);
 
-        var outcome = tool.executeForWiki(
-                "student-schema",
-                objectMapper.createObjectNode().put("graphAction", "listGraphSpaces"));
+        var outcome = tool.executeOutcome(objectMapper.createObjectNode().put("action", "listGraphSpaces").put("schemaId", "student-schema"));
 
         var graphSpaces = objectMapper.readTree(outcome.content().modelContent())
                 .at("/data/graphSpaces");
@@ -246,11 +240,11 @@ class KnowledgeGraphToolTest {
         KnowledgeGraphTool.setCurrentContext("tenant-1", null);
 
         var arguments = objectMapper.createObjectNode()
-                .put("graphAction", KnowledgeGraphTool.ACTION_FIND_NEIGHBORHOOD)
+                .put("action", KnowledgeGraphTool.ACTION_FIND_NEIGHBORHOOD)
                 .put("graphId", "students");
         arguments.putArray("subjectIds").add("student-1");
 
-        String output = tool.executeForWiki("student-capability-v1", arguments)
+        String output = tool.executeOutcome(arguments.put("schemaId", "student-capability-v1"))
                 .content().modelContent();
 
         var envelope = objectMapper.readTree(output);
@@ -298,7 +292,7 @@ class KnowledgeGraphToolTest {
         )).thenReturn(GraphRouteResult.empty());
         KnowledgeGraphTool.setCurrentContext("tenant-1", serverContext);
 
-        tool.executeForWiki("student-capability-v1", objectMapper.createObjectNode());
+        tool.executeOutcome(objectMapper.createObjectNode().put("schemaId", "student-capability-v1"));
 
         verify(graphSpaceAccessService).requireReadable(
                 "tenant-1",
@@ -324,10 +318,8 @@ class KnowledgeGraphToolTest {
         );
         KnowledgeGraphTool.setCurrentContext("tenant-1", serverContext);
 
-        assertThatThrownBy(() -> tool.executeForWiki(
-                "student-capability-v1",
-                objectMapper.createObjectNode()
-                        .put("graphAction", KnowledgeGraphTool.ACTION_LIST_GRAPH_SPACES)))
+        assertThatThrownBy(() -> tool.executeOutcome(objectMapper.createObjectNode()
+                        .put("action", KnowledgeGraphTool.ACTION_LIST_GRAPH_SPACES).put("schemaId", "student-capability-v1")))
                 .isInstanceOf(ToolExecutionException.class)
                 .hasMessageContaining("only allows findNeighborhood");
     }
@@ -345,9 +337,7 @@ class KnowledgeGraphToolTest {
                 List.of(), new PageInfo(10, "", false)));
         KnowledgeGraphTool.setCurrentContext("tenant-1", graphSpaceContext);
 
-        String output = tool.executeForWiki(
-                "student-capability-v1",
-                objectMapper.createObjectNode().put("name", "Xiaoming"))
+        String output = tool.executeOutcome(objectMapper.createObjectNode().put("name", "Xiaoming").put("schemaId", "student-capability-v1"))
                 .content().modelContent();
 
         var envelope = objectMapper.readTree(output);
@@ -368,15 +358,13 @@ class KnowledgeGraphToolTest {
     }
 
     @Test
-    void graphSpaceWikiHandlePinsGraphIdWithoutTrustedServerScope() throws Exception {
+    void directGraphQueryUsesExplicitGraphIdWithoutWiki() throws Exception {
         stubSchema("student-capability-v1");
         when(graphStore.listNodes(any())).thenReturn(new PageResponse<>(
                 List.of(), new PageInfo(10, "", false)));
         KnowledgeGraphTool.setCurrentContext("tenant-1", null);
 
-        String output = tool.executeForWiki(
-                "student-capability-v1", "students",
-                objectMapper.createObjectNode().put("name", "Xiaoming"))
+        String output = tool.executeOutcome(objectMapper.createObjectNode().put("name", "Xiaoming").put("schemaId", "student-capability-v1").put("graphId", "students"))
                 .content().modelContent();
 
         assertThat(objectMapper.readTree(output).at("/data/graphId").asText())
@@ -407,6 +395,18 @@ class KnowledgeGraphToolTest {
                         "private", "student-capability-v1")));
 
         assertThat(readable).containsExactly("public-concept");
+    }
+
+    @Test
+    void rejectsMalformedAndOutOfBoundsArgumentsBeforeReadingGraphData() {
+        KnowledgeGraphTool.setCurrentContext("tenant-1", null);
+        assertThatThrownBy(() -> tool.execute(objectMapper.createObjectNode().put("limit", -1)))
+                .hasMessageContaining("Invalid graph arguments");
+        assertThatThrownBy(() -> tool.execute(objectMapper.createObjectNode().put("graphId", 7)))
+                .hasMessageContaining("Invalid graph arguments");
+        assertThatThrownBy(() -> tool.execute(objectMapper.createObjectNode().put("cypher", "MATCH (n) RETURN n")))
+                .hasMessageContaining("Invalid graph arguments");
+        org.mockito.Mockito.verifyNoInteractions(graphStore, retriever, graphSpaceAccessService);
     }
 
     private void stubSchema(String schemaId) {

@@ -25,6 +25,7 @@ import java.util.Map;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.clearInvocations;
@@ -36,12 +37,15 @@ class PersistentGraphSchemaWikiCompilerTest {
 
     private KnowledgeRepository repository;
     private PersistentGraphSchemaWikiCompiler compiler;
+    private GraphCapabilityDescriber describer;
 
     @BeforeEach
     void setUp() {
         EnvConfig.init(Map.of(EnvKey.KNOWLEDGE_CATALOG_COLLECTION, "catalog"));
         repository = mock(KnowledgeRepository.class);
-        compiler = new PersistentGraphSchemaWikiCompiler(repository);
+        describer = mock(GraphCapabilityDescriber.class);
+        when(describer.describe(any())).thenReturn("AI description: find Student entities using query_graph.");
+        compiler = new PersistentGraphSchemaWikiCompiler(repository, describer);
     }
 
     @Test
@@ -54,9 +58,14 @@ class PersistentGraphSchemaWikiCompilerTest {
         assertThat(change.concept().conceptType()).isEqualTo(KnowledgeConceptType.GRAPH_SCHEMA);
         assertThat(change.concept().status()).isEqualTo(KnowledgeStatus.STABLE);
         assertThat(change.revision().body())
-                .contains("Graph Schema student-v1", "Student", "name:STRING required");
+                .contains("Graph Schema student-v1", "Student", "name:STRING required", "query_graph", "Typical queries");
+        assertThat(change.revision().description()).isEqualTo("AI description: find Student entities using query_graph.");
+        assertThat(change.revision().body()).contains(change.revision().description());
+        verify(describer).describe(details(true).definition());
         assertThat(change.revision().metadata())
                 .containsEntry("schemaId", "student-v1")
+                .containsEntry("recommendedTool", "query_graph")
+                .containsEntry("entityTypes", List.of("Student"))
                 .containsEntry("enabled", true)
                 .containsEntry("resourceUri", "cyrene://graph-schemas/student-v1");
         assertThat(change.indexTasks()).singleElement()
@@ -70,7 +79,7 @@ class PersistentGraphSchemaWikiCompilerTest {
     @Test
     void deletionCreatesDeprecatedRevisionAndCatalogDelete() {
         KnowledgeRevisionChange initial = initialChange();
-        clearInvocations(repository);
+        clearInvocations(repository, describer);
         when(repository.findById(any())).thenReturn(Optional.of(new KnowledgeHead(
                 initial.concept(), initial.revision())));
 
@@ -87,13 +96,39 @@ class PersistentGraphSchemaWikiCompilerTest {
     @Test
     void skipsUnchangedRegistryState() {
         KnowledgeRevisionChange initial = initialChange();
-        clearInvocations(repository);
+        clearInvocations(repository, describer);
         when(repository.findById(any())).thenReturn(Optional.of(new KnowledgeHead(
                 initial.concept(), initial.revision())));
 
         compiler.synchronize(details(false));
 
         verify(repository, never()).commitChanges(any());
+        verify(describer, never()).describe(any());
+    }
+
+    @Test
+    void descriptionFailureDoesNotCommitAPlaceholderWiki() {
+        when(repository.findById(any())).thenReturn(Optional.empty());
+        when(describer.describe(any())).thenThrow(new IllegalStateException("model unavailable"));
+        assertThatThrownBy(() -> compiler.synchronize(details(true))).hasMessageContaining("model unavailable");
+        verify(repository, never()).commitChanges(any());
+    }
+
+    @Test
+    void largeSchemaKeepsFullCardWithinSummaryContract() {
+        Map<String, GraphNodeTypeDefinition> types = new java.util.TreeMap<>();
+        java.util.stream.IntStream.range(0, 100).forEach(index -> {
+            String label = "EntityType" + index;
+            types.put(label, new GraphNodeTypeDefinition(label, Map.of()));
+        });
+        var definition = new GraphSchemaDefinition("large-schema", 1, GraphSchemaMode.STRICT, types, Map.of(), 1, 2);
+        when(repository.findById(any())).thenReturn(Optional.empty());
+        compiler.synchronize(new GraphSchemaDetails(definition, true, GraphSchemaSource.MANAGED,
+                GraphSchemaFormat.JSON, true, "{}"));
+        var revision = capturedChange().revision();
+        assertThat(revision.description().length()).isLessThanOrEqualTo(2048);
+        assertThat(revision.body()).contains("EntityType99");
+        assertThat((List<?>) revision.metadata().get("entityTypes")).hasSize(100);
     }
 
     private KnowledgeRevisionChange initialChange() {

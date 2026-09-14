@@ -3,6 +3,7 @@ package com.harness.tool.web;
 import com.harness.core.exception.ToolExecutionException;
 
 import java.net.URI;
+import java.util.Collection;
 import java.util.LinkedHashSet;
 import java.util.Locale;
 import java.util.Set;
@@ -22,6 +23,14 @@ public final class AuthorizedUrlContext {
     }
 
     public static void setFromUserText(String text) {
+        CURRENT.set(Set.copyOf(extractFromUserText(text)));
+    }
+
+    /**
+     * 纯提取：只把文本里的 URL 规范化解出来，不改动当前作用域。
+     * 供 resume 等需要从其它来源（会话历史）重建作用域的调用方使用。
+     */
+    public static Set<String> extractFromUserText(String text) {
         Set<String> urls = new LinkedHashSet<>();
         if (text != null) {
             Matcher matcher = HTTP_URL.matcher(text);
@@ -33,7 +42,29 @@ public final class AuthorizedUrlContext {
                 }
             }
         }
-        CURRENT.set(Set.copyOf(urls));
+        return urls;
+    }
+
+    /**
+     * 追加本轮运行内可信来源（如 web_search 结果）发现的 URL，与用户显式给出的 URL 合并。
+     * 无运行作用域时不授权，保持 fail-closed。
+     */
+    public static void authorizeAll(Collection<String> urls) {
+        Set<String> current = CURRENT.get();
+        if (current == null || urls == null || urls.isEmpty()) {
+            return;
+        }
+        Set<String> merged = new LinkedHashSet<>(current);
+        for (String url : urls) {
+            if (url == null || url.isBlank()) {
+                continue;
+            }
+            try {
+                merged.add(normalize(url));
+            } catch (Exception ignored) {
+            }
+        }
+        CURRENT.set(Set.copyOf(merged));
     }
 
     public static Set<String> snapshot() {
@@ -53,10 +84,17 @@ public final class AuthorizedUrlContext {
             throw new ToolExecutionException(toolName, "Invalid URL: " + e.getMessage(), e);
         }
         Set<String> authorized = CURRENT.get();
-        if (authorized == null || !authorized.contains(normalized)) {
+        // 两种失败原因必须分开报：作用域没建立（run 上下文缺失）和 URL 不在作用域内，
+        // 症状相似但根因完全不同，合并成一句话会让人查错方向。
+        if (authorized == null) {
             throw new ToolExecutionException(
                     toolName,
-                    "URL was not explicitly provided by the user in this request: " + url);
+                    "URL authorization scope is not initialized for this run: " + url);
+        }
+        if (!authorized.contains(normalized)) {
+            throw new ToolExecutionException(
+                    toolName,
+                    "URL is outside the scope authorized by the user in this request: " + url);
         }
     }
 

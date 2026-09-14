@@ -208,8 +208,8 @@ public final class ModelProviderFactory {
 
     private static int configuredContextWindow(ModelConfig config, String modelName) {
         int configured = config.getInt(ModelConfigKey.CHAT_CONTEXT_WINDOW, 0);
-        if (configured < 0) {
-            throw new IllegalStateException(ModelConfigKey.CHAT_CONTEXT_WINDOW + " cannot be negative");
+        if (config.getString(ModelConfigKey.CHAT_CONTEXT_WINDOW) != null && configured <= 0) {
+            throw new IllegalStateException(ModelConfigKey.CHAT_CONTEXT_WINDOW + " must be positive");
         }
         return configured > 0
                 ? configured

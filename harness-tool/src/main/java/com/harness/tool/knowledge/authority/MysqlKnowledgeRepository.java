@@ -172,6 +172,33 @@ public final class MysqlKnowledgeRepository implements KnowledgeRepository {
     }
 
     @Override
+    public PageResponse<KnowledgeConcept> findManagementPage(
+            KnowledgeConceptType conceptType, KnowledgeStatus status, KnowledgeConceptCursor cursor, int limit) {
+        if (conceptType == null || status == null) throw new IllegalArgumentException("conceptType and status are required");
+        validateLimit(limit);
+        var sql = new StringBuilder("SELECT * FROM " + tableFor(conceptType) + " WHERE concept_type = ? AND status = ?");
+        if (cursor != null) sql.append(" AND (updated_at < ? OR (updated_at = ? AND id < ?))");
+        sql.append(" ORDER BY updated_at DESC, id DESC LIMIT ?");
+        var concepts = new ArrayList<KnowledgeConcept>();
+        try (var scope = readConnection(); var statement = scope.connection().prepareStatement(sql.toString())) {
+            int parameter = 1;
+            statement.setString(parameter++, conceptType.name());
+            statement.setString(parameter++, status.storageValue());
+            if (cursor != null) {
+                Timestamp timestamp = Timestamp.from(cursor.updatedAt());
+                statement.setTimestamp(parameter++, timestamp);
+                statement.setTimestamp(parameter++, timestamp);
+                statement.setString(parameter++, cursor.conceptId());
+            }
+            statement.setInt(parameter, limit + 1);
+            try (var rows = statement.executeQuery()) {
+                while (rows.next()) concepts.add(mapConcept(rows));
+            }
+        } catch (SQLException failure) { throw new KnowledgePersistenceException("Failed to list Wiki for management export", failure); }
+        return PageResponse.fromFetched(concepts, limit, concept -> concept.updatedAt() + "|" + concept.id());
+    }
+
+    @Override
     public PageResponse<KnowledgeConcept> findPageInNamespace(
             String tenantId,
             KnowledgeNamespaceType namespaceType,
@@ -246,6 +273,11 @@ public final class MysqlKnowledgeRepository implements KnowledgeRepository {
         return snapshot(revisionId).orElseThrow(() -> new KnowledgePersistenceException("Knowledge version is unavailable: " + revisionId));
     }
 
+    @Override
+    public KnowledgeRevisionSnapshot findMetadataSnapshot(String revisionId) {
+        return rawSnapshot(revisionId).orElseThrow(() -> new KnowledgePersistenceException("Wiki version is unavailable: " + revisionId));
+    }
+
     private Optional<KnowledgeRevisionSnapshot> snapshot(String revisionId) {
         return restoreDocumentBody(rawSnapshot(revisionId));
     }
@@ -303,6 +335,7 @@ public final class MysqlKnowledgeRepository implements KnowledgeRepository {
             connection.commit();
         } catch (Exception e) {
             rollback(connection);
+            if (e instanceof RuntimeException runtime) throw runtime;
             throw new KnowledgePersistenceException("Knowledge projection transaction failed", e);
         } finally {
             projectionConnection.remove();
@@ -507,6 +540,16 @@ public final class MysqlKnowledgeRepository implements KnowledgeRepository {
                 changes == null ? List.of() : changes);
         if (immutableChanges.isEmpty()) {
             throw new IllegalArgumentException("changes must not be empty");
+        }
+        Connection current = projectionConnection.get();
+        if (current != null) {
+            try {
+                for (KnowledgeRevisionChange change : immutableChanges) prepareConceptChange(current, change);
+                for (KnowledgeRevisionChange change : immutableChanges) persistRevisionChange(current, change);
+                return;
+            } catch (SQLException failure) {
+                throw new KnowledgePersistenceException("Cannot save Knowledge changes in the current transaction", failure);
+            }
         }
         Connection connection = null;
         try {

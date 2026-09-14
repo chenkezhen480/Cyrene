@@ -12,6 +12,7 @@ import com.harness.core.model.PageResponse;
 import com.harness.core.model.ResultStatus;
 import com.harness.core.model.ToolExecutionOutcome;
 import com.harness.core.model.ToolOutput;
+import com.harness.core.model.ToolSpec;
 import com.harness.graph.config.GraphSettings;
 import com.harness.graph.model.GraphNodePageRequest;
 import com.harness.graph.model.GraphRouteResult;
@@ -22,6 +23,7 @@ import com.harness.graph.retrieval.GraphToolData;
 import com.harness.graph.schema.GraphSchemaRegistry;
 import com.harness.graph.store.KnowledgeGraphStore;
 import com.harness.tool.protocol.ToolEnvelope;
+import com.harness.tool.Tool;
 import com.harness.tool.protocol.ToolEnvelopeStatus;
 
 import java.util.ArrayList;
@@ -39,9 +41,9 @@ import java.util.Set;
  * <p>A server-provided request scope always takes precedence. Without one, the tool can discover
  * graph spaces and nodes autonomously, subject to the configured graph-space access service.</p>
  */
-public final class KnowledgeGraphTool {
+public final class KnowledgeGraphTool implements Tool {
 
-    private static final String ERROR_SOURCE = "knowledge_read";
+    public static final String TOOL_NAME = "query_graph";
     static final String ACTION_LIST_GRAPH_SPACES = "listGraphSpaces";
     static final String ACTION_FIND_NODES = "findNodes";
     static final String ACTION_FIND_NEIGHBORHOOD = "findNeighborhood";
@@ -54,6 +56,7 @@ public final class KnowledgeGraphTool {
     private final GraphSchemaRegistry schemaRegistry;
     private final GraphSettings settings;
     private final ObjectMapper objectMapper;
+    private final com.harness.core.structured.StructuredOutputValueValidator argumentValidator;
 
     public KnowledgeGraphTool(
             GraphKnowledgeRetriever retriever,
@@ -72,6 +75,7 @@ public final class KnowledgeGraphTool {
         this.schemaRegistry = Objects.requireNonNull(schemaRegistry, "schemaRegistry");
         this.settings = Objects.requireNonNull(settings, "settings");
         this.objectMapper = Objects.requireNonNull(objectMapper, "objectMapper");
+        this.argumentValidator = new com.harness.core.structured.StructuredOutputValueValidator(objectMapper);
     }
 
     public static void setCurrentContext(String tenantId, GraphRequestContext requestContext) {
@@ -97,67 +101,72 @@ public final class KnowledgeGraphTool {
         CURRENT_CONTEXT.remove();
     }
 
-    /** Executes a deterministic Neo4j route selected by an authorized Graph Schema Wiki handle. */
-    public ToolExecutionOutcome executeForWiki(String schemaId, JsonNode arguments) {
-        return executeForWiki(schemaId, null, arguments);
+    @Override
+    public ToolSpec spec() {
+        ObjectNode properties = objectMapper.createObjectNode();
+        ObjectNode action = objectMapper.createObjectNode().put("type", "string");
+        action.putArray("enum").add(ACTION_LIST_GRAPH_SPACES)
+                .add(ACTION_FIND_NODES).add(ACTION_FIND_NEIGHBORHOOD);
+        properties.set("action", action);
+        for (String field : List.of("graphId", "schemaId", "name", "label", "cursor", "queryId")) {
+            properties.set(field, objectMapper.createObjectNode().put("type", "string"));
+        }
+        for (String field : List.of("subjectIds", "relationTypes")) {
+            properties.set(field, objectMapper.createObjectNode().put("type", "array")
+                    .set("items", objectMapper.createObjectNode().put("type", "string")));
+        }
+        properties.set("maxDepth", objectMapper.createObjectNode().put("type", "integer")
+                .put("minimum", 1).put("maximum", settings.maxDepth()));
+        properties.set("limit", objectMapper.createObjectNode().put("type", "integer")
+                .put("minimum", 1).put("maximum", settings.maxLimit()));
+        ObjectNode schema = objectMapper.createObjectNode().put("type", "object")
+                .put("additionalProperties", false);
+        schema.set("properties", properties);
+        schema.putArray("required");
+        return new ToolSpec(TOOL_NAME,
+                "Query Neo4j entities and relationships directly, without a Wiki handle. "
+                        + "For entity membership, related entities or bounded relationship paths, use this tool. "
+                        + "Without graphId/schemaId, listGraphSpaces discovers readable graphs and their Schema cards; "
+                        + "then findNodes by name/label and findNeighborhood with returned subjectIds. "
+                        + "Wiki graph hits describe capabilities only and may recommend this tool. "
+                        + "Use returned cursors for list pagination; never supply Cypher or invent identifiers. "
+                        + "Trusted server graph, subject and query scopes cannot be widened.",
+                schema, com.harness.core.model.ToolCapability.RETRIEVAL);
     }
 
-    /** Executes a deterministic route already narrowed to one Graph Space Wiki handle. */
-    public ToolExecutionOutcome executeForWiki(
-            String schemaId,
-            String graphId,
-            JsonNode arguments
-    ) {
+    @Override
+    public String execute(JsonNode arguments) {
+        return executeOutcome(arguments).content().modelContent();
+    }
+
+    @Override
+    public ToolExecutionOutcome executeOutcome(JsonNode arguments) {
         RuntimeContext runtimeContext = CURRENT_CONTEXT.get();
         if (runtimeContext == null) {
             throw new ToolExecutionException(
-                    ERROR_SOURCE, "No graph tool runtime context is available");
+                    TOOL_NAME, "No graph tool runtime context is available");
         }
-        String normalizedSchemaId = requireValue(schemaId, "schemaId");
         try {
+            validateArguments(arguments);
             GraphRequestContext serverContext = runtimeContext.requestContext();
-            if (serverContext != null
-                    && !normalizedSchemaId.equals(serverContext.schemaId())) {
-                throw new SecurityException(
-                        "Graph Wiki handle exceeds the server-authorized graph scope");
-            }
-            String normalizedGraphId = graphId == null
-                    ? null : requireValue(graphId, "graphId");
-            if (normalizedGraphId != null && serverContext != null
-                    && !normalizedGraphId.equals(serverContext.graphId())) {
-                throw new SecurityException(
-                        "Graph Space Wiki handle exceeds the server-authorized graph scope");
-            }
+            String schemaId = text(arguments, "schemaId", "");
+            String graphId = text(arguments, "graphId", "");
             String defaultAction = serverContext == null
-                    ? normalizedGraphId == null ? ACTION_LIST_GRAPH_SPACES : ACTION_FIND_NODES
+                    ? !stringSet(arguments, "subjectIds").isEmpty() ? ACTION_FIND_NEIGHBORHOOD
+                            : graphId.isEmpty() ? ACTION_LIST_GRAPH_SPACES : ACTION_FIND_NODES
                     : serverContext.hasSubjectScope()
                             ? ACTION_FIND_NEIGHBORHOOD
                             : ACTION_FIND_NODES;
-            String action = text(arguments, "graphAction", defaultAction);
+            String action = text(arguments, "action", defaultAction);
             requireAllowedAction(serverContext, action);
-            if (normalizedGraphId != null && ACTION_LIST_GRAPH_SPACES.equals(action)) {
-                throw new SecurityException(
-                        "Graph Space Wiki handle cannot widen retrieval to other graph spaces");
-            }
-            ObjectNode graphArguments = wikiGraphArguments(arguments, normalizedSchemaId);
-            if (normalizedGraphId != null) {
-                String requestedGraphId = text(arguments, "graphId", normalizedGraphId);
-                if (!normalizedGraphId.equals(requestedGraphId)) {
-                    throw new SecurityException(
-                            "Graph Space Wiki handle cannot select another graphId");
-                }
-                graphArguments.put("graphId", normalizedGraphId);
-            }
-            graphArguments.put("action", action);
             runtimeContext.requireFreshInvocation(
-                    "wiki:" + normalizedSchemaId + ':' + action,
-                    canonicalArguments(graphArguments));
+                    action, canonicalArguments(arguments));
             return switch (action) {
                 case ACTION_LIST_GRAPH_SPACES -> listGraphSpaces(
-                        graphArguments, runtimeContext, normalizedSchemaId);
-                case ACTION_FIND_NODES -> findNodes(graphArguments, runtimeContext);
+                        arguments, runtimeContext, schemaId.isEmpty() ? null : schemaId);
+                case ACTION_FIND_NODES -> findNodes(arguments, runtimeContext);
                 case ACTION_FIND_NEIGHBORHOOD ->
-                        findNeighborhood(graphArguments, runtimeContext);
+                        findNeighborhood(arguments, runtimeContext);
                 default -> throw new IllegalArgumentException(
                         "Unsupported graph action: " + action);
             };
@@ -165,7 +174,7 @@ public final class KnowledgeGraphTool {
             throw exception;
         } catch (Exception exception) {
             throw new ToolExecutionException(
-                    ERROR_SOURCE, "Knowledge graph Wiki route failed: " + exception.getMessage());
+                    TOOL_NAME, "Knowledge graph query failed: " + exception.getMessage());
         }
     }
 
@@ -177,7 +186,7 @@ public final class KnowledgeGraphTool {
         RuntimeContext runtimeContext = CURRENT_CONTEXT.get();
         if (runtimeContext == null) {
             throw new ToolExecutionException(
-                    ERROR_SOURCE, "No graph tool runtime context is available");
+                    TOOL_NAME, "No graph tool runtime context is available");
         }
         GraphRequestContext trusted = runtimeContext.requestContext();
         if (trusted != null) {
@@ -220,7 +229,7 @@ public final class KnowledgeGraphTool {
         RuntimeContext runtimeContext = CURRENT_CONTEXT.get();
         if (runtimeContext == null) {
             throw new ToolExecutionException(
-                    ERROR_SOURCE, "No graph tool runtime context is available");
+                    TOOL_NAME, "No graph tool runtime context is available");
         }
         GraphRequestContext trusted = runtimeContext.requestContext();
         LinkedHashSet<String> readable = new LinkedHashSet<>();
@@ -254,11 +263,14 @@ public final class KnowledgeGraphTool {
         );
         ToolEnvelope<GraphSpacesData> envelope = page.items().isEmpty()
                 ? ToolEnvelope.empty(
-                        new GraphSpacesData(List.of()),
+                        new GraphSpacesData(List.of(), Map.of()),
                         page.pageInfo(),
                         Map.of("truncated", false))
                 : ToolEnvelope.success(
-                        new GraphSpacesData(page.items()),
+                        new GraphSpacesData(page.items(), page.items().stream().collect(
+                                java.util.stream.Collectors.toMap(GraphSpaceReference::schemaId,
+                                        space -> schemaRegistry.find(space.schemaId()).orElseThrow(),
+                                        (first, duplicate) -> first))),
                         page.pageInfo(),
                         Map.of("truncated", false));
         return graphOutcome(envelope);
@@ -458,19 +470,18 @@ public final class KnowledgeGraphTool {
                 ToolOutput.text(serialize(envelope)), resultStatus);
     }
 
-    private ObjectNode wikiGraphArguments(JsonNode arguments, String schemaId) {
-        ObjectNode routed = objectMapper.createObjectNode();
-        if (arguments != null && arguments.isObject()) {
-            for (String field : List.of(
-                    "graphId", "name", "label", "subjectIds", "cursor",
-                    "relationTypes", "queryId", "maxDepth", "limit")) {
-                if (arguments.has(field)) {
-                    routed.set(field, arguments.get(field).deepCopy());
-                }
-            }
+    private void validateArguments(JsonNode arguments) {
+        try {
+            argumentValidator.validate(arguments, spec().parameters());
+        } catch (com.harness.core.exception.StructuredOutputException exception) {
+            throw new IllegalArgumentException("Invalid graph arguments: " + exception.details(), exception);
         }
-        routed.put("schemaId", schemaId);
-        return routed;
+        Map.of("limit", settings.maxLimit(), "maxDepth", settings.maxDepth()).forEach((field, maximum) -> {
+            JsonNode value = arguments.get(field);
+            if (value != null && (!value.canConvertToInt() || value.intValue() < 1 || value.intValue() > maximum)) {
+                throw new IllegalArgumentException("Invalid graph arguments: " + field + " exceeds configured bounds");
+            }
+        });
     }
 
     private static String requiredText(JsonNode arguments, String name) {
@@ -479,13 +490,6 @@ public final class KnowledgeGraphTool {
             throw new IllegalArgumentException(name + " is required");
         }
         return value;
-    }
-
-    private static String requireValue(String value, String name) {
-        if (value == null || value.isBlank()) {
-            throw new IllegalArgumentException(name + " is required");
-        }
-        return value.trim();
     }
 
     private static String text(JsonNode arguments, String name, String defaultValue) {
@@ -575,7 +579,7 @@ public final class KnowledgeGraphTool {
             String invocationKey = action + ':' + canonicalArguments;
             if (!invocationKeys.add(invocationKey)) {
                 throw new ToolExecutionException(
-                        ERROR_SOURCE,
+                        TOOL_NAME,
                         "An identical knowledge graph call already ran in this Agent request; "
                                 + "use its result or change the query parameters"
                 );
@@ -589,9 +593,11 @@ public final class KnowledgeGraphTool {
     ) {
     }
 
-    private record GraphSpacesData(List<GraphSpaceReference> graphSpaces) {
+    private record GraphSpacesData(List<GraphSpaceReference> graphSpaces,
+                                   Map<String, com.harness.graph.schema.GraphSchemaDefinition> schemas) {
         private GraphSpacesData {
-            graphSpaces = graphSpaces == null ? List.of() : List.copyOf(graphSpaces);
+            graphSpaces = List.copyOf(graphSpaces);
+            schemas = Map.copyOf(schemas);
         }
     }
 }

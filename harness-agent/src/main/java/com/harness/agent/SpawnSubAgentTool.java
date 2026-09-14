@@ -77,7 +77,7 @@ public class SpawnSubAgentTool implements Tool {
                         "The sub-agent has NO access to conversation history — you MUST include relevant history here.\n\n" +
                         "Optionally provide 'tools' to give the sub-agent specific tools. If omitted, the sub-agent has NO tools (text-only analysis).\n\n" +
                         "Optionally provide 'completion_contract' when completion must be verified from successful tool calls, stored artifacts, or structured output.\n\n" +
-                        "Available tool names: web_search, knowledge_search, knowledge_read, image_generation, " +
+                        "Available tool names: web_search, knowledge_search, knowledge_read, query_graph, image_generation, " +
                         "code_sandbox, load_skill, and any registered MCP tools.",
                 buildParametersSchema(),
                 com.harness.core.model.ToolCapability.ORCHESTRATION

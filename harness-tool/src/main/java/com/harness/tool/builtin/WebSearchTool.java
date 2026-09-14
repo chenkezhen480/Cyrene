@@ -12,6 +12,7 @@ import com.harness.core.env.EnvKey;
 import com.harness.tool.Tool;
 import com.harness.tool.protocol.ToolEnvelope;
 import com.harness.tool.protocol.ToolEnvelopeStatus;
+import com.harness.tool.web.AuthorizedUrlContext;
 import okhttp3.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -285,6 +286,10 @@ public class WebSearchTool implements Tool {
         }
 
         List<WebSearchData.Result> returnedResults = List.copyOf(uniqueResults.values());
+        // 搜索结果 URL 视为本轮可信来源：允许 read_url_content / browser_control 打开，
+        // 从而打通「搜索 → 阅读」流程；模型自行编造的 URL 仍被拒绝。
+        AuthorizedUrlContext.authorizeAll(
+                returnedResults.stream().map(WebSearchData.Result::url).toList());
 
         Set<String> failedEngines = failedQueriedEngines(diagnostics);
         // 低可信：多数引擎失败（结果可能只来自单一引擎），或全部结果都出自一个引擎（典型如

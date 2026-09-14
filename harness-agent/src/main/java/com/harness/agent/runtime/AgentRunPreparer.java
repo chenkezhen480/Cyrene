@@ -80,14 +80,14 @@ public final class AgentRunPreparer {
                         .map(AgentMessage.Attachment::name)
                         .toList());
 
-        String enhancedText = promptBuilder.enhanceUserText(
-                request.text(), input.parsedContents(), request.agentContext());
         AgentContext agentContext = request.agentContext() != null
                 ? request.agentContext()
                 : AgentContext.empty();
         MemoryContext memoryContext = memoryRuntime.resolve(
                 input.userId(), agentContext.optionalTenantId().orElse(null),
                 request.requestedSessionId(), request.text(), trace);
+        String enhancedText = promptBuilder.enhanceUserText(
+                request.text(), input.message().attachments(), agentContext, memoryContext.sessionId());
         activateRequestContexts(agentContext, memoryContext);
 
         GapAnalysis gapAnalysis = gapAnalyzer.analyze(enhancedText, agentContext);

@@ -9,6 +9,7 @@ import com.harness.input.document.DocumentConversionDiagnostics;
 import com.harness.input.document.DocumentConversionException;
 import com.harness.input.document.DocumentConversionResult;
 import com.harness.input.document.DocumentConversionService;
+import com.harness.input.document.DocumentSummarizer;
 import com.harness.provider.EmbeddingModelProvider;
 import com.harness.tool.knowledge.authority.*;
 import com.harness.tool.rag.VectorStore;
@@ -40,6 +41,7 @@ class KnowledgeIngestServiceTest {
     private EmbeddingModelProvider embeddingProvider;
     private VectorStore vectorStore;
     private DocumentConversionService conversionService;
+    private DocumentSummarizer documentSummarizer;
     private KnowledgeArtifactRepository artifactRepository;
     private KnowledgeIngestJobStore ingestJobStore;
     private KnowledgeRepository knowledgeRepository;
@@ -60,6 +62,11 @@ class KnowledgeIngestServiceTest {
         embeddingProvider = mock(EmbeddingModelProvider.class);
         vectorStore = mock(VectorStore.class);
         conversionService = mock(DocumentConversionService.class);
+        documentSummarizer = mock(DocumentSummarizer.class);
+        when(documentSummarizer.summarize(anyString(), anyString(), eq(2048)))
+                .thenReturn(new DocumentSummarizer.Summary(
+                        "{\"title\":\"Semantic report\",\"summary\":\"Explains student organization, class membership and teaching responsibilities.\"}",
+                        "primary-model", 1, 1));
         artifactRepository = mock(KnowledgeArtifactRepository.class);
         ingestJobStore = mock(KnowledgeIngestJobStore.class);
         knowledgeRepository = mock(KnowledgeRepository.class);
@@ -79,6 +86,7 @@ class KnowledgeIngestServiceTest {
                 embeddingProvider,
                 vectorStore,
                 conversionService,
+                documentSummarizer,
                 new ContentAddressedArtifactStorage(tempDir),
                 artifactRepository,
                 ingestJobStore,
@@ -111,10 +119,20 @@ class KnowledgeIngestServiceTest {
         });
         KnowledgeHead head = heads.get(result.documentId());
         assertThat(head.currentRevision().body()).isEqualTo("# Report\n\nCanonical Markdown.");
+        assertThat(head.currentRevision().title()).isEqualTo("Semantic report");
+        assertThat(head.currentRevision().description()).contains("class membership");
+        assertThat(head.currentRevision().metadata()).containsEntry("summaryModel", "primary-model")
+                .containsEntry("summaryCalls", 1);
+        verify(documentSummarizer).summarize(eq("# Report\n\nCanonical Markdown."),
+                contains("semantic Wiki discovery card"), eq(2048));
+        var compilation = ArgumentCaptor.forClass(KnowledgeRevisionChange.class);
+        verify(ingestJobStore).commitCompilation(eq(result.jobId()), compilation.capture());
+        assertThat(compilation.getValue().indexTasks()).hasSize(1);
+        assertThat(compilation.getValue().revision().description()).isEqualTo(head.currentRevision().description());
     }
 
     @Test
-    void completeUpdateCreatesRevisionAndDeletesOnlyPreviousRevisionProjection() {
+    void completeUpdateCreatesRevisionAndRetainsHistoricalChunks() {
         byte[] first = "first".getBytes(java.nio.charset.StandardCharsets.UTF_8);
         when(conversionService.convert(first, "guide.md", "text/markdown"))
                 .thenReturn(converted("# Guide\n\nFirst.", first.length));
@@ -131,8 +149,10 @@ class KnowledgeIngestServiceTest {
         assertThat(updated.documentId()).isEqualTo(initial.documentId());
         assertThat(updated.revisionId()).isNotEqualTo(initial.revisionId());
         assertThat(heads.get(initial.documentId()).currentRevision().revisionNumber()).isEqualTo(2);
-        verify(vectorStore).deleteDocumentRevision(
-                "documents", initial.documentId(), initial.revisionId());
+        assertThat(heads.get(initial.documentId()).currentRevision().metadata())
+                .containsEntry("previousRevisionId", initial.revisionId());
+        verify(vectorStore, times(2)).upsert(eq("documents"), anyList());
+        verify(vectorStore, never()).deleteDocumentRevision(anyString(), anyString(), anyString());
         verify(vectorStore, never()).deleteById(anyString(), anyString());
     }
 
@@ -171,6 +191,38 @@ class KnowledgeIngestServiceTest {
         verify(ingestJobStore).markFailed(
                 eq(jobState.get().id()), any(), eq("unsupported document"));
         verify(ingestJobStore, never()).reschedule(anyString(), any(), anyString());
+    }
+
+    @Test
+    void summaryFailureKeepsConvertedArtifactPendingWithoutCommittingOrIndexing() {
+        byte[] bytes = "source".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        when(conversionService.convert(bytes, "report.pdf", "application/pdf"))
+                .thenReturn(converted("# Report\n\nSource facts.", bytes.length));
+        when(documentSummarizer.summarize(anyString(), anyString(), eq(2048)))
+                .thenThrow(new IllegalStateException("model unavailable"));
+        KnowledgeIngestPendingException pending = catchThrowableOfType(() -> service.ingest(
+                bytes, "report.pdf", "application/pdf", "documents"), KnowledgeIngestPendingException.class);
+        assertThat(pending.documentId()).isEqualTo(jobState.get().sourceConceptId());
+        assertThat(jobState.get().status()).isEqualTo(KnowledgeIngestJob.Status.CONVERTED);
+        assertThat(jobState.get().convertedArtifactId()).isNotBlank();
+        verify(ingestJobStore).reschedule(eq(jobState.get().id()), any(), eq("model unavailable"));
+        verify(ingestJobStore, never()).commitCompilation(anyString(), any());
+        verify(vectorStore, never()).upsert(anyString(), anyList());
+    }
+
+    @Test
+    void invalidWikiModelOutputIsExplicitAndCannotReplaceCurrentKnowledge() {
+        byte[] bytes = "source".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        when(conversionService.convert(bytes, "report.pdf", "application/pdf"))
+                .thenReturn(converted("# Report\n\nSource facts.", bytes.length));
+        when(documentSummarizer.summarize(anyString(), anyString(), eq(2048)))
+                .thenReturn(new DocumentSummarizer.Summary(
+                        "{\"title\":\"report\",\"summary\":\"\"}", "primary-model", 1, 1));
+        assertThatThrownBy(() -> service.ingest(bytes, "report.pdf", "application/pdf", "documents"))
+                .isInstanceOf(KnowledgeIngestPendingException.class)
+                .hasCauseInstanceOf(IllegalStateException.class);
+        assertThat(heads).isEmpty();
+        verify(ingestJobStore, never()).commitCompilation(anyString(), any());
     }
 
     private void wirePersistentState() {

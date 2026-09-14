@@ -78,6 +78,18 @@ class KnowledgeProjectionFlowTest {
     }
 
     @Test
+    void conversationSummaryIsTheWikiEntryWhileMemoryBodyUsesItsDedicatedProjection() {
+        KnowledgeProjectionMapper mapper = new KnowledgeProjectionMapper(embeddingProvider());
+        for (KnowledgeConceptType type : List.of(KnowledgeConceptType.USER_EPISODE, KnowledgeConceptType.OPERATION_PLAYBOOK)) {
+            KnowledgeNamespaceType namespace = type == KnowledgeConceptType.USER_EPISODE
+                    ? KnowledgeNamespaceType.USER_MEMORY : KnowledgeNamespaceType.OPERATION_MEMORY;
+            KnowledgeHead memory = head(type, namespace, type.isUserOwned() ? "user-1" : null, "memory");
+            assertThat(mapper.mapCatalog(memory).orElseThrow().content()).isEqualTo("Title\n\nDescription");
+            assertThat(mapper.map(memory).orElseThrow().content()).isEqualTo("Body");
+        }
+    }
+
+    @Test
     void allProjectionCollectionsMustRemainDistinct() {
         assertThatThrownBy(() -> new KnowledgeProjectionCollections(
                 "same", "same", "user_memory", "operation_memory"))

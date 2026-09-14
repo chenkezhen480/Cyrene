@@ -1,5 +1,7 @@
 package com.harness.tool.knowledge;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.harness.core.env.EnvConfig;
 import com.harness.core.env.EnvKey;
 import com.harness.core.knowledge.*;
@@ -7,6 +9,7 @@ import com.harness.core.modelconfig.ModelConfigKey;
 import com.harness.input.document.DocumentConversionException;
 import com.harness.input.document.DocumentConversionResult;
 import com.harness.input.document.DocumentConversionService;
+import com.harness.input.document.DocumentSummarizer;
 import com.harness.input.multimodal.MarkdownChunk;
 import com.harness.input.multimodal.TextChunker;
 import com.harness.provider.EmbeddingModelProvider;
@@ -26,12 +29,23 @@ import java.util.*;
 public final class KnowledgeIngestService {
 
     private static final Logger log = LoggerFactory.getLogger(KnowledgeIngestService.class);
-    private static final String COMPILER_ID = "cyrene-document-compiler/v1";
+    private static final String COMPILER_ID = "cyrene-document-compiler/v2";
+    private static final ObjectMapper MAPPER = new ObjectMapper();
+    private static final String WIKI_TASK = """
+            Create a semantic Wiki discovery card for this source document.
+            Return only one JSON object with exactly two string fields: title and summary.
+            title: a meaningful document title, nonblank and at most 512 characters.
+            summary: nonblank, at most 2048 characters; describe subjects, important information,
+            coverage and the kinds of questions this document can answer. Include distinguishing terms.
+            Match the document's language. Do not copy a long excerpt or invent facts.
+            The document remains the source of truth; this card is only for discovering relevant knowledge.
+            """;
     private static final int EMBEDDING_BATCH_SIZE = 10;
 
     private final EmbeddingModelProvider embeddingProvider;
     private final VectorStore vectorStore;
     private final DocumentConversionService documentConversionService;
+    private final DocumentSummarizer documentSummarizer;
     private final ContentAddressedArtifactStorage artifactStorage;
     private final KnowledgeArtifactRepository artifactRepository;
     private final KnowledgeIngestJobStore ingestJobStore;
@@ -47,6 +61,7 @@ public final class KnowledgeIngestService {
             EmbeddingModelProvider embeddingProvider,
             VectorStore vectorStore,
             DocumentConversionService documentConversionService,
+            DocumentSummarizer documentSummarizer,
             ContentAddressedArtifactStorage artifactStorage,
             KnowledgeArtifactRepository artifactRepository,
             KnowledgeIngestJobStore ingestJobStore,
@@ -55,6 +70,7 @@ public final class KnowledgeIngestService {
         this.embeddingProvider = Objects.requireNonNull(embeddingProvider, "embeddingProvider");
         this.vectorStore = Objects.requireNonNull(vectorStore, "vectorStore");
         this.documentConversionService = Objects.requireNonNull(documentConversionService, "documentConversionService");
+        this.documentSummarizer = Objects.requireNonNull(documentSummarizer, "documentSummarizer");
         this.artifactStorage = Objects.requireNonNull(artifactStorage, "artifactStorage");
         this.artifactRepository = Objects.requireNonNull(artifactRepository, "artifactRepository");
         this.ingestJobStore = Objects.requireNonNull(ingestJobStore, "ingestJobStore");
@@ -227,9 +243,11 @@ public final class KnowledgeIngestService {
             throw new IllegalArgumentException("Source Document exceeds Chunk limit " + maxChunks);
         }
 
-        Instant now = Instant.now();
         KnowledgeHead existing = knowledgeRepository.findById(job.sourceConceptId()).orElse(null);
         validateExistingDocument(existing, job);
+        DocumentSummarizer.Summary summary = documentSummarizer.summarize(markdown, WIKI_TASK, 2048);
+        JsonNode card = wikiCard(summary.text());
+        Instant now = Instant.now();
         long expectedVersion = existing == null ? 0 : existing.concept().version();
         long revisionNumber = expectedVersion + 1;
         String contentHash = KnowledgeIdentity.sha256(markdown);
@@ -247,13 +265,15 @@ public final class KnowledgeIngestService {
         metadata.put("chunkCount", chunks.size());
         metadata.put("tokenEstimator", textChunker.tokenEstimatorStrategy());
         metadata.put("resourceUri", "cyrene://artifacts/" + source.id());
+        metadata.put("summaryModel", summary.model());
+        metadata.put("summaryCalls", summary.calls());
+        metadata.put("summaryInputBlocks", summary.inputBlocks());
         if (previousRevisionId != null) {
             metadata.put("previousRevisionId", previousRevisionId);
         }
         KnowledgeRevision revision = new KnowledgeRevision(
                 revisionId, job.sourceConceptId(), revisionNumber,
-                documentTitle(markdown, source.fileName()),
-                "Source document compiled from immutable Artifact " + source.id(),
+                card.get("title").asText().strip(), card.get("summary").asText().strip(),
                 markdown, COMPILER_ID, now, contentHash, metadata, now);
         KnowledgeConcept concept = new KnowledgeConcept(
                 job.sourceConceptId(), job.tenantId(), null,
@@ -441,16 +461,22 @@ public final class KnowledgeIngestService {
         throw new IllegalStateException("Revision metadata is missing " + key);
     }
 
-    private static String documentTitle(String markdown, String fileName) {
-        for (String line : markdown.split("\\R", 50)) {
-            String trimmed = line.trim();
-            if (trimmed.matches("^#{1,6}\\s+.+$")) {
-                return trimmed.replaceFirst("^#{1,6}\\s+", "").trim();
+    private static JsonNode wikiCard(String text) {
+        try {
+            JsonNode card = MAPPER.readTree(text);
+            if (card == null || !card.isObject() || card.size() != 2
+                    || !validCardText(card.get("title"), 512) || !validCardText(card.get("summary"), 2048)) {
+                throw new IllegalStateException("Document model returned an invalid Wiki title or summary");
             }
+            return card;
+        } catch (java.io.IOException e) {
+            throw new IllegalStateException("Document model returned invalid Wiki JSON", e);
         }
-        String leaf = java.nio.file.Path.of(fileName).getFileName().toString();
-        int extension = leaf.lastIndexOf('.');
-        return extension > 0 ? leaf.substring(0, extension) : leaf;
+    }
+
+    private static boolean validCardText(JsonNode value, int limit) {
+        return value != null && value.isTextual() && !value.asText().isBlank()
+                && value.asText().strip().length() <= limit;
     }
 
     private static void validateDocumentTypeEnabled(String mimeType) {

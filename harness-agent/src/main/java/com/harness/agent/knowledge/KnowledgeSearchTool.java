@@ -44,10 +44,17 @@ public final class KnowledgeSearchTool implements Tool {
                 .put("type", "string")
                 .put("minLength", 1)
                 .put("maxLength", 4096)
-                .put("description", "Complete standalone knowledge query."));
+                .put("description", "Complete standalone knowledge query in natural language. Include the "
+                        + "entity names and enough context to stand alone — the index does not see this "
+                        + "conversation."));
         ObjectNode types = objectMapper.createObjectNode()
                 .put("type", "array")
-                .put("description", "Optional exact knowledge kinds; omission searches the unified Wiki index.");
+                .put("description", "Optional filter to restrict the search to specific kinds. "
+                        + "SOURCE_DOCUMENT = uploaded domain documents; "
+                        + "OPERATION_PLAYBOOK = how this agent handled similar tasks; "
+                        + "USER_EPISODE = what happened with this user in past sessions; "
+                        + "GRAPH_SCHEMA / GRAPH_SPACE = business entity relations. "
+                        + "Omit to search the unified Wiki index.");
         ObjectNode typeItems = objectMapper.createObjectNode().put("type", "string");
         var typeEnum = typeItems.putArray("enum");
         for (KnowledgeConceptType type : KnowledgeConceptType.values()) {
@@ -64,7 +71,18 @@ public final class KnowledgeSearchTool implements Tool {
         schema.put("additionalProperties", false);
         return new ToolSpec(
                 TOOL_NAME,
-                "Discover authorized current knowledge and return typed handles. Scores retain route-specific semantics. Use knowledge_read to expand a handle.",
+                "Search one unified index holding everything this agent has accumulated. It covers four "
+                        + "kinds of material: (1) OPERATION_PLAYBOOK — how similar tasks were handled before, "
+                        + "including step order and pitfalls; (2) USER_EPISODE — what happened with this user "
+                        + "in earlier sessions, including decisions and outcomes; (3) SOURCE_DOCUMENT — uploaded "
+                        + "domain documents and the professional knowledge extracted from them; (4) GRAPH_SCHEMA "
+                        + "and GRAPH_SPACE — business entity relations the graph can answer. "
+                        + "Search before answering whenever the request could depend on earlier sessions, "
+                        + "uploaded material, or known entity relations — including when the user did not "
+                        + "explicitly ask for a search. "
+                        + "Scores retain route-specific semantics. Use knowledge_read for source details. "
+                        + "Graph hits are capability/Schema cards, not graph facts: "
+                        + "use graphRouteHint.recommendedTool (query_graph) with the discovered graphId/schemaId to query Neo4j.",
                 schema,
                 com.harness.core.model.ToolCapability.RETRIEVAL);
     }
