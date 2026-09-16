@@ -60,11 +60,16 @@ public final class KnowledgeReadTool implements Tool {
 
     @Override
     public ToolSpec spec() {
+        int windowMax = documentExecutor.contextWindowMax();
         ObjectNode properties = objectMapper.createObjectNode();
         properties.set("handle", objectMapper.createObjectNode()
                 .put("type", "string").put("minLength", 1).put("maxLength", 4096));
-        properties.set("before", integerProperty(0, documentExecutor.contextWindowMax()));
-        properties.set("after", integerProperty(0, documentExecutor.contextWindowMax()));
+        properties.set("before", integerProperty(0, windowMax)
+                .put("description", "Number of document chunks before the anchor; maximum "
+                        + windowMax + " per call."));
+        properties.set("after", integerProperty(0, windowMax)
+                .put("description", "Number of document chunks after the anchor; maximum "
+                        + windowMax + " per call."));
         ObjectNode schema = objectMapper.createObjectNode().put("type", "object");
         schema.set("properties", properties);
         schema.putArray("required").add("handle");
@@ -72,6 +77,9 @@ public final class KnowledgeReadTool implements Tool {
         return new ToolSpec(
                 TOOL_NAME,
                 "Read one typed Wiki handle after rechecking its current revision, tenant, collection, and tool authorization. "
+                        + "A single call can move at most " + windowMax
+                        + " document chunks in either direction; "
+                        + "use handles on returned chunks to continue reading deeper into a document. "
                         + "Graph handles return capability/Schema cards only; use query_graph for graph facts.",
                 schema,
                 com.harness.core.model.ToolCapability.RETRIEVAL);
@@ -193,11 +201,14 @@ public final class KnowledgeReadTool implements Tool {
         if (handle.chunkIndex() == null) {
             throw new IllegalArgumentException("Document handle is missing its chunk anchor; search again");
         }
-        int before = integer(arguments, "before", 1);
-        int after = integer(arguments, "after", 1);
-        if (before < 0 || before > documentExecutor.contextWindowMax()
-                || after < 0 || after > documentExecutor.contextWindowMax()) {
-            throw new IllegalArgumentException("Document window exceeds configured bounds");
+        int windowMax = documentExecutor.contextWindowMax();
+        int before = integer(arguments, "before", Math.min(1, windowMax));
+        int after = integer(arguments, "after", Math.min(1, windowMax));
+        if (before < 0 || before > windowMax || after < 0 || after > windowMax) {
+            throw new IllegalArgumentException("A single knowledge_read call cannot move more than "
+                    + windowMax + " chunks in either direction; before and after must each be between 0 and "
+                    + windowMax + " (received before=" + before + ", after=" + after
+                    + "). Use handles on returned chunks to continue reading in another call");
         }
         var chunks = documentExecutor.readContext(
                 head.routeText("collectionKey"), head.routeText("documentId"), head.currentVersion(),
@@ -263,7 +274,8 @@ public final class KnowledgeReadTool implements Tool {
 
     private ObjectNode integerProperty(int minimum, int maximum) {
         return objectMapper.createObjectNode().put("type", "integer")
-                .put("minimum", minimum).put("maximum", maximum);
+                .put("minimum", minimum).put("maximum", maximum)
+                .put("default", Math.min(1, maximum));
     }
 
     private static String requiredText(JsonNode arguments, String field) {

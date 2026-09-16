@@ -18,7 +18,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.function.Predicate;
 
 /**
  * SQLite-based trace store. Default implementation.
@@ -179,18 +178,13 @@ public class SqliteTraceStore implements TraceStore {
     }
 
     @Override
-    public CleanupResult cleanup(
-            int retentionDays,
-            Predicate<String> retainedByKnowledge
-    ) {
-        java.util.Objects.requireNonNull(retainedByKnowledge, "retainedByKnowledge");
+    public int cleanup(int retentionDays) {
         Instant cutoff = Instant.now().minusSeconds(retentionDays * 86400L);
         String deleteSql = "DELETE FROM agent_traces WHERE trace_id = ? AND timestamp < ?";
         Connection connection = null;
         try {
             connection = getConnection();
             connection.setAutoCommit(false);
-            int retained = 0;
             int deleted = 0;
             ExpiredTraceCursor cursor = null;
             boolean hasMore;
@@ -203,10 +197,6 @@ public class SqliteTraceStore implements TraceStore {
                         : fetched;
                 try (PreparedStatement statement = connection.prepareStatement(deleteSql)) {
                     for (ExpiredTraceCursor candidate : page) {
-                        if (retainedByKnowledge.test(candidate.traceId())) {
-                            retained++;
-                            continue;
-                        }
                         statement.setString(1, candidate.traceId());
                         statement.setString(2, cutoff.toString());
                         deleted += statement.executeUpdate();
@@ -215,7 +205,7 @@ public class SqliteTraceStore implements TraceStore {
                 cursor = page.isEmpty() ? cursor : page.getLast();
             } while (hasMore);
             connection.commit();
-            return new CleanupResult(deleted, retained);
+            return deleted;
         } catch (SQLException | RuntimeException e) {
             rollback(connection);
             log.error("Failed to cleanup traces: {}", e.getMessage(), e);

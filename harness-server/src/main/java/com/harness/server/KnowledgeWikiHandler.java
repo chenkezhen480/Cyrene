@@ -49,6 +49,15 @@ final class KnowledgeWikiHandler {
         });
     }
 
+    void delete(Context ctx) {
+        execute(ctx, () -> {
+            String revisionId = ctx.queryParam("revisionId");
+            if (revisionId == null || revisionId.isBlank())
+                throw new IllegalArgumentException("revisionId is required");
+            ctx.json(service.delete(ctx.pathParam("conceptId"), revisionId, authorized(owner(ctx))));
+        });
+    }
+
     void export(Context ctx) {
         execute(ctx, () -> {
             var card = service.get(ctx.pathParam("conceptId"), authorized(owner(ctx)));

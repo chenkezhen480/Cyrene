@@ -5,6 +5,8 @@ import com.harness.agent.knowledge.KnowledgeToolRuntimeContext;
 import com.harness.core.knowledge.KnowledgeConceptType;
 import com.harness.core.knowledge.KnowledgeIdentity;
 import com.harness.core.knowledge.KnowledgeNamespaceType;
+import com.harness.core.knowledge.KnowledgeRevision;
+import com.harness.core.knowledge.KnowledgeStatus;
 import com.harness.core.knowledge.LongTermKnowledgeBudgetAllocator;
 import com.harness.core.knowledge.PreferenceActivationContext;
 import com.harness.core.knowledge.PreferenceActivationTagRegistry;
@@ -14,6 +16,7 @@ import com.harness.core.model.PageResponse;
 import com.harness.core.runtime.RunTrace;
 import com.harness.core.text.TextTokenEstimator;
 import com.harness.tool.ToolRegistry;
+import com.harness.tool.knowledge.WikiIdentityResolver;
 import com.harness.tool.knowledge.authority.KnowledgeHead;
 import com.harness.tool.knowledge.authority.KnowledgeRepository;
 import com.harness.tool.knowledge.authority.KnowledgeRevisionChange;
@@ -22,6 +25,7 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
 import java.time.Clock;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -169,6 +173,47 @@ class SaveMemoryToolTest {
         assertThatThrownBy(() -> tool.execute(arguments("USER_EPISODE")))
                 .hasMessageContaining("transaction failed");
         verifyNoInteractions(signal);
+    }
+
+    @Test void appendsARevisionWhenTheModelIdentifiesTheSameMemory() throws Exception {
+        WikiIdentityResolver identityResolver = mock(WikiIdentityResolver.class);
+        SaveMemoryTool resolvingTool = new SaveMemoryTool(repository, mapper, Clock.systemUTC(), signal,
+                com.harness.core.knowledge.PreferenceKeyRegistry.standard(), identityResolver);
+        ToolRegistry registry = new ToolRegistry();
+        registry.register(resolvingTool);
+        KnowledgeToolRuntimeContext.activate("tenant-a", null, null, null, registry.snapshot());
+
+        Instant createdAt = Instant.parse("2026-09-14T00:00:00Z");
+        KnowledgeRevision previousRevision = new KnowledgeRevision("revision-v1", "concept-1", 1,
+                "原神角色二创图", "生成前查官方设定", "先搜索官方外观设定", SaveMemoryTool.TOOL_NAME,
+                createdAt, "hash-v1", Map.of("captureMode", "conversation"), createdAt);
+        var previousConcept = new com.harness.core.knowledge.KnowledgeConcept(
+                "concept-1", "tenant-a", null, KnowledgeNamespaceType.OPERATION_MEMORY, null,
+                KnowledgeConceptType.OPERATION_PLAYBOOK, "genshin_character_fanart_generation",
+                KnowledgeStatus.STABLE, previousRevision.id(), 1, null, createdAt, createdAt);
+        KnowledgeHead previous = new KnowledgeHead(previousConcept, previousRevision);
+        var merged = new WikiIdentityResolver.Draft(
+                "IP角色二创图：先查经验与官方设定",
+                "生成前先检索已有经验和官方设定",
+                "先查操作经验，再搜索官方设定；来源打不开不能证明没有官方设定。");
+        when(identityResolver.resolve(eq(KnowledgeConceptType.OPERATION_PLAYBOOK), eq("tenant-a"),
+                isNull(), eq(KnowledgeNamespaceType.OPERATION_MEMORY), isNull(), anyString(),
+                any(WikiIdentityResolver.Draft.class),
+                eq(WikiIdentityResolver.RevisionMode.SYNTHESIZE)))
+                .thenReturn(Optional.of(new WikiIdentityResolver.Resolution(previous, merged)));
+
+        var result = mapper.readTree(resolvingTool.execute(arguments("OPERATION_PLAYBOOK")
+                .put("memoryKey", "genshin.character.art.officialDesignFirst")));
+
+        assertThat(result.path("conceptId").asText()).isEqualTo("concept-1");
+        ArgumentCaptor<List<KnowledgeRevisionChange>> captor = ArgumentCaptor.forClass(List.class);
+        verify(repository).commitChanges(captor.capture());
+        KnowledgeRevisionChange change = captor.getValue().getFirst();
+        assertThat(change.expectedConceptVersion()).isEqualTo(1);
+        assertThat(change.concept().id()).isEqualTo("concept-1");
+        assertThat(change.concept().logicalKey()).isEqualTo("genshin_character_fanart_generation");
+        assertThat(change.concept().version()).isEqualTo(2);
+        assertThat(change.revision().body()).isEqualTo(merged.content());
     }
 
     private com.fasterxml.jackson.databind.node.ObjectNode arguments(String type) {

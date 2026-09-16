@@ -198,6 +198,10 @@ const CyreneAPI = (() => {
     return request('PUT', `/api/wiki/${encodeURIComponent(conceptId)}?${new URLSearchParams({ userId })}`, draft);
   }
 
+  function deleteWiki(conceptId, userId, revisionId) {
+    return request('DELETE', `/api/wiki/${encodeURIComponent(conceptId)}?${new URLSearchParams({ userId, revisionId })}`);
+  }
+
   function exportWiki(conceptId, userId) {
     return downloadWikiBlob(`/api/wiki/${encodeURIComponent(conceptId)}/export`, userId);
   }
@@ -402,7 +406,7 @@ const CyreneAPI = (() => {
     chat, cancelChat, approveConfirmation, rejectConfirmation, uploadFile,
     getModelConfiguration, updateModelConfiguration,
     createSession, listSessions, getSession, getMessages, getSessionStats, closeSession,
-    listCollections, uploadKnowledge, listKnowledge, listWiki, getWiki, updateWiki, exportWiki, exportAllWiki,
+    listCollections, uploadKnowledge, listKnowledge, listWiki, getWiki, updateWiki, deleteWiki, exportWiki, exportAllWiki,
     getGraphStatus, listGraphSchemas, getGraphSchema,
     listGraphSchemaConfigs, getGraphSchemaConfig, createGraphSchemaConfig, updateGraphSchemaConfig,
     enableGraphSchemaConfig, disableGraphSchemaConfig, deleteGraphSchemaConfig,

@@ -23,17 +23,11 @@ public interface KnowledgeProjectionStore {
 
     java.util.Optional<com.harness.tool.knowledge.authority.KnowledgeRevisionSnapshot> findRevisionSnapshot(String revisionId);
 
-    boolean isSourceReferenced(String sourceType, String sourceId);
-
     void activateRevision(String conceptId, String revisionId);
 
     void deleteRevision(String revisionId);
 
     void deleteConcept(String conceptId);
-
-    void deleteOtherRevisions(
-            String conceptId,
-            String currentRevisionId);
 
     PageResponse<KnowledgeProjectionIdentity> findIdentityPage(
             String afterRevisionId,

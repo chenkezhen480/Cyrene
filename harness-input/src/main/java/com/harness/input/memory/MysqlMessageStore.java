@@ -11,7 +11,6 @@ import java.sql.*;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
-import java.util.function.LongPredicate;
 
 /**
  * MySQL-backed message store.
@@ -377,62 +376,23 @@ public class MysqlMessageStore implements MessageStore {
     }
 
     @Override
-    public DeletionResult deleteToolMessages(
-            String sessionId,
-            LongPredicate retainedByKnowledge
-    ) {
-        java.util.Objects.requireNonNull(retainedByKnowledge, "retainedByKnowledge");
-        String selectSql = """
-                SELECT id FROM messages
-                WHERE session_id = ?
-                  AND role IN ('assistant_tool_call', 'tool')
-                  AND id > ?
-                ORDER BY id ASC LIMIT ?
-                """;
+    public int deleteToolMessages(String sessionId) {
         String deleteSql = """
                 DELETE FROM messages
-                WHERE session_id = ? AND id = ?
+                WHERE session_id = ?
                   AND role IN ('assistant_tool_call', 'tool')
                 """;
         Connection connection = null;
         try {
             connection = getConnection();
             connection.setAutoCommit(false);
-            int deleted = 0;
-            int retained = 0;
-            long afterMessageId = 0;
-            boolean hasMore;
-            do {
-                List<Long> fetched = new ArrayList<>(501);
-                try (PreparedStatement statement = connection.prepareStatement(selectSql)) {
-                    statement.setString(1, sessionId);
-                    statement.setLong(2, afterMessageId);
-                    statement.setInt(3, 501);
-                    try (ResultSet resultSet = statement.executeQuery()) {
-                        while (resultSet.next()) {
-                            fetched.add(resultSet.getLong("id"));
-                        }
-                    }
-                }
-                hasMore = fetched.size() > 500;
-                List<Long> page = hasMore ? fetched.subList(0, 500) : fetched;
-                try (PreparedStatement statement = connection.prepareStatement(deleteSql)) {
-                    for (Long messageId : page) {
-                        if (retainedByKnowledge.test(messageId)) {
-                            retained++;
-                            continue;
-                        }
-                        statement.setString(1, sessionId);
-                        statement.setLong(2, messageId);
-                        deleted += statement.executeUpdate();
-                    }
-                }
-                if (!page.isEmpty()) {
-                    afterMessageId = page.getLast();
-                }
-            } while (hasMore);
+            int deleted;
+            try (PreparedStatement statement = connection.prepareStatement(deleteSql)) {
+                statement.setString(1, sessionId);
+                deleted = statement.executeUpdate();
+            }
             connection.commit();
-            return new DeletionResult(deleted, retained);
+            return deleted;
         } catch (SQLException | RuntimeException e) {
             rollback(connection);
             throw new MemoryStoreException(

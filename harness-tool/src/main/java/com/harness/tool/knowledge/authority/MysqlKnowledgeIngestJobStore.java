@@ -171,6 +171,7 @@ public final class MysqlKnowledgeIngestJobStore implements KnowledgeIngestJobSto
     @Override
     public KnowledgeIngestJob commitCompilation(
             String jobId,
+            String expectedSourceConceptId,
             KnowledgeRevisionChange change
     ) {
         Connection connection = null;
@@ -190,9 +191,9 @@ public final class MysqlKnowledgeIngestJobStore implements KnowledgeIngestJobSto
                         "Ingest Job is not claimed after conversion: " + jobId);
             }
             if (job.sourceConceptId() != null
-                    && !job.sourceConceptId().equals(change.concept().id())) {
+                    && !job.sourceConceptId().equals(expectedSourceConceptId)) {
                 throw new KnowledgePersistenceException(
-                        "Ingest Job source Concept differs from compiled Concept: " + jobId);
+                        "Ingest Job source Concept changed concurrently: " + jobId);
             }
             knowledgeRepository.commitRevisionChange(connection, change);
             try (PreparedStatement statement = connection.prepareStatement("""

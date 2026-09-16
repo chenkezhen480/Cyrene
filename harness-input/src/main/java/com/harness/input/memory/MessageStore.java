@@ -5,7 +5,6 @@ import com.harness.core.model.MessageBlock;
 
 import java.util.List;
 import java.util.Optional;
-import java.util.function.LongPredicate;
 
 /**
  * Persistence interface for conversation messages within a session.
@@ -90,13 +89,5 @@ public interface MessageStore {
     SessionStats loadSessionStats(String sessionId);
 
     /** Delete Tool calls/results when minor compression strips Tool context. */
-    DeletionResult deleteToolMessages(String sessionId, LongPredicate retainedByKnowledge);
-
-    record DeletionResult(int deleted, int retainedByKnowledge) {
-        public DeletionResult {
-            if (deleted < 0 || retainedByKnowledge < 0) {
-                throw new IllegalArgumentException("deletion counts must not be negative");
-            }
-        }
-    }
+    int deleteToolMessages(String sessionId);
 }

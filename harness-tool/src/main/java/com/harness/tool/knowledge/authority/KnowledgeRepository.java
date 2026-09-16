@@ -9,7 +9,6 @@ import com.harness.core.knowledge.KnowledgeNamespaceType;
 import com.harness.core.knowledge.KnowledgeRevision;
 import com.harness.core.knowledge.KnowledgeSource;
 import com.harness.core.knowledge.KnowledgeSourceCursor;
-import com.harness.core.knowledge.KnowledgeSourceType;
 import com.harness.core.knowledge.KnowledgeStatus;
 import com.harness.core.knowledge.KnowledgeVerification;
 import com.harness.core.knowledge.KnowledgeVerificationCursor;
@@ -85,8 +84,6 @@ public interface KnowledgeRepository {
             String toConceptId,
             KnowledgeLinkCursor cursor,
             int limit);
-
-    boolean isSourceReferenced(KnowledgeSourceType sourceType, String sourceId);
 
     void commitChanges(List<KnowledgeRevisionChange> changes);
 }

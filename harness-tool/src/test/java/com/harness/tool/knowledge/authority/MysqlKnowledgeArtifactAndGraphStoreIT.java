@@ -128,7 +128,9 @@ class MysqlKnowledgeArtifactAndGraphStoreIT {
     @Test
     void sourceDocumentCompilationCommitsRevisionOutboxAndJobStageAtomically() {
         KnowledgeArtifact artifact = artifact("source-compile.md", "artifact-content-compile");
-        KnowledgeIngestJob job = job("it-todo12-ingest-compile", artifact.id());
+        String placeholderConceptId = "it-todo12-doc-placeholder";
+        KnowledgeIngestJob job = job(
+                "it-todo12-ingest-compile", artifact.id(), placeholderConceptId);
         artifactRepository.registerWithIngestJob(artifact, job);
         ingestJobStore.claim(job.id(), AVAILABLE_AT).orElseThrow();
         ingestJobStore.advance(
@@ -157,7 +159,7 @@ class MysqlKnowledgeArtifactAndGraphStoreIT {
                 0, now, null, null, null, now);
 
         KnowledgeIngestJob compiled = ingestJobStore.commitCompilation(
-                job.id(), new KnowledgeRevisionChange(
+                job.id(), placeholderConceptId, new KnowledgeRevisionChange(
                         concept, 0, revision, List.of(source),
                         List.of(), List.of(), List.of(indexTask)));
 
@@ -184,9 +186,17 @@ class MysqlKnowledgeArtifactAndGraphStoreIT {
     }
 
     private static KnowledgeIngestJob job(String id, String artifactId) {
+        return job(id, artifactId, null);
+    }
+
+    private static KnowledgeIngestJob job(
+            String id,
+            String artifactId,
+            String sourceConceptId
+    ) {
         return new KnowledgeIngestJob(
                 id, artifactId, null, COLLECTION, KnowledgeIngestJob.Status.UPLOADED,
-                0, AVAILABLE_AT, null, null, null, null, null, AVAILABLE_AT, null);
+                0, AVAILABLE_AT, null, null, sourceConceptId, null, null, AVAILABLE_AT, null);
     }
 
     private static void cleanTestRows() throws SQLException {

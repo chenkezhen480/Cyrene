@@ -206,33 +206,15 @@ class MysqlMessageStoreIT {
         save(sid, "tool", blocks("tool result"), false);
         save(sid, "assistant", blocks("final answer"), false);
 
-        MessageStore.DeletionResult result = store.deleteToolMessages(sid, id -> false);
+        int deleted = store.deleteToolMessages(sid);
 
-        assertThat(result.deleted()).isEqualTo(2);
-        assertThat(result.retainedByKnowledge()).isZero();
+        assertThat(deleted).isEqualTo(2);
         assertThat(store.loadForContext(sid))
                 .extracting(MemoryMessage::role)
                 .containsExactly("user", "assistant");
         assertThat(store.loadPage(sid, 0, 10, true))
                 .extracting(MemoryMessage::role)
                 .containsExactly("user", "assistant");
-    }
-
-    @Test
-    void deleteToolMessages_retainsReferencedEvidence() {
-        String sid = createTestSession();
-        long retainedId = store.save(new MessageWrite(
-                sid, "trace-it", "tool", blocks("retained result"), false));
-        long deletableId = store.save(new MessageWrite(
-                sid, "trace-it", "tool", blocks("deletable result"), false));
-
-        MessageStore.DeletionResult result = store.deleteToolMessages(
-                sid, messageId -> messageId == retainedId);
-
-        assertThat(result.deleted()).isEqualTo(1);
-        assertThat(result.retainedByKnowledge()).isEqualTo(1);
-        assertThat(store.findByIdAndSession(retainedId, sid)).isPresent();
-        assertThat(store.findByIdAndSession(deletableId, sid)).isEmpty();
     }
 
     @Test

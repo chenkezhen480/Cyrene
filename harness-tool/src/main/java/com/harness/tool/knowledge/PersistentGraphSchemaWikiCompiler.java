@@ -35,10 +35,20 @@ public final class PersistentGraphSchemaWikiCompiler implements GraphSchemaWikiC
 
     private final KnowledgeRepository repository;
     private final GraphCapabilityDescriber capabilityDescriber;
+    private final WikiIdentityResolver identityResolver;
 
     public PersistentGraphSchemaWikiCompiler(KnowledgeRepository repository, GraphCapabilityDescriber capabilityDescriber) {
+        this(repository, capabilityDescriber, null);
+    }
+
+    public PersistentGraphSchemaWikiCompiler(
+            KnowledgeRepository repository,
+            GraphCapabilityDescriber capabilityDescriber,
+            WikiIdentityResolver identityResolver
+    ) {
         this.repository = Objects.requireNonNull(repository, "repository");
         this.capabilityDescriber = Objects.requireNonNull(capabilityDescriber, "capabilityDescriber");
+        this.identityResolver = identityResolver;
     }
 
     @Override
@@ -61,9 +71,27 @@ public final class PersistentGraphSchemaWikiCompiler implements GraphSchemaWikiC
         }
         String summary = capabilityDescriber.describe(definition);
         body += "\n## AI capability description\n" + summary + '\n';
+        if (existing == null && identityResolver != null) {
+            var resolution = identityResolver.resolve(
+                    KnowledgeConceptType.GRAPH_SCHEMA, null, null,
+                    KnowledgeNamespaceType.GRAPH, schemaId, schemaId,
+                    new WikiIdentityResolver.Draft(
+                            "Graph Schema " + schemaId, summary, body),
+                    WikiIdentityResolver.RevisionMode.AUTHORITATIVE_SNAPSHOT).orElse(null);
+            if (resolution != null) {
+                existing = resolution.previous();
+                conceptId = existing.concept().id();
+                expectedVersion = existing.concept().version();
+                revisionNumber = expectedVersion + 1;
+                if (sourceHash.equals(existing.currentRevision().metadata().get("capabilitySourceHash"))) {
+                    return;
+                }
+            }
+        }
         String contentHash = KnowledgeIdentity.sha256(body);
         Map<String, Object> metadata = new LinkedHashMap<>(metadata(schema));
         metadata.put("capabilitySourceHash", sourceHash);
+        if (existing != null) metadata.put("previousRevisionId", existing.currentRevision().id());
         KnowledgeRevision revision = new KnowledgeRevision(
                 KnowledgeIdentity.revisionId(conceptId, revisionNumber, contentHash),
                 conceptId, revisionNumber, "Graph Schema " + schemaId,

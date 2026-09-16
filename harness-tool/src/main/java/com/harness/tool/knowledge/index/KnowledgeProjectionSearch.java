@@ -1,6 +1,7 @@
 package com.harness.tool.knowledge.index;
 
 import com.harness.core.knowledge.KnowledgeConceptType;
+import com.harness.core.knowledge.KnowledgeNamespaceType;
 
 import java.util.Set;
 
@@ -10,6 +11,9 @@ public record KnowledgeProjectionSearch(
         float[] embedding,
         String tenantId,
         String userId,
+        KnowledgeNamespaceType namespaceType,
+        String namespaceKey,
+        boolean exactTenant,
         Set<KnowledgeConceptType> conceptTypes,
         int laneTopK,
         int fusedTopK,
@@ -17,6 +21,22 @@ public record KnowledgeProjectionSearch(
         double sparseThreshold,
         int rrfK
 ) {
+    public KnowledgeProjectionSearch(
+            String query,
+            float[] embedding,
+            String tenantId,
+            String userId,
+            Set<KnowledgeConceptType> conceptTypes,
+            int laneTopK,
+            int fusedTopK,
+            double denseThreshold,
+            double sparseThreshold,
+            int rrfK
+    ) {
+        this(query, embedding, tenantId, userId, null, null, false, conceptTypes,
+                laneTopK, fusedTopK, denseThreshold, sparseThreshold, rrfK);
+    }
+
     public KnowledgeProjectionSearch {
         if (query == null || query.isBlank() || query.length() > 4096) {
             throw new IllegalArgumentException("query must contain 1 to 4096 characters");
@@ -28,6 +48,10 @@ public record KnowledgeProjectionSearch(
         embedding = embedding.clone();
         tenantId = optional(tenantId);
         userId = optional(userId);
+        namespaceKey = optional(namespaceKey);
+        if (namespaceKey != null && namespaceType == null) {
+            throw new IllegalArgumentException("namespaceType is required with namespaceKey");
+        }
         conceptTypes = Set.copyOf(conceptTypes == null ? Set.of() : conceptTypes);
         if (laneTopK < 1 || laneTopK > 100 || fusedTopK < 1 || fusedTopK > laneTopK) {
             throw new IllegalArgumentException(

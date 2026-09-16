@@ -33,8 +33,12 @@ class PersistentGraphSpaceWikiCompilerTest {
     void createsOneCatalogEntryThatPointsToTheConcreteGraphSpace() {
         KnowledgeRepository repository = mock(KnowledgeRepository.class);
         when(repository.findById(any())).thenReturn(Optional.empty());
+        WikiIdentityResolver identityResolver = mock(WikiIdentityResolver.class);
+        when(identityResolver.resolve(any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(Optional.empty());
         PersistentGraphSpaceWikiCompiler compiler =
-                new PersistentGraphSpaceWikiCompiler(repository, schemaRegistry(), describer());
+                new PersistentGraphSpaceWikiCompiler(
+                        repository, schemaRegistry(), describer(), identityResolver);
         GraphChangeSet changeSet = changeSet();
 
         compiler.synchronize(changeSet,
@@ -66,6 +70,14 @@ class PersistentGraphSpaceWikiCompilerTest {
         assertThat(change.indexTasks()).singleElement()
                 .satisfies(task -> assertThat(task.operation())
                         .isEqualTo(KnowledgeIndexOperation.UPSERT_CURRENT));
+        verify(identityResolver).resolve(
+                org.mockito.ArgumentMatchers.eq(KnowledgeConceptType.GRAPH_SPACE),
+                org.mockito.ArgumentMatchers.isNull(), org.mockito.ArgumentMatchers.isNull(),
+                org.mockito.ArgumentMatchers.eq(KnowledgeNamespaceType.GRAPH),
+                org.mockito.ArgumentMatchers.eq("graph-a:schema-a"),
+                org.mockito.ArgumentMatchers.eq("graph-a"), any(),
+                org.mockito.ArgumentMatchers.eq(
+                        WikiIdentityResolver.RevisionMode.AUTHORITATIVE_SNAPSHOT));
     }
 
     @Test

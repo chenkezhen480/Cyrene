@@ -272,6 +272,8 @@ public final class AgentRunCoordinator {
                 persistenceFailure.addSuppressed(e);
                 reportedFailure = persistenceFailure;
             }
+            log.error("Stream run failed: traceId={}, sessionId={}",
+                    trace.traceId(), command.requestedSessionId(), reportedFailure);
             trace.recordOutput(
                     "Error: " + reportedFailure.getMessage(), RiskLevel.HIGH, false);
             finishTraceAsync(trace);

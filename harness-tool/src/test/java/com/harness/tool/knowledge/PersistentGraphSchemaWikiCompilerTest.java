@@ -32,20 +32,26 @@ import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 
 class PersistentGraphSchemaWikiCompilerTest {
 
     private KnowledgeRepository repository;
     private PersistentGraphSchemaWikiCompiler compiler;
     private GraphCapabilityDescriber describer;
+    private WikiIdentityResolver identityResolver;
 
     @BeforeEach
     void setUp() {
         EnvConfig.init(Map.of(EnvKey.KNOWLEDGE_CATALOG_COLLECTION, "catalog"));
         repository = mock(KnowledgeRepository.class);
         describer = mock(GraphCapabilityDescriber.class);
+        identityResolver = mock(WikiIdentityResolver.class);
+        when(identityResolver.resolve(any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(Optional.empty());
         when(describer.describe(any())).thenReturn("AI description: find Student entities using query_graph.");
-        compiler = new PersistentGraphSchemaWikiCompiler(repository, describer);
+        compiler = new PersistentGraphSchemaWikiCompiler(repository, describer, identityResolver);
     }
 
     @Test
@@ -62,6 +68,11 @@ class PersistentGraphSchemaWikiCompilerTest {
         assertThat(change.revision().description()).isEqualTo("AI description: find Student entities using query_graph.");
         assertThat(change.revision().body()).contains(change.revision().description());
         verify(describer).describe(details(true).definition());
+        verify(identityResolver).resolve(
+                eq(KnowledgeConceptType.GRAPH_SCHEMA), isNull(), isNull(),
+                eq(com.harness.core.knowledge.KnowledgeNamespaceType.GRAPH),
+                eq("student-v1"), eq("student-v1"), any(),
+                eq(WikiIdentityResolver.RevisionMode.AUTHORITATIVE_SNAPSHOT));
         assertThat(change.revision().metadata())
                 .containsEntry("schemaId", "student-v1")
                 .containsEntry("recommendedTool", "query_graph")

@@ -57,7 +57,7 @@ class KnowledgeReadToolTest {
         objectMapper = new ObjectMapper();
         codec = new KnowledgeHandleCodec(objectMapper);
         documentExecutor = mock(KnowledgeAccessService.class);
-        when(documentExecutor.contextWindowMax()).thenReturn(2);
+        when(documentExecutor.contextWindowMax()).thenReturn(10);
         tool = new KnowledgeReadTool(
                 repository, projectionStore, codec, documentExecutor, null, objectMapper,
                 Clock.fixed(NOW, ZoneOffset.UTC));
@@ -175,7 +175,7 @@ class KnowledgeReadToolTest {
         KnowledgeHead document = documentHead();
         when(repository.findAuthorityById(document.concept().id())).thenReturn(Optional.of(document));
         when(documentExecutor.readContext(
-                "collection-a", "document-1", "document-revision", 0, 0, 0))
+                "collection-a", "document-1", "document-revision", 0, 3, 4))
                 .thenReturn(List.of(new RagRetriever.RagDocument(
                         "chunk-0", "current document body", "manual.md", 0.0,
                         Map.of("document_id", "document-1",
@@ -186,12 +186,40 @@ class KnowledgeReadToolTest {
                 "document-revision", "collection-a", "document-1", 0);
 
         var output = objectMapper.readTree(tool.execute(objectMapper.createObjectNode()
-                .put("handle", codec.encode(handle)).put("before", 0).put("after", 0)));
+                .put("handle", codec.encode(handle)).put("before", 3).put("after", 4)));
 
         assertThat(output.at("/data/chunks/0/content").asText())
                 .isEqualTo("current document body");
         verify(documentExecutor).readContext(
-                "collection-a", "document-1", "document-revision", 0, 0, 0);
+                "collection-a", "document-1", "document-revision", 0, 3, 4);
+    }
+
+    @Test
+    void rejectsWindowsLargerThanConfiguredLimitBeforeStorageRead() {
+        KnowledgeHead document = documentHead();
+        when(repository.findAuthorityById(document.concept().id())).thenReturn(Optional.of(document));
+        activateDocumentScope();
+        String handle = codec.encode(KnowledgeHandle.document(
+                KnowledgeConceptType.SOURCE_DOCUMENT, "document-1", "document-revision",
+                "collection-a", "document-1", 0));
+
+        for (String field : List.of("before", "after")) {
+            assertThat(tool.spec().parameters().at("/properties/" + field + "/maximum").asInt())
+                    .isEqualTo(10);
+            assertThat(tool.spec().parameters().at("/properties/" + field + "/description").asText())
+                    .contains("maximum 10 per call");
+            assertThatThrownBy(() -> tool.execute(objectMapper.createObjectNode()
+                    .put("handle", handle).put(field, 11)))
+                    .isInstanceOf(ToolExecutionException.class)
+                    .hasMessageContaining("single knowledge_read call cannot move more than 10 chunks")
+                    .hasMessageContaining("between 0 and 10")
+                    .hasMessageContaining(field + "=11")
+                    .hasMessageContaining("handles on returned chunks");
+        }
+        verify(documentExecutor, never()).readContext(
+                org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyInt(),
+                org.mockito.ArgumentMatchers.anyInt(), org.mockito.ArgumentMatchers.anyInt());
     }
 
     @Test

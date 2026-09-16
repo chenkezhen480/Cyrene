@@ -16,7 +16,6 @@ import com.harness.core.knowledge.KnowledgeNamespaceType;
 import com.harness.core.knowledge.KnowledgeRevision;
 import com.harness.core.knowledge.KnowledgeSource;
 import com.harness.core.knowledge.KnowledgeSourceCursor;
-import com.harness.core.knowledge.KnowledgeSourceType;
 import com.harness.core.knowledge.KnowledgeStatus;
 import com.harness.core.knowledge.KnowledgeVerification;
 import com.harness.core.knowledge.KnowledgeVerificationCursor;
@@ -520,18 +519,6 @@ public final class MysqlKnowledgeRepository implements KnowledgeRepository {
                 link -> (outgoing
                         ? KnowledgeLinkCursor.outgoing(link)
                         : KnowledgeLinkCursor.incoming(link)).encode());
-    }
-
-    @Override
-    public boolean isSourceReferenced(KnowledgeSourceType sourceType, String sourceId) {
-        String sql = "SELECT 1 FROM user_preferences WHERE JSON_CONTAINS(snapshot, JSON_QUOTE(?), '$.sourceKeys') "
-                + "UNION ALL SELECT 1 FROM knowledge_tasks WHERE task_type = 'vector_index' AND payload IS NOT NULL "
-                + "AND JSON_CONTAINS(payload, JSON_QUOTE(?), '$.sourceKeys') LIMIT 1";
-        try (Connection c = connectionProvider.getConnection(); var statement = c.prepareStatement(sql)) {
-            statement.setString(1, sourceType.name() + ":" + sourceId); statement.setString(2, sourceType.name() + ":" + sourceId);
-            try (var rows = statement.executeQuery()) { if (rows.next()) return true; }
-        } catch (SQLException e) { throw new KnowledgePersistenceException("Cannot check pending knowledge sources", e); }
-        return projectionStore != null && projectionStore.isSourceReferenced(sourceType.name(), sourceId);
     }
 
     @Override

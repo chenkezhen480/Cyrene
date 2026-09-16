@@ -53,12 +53,16 @@ public final class KnowledgeSearchTool implements Tool {
                         + "SOURCE_DOCUMENT = uploaded domain documents; "
                         + "OPERATION_PLAYBOOK = how this agent handled similar tasks; "
                         + "USER_EPISODE = what happened with this user in past sessions; "
-                        + "GRAPH_SCHEMA / GRAPH_SPACE = business entity relations. "
+                        + "GRAPH_SCHEMA = the graph Schema description. "
+                        + "USER_PREFERENCE is injected automatically before the model call and cannot be searched. "
                         + "Omit to search the unified Wiki index.");
         ObjectNode typeItems = objectMapper.createObjectNode().put("type", "string");
         var typeEnum = typeItems.putArray("enum");
         for (KnowledgeConceptType type : KnowledgeConceptType.values()) {
-            if (type != KnowledgeConceptType.USER_PREFERENCE) typeEnum.add(type.name());
+            if (type != KnowledgeConceptType.USER_PREFERENCE
+                    && type != KnowledgeConceptType.GRAPH_SPACE) {
+                typeEnum.add(type.name());
+            }
         }
         types.set("items", typeItems);
         types.put("uniqueItems", true);
@@ -76,7 +80,7 @@ public final class KnowledgeSearchTool implements Tool {
                         + "including step order and pitfalls; (2) USER_EPISODE — what happened with this user "
                         + "in earlier sessions, including decisions and outcomes; (3) SOURCE_DOCUMENT — uploaded "
                         + "domain documents and the professional knowledge extracted from them; (4) GRAPH_SCHEMA "
-                        + "and GRAPH_SPACE — business entity relations the graph can answer. "
+                        + "— the graph Schema description. "
                         + "Search before answering whenever the request could depend on earlier sessions, "
                         + "uploaded material, or known entity relations — including when the user did not "
                         + "explicitly ask for a search. "

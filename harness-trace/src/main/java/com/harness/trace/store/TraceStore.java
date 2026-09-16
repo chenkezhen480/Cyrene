@@ -7,7 +7,6 @@ import com.harness.core.model.TraceCursor;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.function.Predicate;
 
 /**
  * Interface for trace persistence.
@@ -36,7 +35,7 @@ public interface TraceStore {
     /**
      * Delete traces older than the given number of days.
      */
-    CleanupResult cleanup(int retentionDays, Predicate<String> retainedByKnowledge);
+    int cleanup(int retentionDays);
 
     /**
      * Delete a specific trace by ID.
@@ -65,11 +64,4 @@ public interface TraceStore {
      */
     void close();
 
-    record CleanupResult(int deleted, int retainedByKnowledge) {
-        public CleanupResult {
-            if (deleted < 0 || retainedByKnowledge < 0) {
-                throw new IllegalArgumentException("cleanup counts must not be negative");
-            }
-        }
-    }
 }

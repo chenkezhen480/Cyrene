@@ -3,7 +3,6 @@ package com.harness.agent.knowledge;
 import com.harness.agent.KnowledgeGraphTool;
 import com.harness.agent.context.ContextBuilder;
 import com.harness.agent.context.KnowledgeAccessService;
-import com.harness.agent.graph.GraphSpaceReference;
 import com.harness.core.knowledge.KnowledgeConcept;
 import com.harness.core.knowledge.KnowledgeConceptType;
 import com.harness.core.knowledge.KnowledgeNamespaceType;
@@ -188,28 +187,17 @@ class KnowledgeDiscoveryRouterTest {
     }
 
     @Test
-    void graphSpaceDiscoveryCarriesExactGraphAndSchemaRoute() {
+    void graphSpaceProjectionIsNotSearchableWikiContent() {
         KnowledgeProjection graphSpace = projection(
                 "space-concept", "space-revision", KnowledgeConceptType.GRAPH_SPACE);
         when(projectionStore.searchHybrid(any())).thenReturn(List.of(
                 new KnowledgeProjectionHit(graphSpace, 0.03)));
         when(repository.findAuthorityByIds(any())).thenReturn(Map.of(
                 graphSpace.conceptId(), head(graphSpace, graphSpace.revisionId())));
-        when(graphExecutor.readableWikiGraphSpaces(
-                "tenant-a", Map.of("space-concept",
-                        new GraphSpaceReference("graph-a", "schema-a"))))
-                .thenReturn(Set.of("space-concept"));
-
         assertThat(router.search(
                 "student graph", Set.of(KnowledgeConceptType.GRAPH_SPACE), 10, context()))
-                .singleElement()
-                .satisfies(result -> {
-                    assertThat(result.routeTarget()).isEqualTo(KnowledgeRouteTarget.GRAPH);
-                    assertThat(result.graphRouteHint())
-                            .containsEntry("graphId", "graph-a")
-                            .containsEntry("schemaId", "schema-a")
-                            .containsEntry("recommendedTool", "query_graph");
-                });
+                .isEmpty();
+        org.mockito.Mockito.verifyNoInteractions(graphExecutor);
     }
 
     @Test

@@ -54,6 +54,11 @@ public final class KnowledgeWikiService {
                     throw new IllegalStateException("Wiki has changed; reload it before saving");
                 var snapshot = repository.findSnapshot(head.currentVersion());
                 var previous = snapshot.revision();
+                if (safeTitle.equals(previous.title())
+                        && safeSummary.equals(previous.description())) {
+                    result.set(card(head, previous));
+                    return;
+                }
                 var current = head.concept();
                 Instant now = Instant.now();
                 long version = current.version() + 1;
@@ -61,7 +66,8 @@ public final class KnowledgeWikiService {
                 metadata.put("previousRevisionId", previous.id());
                 metadata.put("wikiEditedAt", now.toString());
                 metadata.put("wikiEditId", UUID.randomUUID().toString());
-                String hash = KnowledgeIdentity.sha256(previous.body() + safeTitle + safeSummary + metadata.get("wikiEditId"));
+                String hash = KnowledgeIdentity.sha256(
+                        safeTitle + '\0' + safeSummary + '\0' + previous.body());
                 var revision = new KnowledgeRevision(KnowledgeIdentity.revisionId(conceptId, version, hash),
                         conceptId, version, safeTitle, safeSummary, previous.body(),
                         "cyrene-wiki-editor/" + required(editor, "editor", 128), now, hash, metadata, now);
@@ -89,6 +95,41 @@ public final class KnowledgeWikiService {
             }
             throw failure;
         }
+    }
+
+    public DeletionResult delete(String conceptId, String expectedRevisionId,
+            Predicate<KnowledgeHead> authorized) {
+        String id = required(conceptId, "conceptId", 64);
+        String revisionId = required(expectedRevisionId, "revisionId", 128);
+        AtomicReference<DeletionResult> result = new AtomicReference<>();
+        repository.withAuthorityLock(id, () -> {
+            var head = authorizedHead(id, authorized);
+            if (!Objects.equals(revisionId, head.currentVersion()))
+                throw new IllegalStateException("Wiki has changed; reload it before deleting");
+            var snapshot = repository.findSnapshot(head.currentVersion());
+            var current = head.concept();
+            var previous = snapshot.revision();
+            Instant now = Instant.now();
+            long version = current.version() + 1;
+            var metadata = new LinkedHashMap<>(previous.metadata());
+            metadata.put("previousRevisionId", previous.id());
+            metadata.put("deprecatedAt", now.toString());
+            String hash = KnowledgeIdentity.sha256(previous.body() + "\0deprecated\0" + now);
+            var revision = new KnowledgeRevision(KnowledgeIdentity.revisionId(id, version, hash),
+                    id, version, previous.title(), previous.description(), previous.body(),
+                    "cyrene-wiki-editor/delete", now, hash, metadata, now);
+            var concept = new KnowledgeConcept(id, current.tenantId(), current.userId(),
+                    current.namespaceType(), current.namespaceKey(), current.conceptType(), current.logicalKey(),
+                    KnowledgeStatus.DEPRECATED, revision.id(), version, current.staleAfter(), current.createdAt(), now);
+            var sources = snapshot.sources().stream().map(source -> new KnowledgeSource(revision.id(), source.sourceType(),
+                    source.sourceId(), source.sourceResource(), source.observedAt(), source.createdAt())).toList();
+            var index = new KnowledgeIndexTask(null, id, revision.id(), KnowledgeIndexOperation.DELETE_CONCEPT,
+                    KnowledgeIndexTaskStatus.PENDING, 0, now, null, null, null, now);
+            repository.commitChanges(List.of(new KnowledgeRevisionChange(concept, current.version(), revision,
+                    sources, List.of(), List.of(), List.of(index))));
+            result.set(new DeletionResult(id, revision.id(), true));
+        });
+        return result.get();
     }
 
     public String exportMarkdown() {
@@ -183,4 +224,6 @@ public final class KnowledgeWikiService {
     public record WikiCard(String conceptId, KnowledgeConceptType conceptType, String namespaceKey,
             String revisionId, long version, String title, String summary, String capability,
             Map<String, Object> route, Instant updatedAt) {}
+
+    public record DeletionResult(String conceptId, String revisionId, boolean deleted) {}
 }

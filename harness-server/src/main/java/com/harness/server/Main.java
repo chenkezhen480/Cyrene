@@ -12,23 +12,17 @@ import com.harness.core.env.EnvKey;
 import com.harness.core.modelconfig.ModelConfigFile;
 import com.harness.graph.build.GraphBuildService;
 import com.harness.graph.build.GraphMutationCommitter;
-import com.harness.graph.build.GraphMutationSagaService;
-import com.harness.graph.build.GraphMutationSagaWorker;
 import com.harness.agent.graph.LlmGraphDataConverter;
 import com.harness.graph.build.GraphDataConverterRegistry;
 import com.harness.tool.knowledge.KnowledgeIngestService;
 import com.harness.tool.knowledge.KnowledgeIngestWorker;
 import com.harness.tool.knowledge.KnowledgeDocumentLifecycleService;
 import com.harness.tool.knowledge.PersistentGraphSchemaWikiCompiler;
-import com.harness.tool.knowledge.PersistentGraphSpaceWikiCompiler;
 import com.harness.tool.knowledge.GraphCapabilityDescriber;
 import com.harness.tool.knowledge.authority.ContentAddressedArtifactStorage;
 import com.harness.tool.knowledge.authority.MysqlKnowledgeArtifactRepository;
 import com.harness.tool.knowledge.authority.MysqlKnowledgeIngestJobStore;
-import com.harness.tool.knowledge.authority.MysqlKnowledgeGraphMutationJobStore;
 import com.harness.tool.knowledge.authority.MysqlKnowledgeIndexOutboxStore;
-import com.harness.tool.knowledge.authority.KnowledgeSourcePurgeGuard;
-import com.harness.core.knowledge.KnowledgeSourceType;
 import com.harness.tool.knowledge.okf.OkfBundleExporter;
 import com.harness.tool.knowledge.okf.OkfImportService;
 import com.harness.server.api.ApiErrorCode;
@@ -126,12 +120,12 @@ public class Main {
                 new ContentAddressedArtifactStorage(Path.of(knowledgeUploadDir)),
                 knowledgeArtifactRepository,
                 new MysqlKnowledgeIngestJobStore(agent.knowledgeRepository()),
-                agent.knowledgeRepository());
+                agent.knowledgeRepository(),
+                agent.wikiIdentityResolver());
         KnowledgeIngestWorker ingestWorker = new KnowledgeIngestWorker(ingestService);
         ingestWorker.start();
         Runtime.getRuntime().addShutdownHook(new Thread(ingestWorker::close));
         TraceStore traceStore = agent.traceStore();
-        KnowledgeSourcePurgeGuard sourcePurgeGuard = agent.sourcePurgeGuard();
 
         // Shared cancellation token registry for in-flight chat requests
         ConcurrentHashMap<String, CancellationToken> activeRequests = new ConcurrentHashMap<>();
@@ -140,10 +134,7 @@ public class Main {
         mapper.disable(com.fasterxml.jackson.databind.SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
 
         // Audit cleanup scheduler
-        AuditCleanupScheduler auditCleanup = new AuditCleanupScheduler(
-                traceStore,
-                traceId -> sourcePurgeGuard.retainIfReferenced(
-                        KnowledgeSourceType.TRACE, traceId));
+        AuditCleanupScheduler auditCleanup = new AuditCleanupScheduler(traceStore);
         auditCleanup.start();
         Runtime.getRuntime().addShutdownHook(new Thread(auditCleanup::stop));
 
@@ -223,6 +214,7 @@ public class Main {
         app.get("/api/wiki/export", wikiHandler::exportAll);
         app.get("/api/wiki/{conceptId}", wikiHandler::get);
         app.put("/api/wiki/{conceptId}", wikiHandler::update);
+        app.delete("/api/wiki/{conceptId}", wikiHandler::delete);
         app.get("/api/wiki/{conceptId}/export", wikiHandler::export);
 
         KnowledgeOkfSourceAccess okfSourceAccess = new KnowledgeOkfSourceAccess(
@@ -254,25 +246,10 @@ public class Main {
                 agent.graphSettings(),
                 mapper
         ));
-        GraphMutationCommitter graphMutationCommitter;
+        GraphMutationCommitter graphMutationCommitter =
+                agent.knowledgeGraphStore()::applyChanges;
         GraphCapabilityDescriber graphCapabilityDescriber = new GraphCapabilityDescriber(
                 agent::chatModel, agent.embeddingModel().tokenEstimator());
-        if ("none".equals(agent.knowledgeGraphStore().providerName())) {
-            graphMutationCommitter = agent.knowledgeGraphStore()::applyChanges;
-        } else {
-            GraphMutationSagaService graphMutationSagaService =
-                    new GraphMutationSagaService(
-                            agent.knowledgeGraphStore()::applyChanges,
-                            new PersistentGraphSpaceWikiCompiler(
-                                    agent.knowledgeRepository(), agent.graphSchemaRegistry(), graphCapabilityDescriber),
-                            new MysqlKnowledgeGraphMutationJobStore());
-            GraphMutationSagaWorker graphMutationSagaWorker =
-                    new GraphMutationSagaWorker(graphMutationSagaService);
-            graphMutationSagaWorker.start();
-            Runtime.getRuntime().addShutdownHook(
-                    new Thread(graphMutationSagaWorker::close));
-            graphMutationCommitter = graphMutationSagaService;
-        }
         GraphManagementHandler graphHandler = new GraphManagementHandler(
                 agent.knowledgeGraphStore(),
                 agent.graphSchemaRegistry(),
@@ -289,7 +266,9 @@ public class Main {
                 agent.knowledgeGraphStore(),
                 agent.graphSettings(),
                 graphRequestExecutor,
-                new PersistentGraphSchemaWikiCompiler(agent.knowledgeRepository(), graphCapabilityDescriber)
+                new PersistentGraphSchemaWikiCompiler(
+                        agent.knowledgeRepository(), graphCapabilityDescriber,
+                        agent.wikiIdentityResolver())
         );
         app.get("/api/graph/status", graphHandler::status);
         app.get("/api/graph/graphs", graphHandler::listGraphSpaces);
@@ -353,8 +332,7 @@ public class Main {
                 agent.sessionStore(),
                 agent.messageStore(),
                 agent.messageCache(),
-                agent.messageWriteWorker(),
-                sourcePurgeGuard);
+                agent.messageWriteWorker());
         app.post("/api/sessions", sessionHandler::create);
         app.get("/api/sessions", sessionHandler::list);
         app.get("/api/sessions/{sessionId}", sessionHandler::detail);
@@ -365,8 +343,6 @@ public class Main {
         // Bounded process-level cache metrics. Labels never include user or session identifiers.
         app.get("/api/metrics/session-cache",
                 ctx -> ctx.json(agent.messageCache().metricsSnapshot()));
-        app.get("/api/metrics/knowledge-purge",
-                ctx -> ctx.json(sourcePurgeGuard.metricsSnapshot()));
 
         // Cancel in-progress chat request
         app.delete("/api/chat/{sessionId}", ctx -> {
@@ -423,25 +399,15 @@ public class Main {
 
         // Manual trace cleanup
         app.delete("/api/traces/cleanup", ctx -> {
-            TraceStore.CleanupResult result = traceStore.cleanup(
-                    retentionDays,
-                    traceId -> sourcePurgeGuard.retainIfReferenced(
-                            KnowledgeSourceType.TRACE, traceId));
+            int deleted = traceStore.cleanup(retentionDays);
             ctx.json(Map.of(
-                    "deleted", result.deleted(),
-                    "retainedByKnowledge", result.retainedByKnowledge(),
+                    "deleted", deleted,
                     "retentionDays", retentionDays));
         });
 
         // Delete specific trace
         app.delete("/api/traces/{traceId}", ctx -> {
             String traceId = ctx.pathParam("traceId");
-            if (sourcePurgeGuard.retainIfReferenced(KnowledgeSourceType.TRACE, traceId)) {
-                ApiResponses.error(
-                        ctx, 409, ApiErrorCode.CONFLICT,
-                        "Trace is retained by knowledge revisions");
-                return;
-            }
             boolean deleted = traceStore.deleteById(traceId);
             if (deleted) {
                 ctx.json(Map.of("status", "deleted", "traceId", traceId));

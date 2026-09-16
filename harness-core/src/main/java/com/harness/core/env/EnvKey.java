@@ -63,7 +63,7 @@ public final class EnvKey {
     public static final String RAG_MILVUS_METRIC_TYPE = "HARNESS_RAG_MILVUS_METRIC_TYPE";
 
     // ==================== RAG (显式上下文窗口) ====================
-    /** readContext 的 before/after 单侧最大 chunk 数，默认 2 */
+    /** readContext 的 before/after 单侧最大 chunk 数，默认 10 */
     public static final String RAG_CONTEXT_WINDOW_MAX      = "HARNESS_RAG_CONTEXT_WINDOW_MAX";
 
     // ==================== Knowledge Graph ====================

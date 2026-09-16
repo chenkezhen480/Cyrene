@@ -45,6 +45,7 @@ class KnowledgeIngestServiceTest {
     private KnowledgeArtifactRepository artifactRepository;
     private KnowledgeIngestJobStore ingestJobStore;
     private KnowledgeRepository knowledgeRepository;
+    private WikiIdentityResolver identityResolver;
     private AtomicReference<KnowledgeIngestJob> jobState;
     private Map<String, KnowledgeArtifact> artifacts;
     private Map<String, KnowledgeHead> heads;
@@ -70,6 +71,9 @@ class KnowledgeIngestServiceTest {
         artifactRepository = mock(KnowledgeArtifactRepository.class);
         ingestJobStore = mock(KnowledgeIngestJobStore.class);
         knowledgeRepository = mock(KnowledgeRepository.class);
+        identityResolver = mock(WikiIdentityResolver.class);
+        when(identityResolver.resolve(any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(Optional.empty());
         jobState = new AtomicReference<>();
         artifacts = new ConcurrentHashMap<>();
         heads = new ConcurrentHashMap<>();
@@ -90,7 +94,8 @@ class KnowledgeIngestServiceTest {
                 new ContentAddressedArtifactStorage(tempDir),
                 artifactRepository,
                 ingestJobStore,
-                knowledgeRepository);
+                knowledgeRepository,
+                identityResolver);
     }
 
     @Test
@@ -126,7 +131,8 @@ class KnowledgeIngestServiceTest {
         verify(documentSummarizer).summarize(eq("# Report\n\nCanonical Markdown."),
                 contains("semantic Wiki discovery card"), eq(2048));
         var compilation = ArgumentCaptor.forClass(KnowledgeRevisionChange.class);
-        verify(ingestJobStore).commitCompilation(eq(result.jobId()), compilation.capture());
+        verify(ingestJobStore).commitCompilation(
+                eq(result.jobId()), anyString(), compilation.capture());
         assertThat(compilation.getValue().indexTasks()).hasSize(1);
         assertThat(compilation.getValue().revision().description()).isEqualTo(head.currentRevision().description());
     }
@@ -154,6 +160,35 @@ class KnowledgeIngestServiceTest {
         verify(vectorStore, times(2)).upsert(eq("documents"), anyList());
         verify(vectorStore, never()).deleteDocumentRevision(anyString(), anyString(), anyString());
         verify(vectorStore, never()).deleteById(anyString(), anyString());
+    }
+
+    @Test
+    void semanticallySameUploadWithoutDocumentIdAppendsAnAuthoritativeRevision() {
+        byte[] first = "first".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        when(conversionService.convert(first, "guide-v1.md", "text/markdown"))
+                .thenReturn(converted("# Guide\n\nFirst complete snapshot.", first.length));
+        IngestResult initial = service.ingest(first, "guide-v1.md", "text/markdown", "documents");
+        KnowledgeHead previous = heads.get(initial.documentId());
+        when(identityResolver.resolve(eq(com.harness.core.knowledge.KnowledgeConceptType.SOURCE_DOCUMENT),
+                isNull(), isNull(), eq(com.harness.core.knowledge.KnowledgeNamespaceType.COLLECTION),
+                eq("documents"), eq("guide-v2.md"), any(),
+                eq(WikiIdentityResolver.RevisionMode.AUTHORITATIVE_SNAPSHOT)))
+                .thenReturn(Optional.of(new WikiIdentityResolver.Resolution(
+                        previous, new WikiIdentityResolver.Draft(
+                        "Semantic report", "Updated report", "# Guide\n\nSecond complete snapshot."))));
+
+        byte[] second = "second".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        when(conversionService.convert(second, "guide-v2.md", "text/markdown"))
+                .thenReturn(converted("# Guide\n\nSecond complete snapshot.", second.length));
+        IngestResult updated = service.ingest(
+                second, "guide-v2.md", "text/markdown", "documents");
+
+        assertThat(updated.documentId()).isEqualTo(initial.documentId());
+        assertThat(heads.get(initial.documentId()).currentRevision().revisionNumber()).isEqualTo(2);
+        assertThat(heads.get(initial.documentId()).currentRevision().body())
+                .isEqualTo("# Guide\n\nSecond complete snapshot.");
+        verify(ingestJobStore).commitCompilation(
+                eq(updated.jobId()), anyString(), any(KnowledgeRevisionChange.class));
     }
 
     @Test
@@ -206,7 +241,7 @@ class KnowledgeIngestServiceTest {
         assertThat(jobState.get().status()).isEqualTo(KnowledgeIngestJob.Status.CONVERTED);
         assertThat(jobState.get().convertedArtifactId()).isNotBlank();
         verify(ingestJobStore).reschedule(eq(jobState.get().id()), any(), eq("model unavailable"));
-        verify(ingestJobStore, never()).commitCompilation(anyString(), any());
+        verify(ingestJobStore, never()).commitCompilation(anyString(), anyString(), any());
         verify(vectorStore, never()).upsert(anyString(), anyList());
     }
 
@@ -222,7 +257,7 @@ class KnowledgeIngestServiceTest {
                 .isInstanceOf(KnowledgeIngestPendingException.class)
                 .hasCauseInstanceOf(IllegalStateException.class);
         assertThat(heads).isEmpty();
-        verify(ingestJobStore, never()).commitCompilation(anyString(), any());
+        verify(ingestJobStore, never()).commitCompilation(anyString(), anyString(), any());
     }
 
     private void wirePersistentState() {
@@ -271,8 +306,8 @@ class KnowledgeIngestServiceTest {
                     jobState.set(advanced);
                     return advanced;
                 });
-        when(ingestJobStore.commitCompilation(anyString(), any())).thenAnswer(invocation -> {
-            KnowledgeRevisionChange change = invocation.getArgument(1);
+        when(ingestJobStore.commitCompilation(anyString(), anyString(), any())).thenAnswer(invocation -> {
+            KnowledgeRevisionChange change = invocation.getArgument(2);
             heads.put(change.concept().id(), new KnowledgeHead(change.concept(), change.revision()));
             KnowledgeIngestJob current = jobState.get();
             KnowledgeIngestJob compiled = new KnowledgeIngestJob(

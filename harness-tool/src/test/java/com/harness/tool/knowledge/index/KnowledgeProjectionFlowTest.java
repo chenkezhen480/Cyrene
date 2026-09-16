@@ -90,6 +90,25 @@ class KnowledgeProjectionFlowTest {
     }
 
     @Test
+    void sourceCatalogIndexesFileNameAndMarkdownHeadings() {
+        KnowledgeHead base = head(KnowledgeConceptType.SOURCE_DOCUMENT,
+                KnowledgeNamespaceType.COLLECTION, null, "document-title");
+        Map<String, Object> metadata = new java.util.LinkedHashMap<>(base.currentRevision().metadata());
+        metadata.put("fileName", "角色元素机制说明.pdf");
+        KnowledgeRevision revision = new KnowledgeRevision(
+                base.currentRevision().id(), base.concept().id(), 1,
+                "Generic Wiki title", "Generic summary",
+                "# 芙宁娜气氛值规则\n\n正文。\n\n## 叠层限制\n\n更多正文。",
+                "test", NOW, base.currentRevision().contentHash(), metadata, NOW);
+
+        KnowledgeProjection projection = new KnowledgeProjectionMapper(embeddingProvider())
+                .mapCatalog(new KnowledgeHead(base.concept(), revision)).orElseThrow();
+
+        assertThat(projection.content()).contains(
+                "Generic Wiki title", "角色元素机制说明.pdf", "芙宁娜气氛值规则", "叠层限制", "Generic summary");
+    }
+
+    @Test
     void allProjectionCollectionsMustRemainDistinct() {
         assertThatThrownBy(() -> new KnowledgeProjectionCollections(
                 "same", "same", "user_memory", "operation_memory"))
@@ -140,6 +159,22 @@ class KnowledgeProjectionFlowTest {
     }
 
     @Test
+    void identitySearchFiltersTheExactTenantAndNamespaceBeforeRetrieval() {
+        String filter = MilvusKnowledgeProjectionStore.searchFilter(
+                new KnowledgeProjectionSearch(
+                        "guide", new float[]{0.1f}, "tenant-a", null,
+                        KnowledgeNamespaceType.COLLECTION, "documents", true,
+                        Set.of(KnowledgeConceptType.SOURCE_DOCUMENT),
+                        20, 5, 0.70, 0.10, 60));
+
+        assertThat(filter)
+                .contains("tenant_id == \"tenant-a\"")
+                .doesNotContain("tenant_id is null")
+                .contains("namespace_type == \"COLLECTION\"")
+                .contains("namespace_key == \"documents\"");
+    }
+
+    @Test
     void catalogTaskPreservesItsVersionContentAndHistory() {
         KnowledgeRepository repository = mock(KnowledgeRepository.class);
         org.mockito.Mockito.doAnswer(call -> { ((Runnable) call.getArgument(1)).run(); return null; })
@@ -165,8 +200,6 @@ class KnowledgeProjectionFlowTest {
         assertThat(projections.getValue()).singleElement()
                 .extracting(KnowledgeProjection::revisionId)
                 .isEqualTo(current.currentRevision().id());
-        verify(store, never()).deleteOtherRevisions(
-                current.concept().id(), current.currentRevision().id());
     }
 
     @Test

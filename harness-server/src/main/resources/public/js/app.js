@@ -26,6 +26,7 @@ function renderMarkdown(text) {
 const ARTIFACT_LINK_RE = /!\[.*?\]\(\/api\/artifacts\/[^)]+\)/g;
 // 服务端长时间不吐任何事件就主动放弃：响应流若因任何原因不关闭，界面会被永久锁住。
 const STREAM_IDLE_TIMEOUT_MS = 90_000;
+const STREAM_CHARS_PER_FRAME = 8;
 const CRYSTAL_SVG = '<svg width="15" height="15" viewBox="0 0 16 16" fill="none" style="vertical-align:-2px;margin-right:3px"><defs><radialGradient id="cg"><stop offset="0%" stop-color="rgba(232,160,191,0.6)"/><stop offset="100%" stop-color="rgba(139,126,200,0.15)"/></radialGradient></defs><path d="M8 0.5L9.5 5 14 3.5 11 7.5 15.5 8 11 8.5 14 12.5 9.5 11 8 15.5 6.5 11 2 12.5 5 8.5 0.5 8 5 7.5 2 3.5 6.5 5z" fill="url(#cg)" stroke="var(--iris)" stroke-width="0.5" stroke-linejoin="round"/><circle cx="8" cy="8" r="1.8" fill="rgba(232,160,191,0.7)"/><circle cx="8" cy="8" r="0.8" fill="white" opacity="0.6"/></svg>';
 function stripArtifactLinks(text) {
   if (!text) return '';
@@ -653,15 +654,26 @@ const ChatPage = {
 
     async function deleteSession(sid) {
       if (!confirm(t('deleteSessionConfirm'))) return;
+      const sessionIndex = sessions.value.findIndex(session => session.id === sid);
+      const removedSession = sessionIndex >= 0 ? sessions.value[sessionIndex] : null;
+      const clearedCurrent = currentSessionId.value === sid;
+      const removedMessages = clearedCurrent ? messages.value : null;
+      if (sessionIndex >= 0) sessions.value.splice(sessionIndex, 1);
+      if (clearedCurrent) {
+        currentSessionId.value = null;
+        messages.value = [];
+      }
       try {
         await CyreneAPI.closeSession(sid, userId.value);
         showToast(t('sessionDeleted'), 'success');
-        if (currentSessionId.value === sid) {
-          currentSessionId.value = null;
-          messages.value = [];
-        }
-        loadSessions();
       } catch (e) {
+        if (removedSession && !sessions.value.some(session => session.id === sid)) {
+          sessions.value.splice(sessionIndex, 0, removedSession);
+        }
+        if (clearedCurrent && currentSessionId.value === null) {
+          currentSessionId.value = sid;
+          messages.value = removedMessages;
+        }
         showToast(t('deleteFailed') + e.message, 'error');
       }
     }
@@ -763,6 +775,41 @@ const ChatPage = {
       });
       const msgIdx = messages.value.length - 1;
       let reader = null;
+      let idleTimer = null;
+      let terminalEvent = null;
+      let receivedText = false;
+      let pendingText = '';
+      let renderFrame = null;
+      let streamDrainResolve = null;
+      let terminalPayload = null;
+
+      const flushStreamFrame = () => {
+        renderFrame = null;
+        if (pendingText) {
+          let end = Math.min(STREAM_CHARS_PER_FRAME, pendingText.length);
+          if (end < pendingText.length && /[\uD800-\uDBFF]/.test(pendingText[end - 1])) end--;
+          appendAssistantText(messages.value[msgIdx], pendingText.slice(0, end));
+          pendingText = pendingText.slice(end);
+        }
+        scrollToBottom();
+        if (pendingText) {
+          scheduleStreamFrame();
+        } else if (streamDrainResolve) {
+          const resolve = streamDrainResolve;
+          streamDrainResolve = null;
+          resolve();
+        }
+      };
+      const scheduleStreamFrame = () => {
+        if (renderFrame === null) {
+          renderFrame = requestAnimationFrame(flushStreamFrame);
+        }
+      };
+      const waitForStreamDrain = () => {
+        if (!pendingText && renderFrame === null) return Promise.resolve();
+        scheduleStreamFrame();
+        return new Promise(resolve => { streamDrainResolve = resolve; });
+      };
 
       try {
         // Build context with file URLs
@@ -784,6 +831,7 @@ const ChatPage = {
         reader = resp.body.getReader();
         const decoder = new TextDecoder();
         const sseParser = CyreneSSE.createParser(({ type, data }) => {
+          if (terminalEvent) return;
           let parsed;
           try {
             parsed = JSON.parse(data);
@@ -803,7 +851,10 @@ const ChatPage = {
                     if (typeof messages.value[msgIdx].content === 'string' && messages.value[msgIdx].content.includes('thinking-placeholder')) {
                       messages.value[msgIdx].content = '';
                     }
-                    if (parsed.text) appendAssistantText(messages.value[msgIdx], parsed.text);
+                    if (parsed.text) {
+                      pendingText += parsed.text;
+                      receivedText = true;
+                    }
                     break;
                   case 'tool_call_created':
                   case 'tool_call_start':
@@ -838,61 +889,80 @@ const ChatPage = {
                     messages.value[msgIdx].compressions.push(parsed);
                     break;
                   case 'done':
-                    // Don't replace streamed content — tool call blocks + tokens already in place
-                    if (parsed.sessionId) {
-                      currentSessionId.value = parsed.sessionId;
+                    terminalPayload = parsed;
+                    if (!receivedText && !Array.isArray(parsed.blocks)
+                        && typeof parsed.output === 'string') {
+                      pendingText += parsed.output;
                     }
-                    if (Array.isArray(parsed.blocks)) {
-                      messages.value[msgIdx].content = parsed.blocks;
-                    }
-                    // 服务端已收工，本轮就此结束 —— 不等响应流关闭，否则流不关界面会一直转。
-                    isStreaming.value = false;
+                    terminalEvent = type;
                     break;
                   case 'cancelled':
                     // Keep streamed content as-is (tool call blocks + tokens already in place)
+                    terminalEvent = type;
                     break;
                   case 'error':
+                    if (renderFrame !== null) cancelAnimationFrame(renderFrame);
+                    renderFrame = null;
+                    pendingText = '';
                     messages.value[msgIdx].content = `⚠️ Error: ${parsed.error || t('unknownError')}`;
                     showToast(parsed.error || t('requestFailed'), 'error');
+                    terminalEvent = type;
                     break;
                   default:
                     break;
           }
+          if (pendingText) scheduleStreamFrame();
         });
 
-        let idleTimer = null;
         const idleTimeout = () => new Promise((_, reject) => {
           idleTimer = setTimeout(
             () => reject(new Error(t('streamIdleTimeout'))), STREAM_IDLE_TIMEOUT_MS);
         });
 
-        while (true) {
+        while (!terminalEvent) {
           const { done, value } = await Promise.race([reader.read(), idleTimeout()]);
           clearTimeout(idleTimer);
           idleTimer = null;
           if (done) break;
 
           sseParser.feed(decoder.decode(value, { stream: true }));
-
-          // Force yield to macrotask queue so browser can repaint
-          scrollToBottom();
-          await new Promise(r => setTimeout(r, 0));
         }
         sseParser.feed(decoder.decode());
         sseParser.finish();
+        if (!terminalEvent) throw new Error(t('streamInterrupted'));
+        if (terminalEvent !== 'error') await waitForStreamDrain();
+        if (terminalEvent === 'done') {
+          if (terminalPayload.sessionId) {
+            currentSessionId.value = terminalPayload.sessionId;
+          }
+          if (Array.isArray(terminalPayload.blocks)) {
+            messages.value[msgIdx].content = terminalPayload.blocks;
+          }
+        }
 
         // Reload sessions list
         loadSessions();
       } catch (e) {
         messages.value[msgIdx].content = `⚠️ Error: ${e.message}`;
-        pendingConfirmation.value = null;
-        confirmationAcknowledged.value = false;
         showToast(e.message, 'error');
       } finally {
+        clearTimeout(idleTimer);
+        if (renderFrame !== null) cancelAnimationFrame(renderFrame);
         if (reader) {
           reader.cancel().catch(() => {});
         }
+        messages.value[msgIdx].toolCalls.forEach(toolCall => {
+          if (['CREATED', 'RUNNING', 'AWAITING_CONFIRMATION'].includes(toolCall.status)) {
+            upsertToolCall(messages.value[msgIdx], {
+              toolCallId: toolCall.id,
+              status: terminalEvent === 'cancelled' ? 'CANCELLED' : 'FAILED',
+              errorSummary: terminalEvent === 'cancelled' ? '' : t('streamInterrupted'),
+            });
+          }
+        });
         isStreaming.value = false;
+        pendingConfirmation.value = null;
+        confirmationAcknowledged.value = false;
         scrollToBottom();
       }
     }
@@ -1198,6 +1268,7 @@ const KnowledgePage = {
     const selectedWiki = ref(null);
     const editingWiki = ref(false);
     const wikiSaving = ref(false);
+    const wikiDeleting = ref(false);
     const wikiExporting = ref(false);
     const draftTitle = ref('');
     const draftSummary = ref('');
@@ -1315,7 +1386,7 @@ const KnowledgePage = {
     }
 
     async function openDocumentWiki(document) {
-      if (wikiSaving.value) return;
+      if (wikiSaving.value || wikiDeleting.value) return;
       try { openWiki(requireWikiCard(await CyreneAPI.getWiki(document.documentId, userId.value))); }
       catch (e) { wikiError.value = e.message; }
     }
@@ -1349,7 +1420,7 @@ const KnowledgePage = {
     }
 
     async function saveWiki() {
-      if (!selectedWiki.value || wikiSaving.value || !draftTitle.value.trim() || !draftSummary.value.trim()) return;
+      if (!selectedWiki.value || wikiSaving.value || wikiDeleting.value || !draftTitle.value.trim() || !draftSummary.value.trim()) return;
       wikiSaving.value = true;
       wikiError.value = '';
       try {
@@ -1365,12 +1436,30 @@ const KnowledgePage = {
       finally { wikiSaving.value = false; }
     }
 
+    async function deleteWiki() {
+      const card = selectedWiki.value;
+      if (!card || wikiSaving.value || wikiDeleting.value || wikiExporting.value) return;
+      if (!window.confirm(t('wikiDeleteConfirm').replace('{title}', card.title))) return;
+      wikiDeleting.value = true;
+      wikiError.value = '';
+      try {
+        const result = await CyreneAPI.deleteWiki(card.conceptId, userId.value, card.revisionId);
+        if (!result || result.conceptId !== card.conceptId || result.deleted !== true) throw new Error(t('invalidWikiResponse'));
+        selectedWiki.value = null;
+        wikiCards.value = [];
+        editingWiki.value = false;
+        await loadWiki();
+        showToast(t('wikiDeleted'), 'success');
+      } catch (e) { wikiError.value = e.message; }
+      finally { wikiDeleting.value = false; }
+    }
+
     function openWikiDrawer() {
       if (wikiDrawer.value && !wikiDrawer.value.open) wikiDrawer.value.showModal();
     }
 
     function closeWikiDrawer() {
-      if (wikiSaving.value || wikiExporting.value || !confirmWikiChange()) return;
+      if (wikiSaving.value || wikiDeleting.value || wikiExporting.value || !confirmWikiChange()) return;
       if (selectedWiki.value) {
         draftTitle.value = selectedWiki.value.title;
         draftSummary.value = selectedWiki.value.summary;
@@ -1384,7 +1473,7 @@ const KnowledgePage = {
     }
 
     async function downloadWiki(all = false) {
-      if ((!all && !selectedWiki.value) || wikiDirty.value || wikiExporting.value || wikiSaving.value) return;
+      if ((!all && !selectedWiki.value) || wikiDirty.value || wikiExporting.value || wikiSaving.value || wikiDeleting.value) return;
       wikiExporting.value = true;
       wikiError.value = '';
       wikiExportError.value = '';
@@ -1421,14 +1510,14 @@ const KnowledgePage = {
       documents, pageInfo, fileNameFilter, loadingDocuments, loadingMore, documentListError,
       uploading, uploadCollection, fileInput, selectedFiles, uploadQueue, uploadedCount,
       wikiType, wikiTypes, wikiCards, wikiPageInfo, wikiLoading, wikiError, selectedWiki, editingWiki,
-      wikiDrawer, wikiExportError, wikiSaving, wikiExporting, draftTitle, draftSummary, wikiDirty, wikiPreview,
+      wikiDrawer, wikiExportError, wikiSaving, wikiDeleting, wikiExporting, draftTitle, draftSummary, wikiDirty, wikiPreview,
       loadCollections, loadDocuments, applyCollection, uploadFiles, openWiki, openDocumentWiki,
-      loadWiki, changeWikiType, saveWiki, downloadWiki, openWikiDrawer, closeWikiDrawer, handleWikiBackdrop };
+      loadWiki, changeWikiType, saveWiki, deleteWiki, downloadWiki, openWikiDrawer, closeWikiDrawer, handleWikiBackdrop };
   },
   template: `
     <div class="knowledge-workspace">
       <div class="knowledge-page-toolbar">
-        <button class="btn btn-ghost" @click="downloadWiki(true)" :disabled="wikiExporting || wikiSaving || wikiDirty" :title="wikiDirty ? t('wikiSaveBeforeExport') : t('exportAllWikiHint')">{{ wikiExporting ? t('exportingWiki') : t('exportAllWikiMd') }}</button>
+        <button class="btn btn-ghost" @click="downloadWiki(true)" :disabled="wikiExporting || wikiSaving || wikiDeleting || wikiDirty" :title="wikiDirty ? t('wikiSaveBeforeExport') : t('exportAllWikiHint')">{{ wikiExporting ? t('exportingWiki') : t('exportAllWikiMd') }}</button>
         <button class="btn btn-primary" @click="openWikiDrawer" aria-haspopup="dialog" aria-controls="knowledgeWikiDrawer">LLM Wiki</button>
       </div>
       <div v-if="wikiExportError" class="knowledge-list-error text-sm" role="alert">{{ wikiExportError }}</div>
@@ -1506,18 +1595,18 @@ const KnowledgePage = {
         <div class="card-header">
           <div id="knowledgeWikiTitle" class="card-title">LLM Wiki</div>
           <div class="knowledge-wiki-toolbar">
-            <button class="btn btn-ghost btn-sm" @click="downloadWiki(true)" :disabled="wikiExporting || wikiSaving || wikiDirty" :title="t('exportAllWikiHint')">{{ wikiExporting ? t('exportingWiki') : t('exportAllWikiMd') }}</button>
-            <button class="btn btn-ghost btn-sm" @click="loadWiki" :disabled="wikiLoading || wikiSaving" :aria-label="t('reload')"><span v-html="Icons.refresh"></span></button>
-            <button class="btn btn-ghost btn-sm" @click="closeWikiDrawer" :disabled="wikiSaving || wikiExporting" :aria-label="t('closeWiki')">×</button>
+            <button class="btn btn-ghost btn-sm" @click="downloadWiki(true)" :disabled="wikiExporting || wikiSaving || wikiDeleting || wikiDirty" :title="t('exportAllWikiHint')">{{ wikiExporting ? t('exportingWiki') : t('exportAllWikiMd') }}</button>
+            <button class="btn btn-ghost btn-sm" @click="loadWiki" :disabled="wikiLoading || wikiSaving || wikiDeleting" :aria-label="t('reload')"><span v-html="Icons.refresh"></span></button>
+            <button class="btn btn-ghost btn-sm" @click="closeWikiDrawer" :disabled="wikiSaving || wikiDeleting || wikiExporting" :aria-label="t('closeWiki')">×</button>
           </div>
         </div>
         <div class="card-body knowledge-wiki-body">
           <p class="text-xs text-ash">{{ t('wikiHint') }}</p>
-          <select class="input" :value="wikiType" @change="changeWikiType($event)" :disabled="wikiSaving" :aria-label="t('wikiType')">
+          <select class="input" :value="wikiType" @change="changeWikiType($event)" :disabled="wikiSaving || wikiDeleting" :aria-label="t('wikiType')">
             <option v-for="type in wikiTypes" :key="type.value" :value="type.value">{{ t(type.label) }}</option>
           </select>
           <div class="knowledge-wiki-list">
-            <button v-for="card in wikiCards" :key="card.conceptId" class="knowledge-wiki-item" :class="{ active: selectedWiki?.conceptId === card.conceptId }" @click="openWiki(card)" :disabled="wikiSaving">
+            <button v-for="card in wikiCards" :key="card.conceptId" class="knowledge-wiki-item" :class="{ active: selectedWiki?.conceptId === card.conceptId }" @click="openWiki(card)" :disabled="wikiSaving || wikiDeleting">
               <span>{{ card.title }}</span><span class="text-xs text-ash">{{ card.namespaceKey }} · v{{ card.version }}</span>
             </button>
             <button v-if="wikiPageInfo.hasMore" class="btn btn-ghost btn-sm w-full" @click="loadWiki({ append: true, cursor: wikiPageInfo.nextCursor })" :disabled="wikiLoading">{{ t('loadMoreWiki') }}</button>
@@ -1530,17 +1619,20 @@ const KnowledgePage = {
                 <button class="btn btn-ghost btn-sm" :class="{ 'wiki-tab-active': !editingWiki }" @click="editingWiki = false">{{ t('wikiPreview') }}</button>
                 <button class="btn btn-ghost btn-sm" :class="{ 'wiki-tab-active': editingWiki }" @click="editingWiki = true">{{ t('edit') }}</button>
               </div>
-              <button class="btn btn-ghost btn-sm" @click="downloadWiki(false)" :disabled="wikiExporting || wikiSaving || wikiDirty" :title="wikiDirty ? t('wikiSaveBeforeExport') : ''">{{ wikiExporting ? t('exportingWiki') : t('exportWikiMd') }}</button>
+              <div class="knowledge-wiki-toolbar">
+                <button class="btn btn-danger btn-sm" @click="deleteWiki" :disabled="wikiDeleting || wikiSaving || wikiExporting">{{ wikiDeleting ? t('wikiDeleting') : t('delete') }}</button>
+                <button class="btn btn-ghost btn-sm" @click="downloadWiki(false)" :disabled="wikiExporting || wikiSaving || wikiDeleting || wikiDirty" :title="wikiDirty ? t('wikiSaveBeforeExport') : ''">{{ wikiExporting ? t('exportingWiki') : t('exportWikiMd') }}</button>
+              </div>
             </div>
             <iframe v-if="!editingWiki" class="knowledge-wiki-preview" :srcdoc="wikiPreview" sandbox="" :title="t('wikiPreview')"></iframe>
             <div v-else class="knowledge-wiki-editor">
               <label class="input-label" for="wikiTitle">{{ t('wikiTitle') }}</label>
-              <input id="wikiTitle" class="input" v-model="draftTitle" maxlength="512" :disabled="wikiSaving" />
+              <input id="wikiTitle" class="input" v-model="draftTitle" maxlength="512" :disabled="wikiSaving || wikiDeleting" />
               <label class="input-label mt-4" for="wikiSummary">{{ t('wikiSummary') }}</label>
-              <textarea id="wikiSummary" class="input knowledge-wiki-summary" v-model="draftSummary" maxlength="2048" :disabled="wikiSaving"></textarea>
+              <textarea id="wikiSummary" class="input knowledge-wiki-summary" v-model="draftSummary" maxlength="2048" :disabled="wikiSaving || wikiDeleting"></textarea>
               <div class="knowledge-wiki-toolbar mt-4">
                 <span class="text-xs text-ash">{{ draftSummary.length }}/2048<span v-if="wikiDirty"> · {{ t('wikiUnsaved') }}</span></span>
-                <button class="btn btn-primary btn-sm" @click="saveWiki" :disabled="wikiSaving || !wikiDirty || !draftTitle.trim() || !draftSummary.trim()">{{ wikiSaving ? t('saving') : t('save') }}</button>
+                <button class="btn btn-primary btn-sm" @click="saveWiki" :disabled="wikiSaving || wikiDeleting || !wikiDirty || !draftTitle.trim() || !draftSummary.trim()">{{ wikiSaving ? t('saving') : t('save') }}</button>
               </div>
             </div>
           </template>

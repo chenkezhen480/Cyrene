@@ -302,6 +302,7 @@ public class ReActEngine implements ReActLoop {
                                 StructuredOutputException.Code.STRUCTURED_OUTPUT_EMPTY,
                                 "Tool failure limit reached before structured_output was submitted");
                     }
+                    log.warn("[L3-ReAct] Tool failure limit reached; generating tool-free final response");
                     GeneratedFinalResponse finalResponse = generateBlockingFinalResponse(
                             systemPrompt, messages, finalRequestParameters,
                             cancellationToken, trace);
@@ -538,6 +539,7 @@ public class ReActEngine implements ReActLoop {
                     toolRetries++;
                 }
                 if (outcome.action() == RoundAction.GENERATE_FINAL) {
+                    log.warn("[L3-ReAct] Tool failure limit reached; generating streamed tool-free final response");
                     GeneratedFinalResponse finalResponse = generateFinalResponse(
                             systemPrompt,
                             messages,

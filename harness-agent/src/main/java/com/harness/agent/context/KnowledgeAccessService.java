@@ -24,7 +24,7 @@ public final class KnowledgeAccessService {
     ) {
         this(
                 new ContextBuilder(rerankModelProvider, embeddingModelProvider),
-                EnvConfig.get().getInt(EnvKey.RAG_CONTEXT_WINDOW_MAX, 2));
+                EnvConfig.get().getInt(EnvKey.RAG_CONTEXT_WINDOW_MAX, 10));
     }
 
     public KnowledgeAccessService(ContextBuilder contextBuilder, int contextWindowMax) {

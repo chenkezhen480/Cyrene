@@ -17,7 +17,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.function.Predicate;
 import java.util.stream.Stream;
 
 /**
@@ -125,24 +124,13 @@ public class FileTraceStore implements TraceStore {
     }
 
     @Override
-    public CleanupResult cleanup(
-            int retentionDays,
-            Predicate<String> retainedByKnowledge
-    ) {
-        java.util.Objects.requireNonNull(retainedByKnowledge, "retainedByKnowledge");
+    public int cleanup(int retentionDays) {
         Instant cutoff = Instant.now().minusSeconds(retentionDays * 86400L);
         int deleted = 0;
-        int retained = 0;
         try (Stream<Path> paths = Files.list(traceDir)) {
             var files = paths.filter(p -> p.toString().endsWith(".json")).toList();
             for (Path f : files) {
                 if (Files.getLastModifiedTime(f).toInstant().isBefore(cutoff)) {
-                    String fileName = f.getFileName().toString();
-                    String traceId = fileName.substring(0, fileName.length() - ".json".length());
-                    if (retainedByKnowledge.test(traceId)) {
-                        retained++;
-                        continue;
-                    }
                     Files.delete(f);
                     deleted++;
                 }
@@ -151,7 +139,7 @@ public class FileTraceStore implements TraceStore {
             log.error("Cleanup failed: {}", e.getMessage(), e);
             throw new TraceStoreException("Failed to cleanup trace files", e);
         }
-        return new CleanupResult(deleted, retained);
+        return deleted;
     }
 
     @Override

@@ -35,10 +35,7 @@ public final class TraceStoreFactory {
                     java.util.List.of(),
                     new com.harness.core.model.PageInfo(limit, "", false));
         }
-        @Override public CleanupResult cleanup(
-                int retentionDays, java.util.function.Predicate<String> retainedByKnowledge) {
-            return new CleanupResult(0, 0);
-        }
+        @Override public int cleanup(int retentionDays) { return 0; }
         @Override public boolean deleteById(String traceId) { return false; }
         @Override public int count() { return 0; }
         @Override public boolean updateMetadata(String traceId, java.util.Map<String, String> entries) { return false; }

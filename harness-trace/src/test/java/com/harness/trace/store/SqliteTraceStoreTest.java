@@ -46,20 +46,18 @@ class SqliteTraceStoreTest {
     }
 
     @Test
-    void cleanup_retainsKnowledgeEvidenceAndReportsBothOutcomes() {
+    void cleanup_removesAllExpiredTraces() {
         SqliteTraceStore store = new SqliteTraceStore(
                 "jdbc:sqlite:" + tempDir.resolve("cleanup.db").toAbsolutePath());
         Instant old = Instant.parse("2000-01-01T00:00:00Z");
-        store.save(trace("retained", "session-1", old));
-        store.save(trace("deletable", "session-1", old));
+        store.save(trace("expired-1", "session-1", old));
+        store.save(trace("expired-2", "session-1", old));
 
-        TraceStore.CleanupResult result = store.cleanup(
-                1, traceId -> "retained".equals(traceId));
+        int deleted = store.cleanup(1);
 
-        assertThat(result.deleted()).isEqualTo(1);
-        assertThat(result.retainedByKnowledge()).isEqualTo(1);
-        assertThat(store.findById("retained")).isPresent();
-        assertThat(store.findById("deletable")).isEmpty();
+        assertThat(deleted).isEqualTo(2);
+        assertThat(store.findById("expired-1")).isEmpty();
+        assertThat(store.findById("expired-2")).isEmpty();
     }
 
     private static AgentTrace trace(String traceId, String sessionId, Instant timestamp) {

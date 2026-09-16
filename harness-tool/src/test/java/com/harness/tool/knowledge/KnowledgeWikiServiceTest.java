@@ -73,6 +73,20 @@ class KnowledgeWikiServiceTest {
                 assertThat(task.operation()).isEqualTo(KnowledgeIndexOperation.UPSERT_CURRENT);
             });
         });
+        verify(vectors, never()).deleteDocumentRevision("manuals", "doc-1", "rev-1");
+    }
+
+    @Test
+    void identicalEditKeepsTheCurrentRevision() {
+        setup(KnowledgeConceptType.SOURCE_DOCUMENT);
+
+        var result = service.update("doc-1", "rev-1", "Original title",
+                "Discovery summary", "alice", ignored -> true);
+
+        assertThat(result.revisionId()).isEqualTo("rev-1");
+        assertThat(result.version()).isEqualTo(1);
+        verify(repository, never()).commitChanges(any());
+        verifyNoInteractions(vectors);
     }
 
     @Test
@@ -106,6 +120,25 @@ class KnowledgeWikiServiceTest {
         assertThat(changes.getValue().getFirst().revision().body()).isEqualTo("original source facts");
         assertThat(card.capability()).isEmpty();
         verifyNoInteractions(vectors);
+    }
+
+    @Test
+    void deleteDeprecatesTheAuthorityAndSchedulesProjectionRemoval() {
+        setup(KnowledgeConceptType.USER_EPISODE);
+
+        var result = service.delete("doc-1", "rev-1", ignored -> true);
+
+        ArgumentCaptor<List<KnowledgeRevisionChange>> changes = ArgumentCaptor.forClass(List.class);
+        verify(repository).commitChanges(changes.capture());
+        assertThat(result.deleted()).isTrue();
+        assertThat(changes.getValue()).singleElement().satisfies(change -> {
+            assertThat(change.concept().status()).isEqualTo(KnowledgeStatus.DEPRECATED);
+            assertThat(change.concept().userId()).isEqualTo("alice");
+            assertThat(change.revision().body()).isEqualTo("original source facts");
+            assertThat(change.revision().metadata()).containsEntry("previousRevisionId", "rev-1");
+            assertThat(change.indexTasks()).singleElement().satisfies(task ->
+                    assertThat(task.operation()).isEqualTo(KnowledgeIndexOperation.DELETE_CONCEPT));
+        });
     }
     @Test
     void globalManagementExportIncludesAllOwnersAcrossCollectionsAndPagesWithoutDuplicatingGraphDescriptions() {

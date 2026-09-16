@@ -132,6 +132,7 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
 
     private final AgentMemoryRuntime memoryRuntime;
     private LongTermKnowledgeRetriever longTermKnowledgeRetriever;
+    private com.harness.tool.knowledge.WikiIdentityResolver wikiIdentityResolver;
 
     // Skill subsystem
     private final SkillRegistry skillRegistry;
@@ -290,9 +291,22 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
                 runtime.providers().embedding().tokenEstimator(),
                 objectMapper,
                 Clock.systemUTC());
+        wikiIdentityResolver = null;
+        if (!"none".equalsIgnoreCase(ragProvider)) {
+            wikiIdentityResolver = new com.harness.tool.knowledge.WikiIdentityResolver(
+                    memoryRuntime.knowledgeRepository(),
+                    memoryRuntime.knowledgeProjectionStore(),
+                    runtime.providers().embedding(),
+                    new com.harness.input.document.DocumentSummarizer(
+                            () -> runtime.providers().chat(),
+                            runtime.providers().embedding().tokenEstimator()),
+                    objectMapper);
+        }
         toolRegistry.register(new com.harness.agent.memory.SaveMemoryTool(
                 memoryRuntime.knowledgeRepository(), objectMapper, Clock.systemUTC(),
-                memoryRuntime::signalKnowledgeIndex, com.harness.core.knowledge.PreferenceKeyRegistry.standard()));
+                memoryRuntime::signalKnowledgeIndex,
+                com.harness.core.knowledge.PreferenceKeyRegistry.standard(),
+                wikiIdentityResolver));
         if ("none".equalsIgnoreCase(ragProvider)) {
             log.info("Knowledge search tools disabled (ragProvider=none); "
                     + "memory capture and MySQL preference injection remain enabled");
@@ -705,8 +719,8 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
     public com.harness.tool.knowledge.authority.KnowledgeRepository knowledgeRepository() {
         return memoryRuntime.knowledgeRepository();
     }
-    public com.harness.tool.knowledge.authority.KnowledgeSourcePurgeGuard sourcePurgeGuard() {
-        return memoryRuntime.sourcePurgeGuard();
+    public com.harness.tool.knowledge.WikiIdentityResolver wikiIdentityResolver() {
+        return wikiIdentityResolver;
     }
     public GraphSpaceAccessService graphSpaceAccessService() { return graphSpaceAccessService; }
     public GraphSchemaRegistry graphSchemaRegistry() { return graphSchemaRegistry; }

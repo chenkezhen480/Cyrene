@@ -9,13 +9,18 @@ import com.harness.provider.EmbeddingModelProvider;
 import com.harness.tool.knowledge.authority.KnowledgeHead;
 import dev.langchain4j.data.embedding.Embedding;
 
+import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Optional;
+import java.util.regex.Pattern;
 
 /** Converts an authoritative current Head into one provider-neutral projection row. */
 public final class KnowledgeProjectionMapper {
 
     private static final int MAX_CONTENT_CHARS = 65_535;
+    private static final int MAX_CATALOG_HEADINGS = 64;
+    private static final Pattern MARKDOWN_HEADING = Pattern.compile(
+            "(?m)^ {0,3}#{1,6}[\\t ]+(.+?)[\\t ]*#*[\\t ]*$");
 
     private final EmbeddingModelProvider embeddingProvider;
 
@@ -52,7 +57,7 @@ public final class KnowledgeProjectionMapper {
         }
 
         String content = catalog
-                ? revision.title() + (revision.description() == null ? "" : "\n\n" + revision.description())
+                ? catalogContent(concept, revision)
                 : concept.conceptType().isMemory() ? revision.body() : projectionContent(revision);
         Embedding embedded = embeddingProvider.embed(content);
         if (embedded == null || embedded.vector() == null
@@ -112,6 +117,25 @@ public final class KnowledgeProjectionMapper {
             return content.substring(0, MAX_CONTENT_CHARS);
         }
         return content.toString();
+    }
+
+    private static String catalogContent(KnowledgeConcept concept, KnowledgeRevision revision) {
+        LinkedHashSet<String> parts = new LinkedHashSet<>();
+        parts.add(revision.title());
+        if (concept.conceptType() == KnowledgeConceptType.SOURCE_DOCUMENT) {
+            Object fileName = revision.metadata().get("fileName");
+            if (fileName instanceof String text && !text.isBlank()) parts.add(text.strip());
+            // ponytail: canonical MarkItDown uses ATX headings; add a parser if other heading forms become common.
+            var headings = MARKDOWN_HEADING.matcher(revision.body());
+            while (headings.find() && parts.size() <= MAX_CATALOG_HEADINGS) {
+                String heading = headings.group(1).strip();
+                if (!heading.isBlank() && heading.length() <= 512) parts.add(heading);
+            }
+        }
+        if (revision.description() != null && !revision.description().isBlank()) {
+            parts.add(revision.description().strip());
+        }
+        return String.join("\n\n", parts);
     }
 
     private static String resourceUri(

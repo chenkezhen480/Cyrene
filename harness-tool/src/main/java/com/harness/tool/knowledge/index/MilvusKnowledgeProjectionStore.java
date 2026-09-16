@@ -131,17 +131,6 @@ public final class MilvusKnowledgeProjectionStore implements KnowledgeProjection
     }
 
     @Override
-    public boolean isSourceReferenced(String sourceType, String sourceId) {
-        var response = client.query(io.milvus.v2.service.vector.request.QueryReq.builder()
-                    .consistencyLevel(io.milvus.v2.common.ConsistencyLevel.STRONG)
-                .collectionName(requireCollections().catalogCollection())
-                .filter("json_contains(revision_data[\"sourceKeys\"], {source})")
-                .filterTemplateValues(Map.of("source", sourceType + ":" + sourceId))
-                .outputFields(List.of("id")).limit(1L).build());
-        return !response.getQueryResults().isEmpty();
-    }
-
-    @Override
     public void activateRevision(String conceptId, String revisionId) {
         QueryIterator iterator = null;
         try {
@@ -195,24 +184,6 @@ public final class MilvusKnowledgeProjectionStore implements KnowledgeProjection
                     .collectionName(collection)
                     .filter("concept_id == {conceptId}")
                     .filterTemplateValues(Map.of("conceptId", requiredConceptId))
-                    .build());
-        }
-    }
-
-    @Override
-    public void deleteOtherRevisions(
-            String conceptId,
-            String currentRevisionId
-    ) {
-        String requiredConceptId = required(conceptId, "conceptId");
-        String requiredRevisionId = required(currentRevisionId, "currentRevisionId");
-        for (String collection : requireCollections().projectionCollections()) {
-            client.delete(DeleteReq.builder()
-                    .collectionName(collection)
-                    .filter("concept_id == {conceptId} and revision_id != {revisionId}")
-                    .filterTemplateValues(Map.of(
-                            "conceptId", requiredConceptId,
-                            "revisionId", requiredRevisionId))
                     .build());
         }
     }
@@ -316,7 +287,7 @@ public final class MilvusKnowledgeProjectionStore implements KnowledgeProjection
                     .collectionName(collection)
                     .searchRequests(List.of(dense, sparse))
                     .ranker(new RRFRanker(search.rrfK()))
-                    .outFields(outputFields(Set.of()))
+                    .outFields(outputFields(search.conceptTypes()))
                     .topK(search.fusedTopK())
                     .build());
             if (response.getSearchResults().isEmpty()) {
@@ -360,9 +331,17 @@ public final class MilvusKnowledgeProjectionStore implements KnowledgeProjection
         } else {
             String sharedTenant = search.tenantId() == null
                     ? "tenant_id is null"
+                    : search.exactTenant()
+                    ? "tenant_id == " + literal(search.tenantId())
                     : "(tenant_id == " + literal(search.tenantId())
                     + " or tenant_id is null)";
             predicates.add(sharedTenant);
+        }
+        if (search.namespaceType() != null) {
+            predicates.add("namespace_type == " + literal(search.namespaceType().name()));
+            predicates.add(search.namespaceKey() == null
+                    ? "namespace_key is null"
+                    : "namespace_key == " + literal(search.namespaceKey()));
         }
         return String.join(" and ", predicates);
     }
@@ -575,8 +554,9 @@ public final class MilvusKnowledgeProjectionStore implements KnowledgeProjection
                     EnumSet.noneOf(KnowledgeConceptType.class)).add(type);
         }
         return grouped.entrySet().stream()
-                .map(entry -> new SearchTarget(requireCollections().catalogCollection(), new KnowledgeProjectionSearch(
+                .map(entry -> new SearchTarget(entry.getKey(), new KnowledgeProjectionSearch(
                         search.query(), search.embedding(), search.tenantId(), search.userId(),
+                        search.namespaceType(), search.namespaceKey(), search.exactTenant(),
                         entry.getValue(), search.laneTopK(), search.fusedTopK(),
                         search.denseThreshold(), search.sparseThreshold(), search.rrfK())))
                 .toList();

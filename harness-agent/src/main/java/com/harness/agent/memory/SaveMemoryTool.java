@@ -9,6 +9,7 @@ import com.harness.core.knowledge.*;
 import com.harness.core.model.ToolCapability;
 import com.harness.core.model.ToolSpec;
 import com.harness.tool.Tool;
+import com.harness.tool.knowledge.WikiIdentityResolver;
 import com.harness.tool.knowledge.authority.*;
 
 import java.time.Clock;
@@ -26,20 +27,28 @@ public final class SaveMemoryTool implements Tool {
     private final Runnable signalIndex;
     private final KnowledgeExtractionSanitizer sanitizer;
     private final PreferenceKeyRegistry preferenceKeys;
+    private final WikiIdentityResolver identityResolver;
 
     public SaveMemoryTool(KnowledgeRepository repository, ObjectMapper mapper,
                           Clock clock, Runnable signalIndex) {
-        this(repository, mapper, clock, signalIndex, PreferenceKeyRegistry.standard());
+        this(repository, mapper, clock, signalIndex, PreferenceKeyRegistry.standard(), null);
     }
 
     public SaveMemoryTool(KnowledgeRepository repository, ObjectMapper mapper,
                           Clock clock, Runnable signalIndex, PreferenceKeyRegistry preferenceKeys) {
+        this(repository, mapper, clock, signalIndex, preferenceKeys, null);
+    }
+
+    public SaveMemoryTool(KnowledgeRepository repository, ObjectMapper mapper,
+                          Clock clock, Runnable signalIndex, PreferenceKeyRegistry preferenceKeys,
+                          WikiIdentityResolver identityResolver) {
         this.repository = Objects.requireNonNull(repository);
         this.mapper = Objects.requireNonNull(mapper);
         this.clock = Objects.requireNonNull(clock);
         this.signalIndex = Objects.requireNonNull(signalIndex);
         this.sanitizer = new KnowledgeExtractionSanitizer();
         this.preferenceKeys = Objects.requireNonNull(preferenceKeys);
+        this.identityResolver = identityResolver;
     }
 
     @Override
@@ -71,7 +80,8 @@ public final class SaveMemoryTool implements Tool {
                 + "Never force a memory just to fill a type. USER_EPISODE records a concrete "
                 + "user event and its context/outcome; OPERATION_PLAYBOOK records an observed reusable "
                 + "Agent procedure, conditions, steps and verification, without user-specific facts. "
-                + "Use a stable memoryKey to revise the same memory. Do not save secrets, speculation or raw tool output. "
+                + "Use a stable memoryKey to revise the same memory; scoped semantic candidates are checked before "
+                + "creating a different episode or playbook. Do not save secrets, speculation or raw tool output. "
                 + "Preferences are saved only in MySQL and injected before later model calls, without Wiki/vector indexing. "
                 + "For preferences, content is the lasting preference statement; registered memoryKeys are "
                 + preferenceKeys.definitions().keySet().stream().sorted().toList()
@@ -113,6 +123,23 @@ public final class SaveMemoryTool implements Tool {
                     : KnowledgeIdentity.sha256(mapper.writeValueAsString(
                             java.util.Arrays.asList(type.name(), context.tenantId(), userId, key)));
             KnowledgeHead previous = repository.findById(conceptId).orElse(null);
+            if (!preference && previous == null && identityResolver != null) {
+                var resolution = identityResolver.resolve(
+                        type, context.tenantId(), userId,
+                        type == KnowledgeConceptType.USER_EPISODE
+                                ? KnowledgeNamespaceType.USER_MEMORY
+                                : KnowledgeNamespaceType.OPERATION_MEMORY,
+                        null, key, new WikiIdentityResolver.Draft(title, summary, content),
+                        WikiIdentityResolver.RevisionMode.SYNTHESIZE).orElse(null);
+                if (resolution != null) {
+                    previous = resolution.previous();
+                    conceptId = previous.concept().id();
+                    logicalKey = previous.concept().logicalKey();
+                    title = resolution.draft().title();
+                    summary = resolution.draft().summary();
+                    content = resolution.draft().content();
+                }
+            }
             Instant now = clock.instant();
             Instant expiresAt = instant(arguments, "expiresAt", null);
             if (expiresAt != null && !expiresAt.isAfter(now)) {

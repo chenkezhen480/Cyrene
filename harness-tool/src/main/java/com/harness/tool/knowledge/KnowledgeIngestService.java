@@ -50,6 +50,7 @@ public final class KnowledgeIngestService {
     private final KnowledgeArtifactRepository artifactRepository;
     private final KnowledgeIngestJobStore ingestJobStore;
     private final KnowledgeRepository knowledgeRepository;
+    private final WikiIdentityResolver identityResolver;
     private final TextChunker textChunker;
     private final String defaultCollection;
     private final long maxFileSizeMb;
@@ -67,6 +68,21 @@ public final class KnowledgeIngestService {
             KnowledgeIngestJobStore ingestJobStore,
             KnowledgeRepository knowledgeRepository
     ) {
+        this(embeddingProvider, vectorStore, documentConversionService, documentSummarizer,
+                artifactStorage, artifactRepository, ingestJobStore, knowledgeRepository, null);
+    }
+
+    public KnowledgeIngestService(
+            EmbeddingModelProvider embeddingProvider,
+            VectorStore vectorStore,
+            DocumentConversionService documentConversionService,
+            DocumentSummarizer documentSummarizer,
+            ContentAddressedArtifactStorage artifactStorage,
+            KnowledgeArtifactRepository artifactRepository,
+            KnowledgeIngestJobStore ingestJobStore,
+            KnowledgeRepository knowledgeRepository,
+            WikiIdentityResolver identityResolver
+    ) {
         this.embeddingProvider = Objects.requireNonNull(embeddingProvider, "embeddingProvider");
         this.vectorStore = Objects.requireNonNull(vectorStore, "vectorStore");
         this.documentConversionService = Objects.requireNonNull(documentConversionService, "documentConversionService");
@@ -75,6 +91,7 @@ public final class KnowledgeIngestService {
         this.artifactRepository = Objects.requireNonNull(artifactRepository, "artifactRepository");
         this.ingestJobStore = Objects.requireNonNull(ingestJobStore, "ingestJobStore");
         this.knowledgeRepository = Objects.requireNonNull(knowledgeRepository, "knowledgeRepository");
+        this.identityResolver = identityResolver;
         this.textChunker = new TextChunker(embeddingProvider.tokenEstimator());
 
         EnvConfig config = EnvConfig.get();
@@ -132,10 +149,11 @@ public final class KnowledgeIngestService {
         } catch (RuntimeException failure) {
             throw ingestFailure(job, artifact, failure);
         }
-        KnowledgeHead head = knowledgeRepository.findById(conceptId).orElseThrow(
+        String completedConceptId = completed.sourceConceptId();
+        KnowledgeHead head = knowledgeRepository.findById(completedConceptId).orElseThrow(
                 () -> new IllegalStateException("Compiled Source Document is missing"));
         return new IngestResult(
-                completed.id(), conceptId, completed.sourceRevisionId(), artifact.id(),
+                completed.id(), completedConceptId, completed.sourceRevisionId(), artifact.id(),
                 completed.convertedArtifactId(), fileName, collectionKey,
                 numberMetadata(head.currentRevision(), "chunkCount"),
                 embeddingProvider.dimension(), artifact.storageUri(),
@@ -243,20 +261,43 @@ public final class KnowledgeIngestService {
             throw new IllegalArgumentException("Source Document exceeds Chunk limit " + maxChunks);
         }
 
-        KnowledgeHead existing = knowledgeRepository.findById(job.sourceConceptId()).orElse(null);
+        String expectedJobConceptId = job.sourceConceptId();
+        String conceptId = expectedJobConceptId;
+        KnowledgeHead existing = knowledgeRepository.findById(conceptId).orElse(null);
         validateExistingDocument(existing, job);
         DocumentSummarizer.Summary summary = documentSummarizer.summarize(markdown, WIKI_TASK, 2048);
         JsonNode card = wikiCard(summary.text());
+        if (existing == null && identityResolver != null) {
+            var resolution = identityResolver.resolve(
+                    KnowledgeConceptType.SOURCE_DOCUMENT, job.tenantId(), null,
+                    KnowledgeNamespaceType.COLLECTION, job.collectionKey(), source.fileName(),
+                    new WikiIdentityResolver.Draft(
+                            card.get("title").asText().strip(),
+                            card.get("summary").asText().strip(), markdown),
+                    WikiIdentityResolver.RevisionMode.AUTHORITATIVE_SNAPSHOT).orElse(null);
+            if (resolution != null) {
+                existing = resolution.previous();
+                validateExistingDocument(existing, job);
+                conceptId = existing.concept().id();
+            }
+        }
         Instant now = Instant.now();
         long expectedVersion = existing == null ? 0 : existing.concept().version();
         long revisionNumber = expectedVersion + 1;
         String contentHash = KnowledgeIdentity.sha256(markdown);
+        if (existing != null && existing.concept().status() == KnowledgeStatus.STABLE
+                && contentHash.equals(existing.currentRevision().contentHash())) {
+            ingestJobStore.advance(job.id(), KnowledgeIngestJob.Status.CONVERTED,
+                    KnowledgeIngestJob.Status.COMPILED, null, conceptId,
+                    existing.currentRevision().id(), null);
+            return;
+        }
         String revisionId = KnowledgeIdentity.revisionId(
-                job.sourceConceptId(), revisionNumber, contentHash);
+                conceptId, revisionNumber, contentHash);
         String previousRevisionId = existing == null ? null : existing.concept().currentRevisionId();
 
         Map<String, Object> metadata = new LinkedHashMap<>();
-        metadata.put("documentId", job.sourceConceptId());
+        metadata.put("documentId", conceptId);
         metadata.put("artifactId", source.id());
         metadata.put("canonicalArtifactId", markdownArtifact.id());
         metadata.put("collection", job.collectionKey());
@@ -272,11 +313,11 @@ public final class KnowledgeIngestService {
             metadata.put("previousRevisionId", previousRevisionId);
         }
         KnowledgeRevision revision = new KnowledgeRevision(
-                revisionId, job.sourceConceptId(), revisionNumber,
+                revisionId, conceptId, revisionNumber,
                 card.get("title").asText().strip(), card.get("summary").asText().strip(),
                 markdown, COMPILER_ID, now, contentHash, metadata, now);
         KnowledgeConcept concept = new KnowledgeConcept(
-                job.sourceConceptId(), job.tenantId(), null,
+                conceptId, job.tenantId(), null,
                 KnowledgeNamespaceType.COLLECTION, job.collectionKey(),
                 KnowledgeConceptType.SOURCE_DOCUMENT, null, KnowledgeStatus.STABLE,
                 revision.id(), revisionNumber, null,
@@ -288,7 +329,7 @@ public final class KnowledgeIngestService {
                 null, concept.id(), revision.id(),
                 KnowledgeIndexOperation.UPSERT_CURRENT, KnowledgeIndexTaskStatus.PENDING,
                 0, now, null, null, null, now);
-        ingestJobStore.commitCompilation(job.id(), new KnowledgeRevisionChange(
+        ingestJobStore.commitCompilation(job.id(), expectedJobConceptId, new KnowledgeRevisionChange(
                 concept, expectedVersion, revision, sources,
                 List.of(), List.of(), List.of(catalogTask)));
     }

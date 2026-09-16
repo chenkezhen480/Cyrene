@@ -34,12 +34,23 @@ public final class PersistentGraphSpaceWikiCompiler implements GraphSpaceWikiCom
     private final KnowledgeRepository repository;
     private final GraphSchemaRegistry schemaRegistry;
     private final GraphCapabilityDescriber capabilityDescriber;
+    private final WikiIdentityResolver identityResolver;
 
     public PersistentGraphSpaceWikiCompiler(KnowledgeRepository repository, GraphSchemaRegistry schemaRegistry,
                                             GraphCapabilityDescriber capabilityDescriber) {
+        this(repository, schemaRegistry, capabilityDescriber, null);
+    }
+
+    public PersistentGraphSpaceWikiCompiler(
+            KnowledgeRepository repository,
+            GraphSchemaRegistry schemaRegistry,
+            GraphCapabilityDescriber capabilityDescriber,
+            WikiIdentityResolver identityResolver
+    ) {
         this.repository = Objects.requireNonNull(repository, "repository");
         this.schemaRegistry = Objects.requireNonNull(schemaRegistry, "schemaRegistry");
         this.capabilityDescriber = Objects.requireNonNull(capabilityDescriber, "capabilityDescriber");
+        this.identityResolver = identityResolver;
     }
 
     @Override
@@ -65,6 +76,21 @@ public final class PersistentGraphSpaceWikiCompiler implements GraphSpaceWikiCom
         }
         String summary = capabilityDescriber.describe(schema);
         body += "\n\n## AI capability description\n" + summary + '\n';
+        if (existing == null && identityResolver != null) {
+            var resolution = identityResolver.resolve(
+                    KnowledgeConceptType.GRAPH_SPACE, null, null,
+                    KnowledgeNamespaceType.GRAPH, namespaceKey(changeSet), changeSet.graphId(),
+                    new WikiIdentityResolver.Draft(
+                            "Graph Space " + changeSet.graphId(), summary, body),
+                    WikiIdentityResolver.RevisionMode.AUTHORITATIVE_SNAPSHOT).orElse(null);
+            if (resolution != null) {
+                existing = resolution.previous();
+                conceptId = existing.concept().id();
+                if (sourceHash.equals(existing.currentRevision().metadata().get("capabilitySourceHash"))) {
+                    return existing.currentRevision().id();
+                }
+            }
+        }
         String contentHash = KnowledgeIdentity.sha256(body);
 
         Instant now = Instant.now();
@@ -81,6 +107,7 @@ public final class PersistentGraphSpaceWikiCompiler implements GraphSpaceWikiCom
         metadata.put("typicalQueries", PersistentGraphSchemaWikiCompiler.typicalQueries(schema));
         metadata.put("recommendedTool", "query_graph");
         metadata.put("capabilitySourceHash", sourceHash);
+        if (existing != null) metadata.put("previousRevisionId", existing.currentRevision().id());
 
         KnowledgeRevision revision = new KnowledgeRevision(
                 KnowledgeIdentity.revisionId(conceptId, revisionNumber, contentHash),

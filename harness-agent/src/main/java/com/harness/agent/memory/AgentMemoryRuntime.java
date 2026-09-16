@@ -4,7 +4,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.harness.core.concurrent.BlockingTaskExecutor;
 import com.harness.core.env.EnvConfig;
 import com.harness.core.env.EnvKey;
-import com.harness.core.knowledge.KnowledgeSourceType;
 import com.harness.core.model.MessageBlock;
 import com.harness.core.model.MemoryMessage;
 import com.harness.core.model.ReActStep;
@@ -24,7 +23,6 @@ import com.harness.provider.EmbeddingModelProvider;
 import com.harness.react.ReActResult;
 import com.harness.tool.ToolRegistry;
 import com.harness.tool.knowledge.authority.KnowledgeRepository;
-import com.harness.tool.knowledge.authority.KnowledgeSourcePurgeGuard;
 import com.harness.tool.knowledge.authority.MysqlKnowledgeRepository;
 import com.harness.tool.knowledge.authority.MysqlKnowledgeIndexOutboxStore;
 import com.harness.tool.knowledge.index.KnowledgeIndexProjector;
@@ -58,7 +56,6 @@ public final class AgentMemoryRuntime {
     private final MemoryCompressor memoryCompressor;
     private final SessionCleanupScheduler cleanupScheduler;
     private final KnowledgeRepository knowledgeRepository;
-    private final KnowledgeSourcePurgeGuard sourcePurgeGuard;
     private final KnowledgeProjectionStore knowledgeProjectionStore;
     private final KnowledgeIndexOutboxWorker indexOutboxWorker;
     private final KnowledgeReindexService knowledgeReindexService;
@@ -90,7 +87,6 @@ public final class AgentMemoryRuntime {
             this.knowledgeRepository = new MysqlKnowledgeRepository(
                     com.harness.core.env.MysqlConnectionPool::getConnection, objectMapper,
                     knowledgeProjectionStore, vectorStore);
-            this.sourcePurgeGuard = new KnowledgeSourcePurgeGuard(knowledgeRepository);
             if (projectionRuntime.enabled()) {
                 KnowledgeIndexProjector projector = new KnowledgeIndexProjector(
                         knowledgeRepository,
@@ -123,7 +119,6 @@ public final class AgentMemoryRuntime {
             this.memoryCompressor = null;
             this.cleanupScheduler = null;
             this.knowledgeRepository = null;
-            this.sourcePurgeGuard = null;
             this.knowledgeProjectionStore = null;
             this.indexOutboxWorker = null;
             this.knowledgeReindexService = null;
@@ -386,13 +381,6 @@ public final class AgentMemoryRuntime {
         return knowledgeRepository;
     }
 
-    public KnowledgeSourcePurgeGuard sourcePurgeGuard() {
-        if (sourcePurgeGuard == null) {
-            throw new IllegalStateException("Knowledge authority requires HARNESS_MEMORY_STORE=mysql");
-        }
-        return sourcePurgeGuard;
-    }
-
     public KnowledgeProjectionStore knowledgeProjectionStore() {
         if (knowledgeProjectionStore == null) {
             throw new IllegalStateException(
@@ -440,16 +428,12 @@ public final class AgentMemoryRuntime {
         if (messageWriteWorker != null) {
             messageWriteWorker.flushPending();
         }
-        MessageStore.DeletionResult persisted = messageStore == null
-                ? new MessageStore.DeletionResult(0, 0)
-                : messageStore.deleteToolMessages(
-                        sessionId,
-                        messageId -> sourcePurgeGuard.retainIfReferenced(
-                                KnowledgeSourceType.SESSION_MESSAGE,
-                                Long.toString(messageId)));
+        int persisted = messageStore == null
+                ? 0
+                : messageStore.deleteToolMessages(sessionId);
         List<MemoryMessage> cached = messageCache.getIfPresent(sessionId);
         if (cached == null || cached.isEmpty()) {
-            return persisted.deleted();
+            return persisted;
         }
         List<MemoryMessage> stripped = cached.stream()
                 .filter(message -> !ToolMemoryCodec.TOOL_RESULT_ROLE.equals(message.role()))
@@ -461,7 +445,7 @@ public final class AgentMemoryRuntime {
         if (removed > 0) {
             messageCache.put(sessionId, userId, stripped);
         }
-        return Math.max(removed, persisted.deleted());
+        return Math.max(removed, persisted);
     }
 
     private static int estimateTokens(List<MemoryMessage> messages) {

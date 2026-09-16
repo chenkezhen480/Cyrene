@@ -46,7 +46,6 @@ public final class KnowledgeDiscoveryRouter {
     private static final Set<KnowledgeConceptType> SEARCHABLE_TYPES = Set.of(
             KnowledgeConceptType.SOURCE_DOCUMENT,
             KnowledgeConceptType.GRAPH_SCHEMA,
-            KnowledgeConceptType.GRAPH_SPACE,
             KnowledgeConceptType.USER_EPISODE,
             KnowledgeConceptType.OPERATION_PLAYBOOK);
 

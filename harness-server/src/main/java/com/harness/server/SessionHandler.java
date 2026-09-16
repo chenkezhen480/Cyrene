@@ -5,7 +5,6 @@ import com.harness.core.model.PageInfo;
 import com.harness.core.model.PageResponse;
 import com.harness.core.model.Session;
 import com.harness.core.model.SessionCursor;
-import com.harness.core.knowledge.KnowledgeSourceType;
 import com.harness.core.env.MysqlConnectionPool;
 import com.harness.input.memory.MessageStore;
 import com.harness.input.memory.MessageWriteWorker;
@@ -13,7 +12,6 @@ import com.harness.input.memory.SessionMessageCache;
 import com.harness.input.memory.SessionStore;
 import com.harness.server.api.ApiErrorCode;
 import com.harness.server.api.ApiResponses;
-import com.harness.tool.knowledge.authority.KnowledgeSourcePurgeGuard;
 import io.javalin.http.Context;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -37,13 +35,11 @@ public class SessionHandler {
     private final SessionMessageCache cache;
     private final MessageWriteWorker messageWriteWorker;
     private final SessionRequestOwnerResolver ownerResolver;
-    private final KnowledgeSourcePurgeGuard sourcePurgeGuard;
 
     public SessionHandler(SessionStore sessionStore, MessageStore messageStore,
-                          SessionMessageCache cache, MessageWriteWorker messageWriteWorker,
-                          KnowledgeSourcePurgeGuard sourcePurgeGuard) {
+                          SessionMessageCache cache, MessageWriteWorker messageWriteWorker) {
         this(sessionStore, messageStore, cache, messageWriteWorker,
-                new SessionRequestOwnerResolver(), sourcePurgeGuard);
+                new SessionRequestOwnerResolver());
     }
 
     SessionHandler(
@@ -51,16 +47,13 @@ public class SessionHandler {
             MessageStore messageStore,
             SessionMessageCache cache,
             MessageWriteWorker messageWriteWorker,
-            SessionRequestOwnerResolver ownerResolver,
-            KnowledgeSourcePurgeGuard sourcePurgeGuard
+            SessionRequestOwnerResolver ownerResolver
     ) {
         this.sessionStore = sessionStore;
         this.messageStore = messageStore;
         this.cache = cache;
         this.messageWriteWorker = messageWriteWorker;
         this.ownerResolver = ownerResolver;
-        this.sourcePurgeGuard = java.util.Objects.requireNonNull(
-                sourcePurgeGuard, "sourcePurgeGuard");
     }
 
     /**
@@ -299,30 +292,6 @@ public class SessionHandler {
                     if (!rs.next()) {
                         throw new SQLException("Session owner changed before delete");
                     }
-                }
-            }
-
-            List<Long> messageIds = new java.util.ArrayList<>();
-            try (PreparedStatement ps = conn.prepareStatement(
-                    "SELECT id FROM messages WHERE session_id = ? ORDER BY id FOR UPDATE")) {
-                ps.setString(1, sessionId);
-                try (ResultSet rs = ps.executeQuery()) {
-                    while (rs.next()) {
-                        messageIds.add(rs.getLong("id"));
-                    }
-                }
-            }
-            if (messageIds.isEmpty()) {
-                log.warn("[Server] Session {} has 0 messages in DB before delete — possible stale UI or write failure", sessionId);
-            }
-            for (Long messageId : messageIds) {
-                if (sourcePurgeGuard.retainIfReferenced(
-                        KnowledgeSourceType.SESSION_MESSAGE,
-                        Long.toString(messageId))) {
-                    conn.rollback();
-                    ApiResponses.error(ctx, 409, ApiErrorCode.CONFLICT,
-                            "Session contains evidence retained by knowledge revisions");
-                    return;
                 }
             }
 

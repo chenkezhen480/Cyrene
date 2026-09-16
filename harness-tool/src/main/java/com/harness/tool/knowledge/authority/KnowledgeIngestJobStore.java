@@ -23,7 +23,13 @@ public interface KnowledgeIngestJobStore {
             String sourceRevisionId,
             Instant completedAt);
 
-    KnowledgeIngestJob commitCompilation(String jobId, KnowledgeRevisionChange change);
+    default KnowledgeIngestJob commitCompilation(
+            String jobId, KnowledgeRevisionChange change) {
+        return commitCompilation(jobId, change.concept().id(), change);
+    }
+
+    KnowledgeIngestJob commitCompilation(
+            String jobId, String expectedSourceConceptId, KnowledgeRevisionChange change);
 
     void reschedule(String jobId, Instant availableAt, String errorMessage);
 

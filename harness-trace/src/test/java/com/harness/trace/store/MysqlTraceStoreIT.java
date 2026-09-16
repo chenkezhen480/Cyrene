@@ -178,10 +178,10 @@ class MysqlTraceStoreIT {
         // We test with a very large number first (should not delete ours)
         store.save(buildTrace(testTraceId));
 
-        TraceStore.CleanupResult result = store.cleanup(99999, traceId -> false);
+        int deleted = store.cleanup(99999);
 
         // Our trace should still exist (not old enough)
-        assertThat(result.deleted()).isZero();
+        assertThat(deleted).isZero();
         assertThat(store.findById(testTraceId)).isPresent();
     }
 }

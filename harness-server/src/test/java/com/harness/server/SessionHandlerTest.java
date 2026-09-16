@@ -8,7 +8,6 @@ import com.harness.input.memory.MessageStore;
 import com.harness.input.memory.MessageWriteWorker;
 import com.harness.input.memory.SessionMessageCache;
 import com.harness.input.memory.SessionStore;
-import com.harness.tool.knowledge.authority.KnowledgeSourcePurgeGuard;
 import io.javalin.http.Context;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -47,7 +46,7 @@ class SessionHandlerTest {
                         new PageInfo(20, "2026-07-29T23:59:40Z|session-20", true)));
 
         SessionHandler handler = new SessionHandler(
-                sessionStore, messageStore, null, null, purgeGuard());
+                sessionStore, messageStore, null, null);
         handler.list(context);
 
         ArgumentCaptor<Object> responseCaptor = ArgumentCaptor.forClass(Object.class);
@@ -80,7 +79,7 @@ class SessionHandlerTest {
                 message(98), message(99), message(100)));
 
         SessionHandler handler = new SessionHandler(
-                sessionStore, messageStore, cache, messageWriteWorker, purgeGuard());
+                sessionStore, messageStore, cache, messageWriteWorker);
         handler.messages(context);
 
         ArgumentCaptor<Object> responseCaptor = ArgumentCaptor.forClass(Object.class);
@@ -112,7 +111,7 @@ class SessionHandlerTest {
                 message(1), message(2), message(3)));
 
         SessionHandler handler = new SessionHandler(
-                sessionStore, messageStore, null, null, purgeGuard());
+                sessionStore, messageStore, null, null);
         handler.messages(context);
 
         ArgumentCaptor<Object> responseCaptor = ArgumentCaptor.forClass(Object.class);
@@ -148,7 +147,4 @@ class SessionHandlerTest {
                 Instant.parse("2026-07-30T00:00:00Z"));
     }
 
-    private static KnowledgeSourcePurgeGuard purgeGuard() {
-        return mock(KnowledgeSourcePurgeGuard.class);
-    }
 }

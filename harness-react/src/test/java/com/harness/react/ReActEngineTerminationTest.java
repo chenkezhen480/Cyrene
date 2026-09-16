@@ -17,9 +17,13 @@ import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.ToolExecutionResultMessage;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.chat.ChatModel;
+import dev.langchain4j.model.chat.StreamingChatModel;
 import dev.langchain4j.model.chat.request.ChatRequest;
 import dev.langchain4j.model.chat.response.ChatResponse;
+import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -140,8 +144,9 @@ class ReActEngineTerminationTest {
         assertThat(toolResultMessage.id()).isEqualTo(executedCallId.get());
     }
 
-    @Test
-    void sixthConsecutiveToolFailureStopsPlanningAndGeneratesFinalAnswer() {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void sixthConsecutiveToolFailureStopsPlanningAndGeneratesFinalAnswer(boolean streaming) {
         List<ChatRequest> requests = new ArrayList<>();
         AtomicInteger planningCalls = new AtomicInteger();
         ChatModel chatModel = new ChatModel() {
@@ -175,11 +180,25 @@ class ReActEngineTerminationTest {
                             call.id(), call.toolName(), "invalid graph parameters", 1);
                 });
 
-        ReActResult result = new ReActEngine(
-                provider(chatModel), catalog(), executor, null, null, 10)
-                .execute(new ReActRequest(
-                        "system", "must use the tool", List.of(), RunTrace.noop(),
-                        null, null, ThinkingLevel.OFF, null));
+        ChatModelProvider provider = provider(chatModel);
+        when(provider.streamingModel()).thenReturn(new StreamingChatModel() {
+            @Override
+            public void doChat(ChatRequest request, StreamingChatResponseHandler handler) {
+                ChatResponse response = chatModel.chat(request);
+                handler.onPartialResponse(response.aiMessage().text());
+                handler.onCompleteResponse(response);
+            }
+        });
+        List<String> tokens = new ArrayList<>();
+        ReActListener listener = new ReActListener() {
+            @Override public void onStep(com.harness.core.model.ReActStep step) {}
+            @Override public void onToken(String token) { tokens.add(token); }
+        };
+        ReActEngine engine = new ReActEngine(provider, catalog(), executor, null, null, 10);
+        ReActRequest request = new ReActRequest(
+                "system", "must use the tool", List.of(), RunTrace.noop(),
+                listener, null, ThinkingLevel.OFF, null);
+        ReActResult result = streaming ? engine.streamExecute(request) : engine.execute(request);
 
         assertThat(executions).hasValue(6);
         assertThat(planningCalls).hasValue(6);
@@ -187,6 +206,7 @@ class ReActEngineTerminationTest {
         assertThat(requests.getLast().parameters().toolSpecifications()).isEmpty();
         assertThat(result.output()).isEqualTo("final answer after hard limit");
         assertThat(result.loopStats().outcome()).isEqualTo("tool_failure_limit");
+        if (streaming) assertThat(tokens).containsExactly("final answer after hard limit");
         assertThat(result.steps().get(5).inspection().status())
                 .isEqualTo(com.harness.core.model.ReActStep.InspectionResult.InspectionStatus.LOOP_DETECTED);
     }

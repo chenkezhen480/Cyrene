@@ -182,7 +182,7 @@ class MilvusKnowledgeProjectionIT {
                         ? 90.0 : null,
                 conceptType == KnowledgeConceptType.OPERATION_PLAYBOOK
                         ? List.of("knowledge_read") : List.of(),
-                vector());
+                vector()).withRevisionData("{\"current\":true}");
     }
 
     private static float[] vector() {
