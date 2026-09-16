@@ -6,6 +6,7 @@ import com.harness.agent.SpawnSubAgentTool;
 import com.harness.agent.SubAgentManager;
 import com.harness.agent.context.KnowledgeAccessService;
 import com.harness.agent.knowledge.KnowledgeToolRuntimeContext;
+import com.harness.agent.lifecycle.AgentLifecycleHooks;
 import com.harness.agent.memory.AgentMemoryRuntime;
 import com.harness.agent.memory.AgentMemoryRuntime.CompressionOutcome;
 import com.harness.agent.runtime.AgentRunPreparer.AgentRunRequest;
@@ -23,6 +24,7 @@ import com.harness.core.model.ReActStep;
 import com.harness.core.model.RiskLevel;
 import com.harness.core.model.StreamCallback;
 import com.harness.core.model.StreamEvent;
+import com.harness.core.model.SubAgentLifecycleEvent;
 import com.harness.core.model.ToolCallStatus;
 import com.harness.core.model.ToolOutput;
 import com.harness.core.model.ToolResult;
@@ -73,6 +75,7 @@ public final class AgentRunCoordinator {
     private final ToolExecutor toolExecutor;
     private final SubAgentManager subAgentManager;
     private final ReplyAuditor replyAuditor;
+    private final AgentLifecycleHooks lifecycleHooks;
 
     public AgentRunCoordinator(
             AgentRuntime runtime,
@@ -81,7 +84,8 @@ public final class AgentRunCoordinator {
             ToolRegistry toolRegistry,
             ToolExecutor toolExecutor,
             SubAgentManager subAgentManager,
-            ReplyAuditor replyAuditor
+            ReplyAuditor replyAuditor,
+            AgentLifecycleHooks lifecycleHooks
     ) {
         this.runtime = runtime;
         this.runPreparer = runPreparer;
@@ -90,6 +94,8 @@ public final class AgentRunCoordinator {
         this.toolExecutor = toolExecutor;
         this.subAgentManager = subAgentManager;
         this.replyAuditor = replyAuditor;
+        this.lifecycleHooks = java.util.Objects.requireNonNull(
+                lifecycleHooks, "lifecycleHooks");
     }
 
     public AgentResult run(AgentRunCommand command) {
@@ -110,7 +116,7 @@ public final class AgentRunCoordinator {
                     prepared.sessionId(), prepared.unavailableTools(), finalOutputContract);
             prepared = runPreparer.complete(prepared, toolCatalog, trace);
             runId = openRunScope(
-                    prepared.sessionId(), command.cancellationToken(), toolCatalog, trace);
+                    prepared.sessionId(), command.cancellationToken(), toolCatalog, trace, null);
 
             List<MessageBlock> blocks = new ArrayList<>();
             StringBuilder text = new StringBuilder();
@@ -128,6 +134,12 @@ public final class AgentRunCoordinator {
                     thinkingLevel,
                     null,
                     finalOutputContract));
+            boolean completesTurn = !subAgentManager.hasDetachedTasks(runId);
+            if (completesTurn) {
+                result = lifecycleHooks.beforeFinal(
+                        new AgentLifecycleHooks.BeforeFinalContext(
+                                prepared.sessionId(), result)).result();
+            }
             result.steps().forEach(trace::addStep);
             recordReactStats(trace, result);
 
@@ -143,7 +155,8 @@ public final class AgentRunCoordinator {
             trace.recordOutput(result.output(), risk, !confirmationRequired);
             scheduleReplyAudit(trace, result.output(), true);
             memoryRuntime.persistAssistantMessage(
-                    prepared.sessionId(), prepared.userId(), trace.traceId(), assistantBlocks, true);
+                    prepared.sessionId(), prepared.userId(), trace.traceId(), assistantBlocks, true,
+                    completesTurn);
             memoryRuntime.awaitMessageWrites(trace.traceId());
 
             AgentTrace agentTrace = trace.finish();
@@ -189,7 +202,7 @@ public final class AgentRunCoordinator {
             CompressionOutcome compression = prepared.compressionOutcome();
             emitCompressionEvents(compression, callback);
             runId = openRunScope(
-                    prepared.sessionId(), command.cancellationToken(), toolCatalog, trace);
+                    prepared.sessionId(), command.cancellationToken(), toolCatalog, trace, callback);
             List<MessageBlock> blocks = new ArrayList<>();
             StringBuilder text = new StringBuilder();
             AtomicReference<ConfirmationDecision> confirmationDecision = new AtomicReference<>();
@@ -220,6 +233,12 @@ public final class AgentRunCoordinator {
                     command.cancellationToken(),
                     thinkingLevel,
                     confirmationContext));
+            boolean completesTurn = !subAgentManager.hasDetachedTasks(runId);
+            if (completesTurn) {
+                result = lifecycleHooks.beforeFinal(
+                        new AgentLifecycleHooks.BeforeFinalContext(
+                                prepared.sessionId(), result)).result();
+            }
             result.steps().forEach(trace::addStep);
             recordReactStats(trace, result);
 
@@ -236,7 +255,8 @@ public final class AgentRunCoordinator {
             trace.recordOutput(result.output(), risk, userConfirmed);
             scheduleReplyAudit(trace, result.output(), false);
             memoryRuntime.persistAssistantMessage(
-                    prepared.sessionId(), prepared.userId(), trace.traceId(), assistantBlocks, false);
+                    prepared.sessionId(), prepared.userId(), trace.traceId(), assistantBlocks, false,
+                    completesTurn);
             memoryRuntime.awaitMessageWrites(trace.traceId());
             finishTraceAsync(trace);
             memoryRuntime.updateActivityAsync(prepared.sessionId());
@@ -353,6 +373,12 @@ public final class AgentRunCoordinator {
                     String toolCallId, String toolName, String arguments) {
                 callback.onEvent(StreamEvent.toolCallCreated(
                         toolCallId, toolName, arguments));
+                if (SpawnSubAgentTool.TOOL_NAME.equals(toolName)) {
+                    callback.onEvent(StreamEvent.subAgentStatus(
+                            new SubAgentLifecycleEvent(
+                                    toolCallId, null,
+                                    SubAgentLifecycleEvent.Status.PREPARING, "")));
+                }
             }
 
             @Override
@@ -442,10 +468,15 @@ public final class AgentRunCoordinator {
             String sessionId,
             CancellationToken cancellationToken,
             RunToolCatalog toolCatalog,
-            RunTrace trace
+            RunTrace trace,
+            StreamCallback callback
     ) {
         String runId = UUID.randomUUID().toString();
-        subAgentManager.openScope(runId);
+        subAgentManager.openScope(runId, event -> {
+            if (callback != null) {
+                callback.onEvent(StreamEvent.subAgentStatus(event));
+            }
+        });
         SpawnSubAgentTool.setCurrentRunContext(new AgentRunContext(
                 runId, sessionId, cancellationToken, trace.traceId(), toolCatalog));
         Map<String, String> metadata = new HashMap<>(trace.snapshot().metadata());
@@ -521,10 +552,6 @@ public final class AgentRunCoordinator {
             CompressionOutcome compression,
             StreamCallback callback
     ) {
-        if (compression.hasMinor()) {
-            callback.onEvent(StreamEvent.compress(
-                    "minor", compression.minorStripped() + " 条工具消息已清理"));
-        }
         if (compression.hasMajor()) {
             callback.onEvent(StreamEvent.compress(
                     "major",

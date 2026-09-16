@@ -24,6 +24,7 @@ public class SessionInbox {
             String sessionId,
             String taskId,
             String taskDescription,
+            String parentTurnId,
             SubAgentResult result,
             Instant timestamp,
             EventStatus status
@@ -71,7 +72,7 @@ public class SessionInbox {
                 if (event.status() == SubAgentCompletedEvent.EventStatus.PENDING) {
                     pending.add(new SubAgentCompletedEvent(
                             event.eventId(), event.sessionId(), event.taskId(),
-                            event.taskDescription(), event.result(), event.timestamp(),
+                            event.taskDescription(), event.parentTurnId(), event.result(), event.timestamp(),
                             SubAgentCompletedEvent.EventStatus.PROCESSING
                     ));
                 } else {
@@ -104,7 +105,7 @@ public class SessionInbox {
                 if (consumedIds.contains(event.eventId())) {
                     updated.add(new SubAgentCompletedEvent(
                             event.eventId(), event.sessionId(), event.taskId(),
-                            event.taskDescription(), event.result(), event.timestamp(),
+                            event.taskDescription(), event.parentTurnId(), event.result(), event.timestamp(),
                             SubAgentCompletedEvent.EventStatus.CONSUMED
                     ));
                 } else {
@@ -145,7 +146,7 @@ public class SessionInbox {
                 if (resetIds.contains(event.eventId()) && event.status() == SubAgentCompletedEvent.EventStatus.PROCESSING) {
                     updated.add(new SubAgentCompletedEvent(
                             event.eventId(), event.sessionId(), event.taskId(),
-                            event.taskDescription(), event.result(), event.timestamp(),
+                            event.taskDescription(), event.parentTurnId(), event.result(), event.timestamp(),
                             SubAgentCompletedEvent.EventStatus.PENDING
                     ));
                 } else {

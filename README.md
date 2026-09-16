@@ -4,7 +4,7 @@
 
 > 将已有业务系统、领域知识和权限体系接入自主 ReAct Agent，而不是重新开发一套孤立的 AI 应用。
 
-Cyrene Agent 是一个使用 Java 21 构建的 Agent 开发框架。它面向垂直领域开发者，帮助已有系统快速获得自然语言入口、项目接口调用、企业知识检索、关系数据检索、可校验结构化输出、子 Agent 协作和全链路 Trace 能力。当前版本为 `0.6.1`。
+Cyrene Agent 是一个使用 Java 21 构建的 Agent 开发框架。它面向垂直领域开发者，帮助已有系统快速获得自然语言入口、项目接口调用、企业知识检索、关系数据检索、可校验结构化输出、子 Agent 协作和全链路 Trace 能力。当前版本以根 `pom.xml` 的 `revision` 为准。
 
 ## 为什么需要 Cyrene Agent
 
@@ -149,7 +149,7 @@ docker compose --env-file .env -f docker/docker-compose.yml --profile graph up -
 
 ```bash
 mvn clean package -pl harness-server -am -DskipTests
-java -jar harness-server/target/harness-server-0.6.1.jar
+java -jar harness-server/target/harness-server.jar
 ```
 
 服务默认监听 `8080`。打开 Web 控制台后，可以完成项目接口扫描、知识库上传、图谱管理和 Agent 对话。

@@ -5,6 +5,7 @@ import com.harness.core.model.CancellationToken;
 import java.time.Instant;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Record of a sub-agent task within a run scope.
@@ -19,19 +20,33 @@ public class SubAgentTaskRecord {
 
     private final String taskId;
     private final String ownerSessionId;
+    private final String ownerTurnId;
     private final SubAgentTask task;
     private final CompletableFuture<SubAgentResult> completion;
     private final AtomicReference<SubAgentStatus> status;
     private final AtomicReference<ResultDeliveryState> deliveryState;
     private final Instant createdAt;
     private final CancellationToken taskCancellationToken;
+    private final AtomicBoolean lifecycleTerminalPublished = new AtomicBoolean();
 
     // Stored result for detached delivery (set by completion callback)
     private volatile SubAgentResult storedResult;
 
     public SubAgentTaskRecord(String taskId, String ownerRunId, String ownerSessionId, SubAgentTask task, CancellationToken taskCancellationToken) {
+        this(taskId, ownerRunId, ownerSessionId, ownerRunId, task, taskCancellationToken);
+    }
+
+    public SubAgentTaskRecord(
+            String taskId,
+            String ownerRunId,
+            String ownerSessionId,
+            String ownerTurnId,
+            SubAgentTask task,
+            CancellationToken taskCancellationToken
+    ) {
         this.taskId = taskId;
         this.ownerSessionId = ownerSessionId;
+        this.ownerTurnId = ownerTurnId;
         this.task = task;
         this.completion = new CompletableFuture<>();
         this.status = new AtomicReference<>(SubAgentStatus.QUEUED);
@@ -42,6 +57,7 @@ public class SubAgentTaskRecord {
 
     public String taskId() { return taskId; }
     public String ownerSessionId() { return ownerSessionId; }
+    public String ownerTurnId() { return ownerTurnId; }
     public SubAgentTask task() { return task; }
     public CompletableFuture<SubAgentResult> completion() { return completion; }
     public AtomicReference<SubAgentStatus> status() { return status; }
@@ -49,6 +65,10 @@ public class SubAgentTaskRecord {
     public Instant createdAt() { return createdAt; }
     public CancellationToken taskCancellationToken() { return taskCancellationToken; }
     public SubAgentResult storedResult() { return storedResult; }
+
+    public boolean markLifecycleTerminalPublished() {
+        return lifecycleTerminalPublished.compareAndSet(false, true);
+    }
 
     // --- Execution status transitions ---
 

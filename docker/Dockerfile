@@ -19,7 +19,7 @@ RUN mvn clean package -DskipTests -B
 # Stage 2: Runtime
 FROM eclipse-temurin:21-jre
 WORKDIR /app
-COPY --from=builder /build/harness-server/target/harness-server-*.jar app.jar
+COPY --from=builder /build/harness-server/target/harness-server.jar app.jar
 # Expose HTTP port
 EXPOSE 8080
 # .env file is mounted at runtime

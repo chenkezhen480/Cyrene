@@ -34,7 +34,7 @@ async function runChat(events, closes = false) {
     ...state, Map, TextDecoder, CyreneSSE, upsertToolCall,
     CyreneAPI: { async chat() { return { body: { getReader: () => reader } }; } },
     t: key => key, showToast: text => state.toasts.push(text), scrollToBottom() {}, loadSessions() {},
-    STREAM_IDLE_TIMEOUT_MS: 90_000, STREAM_CHARS_PER_FRAME: 8,
+    SSE_LIVENESS_TIMEOUT_MS: 90_000, STREAM_CHARS_PER_FRAME: 8,
     setTimeout(callback, delay) {
       const timer = { callback };
       if (delay === 0) queueMicrotask(callback);

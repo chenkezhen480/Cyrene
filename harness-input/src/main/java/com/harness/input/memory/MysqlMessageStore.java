@@ -17,7 +17,7 @@ import java.util.Optional;
  * Uses shared HikariCP connection pool.
  * Content is stored as JSON (structured MessageBlock array).
  */
-public class MysqlMessageStore implements MessageStore {
+public class MysqlMessageStore implements TurnCompressibleMessageStore {
 
     private static final Logger log = LoggerFactory.getLogger(MysqlMessageStore.class);
     private final SqlConnectionProvider connectionProvider;
@@ -89,41 +89,102 @@ public class MysqlMessageStore implements MessageStore {
 
     @Override
     public List<MemoryMessage> loadForContext(String sessionId) {
-        // Find the latest summary row id, then load that summary + all messages after it
-        String latestSummarySql = "SELECT MAX(id) FROM messages WHERE session_id = ? AND is_summary = 1";
+        String loadSql = "SELECT id, session_id, trace_id, role, content, is_summary, created_at "
+                + "FROM messages WHERE session_id = ? ORDER BY id ASC";
         List<MemoryMessage> messages = new ArrayList<>();
-        try (Connection conn = getConnection()) {
-            Long latestSummaryId = null;
-            try (PreparedStatement ps = conn.prepareStatement(latestSummarySql)) {
-                ps.setString(1, sessionId);
-                ResultSet rs = ps.executeQuery();
-                if (rs.next()) {
-                    latestSummaryId = rs.getLong(1);
-                    if (rs.wasNull()) latestSummaryId = null;
-                }
-            }
-
-            String loadSql;
-            if (latestSummaryId != null) {
-                loadSql = "SELECT id, session_id, trace_id, role, content, is_summary, created_at FROM messages WHERE session_id = ? AND id >= ? ORDER BY id ASC";
-            } else {
-                loadSql = "SELECT id, session_id, trace_id, role, content, is_summary, created_at FROM messages WHERE session_id = ? ORDER BY id ASC";
-            }
-
-            try (PreparedStatement ps = conn.prepareStatement(loadSql)) {
-                ps.setString(1, sessionId);
-                if (latestSummaryId != null) {
-                    ps.setLong(2, latestSummaryId);
-                }
-                ResultSet rs = ps.executeQuery();
-                while (rs.next()) {
-                    messages.add(mapMessage(rs));
-                }
+        try (Connection conn = getConnection();
+             PreparedStatement ps = conn.prepareStatement(loadSql)) {
+            ps.setString(1, sessionId);
+            ResultSet rs = ps.executeQuery();
+            while (rs.next()) {
+                messages.add(mapMessage(rs));
             }
         } catch (SQLException e) {
             throw new MemoryStoreException("Failed to load messages for session " + sessionId, e);
         }
-        return messages;
+        long legacyAnchor = messages.stream()
+                .filter(MemoryMessage::isSummary)
+                .filter(message -> !isTurnSummary(message))
+                .mapToLong(MemoryMessage::id)
+                .max()
+                .orElse(0);
+        return legacyAnchor == 0
+                ? List.copyOf(messages)
+                : messages.stream().filter(message -> message.id() >= legacyAnchor).toList();
+    }
+
+    @Override
+    public void replaceTurnWithSummary(
+            String sessionId,
+            List<Long> messageIds,
+            MessageWrite summary
+    ) {
+        if (messageIds == null || messageIds.isEmpty()) {
+            throw new IllegalArgumentException("messageIds must not be empty");
+        }
+        if (!sessionId.equals(summary.sessionId()) || !summary.isSummary()) {
+            throw new IllegalArgumentException(
+                    "Turn summary must belong to the session and be marked as summary");
+        }
+        List<Long> ids = messageIds.stream().distinct().sorted().toList();
+        if (ids.getFirst() <= 0) {
+            throw new IllegalArgumentException("Turn message ids must be persisted ids");
+        }
+        String placeholders = String.join(",", java.util.Collections.nCopies(ids.size(), "?"));
+        String lockSql = "SELECT id FROM messages WHERE session_id = ? AND id IN ("
+                + placeholders + ") FOR UPDATE";
+        String updateSql = "UPDATE messages SET trace_id = ?, role = ?, content = CAST(? AS JSON), "
+                + "is_summary = 1 WHERE session_id = ? AND id = ?";
+        String deleteSql = ids.size() == 1 ? null
+                : "DELETE FROM messages WHERE session_id = ? AND id IN ("
+                        + String.join(",", java.util.Collections.nCopies(ids.size() - 1, "?"))
+                        + ")";
+        Connection connection = null;
+        try {
+            connection = getConnection();
+            connection.setAutoCommit(false);
+            int found = 0;
+            try (PreparedStatement statement = connection.prepareStatement(lockSql)) {
+                statement.setString(1, sessionId);
+                for (int i = 0; i < ids.size(); i++) {
+                    statement.setLong(i + 2, ids.get(i));
+                }
+                try (ResultSet rows = statement.executeQuery()) {
+                    while (rows.next()) found++;
+                }
+            }
+            if (found != ids.size()) {
+                throw new SQLException("Completed Turn changed before compression");
+            }
+            try (PreparedStatement statement = connection.prepareStatement(updateSql)) {
+                statement.setString(1, summary.traceId());
+                statement.setString(2, summary.role());
+                statement.setString(3, MessageBlock.toJson(summary.content()));
+                statement.setString(4, sessionId);
+                statement.setLong(5, ids.getFirst());
+                if (statement.executeUpdate() != 1) {
+                    throw new SQLException("Turn summary update count mismatch");
+                }
+            }
+            if (deleteSql != null) {
+                try (PreparedStatement statement = connection.prepareStatement(deleteSql)) {
+                    statement.setString(1, sessionId);
+                    for (int i = 1; i < ids.size(); i++) {
+                        statement.setLong(i + 1, ids.get(i));
+                    }
+                    if (statement.executeUpdate() != ids.size() - 1) {
+                        throw new SQLException("Turn message delete count mismatch");
+                    }
+                }
+            }
+            connection.commit();
+        } catch (SQLException | RuntimeException e) {
+            rollback(connection);
+            throw new MemoryStoreException(
+                    "Failed to replace completed Turn in session " + sessionId, e);
+        } finally {
+            close(connection);
+        }
     }
 
     @Override
@@ -375,33 +436,6 @@ public class MysqlMessageStore implements MessageStore {
         return new SessionStats(0, 0, 0, 0, 0, false);
     }
 
-    @Override
-    public int deleteToolMessages(String sessionId) {
-        String deleteSql = """
-                DELETE FROM messages
-                WHERE session_id = ?
-                  AND role IN ('assistant_tool_call', 'tool')
-                """;
-        Connection connection = null;
-        try {
-            connection = getConnection();
-            connection.setAutoCommit(false);
-            int deleted;
-            try (PreparedStatement statement = connection.prepareStatement(deleteSql)) {
-                statement.setString(1, sessionId);
-                deleted = statement.executeUpdate();
-            }
-            connection.commit();
-            return deleted;
-        } catch (SQLException | RuntimeException e) {
-            rollback(connection);
-            throw new MemoryStoreException(
-                    "Failed to delete Tool messages for session " + sessionId, e);
-        } finally {
-            close(connection);
-        }
-    }
-
     private MemoryMessage mapMessage(ResultSet rs) throws SQLException {
         String contentJson = rs.getString("content");
         List<MessageBlock> blocks = MessageBlock.fromJson(contentJson);
@@ -415,6 +449,13 @@ public class MysqlMessageStore implements MessageStore {
                 rs.getBoolean("is_summary"),
                 rs.getTimestamp("created_at").toInstant()
         );
+    }
+
+    private static boolean isTurnSummary(MemoryMessage message) {
+        return message.content().stream()
+                .map(MessageBlock::metadata)
+                .filter(java.util.Objects::nonNull)
+                .anyMatch(metadata -> "turn".equals(metadata.get("summaryType")));
     }
 
     private static void rollback(Connection connection) {

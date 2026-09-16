@@ -1,271 +1,345 @@
 package com.harness.input.memory;
 
-import com.harness.provider.ChatModelProvider;
+import com.harness.core.env.EnvConfig;
 import com.harness.core.model.MemoryMessage;
 import com.harness.core.model.MessageBlock;
-import com.harness.core.env.EnvConfig;
-import dev.langchain4j.data.message.AiMessage;
-import dev.langchain4j.data.message.UserMessage;
-import dev.langchain4j.model.chat.ChatModel;
-import dev.langchain4j.model.chat.response.ChatResponse;
+import com.harness.provider.ChatModelProvider;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.mockito.junit.jupiter.MockitoSettings;
+import org.mockito.quality.Strictness;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.*;
+import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
+@MockitoSettings(strictness = Strictness.LENIENT)
 class MemoryCompressorTest {
 
-    @Mock MessageStore messageStore;
+    @Mock TurnCompressibleMessageStore messageStore;
     @Mock SessionStore sessionStore;
     @Mock ChatModelProvider chatModelProvider;
-    @Mock ChatModel chatModel;
 
-    MemoryCompressor compressor;
+    private MemoryCompressor compressor;
+    private List<MemoryMessage> persisted;
 
     @BeforeEach
     void setUp() {
         EnvConfig.init(Map.of(
-                "HARNESS_CTX_COMPRESS_MAJOR", "85",
-                "HARNESS_CTX_COMPRESS_MAJOR_TARGET", "30"
-        ));
+                "HARNESS_CTX_COMPRESS_MAJOR", "50",
+                "HARNESS_CTX_COMPRESS_MAJOR_TARGET", "0",
+                "HARNESS_CTX_COMPRESS_KEEP_RECENT_TURNS", "0"));
+        when(chatModelProvider.chatModel()).thenReturn(null);
         compressor = new MemoryCompressor(messageStore, sessionStore, chatModelProvider);
     }
 
-    private List<MemoryMessage> createMessages(int count) {
-        List<MemoryMessage> msgs = new ArrayList<>();
-        for (int i = 0; i < count; i++) {
-            String role = (i % 2 == 0) ? "user" : "assistant";
-            msgs.add(new MemoryMessage(i, "sess1", "trace-" + i, role, List.of(new MessageBlock(MessageBlock.BlockType.TEXT, "Message content " + i, null)), false, Instant.now()));
-        }
-        return msgs;
-    }
-
-    private ChatResponse createMockChatResponse(String text) {
-        ChatResponse response = mock(ChatResponse.class);
-        when(response.aiMessage()).thenReturn(AiMessage.from(text));
-        return response;
-    }
-
     @Test
-    void compressIfNeeded_belowThreshold_returnsNone() {
-        List<MemoryMessage> messages = createMessages(5);
-        var result = compressor.compressIfNeeded("sess1", messages, 2000, 5000, 10000);
+    void caseA_ordinaryCompletedTurn_becomesOneSummary() {
+        backStore(List.of(
+                message(1, "turn-a", "user", "Explain the lifecycle in detail"),
+                message(2, "turn-a", "assistant", "The lifecycle completes normally")));
 
-        assertThat(result.type()).isEqualTo(MemoryCompressor.CompressionResult.CompressionType.NONE);
-        assertThat(result.messagesBefore()).isEqualTo(5);
-        assertThat(result.messagesAfter()).isEqualTo(5);
-
-        verifyNoInteractions(messageStore, sessionStore);
-    }
-
-    @Test
-    void compressIfNeeded_aboveThreshold_withChatModel_triggersMajorCompression() {
-        List<MemoryMessage> messages = createMessages(10);
-        List<MemoryMessage> compressedMessages = createMessages(2);
-        ChatResponse chatResponse = createMockChatResponse("This is a compressed summary of the conversation.");
-
-        when(chatModelProvider.chatModel()).thenReturn(chatModel);
-        when(chatModel.chat(any(UserMessage.class))).thenReturn(chatResponse);
-        when(messageStore.loadForContext("sess1")).thenReturn(compressedMessages);
-
-        var result = compressor.compressIfNeeded("sess1", messages, 5000, 9000, 10000);
+        var result = compress();
 
         assertThat(result.type()).isEqualTo(MemoryCompressor.CompressionResult.CompressionType.MAJOR);
-        assertThat(result.messagesBefore()).isEqualTo(10);
-        assertThat(result.messagesAfter()).isEqualTo(2);
-
-        ArgumentCaptor<MessageWrite> summaryCaptor = ArgumentCaptor.forClass(MessageWrite.class);
-        verify(messageStore).save(summaryCaptor.capture());
-        assertThat(summaryCaptor.getValue().sessionId()).isEqualTo("sess1");
-        assertThat(summaryCaptor.getValue().role()).isEqualTo("system");
-        assertThat(summaryCaptor.getValue().isSummary()).isTrue();
-        assertThat(MemoryMessage.text(summaryCaptor.getValue().content())).contains("compressed summary");
-
-        verify(sessionStore).updateLastActive("sess1");
+        assertThat(persisted).singleElement().satisfies(summary -> {
+            assertThat(summary.isSummary()).isTrue();
+            assertThat(summary.traceId()).isEqualTo("turn-a");
+            assertThat(metadata(summary)).containsEntry("summaryType", "turn")
+                    .containsEntry("turnId", "turn-a")
+                    .containsEntry("outcome", "completed");
+        });
     }
 
     @Test
-    void compressIfNeeded_aboveThreshold_nullChatModel_usesFallbackTruncation() {
-        List<MemoryMessage> messages = createMessages(10);
-        List<MemoryMessage> compressedMessages = createMessages(3);
+    void caseB_threeToolCalls_preserveStructuredFactsAndDropRawBlocks() {
+        backStore(List.of(
+                message(1, "turn-b", "user", "Run all three tools and report the result"),
+                toolCalls(2, "turn-b", List.of(
+                        Map.of("id", "call-1", "name", "search"),
+                        Map.of("id", "call-2", "name", "read"),
+                        Map.of("id", "call-3", "name", "write"))),
+                toolResult(3, "turn-b", "call-1", "search", "SUCCEEDED", "found record", null),
+                toolResult(4, "turn-b", "call-2", "read", "SUCCEEDED", "read record", null),
+                toolResult(5, "turn-b", "call-3", "write", "SUCCEEDED", "saved record", null),
+                message(6, "turn-b", "assistant", "All three operations completed")));
 
-        when(chatModelProvider.chatModel()).thenReturn(null);
-        when(messageStore.loadForContext("sess1")).thenReturn(compressedMessages);
+        compress();
 
-        var result = compressor.compressIfNeeded("sess1", messages, 5000, 9000, 10000);
-
-        assertThat(result.type()).isEqualTo(MemoryCompressor.CompressionResult.CompressionType.MAJOR);
-
-        ArgumentCaptor<MessageWrite> summaryCaptor = ArgumentCaptor.forClass(MessageWrite.class);
-        verify(messageStore).save(summaryCaptor.capture());
-        assertThat(summaryCaptor.getValue().isSummary()).isTrue();
-        assertThat(MemoryMessage.text(summaryCaptor.getValue().content())).contains("[Conversation summary]");
-
-        verify(sessionStore).updateLastActive("sess1");
+        assertThat(persisted).singleElement().satisfies(summary -> {
+            assertThat(summary.role()).isEqualTo("system");
+            assertThat(toolFacts(summary)).extracting(fact -> fact.get("toolName"))
+                    .containsExactly("search", "read", "write");
+            assertThat(summary.modelText()).contains("found record", "read record", "saved record");
+        });
     }
 
     @Test
-    void compressIfNeeded_exactThreshold_triggersCompression() {
-        List<MemoryMessage> messages = createMessages(10);
-        List<MemoryMessage> compressedMessages = createMessages(2);
-        ChatResponse chatResponse = createMockChatResponse("Summary.");
+    void caseC_spawnSuspendResume_closesAndCompressesSameTurnOnlyAfterFinalAnswer() {
+        backStore(List.of(
+                message(1, "turn-c", "user", "Delegate this work and continue afterwards"),
+                message(2, "turn-c", "assistant_partial", "Sub-agent started"),
+                toolResult(3, "turn-c", null, "spawn_subagent", "RUNNING", "task-1", null)));
 
-        when(chatModelProvider.chatModel()).thenReturn(chatModel);
-        when(chatModel.chat(any(UserMessage.class))).thenReturn(chatResponse);
-        when(messageStore.loadForContext("sess1")).thenReturn(compressedMessages);
+        assertThat(compress().type())
+                .isEqualTo(MemoryCompressor.CompressionResult.CompressionType.NONE);
+        verify(messageStore, never()).replaceTurnWithSummary(eq("sess1"), anyList(), any());
 
-        var result = compressor.compressIfNeeded("sess1", messages, 5000, 8500, 10000);
+        persisted.add(toolResult(
+                4, "turn-c", null, "spawn_subagent", "COMPLETED", "task-1 finished", null));
+        persisted.add(message(5, "turn-c", "assistant", "The delegated work is complete"));
 
-        assertThat(result.type()).isEqualTo(MemoryCompressor.CompressionResult.CompressionType.MAJOR);
+        assertThat(compress().type())
+                .isEqualTo(MemoryCompressor.CompressionResult.CompressionType.MAJOR);
+        assertThat(persisted).singleElement().satisfies(summary ->
+                assertThat(metadata(summary)).containsEntry("turnId", "turn-c"));
     }
 
     @Test
-    void compressIfNeeded_justBelowThreshold_returnsNone() {
-        List<MemoryMessage> messages = createMessages(5);
+    void caseD_twoCompletedTurns_areCompressedOldestFirst() {
+        backStore(List.of(
+                message(1, "turn-d1", "user", "First sufficiently long question"),
+                message(2, "turn-d1", "assistant", "First sufficiently long answer"),
+                message(3, "turn-d2", "user", "Second sufficiently long question"),
+                message(4, "turn-d2", "assistant", "Second sufficiently long answer")));
+        List<String> replacedTurns = new ArrayList<>();
+        installReplacement(replacedTurns);
 
-        var result = compressor.compressIfNeeded("sess1", messages, 3000, 8400, 10000);
+        compress();
 
-        assertThat(result.type()).isEqualTo(MemoryCompressor.CompressionResult.CompressionType.NONE);
-        verifyNoInteractions(chatModelProvider);
-    }
-
-    // ---- Small context window tests (simulating easy trigger) ----
-
-    @Test
-    void smallContextWindow_triggersCompression() {
-        // Simulate a 1000-token context window; 85% = 850 tokens
-        // 10 messages * ~100 tokens each = 1000 tokens → exceeds 85%
-        EnvConfig.init(Map.of(
-                "HARNESS_CTX_COMPRESS_MAJOR", "85",
-                "HARNESS_CTX_COMPRESS_MAJOR_TARGET", "30"
-        ));
-        MemoryCompressor smallCompressor = new MemoryCompressor(messageStore, sessionStore, chatModelProvider);
-
-        List<MemoryMessage> messages = createMessages(10);
-        List<MemoryMessage> compressed = createMessages(2);
-        ChatResponse chatResponse = createMockChatResponse("Compressed summary of 10 messages.");
-
-        when(chatModelProvider.chatModel()).thenReturn(chatModel);
-        when(chatModel.chat(any(UserMessage.class))).thenReturn(chatResponse);
-        when(messageStore.loadForContext("sess1")).thenReturn(compressed);
-
-        // totalBudget=1000, totalUsed=900 (90%) → triggers
-        var result = smallCompressor.compressIfNeeded("sess1", messages, 900, 900, 1000);
-
-        assertThat(result.type()).isEqualTo(MemoryCompressor.CompressionResult.CompressionType.MAJOR);
-        assertThat(result.messagesBefore()).isEqualTo(10);
-        assertThat(result.messagesAfter()).isEqualTo(2);
-        verify(messageStore).save(argThat(write -> write.sessionId().equals("sess1")
-                && write.role().equals("system") && write.isSummary()));
+        assertThat(replacedTurns).containsExactly("turn-d1", "turn-d2");
+        assertThat(persisted).hasSize(2).allMatch(MemoryMessage::isSummary);
     }
 
     @Test
-    void smallContextWindow_lowUsage_noCompression() {
-        EnvConfig.init(Map.of(
-                "HARNESS_CTX_COMPRESS_MAJOR", "85",
-                "HARNESS_CTX_COMPRESS_MAJOR_TARGET", "30"
-        ));
-        MemoryCompressor smallCompressor = new MemoryCompressor(messageStore, sessionStore, chatModelProvider);
+    void caseE_activeTurn_isNeverCompressed() {
+        backStore(List.of(
+                message(1, "turn-e1", "user", "Completed turn question with enough text"),
+                message(2, "turn-e1", "assistant", "Completed turn answer with enough text"),
+                message(3, "turn-e2", "user", "Current unfinished turn must remain raw")));
 
-        List<MemoryMessage> messages = createMessages(5);
+        compress();
 
-        // totalBudget=10000, totalUsed=500 (5%) → no trigger
-        var result = smallCompressor.compressIfNeeded("sess1", messages, 500, 500, 10000);
-
-        assertThat(result.type()).isEqualTo(MemoryCompressor.CompressionResult.CompressionType.NONE);
-        verifyNoInteractions(chatModelProvider);
+        assertThat(persisted).hasSize(2);
+        assertThat(persisted).anySatisfy(message -> {
+            assertThat(message.traceId()).isEqualTo("turn-e2");
+            assertThat(message.role()).isEqualTo("user");
+            assertThat(message.isSummary()).isFalse();
+        });
     }
 
     @Test
-    void fallbackTruncation_respectsTargetSize() {
-        // Null chat model → fallback truncation
-        when(chatModelProvider.chatModel()).thenReturn(null);
-        when(messageStore.loadForContext("sess1")).thenReturn(createMessages(2));
+    void caseF_existingSummary_isNotCompressedAgain() {
+        MemoryMessage summary = turnSummary(1, "turn-f");
+        backStore(List.of(summary));
 
-        List<MemoryMessage> messages = createMessages(20);
-        // targetTokens = 10000 * 30 / 100 = 3000, targetChars = 9000
-        var result = compressor.compressIfNeeded("sess1", messages, 5000, 9000, 10000);
-
-        assertThat(result.type()).isEqualTo(MemoryCompressor.CompressionResult.CompressionType.MAJOR);
-
-        ArgumentCaptor<MessageWrite> captor = ArgumentCaptor.forClass(MessageWrite.class);
-        verify(messageStore).save(captor.capture());
-        String summary = MemoryMessage.text(captor.getValue().content());
-        // Fallback should produce a summary within ~9000 chars
-        assertThat(summary.length()).isLessThanOrEqualTo(9000 + 100); // small margin for header
-        assertThat(summary).contains("[Conversation summary]");
+        assertThat(compress().type())
+                .isEqualTo(MemoryCompressor.CompressionResult.CompressionType.NONE);
+        assertThat(persisted).containsExactly(summary);
+        verify(messageStore, never()).replaceTurnWithSummary(eq("sess1"), anyList(), any());
     }
 
     @Test
-    void secondPassCompression_triggeredWhenTooLong() {
-        // First pass returns a very long summary → triggers second pass
-        String longSummary = "A".repeat(15000); // exceeds 1.5 * targetChars
-        String compressedSummary = "Short summary.";
+    void caseG_failedTool_preservesFailureStatusAndError() {
+        backStore(List.of(
+                message(1, "turn-g", "user", "Attempt an operation that may fail"),
+                toolCalls(2, "turn-g", List.of(Map.of("id", "call-g", "name", "dangerous_tool"))),
+                toolResult(3, "turn-g", "call-g", "dangerous_tool", "FAILED",
+                        "ERROR: permission denied", "permission denied"),
+                message(4, "turn-g", "assistant", "The operation failed and was not hidden")));
 
-        ChatResponse firstPass = createMockChatResponse(longSummary);
-        ChatResponse secondPass = createMockChatResponse(compressedSummary);
+        compress();
 
-        when(chatModelProvider.chatModel()).thenReturn(chatModel);
-        when(chatModel.chat(any(UserMessage.class)))
-                .thenReturn(firstPass)
-                .thenReturn(secondPass);
-        when(messageStore.loadForContext("sess1")).thenReturn(createMessages(2));
-
-        // targetTokens=3000, targetChars=9000, 1.5x=13500. longSummary=15000 > 13500
-        var result = compressor.compressIfNeeded("sess1", createMessages(10), 5000, 9000, 10000);
-
-        assertThat(result.type()).isEqualTo(MemoryCompressor.CompressionResult.CompressionType.MAJOR);
-        // Should have called chat twice (first pass + second pass)
-        verify(chatModel, times(2)).chat(any(UserMessage.class));
+        assertThat(metadata(persisted.getFirst()))
+                .containsEntry("outcome", "completed_with_tool_failure");
+        assertThat(toolFacts(persisted.getFirst()).getFirst())
+                .containsEntry("status", "FAILED")
+                .containsEntry("error", "permission denied");
     }
 
     @Test
-    void chatModelException_usesFallback() {
-        when(chatModelProvider.chatModel()).thenReturn(chatModel);
-        when(chatModel.chat(any(UserMessage.class))).thenThrow(new RuntimeException("API error"));
-        when(messageStore.loadForContext("sess1")).thenReturn(createMessages(2));
+    void caseH_artifactIdentity_survivesCompression() {
+        MessageBlock result = new MessageBlock(
+                MessageBlock.BlockType.TEXT,
+                "generated report",
+                null,
+                Map.of("toolCallId", "call-h", "toolName", "report", "status", "SUCCEEDED"));
+        MessageBlock artifact = new MessageBlock(
+                MessageBlock.BlockType.ARTIFACT, "report", "artifact-42");
+        backStore(List.of(
+                message(1, "turn-h", "user", "Generate a durable report artifact"),
+                toolCalls(2, "turn-h", List.of(Map.of("id", "call-h", "name", "report"))),
+                new MemoryMessage(3, "sess1", "turn-h", "tool",
+                        List.of(result, artifact), false, Instant.now()),
+                message(4, "turn-h", "assistant", "The report artifact is ready")));
 
-        var result = compressor.compressIfNeeded("sess1", createMessages(10), 5000, 9000, 10000);
+        compress();
 
-        assertThat(result.type()).isEqualTo(MemoryCompressor.CompressionResult.CompressionType.MAJOR);
-
-        ArgumentCaptor<MessageWrite> captor = ArgumentCaptor.forClass(MessageWrite.class);
-        verify(messageStore).save(captor.capture());
-        // Should fall back to truncation
-        assertThat(MemoryMessage.text(captor.getValue().content())).contains("[Conversation summary]");
+        assertThat(toolFacts(persisted.getFirst()).getFirst().get("artifactIds"))
+                .isEqualTo(List.of("artifact-42"));
     }
 
     @Test
-    void customThreshold_respected() {
+    void recentCompletedTurn_canBeKeptUncompressed() {
         EnvConfig.init(Map.of(
                 "HARNESS_CTX_COMPRESS_MAJOR", "50",
-                "HARNESS_CTX_COMPRESS_MAJOR_TARGET", "20"
-        ));
-        MemoryCompressor customCompressor = new MemoryCompressor(messageStore, sessionStore, chatModelProvider);
+                "HARNESS_CTX_COMPRESS_MAJOR_TARGET", "0",
+                "HARNESS_CTX_COMPRESS_KEEP_RECENT_TURNS", "1"));
+        compressor = new MemoryCompressor(messageStore, sessionStore, chatModelProvider);
+        backStore(List.of(
+                message(1, "old", "user", "Old question with enough detail"),
+                message(2, "old", "assistant", "Old answer with enough detail"),
+                message(3, "recent", "user", "Recent question with enough detail"),
+                message(4, "recent", "assistant", "Recent answer with enough detail")));
 
-        List<MemoryMessage> messages = createMessages(10);
-        List<MemoryMessage> compressed = createMessages(1);
-        ChatResponse chatResponse = createMockChatResponse("Summary.");
+        compress();
 
-        when(chatModelProvider.chatModel()).thenReturn(chatModel);
-        when(chatModel.chat(any(UserMessage.class))).thenReturn(chatResponse);
-        when(messageStore.loadForContext("sess1")).thenReturn(compressed);
+        assertThat(persisted).filteredOn(message -> "recent".equals(message.traceId()))
+                .hasSize(2).allMatch(message -> !message.isSummary());
+    }
 
-        // 60% usage > 50% threshold → triggers
-        var result = customCompressor.compressIfNeeded("sess1", messages, 3000, 6000, 10000);
+    @Test
+    void baseMessageStoreRemainsCompatibleWithTurnCompressionDisabled() {
+        MessageStore baseStore = org.mockito.Mockito.mock(MessageStore.class);
+        MemoryCompressor baseCompressor = new MemoryCompressor(
+                baseStore, sessionStore, chatModelProvider);
 
-        assertThat(result.type()).isEqualTo(MemoryCompressor.CompressionResult.CompressionType.MAJOR);
+        var result = baseCompressor.compressIfNeeded(
+                "sess1",
+                List.of(
+                        message(1, "legacy", "user", "A long user request"),
+                        message(2, "legacy", "assistant", "A complete response")),
+                900,
+                900,
+                1_000);
+
+        assertThat(result.type())
+                .isEqualTo(MemoryCompressor.CompressionResult.CompressionType.NONE);
+        verifyNoInteractions(baseStore);
+    }
+
+    private MemoryCompressor.CompressionResult compress() {
+        return compressor.compressIfNeeded("sess1", List.copyOf(persisted), 900, 900, 1_000);
+    }
+
+    private void backStore(List<MemoryMessage> messages) {
+        persisted = new ArrayList<>(messages);
+        when(messageStore.loadForContext("sess1")).thenAnswer(ignored -> List.copyOf(persisted));
+        installReplacement(null);
+    }
+
+    private void installReplacement(List<String> replacedTurns) {
+        doAnswer(invocation -> {
+            List<Long> ids = invocation.getArgument(1);
+            MessageWrite write = invocation.getArgument(2);
+            if (replacedTurns != null) replacedTurns.add(write.traceId());
+            int insertionIndex = 0;
+            for (int index = 0; index < persisted.size(); index++) {
+                if (ids.contains(persisted.get(index).id())) {
+                    insertionIndex = index;
+                    break;
+                }
+            }
+            long summaryId = ids.stream().min(Comparator.naturalOrder()).orElseThrow();
+            persisted.removeIf(message -> ids.contains(message.id()));
+            persisted.add(insertionIndex, new MemoryMessage(
+                    summaryId,
+                    write.sessionId(),
+                    write.traceId(),
+                    write.role(),
+                    write.content(),
+                    true,
+                    Instant.now()));
+            return null;
+        }).when(messageStore).replaceTurnWithSummary(eq("sess1"), anyList(), any());
+    }
+
+    private static MemoryMessage message(long id, String turnId, String role, String text) {
+        return new MemoryMessage(
+                id,
+                "sess1",
+                turnId,
+                role,
+                List.of(new MessageBlock(MessageBlock.BlockType.TEXT, text, null)),
+                false,
+                Instant.now());
+    }
+
+    private static MemoryMessage toolCalls(
+            long id,
+            String turnId,
+            List<Map<String, String>> calls
+    ) {
+        return new MemoryMessage(
+                id,
+                "sess1",
+                turnId,
+                "assistant_tool_call",
+                List.of(new MessageBlock(
+                        MessageBlock.BlockType.TEXT,
+                        "tool calls",
+                        null,
+                        Map.of("toolCalls", calls))),
+                false,
+                Instant.now());
+    }
+
+    private static MemoryMessage toolResult(
+            long id,
+            String turnId,
+            String callId,
+            String toolName,
+            String status,
+            String text,
+            String error
+    ) {
+        Map<String, Object> metadata = new java.util.HashMap<>();
+        if (callId != null) metadata.put("toolCallId", callId);
+        metadata.put("toolName", toolName);
+        metadata.put("status", status);
+        if (error != null) metadata.put("error", error);
+        return new MemoryMessage(
+                id,
+                "sess1",
+                turnId,
+                "tool",
+                List.of(new MessageBlock(MessageBlock.BlockType.TEXT, text, null, metadata)),
+                false,
+                Instant.now());
+    }
+
+    private static MemoryMessage turnSummary(long id, String turnId) {
+        MessageBlock block = new MessageBlock(
+                MessageBlock.BlockType.TEXT,
+                "existing summary",
+                null,
+                Map.of("summaryType", "turn", "turnId", turnId));
+        return new MemoryMessage(
+                id, "sess1", turnId, "system", List.of(block), true, Instant.now());
+    }
+
+    private static Map<String, Object> metadata(MemoryMessage summary) {
+        return summary.content().getFirst().metadata();
+    }
+
+    @SuppressWarnings("unchecked")
+    private static List<Map<String, Object>> toolFacts(MemoryMessage summary) {
+        return (List<Map<String, Object>>) metadata(summary).get("tools");
     }
 }

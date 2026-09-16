@@ -192,6 +192,8 @@ public final class EnvKey {
     public static final String SERVER_HOST           = "HARNESS_SERVER_HOST";
     public static final String SERVER_PORT           = "HARNESS_SERVER_PORT";
     public static final String SERVER_IDLE_TIMEOUT   = "HARNESS_SERVER_IDLE_TIMEOUT";
+    /** SSE 心跳间隔（秒）。仅用于向客户端证明连接存活，与模型/工具的执行业务超时无关，默认 15 */
+    public static final String SSE_KEEPALIVE_SECONDS = "HARNESS_SSE_KEEPALIVE_SECONDS";
     /** Jetty 线程池大小，默认 availableProcessors * 2（最少 8） */
     public static final String SERVER_WORKERS        = "HARNESS_SERVER_WORKERS";
     /** HTTP 请求体最大尺寸（MB），默认 20 */
@@ -241,6 +243,8 @@ public final class EnvKey {
     public static final String CTX_COMPRESS_MAJOR              = "HARNESS_CTX_COMPRESS_MAJOR";
     /** 大压缩目标百分比，默认 30 */
     public static final String CTX_COMPRESS_MAJOR_TARGET        = "HARNESS_CTX_COMPRESS_MAJOR_TARGET";
+    /** 压缩时保留原文的最近完整 Turn 数，默认 1 */
+    public static final String CTX_COMPRESS_KEEP_RECENT_TURNS   = "HARNESS_CTX_COMPRESS_KEEP_RECENT_TURNS";
     /** 基础系统提示词，留空则使用默认值 */
     public static final String SYSTEM_PROMPT                   = "HARNESS_SYSTEM_PROMPT";
     /** 会话清理扫描间隔（分钟），默认 60 */

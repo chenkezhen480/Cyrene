@@ -9,6 +9,7 @@ import com.harness.core.model.ToolExecutionOutcome;
 import com.harness.core.model.ToolOutput;
 import com.harness.core.model.ToolSpec;
 import com.harness.tool.Tool;
+import com.harness.tool.ToolExecutor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -28,6 +29,8 @@ import java.util.Set;
  * - tools: (optional) list of tool names the sub-agent needs; defaults to no tools
  */
 public class SpawnSubAgentTool implements Tool {
+
+    public static final String TOOL_NAME = "spawn_subagent";
 
     private static final Logger log = LoggerFactory.getLogger(SpawnSubAgentTool.class);
     private static final ObjectMapper mapper = new ObjectMapper();
@@ -65,7 +68,7 @@ public class SpawnSubAgentTool implements Tool {
     @Override
     public ToolSpec spec() {
         return new ToolSpec(
-                "spawn_subagent",
+                TOOL_NAME,
                 "Spawn a sub-agent to execute a specific task in parallel. " +
                         "Returns immediately with a task handle. " +
                         "Use await_subagents to wait for completion and get results.\n\n" +
@@ -78,7 +81,7 @@ public class SpawnSubAgentTool implements Tool {
                         "Optionally provide 'tools' to give the sub-agent specific tools. If omitted, the sub-agent has NO tools (text-only analysis).\n\n" +
                         "Optionally provide 'completion_contract' when completion must be verified from successful tool calls, stored artifacts, or structured output.\n\n" +
                         "Available tool names: web_search, knowledge_search, knowledge_read, query_graph, image_generation, " +
-                        "code_sandbox, load_skill, and any registered MCP tools.",
+                        "python_sandbox, load_skill, and any registered MCP tools.",
                 buildParametersSchema(),
                 com.harness.core.model.ToolCapability.ORCHESTRATION
         );
@@ -127,7 +130,14 @@ public class SpawnSubAgentTool implements Tool {
         completionProperties.set("required_artifacts", requiredArtifacts);
         completionProperties.set("output_schema", mapper.createObjectNode()
                 .put("type", "object")
-                .put("description", "Strict JSON Schema for the sub-agent final summary."));
+                .put("description",
+                        "Strict JSON Schema for the sub-agent final summary. "
+                                + "Allowed keywords: type, description, properties, required, "
+                                + "additionalProperties, items, enum. "
+                                + "Allowed types: object, array, string, integer, number, boolean. "
+                                + "Every object MUST set additionalProperties:false and list ALL its "
+                                + "properties in required. Every array MUST declare items. "
+                                + "enum must be a non-empty array of strings."));
         ObjectNode completionSchema = mapper.createObjectNode().put("type", "object");
         completionSchema.set("properties", completionProperties);
         completionSchema.set("required", mapper.createArrayNode());
@@ -193,13 +203,15 @@ public class SpawnSubAgentTool implements Tool {
 
         String taskId = SubAgentManager.generateTaskId();
         String sessionId = runContext.sessionId();
+        String toolCallId = ToolExecutor.currentToolCallId();
         log.info("[SpawnSubAgent] Submitting task: taskId={}, runId={}, sessionId={}, tools={}, deps={}",
                 taskId, runContext.runId(), sessionId, tools, dependencies);
 
         try {
             SubAgentTask task = SubAgentTask.create(taskId, taskDescription, context,
                     persona, systemPrompt, tools, dependencies, completionContract);
-            SubAgentTaskRecord record = subAgentManager.submitTask(runContext, task, sessionId);
+            SubAgentTaskRecord record = subAgentManager.submitTask(
+                    runContext, task, sessionId, toolCallId);
 
             if (record == null) {
                 throw new ToolExecutionException("spawn_subagent",
@@ -219,10 +231,28 @@ public class SpawnSubAgentTool implements Tool {
                     ResultStatus.PENDING);
 
         } catch (ToolExecutionException e) {
+            publishFailed(runContext, toolCallId, taskId, e.getMessage());
             throw e;
         } catch (Exception e) {
+            publishFailed(runContext, toolCallId, taskId, e.getMessage());
             log.error("[SpawnSubAgent] Task submission error: {}", e.getMessage());
             throw new ToolExecutionException("spawn_subagent", "Task submission failed: " + e.getMessage(), e);
+        }
+    }
+
+    private void publishFailed(
+            AgentRunContext runContext,
+            String toolCallId,
+            String taskId,
+            String detail
+    ) {
+        if (toolCallId != null && !toolCallId.isBlank()) {
+            subAgentManager.publishLifecycle(runContext.runId(),
+                    new com.harness.core.model.SubAgentLifecycleEvent(
+                            toolCallId,
+                            taskId,
+                            com.harness.core.model.SubAgentLifecycleEvent.Status.FAILED,
+                            detail));
         }
     }
 

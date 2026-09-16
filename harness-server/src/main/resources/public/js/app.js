@@ -24,8 +24,11 @@ function renderMarkdown(text) {
 // Strip artifact markdown links from text to prevent double-rendering
 // when both TEXT and ARTIFACT blocks are present
 const ARTIFACT_LINK_RE = /!\[.*?\]\(\/api\/artifacts\/[^)]+\)/g;
-// 服务端长时间不吐任何事件就主动放弃：响应流若因任何原因不关闭，界面会被永久锁住。
-const STREAM_IDLE_TIMEOUT_MS = 90_000;
+// SSE 传输层活性超时：超过这个时间收不到任何字节（含 `: keepalive` 注释帧）就认定连接已死，
+// 主动放弃，否则响应流若不关闭界面会被永久锁住。
+// 服务端每 HARNESS_SSE_KEEPALIVE_SECONDS（默认 15s）发一次心跳，此值为其 6 倍。
+// 这**不是**模型或工具的执行超时 —— 生图/文档解析跑多久都不该由它判断。
+const SSE_LIVENESS_TIMEOUT_MS = 90_000;
 const STREAM_CHARS_PER_FRAME = 8;
 const CRYSTAL_SVG = '<svg width="15" height="15" viewBox="0 0 16 16" fill="none" style="vertical-align:-2px;margin-right:3px"><defs><radialGradient id="cg"><stop offset="0%" stop-color="rgba(232,160,191,0.6)"/><stop offset="100%" stop-color="rgba(139,126,200,0.15)"/></radialGradient></defs><path d="M8 0.5L9.5 5 14 3.5 11 7.5 15.5 8 11 8.5 14 12.5 9.5 11 8 15.5 6.5 11 2 12.5 5 8.5 0.5 8 5 7.5 2 3.5 6.5 5z" fill="url(#cg)" stroke="var(--iris)" stroke-width="0.5" stroke-linejoin="round"/><circle cx="8" cy="8" r="1.8" fill="rgba(232,160,191,0.7)"/><circle cx="8" cy="8" r="0.8" fill="white" opacity="0.6"/></svg>';
 function stripArtifactLinks(text) {
@@ -34,6 +37,7 @@ function stripArtifactLinks(text) {
 }
 
 const upsertToolCall = CyreneToolCalls.upsert;
+const upsertSubAgent = CyreneToolCalls.upsertSubAgent;
 const formatToolArguments = CyreneToolCalls.formatArguments;
 
 function appendAssistantText(message, text) {
@@ -861,6 +865,9 @@ const ChatPage = {
                   case 'tool_call_done':
                     upsertToolCall(messages.value[msgIdx], parsed);
                     break;
+                  case 'subagent_status':
+                    upsertSubAgent(messages.value[msgIdx], parsed);
+                    break;
                   case 'tool_output':
                     upsertToolCall(messages.value[msgIdx], parsed);
                     if (Array.isArray(parsed.artifacts)) {
@@ -916,7 +923,7 @@ const ChatPage = {
 
         const idleTimeout = () => new Promise((_, reject) => {
           idleTimer = setTimeout(
-            () => reject(new Error(t('streamIdleTimeout'))), STREAM_IDLE_TIMEOUT_MS);
+            () => reject(new Error(t('streamIdleTimeout'))), SSE_LIVENESS_TIMEOUT_MS);
         });
 
         while (!terminalEvent) {
@@ -1089,6 +1096,12 @@ const ChatPage = {
                       <div v-if="tc.errorSummary" class="tool-call-error-summary">
                         {{ tc.errorSummary }}
                       </div>
+                      <div v-if="tc.subAgent" class="tool-call-output">
+                        SubAgent {{ tc.subAgent.taskId || '' }} · {{ tc.subAgent.status }}
+                        <div v-if="tc.subAgent.detail" class="tool-call-error-summary">
+                          {{ tc.subAgent.detail }}
+                        </div>
+                      </div>
                     </div>
                   </div>
                   <!-- Text / artifact content -->
@@ -1115,7 +1128,7 @@ const ChatPage = {
                   <div v-if="msg.compressions && msg.compressions.length">
                     <div v-for="(compression, ci) in msg.compressions" :key="ci" class="compress-block">
                       <span class="compress-icon">🗜️</span>
-                      <span class="compress-label">{{ compression.mode === 'major' ? t('majorCompress') : t('minorCompress') }}</span>
+                      <span class="compress-label">{{ t('majorCompress') }}</span>
                       <span class="compress-detail">{{ compression.detail }}</span>
                     </div>
                   </div>

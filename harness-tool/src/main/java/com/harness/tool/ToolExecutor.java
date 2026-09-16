@@ -26,6 +26,7 @@ import java.util.Objects;
 public class ToolExecutor {
 
     private static final Logger log = LoggerFactory.getLogger(ToolExecutor.class);
+    private static final ThreadLocal<String> currentToolCallId = new ThreadLocal<>();
 
     private final ConfirmationManager confirmationManager;
     private final List<String> confirmRequiredTools;
@@ -128,6 +129,7 @@ public class ToolExecutor {
         String argsStr = toolCall.arguments() != null ? toolCall.arguments().toString() : "null";
         log.debug("[L3-Tool] Executing [{}] with args: {}", name,
                 argsStr.length() > 200 ? argsStr.substring(0, 200) + "..." : argsStr);
+        currentToolCallId.set(toolCall.id());
         try {
             ToolExecutionOutcome outcome = tool.executeOutcome(toolCall.arguments());
             long duration = System.currentTimeMillis() - start;
@@ -143,7 +145,14 @@ public class ToolExecutor {
             long duration = System.currentTimeMillis() - start;
             log.error("[L3-Tool] [{}] unexpected error in {}ms: {}", name, duration, e.getMessage(), e);
             return ToolResult.fail(toolCall.id(), name, "Unexpected error: " + e.getMessage(), duration);
+        } finally {
+            currentToolCallId.remove();
         }
+    }
+
+    /** Current authorized Tool call on the executing thread. */
+    public static String currentToolCallId() {
+        return currentToolCallId.get();
     }
 
     private static String summarize(ToolOutput output) {

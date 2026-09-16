@@ -38,7 +38,6 @@ import org.slf4j.LoggerFactory;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.time.Clock;
@@ -188,7 +187,7 @@ public final class AgentMemoryRuntime {
             String systemPrompt
     ) {
         if (!enabled) {
-            return new CompressionOutcome(0, null, shorttermMessages);
+            return new CompressionOutcome(null, shorttermMessages);
         }
         int totalBudget = chatModel.chatModel() != null ? chatModel.contextWindow() : 8000;
         int shorttermTokens = estimateTokens(shorttermMessages);
@@ -196,18 +195,13 @@ public final class AgentMemoryRuntime {
                 + TextChunker.estimateTokens(systemPrompt);
         int majorThreshold = EnvConfig.get().getInt(EnvKey.CTX_COMPRESS_MAJOR, 85);
         int usagePercent = (int) (totalUsed * 100.0 / totalBudget);
-        int minorStripped = 0;
-
         if (usagePercent >= majorThreshold) {
-            minorStripped = stripToolMessages(sessionId, userId);
-            if (minorStripped > 0) {
-                shorttermMessages = Optional.ofNullable(messageCache.getIfPresent(sessionId))
-                        .orElseGet(() -> messageStore.loadForContext(sessionId));
-                shorttermTokens = estimateTokens(shorttermMessages);
-                totalUsed = shorttermTokens + TextChunker.estimateTokens(userMessage)
-                        + TextChunker.estimateTokens(systemPrompt);
-                usagePercent = (int) (totalUsed * 100.0 / totalBudget);
-            }
+            messageWriteWorker.flushPending();
+            shorttermMessages = messageStore.loadForContext(sessionId);
+            shorttermTokens = estimateTokens(shorttermMessages);
+            totalUsed = shorttermTokens + TextChunker.estimateTokens(userMessage)
+                    + TextChunker.estimateTokens(systemPrompt);
+            usagePercent = (int) (totalUsed * 100.0 / totalBudget);
         }
 
         MemoryCompressor.CompressionResult majorResult =
@@ -221,7 +215,7 @@ public final class AgentMemoryRuntime {
             shorttermMessages = messageStore.loadForContext(sessionId);
             messageCache.put(sessionId, userId, shorttermMessages);
         }
-        return new CompressionOutcome(minorStripped, majorResult, shorttermMessages);
+        return new CompressionOutcome(majorResult, shorttermMessages);
     }
 
     public void recordCompressionMetadata(RunTrace trace, CompressionOutcome outcome) {
@@ -264,14 +258,27 @@ public final class AgentMemoryRuntime {
             List<MessageBlock> blocks,
             boolean updateActivity
     ) {
+        persistAssistantMessage(
+                sessionId, userId, rootTraceId, blocks, updateActivity, true);
+    }
+
+    public void persistAssistantMessage(
+            String sessionId,
+            String userId,
+            String rootTraceId,
+            List<MessageBlock> blocks,
+            boolean updateActivity,
+            boolean completesTurn
+    ) {
         if (!enabled || sessionId == null || userId == null) {
             return;
         }
-        messageWriteWorker.submit(sessionId, rootTraceId, "assistant", blocks, false);
+        String role = completesTurn ? "assistant" : "assistant_partial";
+        messageWriteWorker.submit(sessionId, rootTraceId, role, blocks, false);
         messageCache.append(
                 sessionId,
                 userId,
-                new MemoryMessage(0, sessionId, rootTraceId, "assistant", blocks, false, null));
+                new MemoryMessage(0, sessionId, rootTraceId, role, blocks, false, null));
         if (updateActivity) {
             sessionStore.updateLastActive(sessionId);
         }
@@ -307,6 +314,41 @@ public final class AgentMemoryRuntime {
                         ToolMemoryCodec.TOOL_RESULT_ROLE,
                         ToolMemoryCodec.encodeResult(toolResult));
             }
+        }
+    }
+
+    public void persistSubAgentEvents(
+            String sessionId,
+            String userId,
+            String turnId,
+            List<com.harness.agent.SessionInbox.SubAgentCompletedEvent> events
+    ) {
+        for (var event : events) {
+            Map<String, Object> metadata = new HashMap<>();
+            metadata.put("toolName", "spawn_subagent");
+            metadata.put("taskId", event.taskId());
+            metadata.put("status", event.result().status().name());
+            if (event.result().error() != null) {
+                metadata.put("error", event.result().error());
+            }
+            List<MessageBlock> blocks = new java.util.ArrayList<>();
+            blocks.add(new MessageBlock(
+                    MessageBlock.BlockType.TEXT,
+                    event.result().output() != null
+                            ? event.result().output()
+                            : "ERROR: " + event.result().error(),
+                    null,
+                    Map.copyOf(metadata)));
+            event.result().artifacts().forEach(artifact -> blocks.add(new MessageBlock(
+                    MessageBlock.BlockType.ARTIFACT,
+                    null,
+                    artifact.id(),
+                    Map.of(
+                            "type", artifact.type().name(),
+                            "mimeType", artifact.mimeType() != null ? artifact.mimeType() : "",
+                            "name", artifact.name() != null ? artifact.name() : ""))));
+            appendContextMessage(
+                    sessionId, userId, turnId, "subagent_event", List.copyOf(blocks));
         }
     }
 
@@ -424,30 +466,6 @@ public final class AgentMemoryRuntime {
                 new MemoryMessage(0, sessionId, rootTraceId, role, blocks, false, null));
     }
 
-    private int stripToolMessages(String sessionId, String userId) {
-        if (messageWriteWorker != null) {
-            messageWriteWorker.flushPending();
-        }
-        int persisted = messageStore == null
-                ? 0
-                : messageStore.deleteToolMessages(sessionId);
-        List<MemoryMessage> cached = messageCache.getIfPresent(sessionId);
-        if (cached == null || cached.isEmpty()) {
-            return persisted;
-        }
-        List<MemoryMessage> stripped = cached.stream()
-                .filter(message -> !ToolMemoryCodec.TOOL_RESULT_ROLE.equals(message.role()))
-                .filter(message -> !ToolMemoryCodec.TOOL_CALL_ROLE.equals(message.role()))
-                .filter(message -> !("assistant".equals(message.role())
-                        && message.text().startsWith("[Tool call]")))
-                .toList();
-        int removed = cached.size() - stripped.size();
-        if (removed > 0) {
-            messageCache.put(sessionId, userId, stripped);
-        }
-        return Math.max(removed, persisted);
-    }
-
     private static int estimateTokens(List<MemoryMessage> messages) {
         return messages.stream()
                 .mapToInt(message -> TextChunker.estimateTokens(message.modelText()))
@@ -463,14 +481,9 @@ public final class AgentMemoryRuntime {
     }
 
     public record CompressionOutcome(
-            int minorStripped,
             MemoryCompressor.CompressionResult majorResult,
             List<MemoryMessage> finalMessages
     ) {
-        public boolean hasMinor() {
-            return minorStripped > 0;
-        }
-
         public boolean hasMajor() {
             return majorResult != null
                     && majorResult.type()

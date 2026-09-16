@@ -88,6 +88,4 @@ public interface MessageStore {
 
     SessionStats loadSessionStats(String sessionId);
 
-    /** Delete Tool calls/results when minor compression strips Tool context. */
-    int deleteToolMessages(String sessionId);
 }

@@ -199,22 +199,34 @@ class MysqlMessageStoreIT {
     }
 
     @Test
-    void deleteToolMessages_removesOnlyToolContext() {
+    void replaceTurnWithSummary_atomicallyRemovesOnlySelectedTurnRows() {
         String sid = createTestSession();
-        save(sid, "user", blocks("query"), false);
-        save(sid, "assistant_tool_call", blocks("[Tool call] lookup({})"), false);
-        save(sid, "tool", blocks("tool result"), false);
-        save(sid, "assistant", blocks("final answer"), false);
+        long userId = store.save(new MessageWrite(
+                sid, "turn-1", "user", blocks("query"), false));
+        long callId = store.save(new MessageWrite(
+                sid, "turn-1", "assistant_tool_call", blocks("[Tool call] lookup({})"), false));
+        long toolId = store.save(new MessageWrite(
+                sid, "turn-1", "tool", blocks("tool result"), false));
+        long assistantId = store.save(new MessageWrite(
+                sid, "turn-1", "assistant", blocks("final answer"), false));
+        save(sid, "user", blocks("next turn"), false);
 
-        int deleted = store.deleteToolMessages(sid);
+        MessageBlock summaryBlock = new MessageBlock(
+                MessageBlock.BlockType.TEXT,
+                "turn summary",
+                null,
+                Map.of("summaryType", "turn", "turnId", "turn-1"));
+        store.replaceTurnWithSummary(
+                sid,
+                List.of(userId, callId, toolId, assistantId),
+                new MessageWrite(
+                        sid, "turn-1", "system", List.of(summaryBlock), true));
 
-        assertThat(deleted).isEqualTo(2);
         assertThat(store.loadForContext(sid))
                 .extracting(MemoryMessage::role)
-                .containsExactly("user", "assistant");
-        assertThat(store.loadPage(sid, 0, 10, true))
-                .extracting(MemoryMessage::role)
-                .containsExactly("user", "assistant");
+                .containsExactly("system", "user");
+        assertThat(store.loadForContext(sid).getFirst().isSummary()).isTrue();
+        assertThat(store.loadForContext(sid).getFirst().traceId()).isEqualTo("turn-1");
     }
 
     @Test

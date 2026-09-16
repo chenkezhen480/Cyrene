@@ -19,6 +19,7 @@ public record StreamEvent(
         TOOL_CALL_START,
         TOOL_CALL_DONE,
         TOOL_OUTPUT,
+        SUBAGENT_STATUS,
         CONFIRMATION_REQUIRED,
         CONFIRMATION_RESOLVED,
         COMPRESS,
@@ -91,6 +92,15 @@ public record StreamEvent(
                 "toolName", toolName != null ? toolName : "",
                 "output", output
         ));
+    }
+
+    public static StreamEvent subAgentStatus(SubAgentLifecycleEvent event) {
+        java.util.HashMap<String, Object> metadata = new java.util.HashMap<>();
+        metadata.put("toolCallId", event.toolCallId());
+        metadata.put("status", event.status().name());
+        metadata.put("taskId", event.taskId() != null ? event.taskId() : "");
+        metadata.put("detail", event.detail());
+        return new StreamEvent(Type.SUBAGENT_STATUS, "", Map.copyOf(metadata));
     }
 
     public static StreamEvent confirmationRequired(

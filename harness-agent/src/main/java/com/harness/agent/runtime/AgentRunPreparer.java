@@ -6,6 +6,7 @@ import com.harness.agent.context.KnowledgeAccessService;
 import com.harness.agent.knowledge.KnowledgeReadTool;
 import com.harness.agent.knowledge.KnowledgeSearchTool;
 import com.harness.agent.knowledge.KnowledgeToolRuntimeContext;
+import com.harness.agent.lifecycle.AgentLifecycleHooks;
 import com.harness.agent.memory.AgentMemoryRuntime;
 import com.harness.agent.memory.AgentMemoryRuntime.CompressionOutcome;
 import com.harness.agent.memory.AgentMemoryRuntime.MemoryContext;
@@ -19,7 +20,6 @@ import com.harness.core.model.MemoryMessage;
 import com.harness.core.runtime.RunTrace;
 import com.harness.input.ProcessedInput;
 import com.harness.input.gap.GapAnalysis;
-import com.harness.input.gap.GapAnalyzer;
 import com.harness.input.multimodal.MultimodalParser;
 import com.harness.tool.builtin.WebSearchTool;
 import com.harness.tool.RunToolCatalog;
@@ -41,7 +41,7 @@ public final class AgentRunPreparer {
 
     private final AgentRuntime runtime;
     private final AgentPromptBuilder promptBuilder;
-    private final GapAnalyzer gapAnalyzer;
+    private final AgentLifecycleHooks lifecycleHooks;
     private final AgentMemoryRuntime memoryRuntime;
     private final boolean knowledgeGraphToolEnabled;
     private final LongTermKnowledgeRetriever longTermKnowledgeRetriever;
@@ -50,7 +50,7 @@ public final class AgentRunPreparer {
     public AgentRunPreparer(
             AgentRuntime runtime,
             AgentPromptBuilder promptBuilder,
-            GapAnalyzer gapAnalyzer,
+            AgentLifecycleHooks lifecycleHooks,
             AgentMemoryRuntime memoryRuntime,
             boolean knowledgeGraphToolEnabled,
             LongTermKnowledgeRetriever longTermKnowledgeRetriever,
@@ -58,7 +58,8 @@ public final class AgentRunPreparer {
     ) {
         this.runtime = runtime;
         this.promptBuilder = promptBuilder;
-        this.gapAnalyzer = gapAnalyzer;
+        this.lifecycleHooks = java.util.Objects.requireNonNull(
+                lifecycleHooks, "lifecycleHooks");
         this.memoryRuntime = memoryRuntime;
         this.knowledgeGraphToolEnabled = knowledgeGraphToolEnabled;
         this.longTermKnowledgeRetriever = longTermKnowledgeRetriever;
@@ -90,7 +91,9 @@ public final class AgentRunPreparer {
                 request.text(), input.message().attachments(), agentContext, memoryContext.sessionId());
         activateRequestContexts(agentContext, memoryContext);
 
-        GapAnalysis gapAnalysis = gapAnalyzer.analyze(enhancedText, agentContext);
+        GapAnalysis gapAnalysis = lifecycleHooks.beforeLoop(
+                new AgentLifecycleHooks.BeforeLoopContext(enhancedText, agentContext))
+                .gapAnalysis();
         GraphRequestContext graphRequestContext = agentContext.graphRequestContext();
         trace.putMetadata(gapMetadata(gapAnalysis, trace.snapshot().metadata()));
 

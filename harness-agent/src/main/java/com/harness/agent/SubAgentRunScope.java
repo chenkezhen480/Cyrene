@@ -1,6 +1,7 @@
 package com.harness.agent;
 
 import com.harness.core.model.CancellationToken;
+import com.harness.core.model.SubAgentLifecycleEvent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -10,6 +11,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 
 /**
  * Scope for sub-agent tasks within a single agent run.
@@ -40,20 +42,40 @@ public class SubAgentRunScope {
 
     // Limits - configurable via env
     private final int maxTasksPerRun;
+    private volatile Consumer<SubAgentLifecycleEvent> lifecycleListener;
 
     public SubAgentRunScope(String runId, int maxTasksPerRun) {
+        this(runId, maxTasksPerRun, event -> { });
+    }
+
+    public SubAgentRunScope(
+            String runId,
+            int maxTasksPerRun,
+            Consumer<SubAgentLifecycleEvent> lifecycleListener
+    ) {
         this.runId = runId;
         this.tasks = new ConcurrentHashMap<>();
         this.totalSpawns = new AtomicInteger(0);
         this.lastAccessedAt = Instant.now();
         this.state = new AtomicReference<>(ScopeState.OPEN);
         this.maxTasksPerRun = maxTasksPerRun;
+        this.lifecycleListener = java.util.Objects.requireNonNull(
+                lifecycleListener, "lifecycleListener");
     }
 
     public String runId() { return runId; }
     public Instant lastAccessedAt() { return lastAccessedAt; }
     public int taskCount() { return tasks.size(); }
     public ScopeState state() { return state.get(); }
+
+    public void publish(SubAgentLifecycleEvent event) {
+        try {
+            lifecycleListener.accept(event);
+        } catch (RuntimeException e) {
+            log.warn("[SubAgentScope] Lifecycle listener failed for run {}: {}",
+                    runId, e.getMessage());
+        }
+    }
 
     /**
      * Mark owner agent as finished. No new tasks can be submitted after this.
@@ -62,6 +84,7 @@ public class SubAgentRunScope {
         if (state.compareAndSet(ScopeState.OPEN, ScopeState.OWNER_FINISHED)) {
             log.debug("[SubAgentScope] Owner finished for run {}", runId);
         }
+        lifecycleListener = event -> { };
     }
 
     /**
@@ -84,6 +107,15 @@ public class SubAgentRunScope {
      * Uses atomic increment-then-check to prevent TOCTOU race on spawn limit.
      */
     public SubAgentTaskRecord registerTask(SubAgentTask task, CancellationToken taskToken, String ownerSessionId) {
+        return registerTask(task, taskToken, ownerSessionId, runId);
+    }
+
+    public SubAgentTaskRecord registerTask(
+            SubAgentTask task,
+            CancellationToken taskToken,
+            String ownerSessionId,
+            String ownerTurnId
+    ) {
         lastAccessedAt = Instant.now();
 
         if (!isOpen()) {
@@ -92,7 +124,8 @@ public class SubAgentRunScope {
         }
 
         String taskId = task.taskId();
-        SubAgentTaskRecord record = new SubAgentTaskRecord(taskId, runId, ownerSessionId, task, taskToken);
+        SubAgentTaskRecord record = new SubAgentTaskRecord(
+                taskId, runId, ownerSessionId, ownerTurnId, task, taskToken);
 
         if (tasks.putIfAbsent(taskId, record) != null) {
             log.warn("[SubAgentScope] Duplicate taskId {} in run {}", taskId, runId);

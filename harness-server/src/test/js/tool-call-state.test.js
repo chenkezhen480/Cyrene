@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { upsert } = require('../../main/resources/public/js/tool-call-state.js');
+const { upsert, upsertSubAgent } = require('../../main/resources/public/js/tool-call-state.js');
 
 test('tracks same-name calls by id and applies duplicate events idempotently', () => {
   const message = { toolCalls: [], toolCallsById: new Map() };
@@ -25,4 +25,18 @@ test('tracks same-name calls by id and applies duplicate events idempotently', (
   assert.equal(message.toolCallsById.get('call-2').outputText, 'bounded output');
   assert.equal(message.toolCallsById.get('call-2').outputTextLength, 120);
   assert.equal(message.toolCallsById.get('call-2').outputTruncated, true);
+});
+
+test('tracks sub-agent lifecycle inside its spawn tool and ignores late transitions', () => {
+  const message = { toolCalls: [], toolCallsById: new Map() };
+
+  upsert(message, { toolCallId: 'spawn-1', toolName: 'spawn_subagent', status: 'CREATED' });
+  upsertSubAgent(message, { toolCallId: 'spawn-1', status: 'PREPARING' });
+  upsertSubAgent(message, { toolCallId: 'spawn-1', taskId: 'sub-1', status: 'RUNNING' });
+  upsertSubAgent(message, { toolCallId: 'spawn-1', taskId: 'sub-1', status: 'COMPLETED' });
+  upsertSubAgent(message, { toolCallId: 'spawn-1', taskId: 'sub-1', status: 'FAILED' });
+
+  assert.deepEqual(message.toolCalls[0].subAgent, {
+    taskId: 'sub-1', status: 'COMPLETED', detail: '',
+  });
 });

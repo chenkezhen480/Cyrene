@@ -6,6 +6,8 @@ import com.harness.agent.memory.AgentMemoryRuntime;
 import com.harness.agent.memory.LongTermKnowledgeRetriever;
 import com.harness.agent.memory.PreferenceActivationContextBuilder;
 import com.harness.agent.knowledge.KnowledgeDiscoveryRouter;
+import com.harness.agent.lifecycle.AgentLifecycleHooks;
+import com.harness.agent.lifecycle.AutoRoutingHook;
 import com.harness.agent.knowledge.KnowledgeReadTool;
 import com.harness.agent.knowledge.KnowledgeSearchTool;
 import com.harness.agent.knowledge.KnowledgeToolRuntimeContext;
@@ -82,6 +84,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -116,7 +119,7 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
     private final ToolExecutor toolExecutor;
     private final TraceStore traceStore;
     private final ReplyAuditor replyAuditor;
-    private final GapAnalyzer gapAnalyzer;
+    private final AgentLifecycleHooks lifecycleHooks;
     private final GraphSettings graphSettings;
     private final GraphSchemaRegistry graphSchemaRegistry;
     private final GraphSchemaManagementService graphSchemaManagementService;
@@ -239,8 +242,10 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
         toolRegistry.register(new CancelSubAgentsTool(subAgentManager));
 
         // GapAnalyzer (动态路由)
-        this.gapAnalyzer = new GapAnalyzer(
+        GapAnalyzer gapAnalyzer = new GapAnalyzer(
                 new GapRuleEngine(), new GapModelAnalyzer(runtime.providers().smallTask()));
+        this.lifecycleHooks = new AgentLifecycleHooks(
+                List.of(new AutoRoutingHook(gapAnalyzer)), List.of());
 
         this.memoryRuntime = new AgentMemoryRuntime(
                 runtime.providers().chat(), runtime.providers().embedding(),
@@ -249,7 +254,7 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
         this.runPreparer = new AgentRunPreparer(
                 runtime,
                 promptBuilder,
-                gapAnalyzer,
+                lifecycleHooks,
                 memoryRuntime,
                 knowledgeGraphToolEnabled,
                 longTermKnowledgeRetriever,
@@ -261,7 +266,8 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
                 toolRegistry,
                 toolExecutor,
                 subAgentManager,
-                replyAuditor);
+                replyAuditor,
+                lifecycleHooks);
 
         log.info("Agent initialized: chat={}, vision={}, voice={}, embedding={}, rerank={}, smallTask={}, tools={}, memory={}",
                 runtime.providers().chat().providerName(),
@@ -548,7 +554,8 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
             String sessionId,
             CancellationToken cancellationToken,
             RunToolCatalog runToolCatalog,
-            RunTrace trace
+            RunTrace trace,
+            String turnId
     ) {
         String runId = java.util.UUID.randomUUID().toString();
         AgentRunContext runContext = new AgentRunContext(
@@ -556,7 +563,8 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
                 sessionId,
                 cancellationToken,
                 trace.traceId(),
-                runToolCatalog);
+                runToolCatalog,
+                turnId);
         subAgentManager.openScope(runId);
         SpawnSubAgentTool.setCurrentRunContext(runContext);
         Map<String, String> metadata = new HashMap<>(trace.snapshot().metadata());
@@ -737,6 +745,21 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
      * Summary rows are converted to AiMessage to preserve compressed context.
      */
     private void resumeSession(String sessionId, List<SessionInbox.SubAgentCompletedEvent> events) {
+        Map<String, List<SessionInbox.SubAgentCompletedEvent>> eventsByTurn = new LinkedHashMap<>();
+        for (SessionInbox.SubAgentCompletedEvent event : events) {
+            String turnId = event.parentTurnId() != null && !event.parentTurnId().isBlank()
+                    ? event.parentTurnId()
+                    : event.eventId();
+            eventsByTurn.computeIfAbsent(turnId, ignored -> new java.util.ArrayList<>()).add(event);
+        }
+        eventsByTurn.forEach((turnId, turnEvents) -> resumeTurn(sessionId, turnId, turnEvents));
+    }
+
+    private void resumeTurn(
+            String sessionId,
+            String turnId,
+            List<SessionInbox.SubAgentCompletedEvent> events
+    ) {
         log.info("[Orchestrator] Resuming session {} with {} events", sessionId, events.size());
 
         try {
@@ -814,10 +837,14 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
                         sessionId,
                         cancellationToken,
                         runToolCatalog,
-                        trace);
+                        trace,
+                        turnId);
 
                 // Build system prompt
-                GapAnalysis gapAnalysis = gapAnalyzer.analyze(eventMessage.toString(), resumeAgentContext);
+                GapAnalysis gapAnalysis = lifecycleHooks.beforeLoop(
+                        new AgentLifecycleHooks.BeforeLoopContext(
+                                eventMessage.toString(), resumeAgentContext))
+                        .gapAnalysis();
                 String systemPrompt = promptBuilder.buildSystemPrompt(null, sessionId,
                         gapAnalysis.needsKnowledgeBase(), false, null,
                         gapAnalysis.needsWebSearch());
@@ -837,17 +864,25 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
                         cancellationToken,
                         null,
                         null));
+                boolean completesTurn = !subAgentManager.hasDetachedTasks(resumeRunId);
+                if (completesTurn) {
+                    result = lifecycleHooks.beforeFinal(
+                            new AgentLifecycleHooks.BeforeFinalContext(sessionId, result))
+                            .result();
+                }
                 result.steps().forEach(trace::addStep);
                 recordReactStats(trace, result);
                 trace.recordOutput(result.output(), determineRisk(result), true);
 
                 // Save assistant message
                 if (userId != null) {
+                    memoryRuntime.persistSubAgentEvents(sessionId, userId, turnId, events);
+                    memoryRuntime.persistToolMessages(result, sessionId, userId, turnId);
                     List<MessageBlock> asstBlocks = List.of(new MessageBlock(MessageBlock.BlockType.TEXT,
                             result.output() != null ? result.output() : "", null));
                     memoryRuntime.persistAssistantMessage(
-                            sessionId, userId, trace.traceId(), asstBlocks, true);
-                    memoryRuntime.awaitMessageWrites(trace.traceId());
+                            sessionId, userId, turnId, asstBlocks, true, completesTurn);
+                    memoryRuntime.awaitMessageWrites(turnId);
                 }
                 trace.finish();
 
@@ -859,6 +894,9 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
 
         } catch (Exception e) {
             log.error("[Orchestrator] Failed to resume session {}: {}", sessionId, e.getMessage(), e);
+            throw e instanceof RuntimeException runtimeException
+                    ? runtimeException
+                    : new IllegalStateException("Failed to resume session " + sessionId, e);
         }
     }
 

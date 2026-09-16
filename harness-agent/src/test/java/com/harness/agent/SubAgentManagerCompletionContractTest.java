@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.harness.core.model.ArtifactStore;
 import com.harness.core.model.CancellationToken;
 import com.harness.core.model.FinalOutputContract;
+import com.harness.core.model.SubAgentLifecycleEvent;
 import com.harness.core.model.ToolSpec;
 import com.harness.core.runtime.RunTrace;
 import com.harness.core.runtime.RunTraceFactory;
@@ -23,6 +24,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -127,6 +129,42 @@ class SubAgentManagerCompletionContractTest {
             assertThat(subAgentSawParentUrl).isTrue();
         } finally {
             AuthorizedUrlContext.clear();
+            manager.shutdown();
+        }
+    }
+
+    @Test
+    void publishesRunningThenOneTerminalLifecycleEvent() throws Exception {
+        ReActLoopFactory loopFactory = mock(ReActLoopFactory.class);
+        ReActLoop loop = mock(ReActLoop.class);
+        when(loopFactory.create(any(), any())).thenReturn(loop);
+        when(loop.execute(any())).thenReturn(new ReActResult("done", List.of(), List.of()));
+        ArtifactStore artifactStore = mock(ArtifactStore.class);
+        when(artifactStore.get(any())).thenReturn(Optional.empty());
+        SubAgentManager manager = new SubAgentManager(
+                loopFactory, () -> mock(RunTrace.class), mock(ToolExecutor.class),
+                artifactStore, new SessionInbox(), mock(SessionResumeDispatcher.class),
+                mock(com.harness.provider.ChatModelProvider.class));
+        List<SubAgentLifecycleEvent> events = new CopyOnWriteArrayList<>();
+
+        try {
+            String runId = "run-lifecycle";
+            manager.openScope(runId, events::add);
+            AgentRunContext runContext = new AgentRunContext(
+                    runId, "session-1", new CancellationToken(), "parent-trace",
+                    new ToolRegistry().snapshot());
+            SubAgentTask task = new SubAgentTask(
+                    "task-1", "description", "context", "persona", "prompt",
+                    List.of(), List.of(), null);
+
+            manager.submitTask(runContext, task, "session-1", "call-1")
+                    .completion().get(5, TimeUnit.SECONDS);
+
+            assertThat(events).extracting(SubAgentLifecycleEvent::status)
+                    .containsExactly(
+                            SubAgentLifecycleEvent.Status.RUNNING,
+                            SubAgentLifecycleEvent.Status.COMPLETED);
+        } finally {
             manager.shutdown();
         }
     }

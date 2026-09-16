@@ -31,7 +31,7 @@ class SpawnSubAgentToolTest {
                 "run-1", "session-1", new CancellationToken(), null,
                 new ToolRegistry().snapshot());
         SpawnSubAgentTool.setCurrentRunContext(runContext);
-        when(manager.submitTask(eq(runContext), any(), eq("session-1")))
+        when(manager.submitTask(eq(runContext), any(), eq("session-1"), any()))
                 .thenAnswer(invocation -> {
                     SubAgentTask task = invocation.getArgument(1);
                     return new SubAgentTaskRecord(
@@ -65,7 +65,7 @@ class SpawnSubAgentToolTest {
         String response = tool.execute(arguments);
 
         ArgumentCaptor<SubAgentTask> taskCaptor = ArgumentCaptor.forClass(SubAgentTask.class);
-        verify(manager).submitTask(eq(runContext), taskCaptor.capture(), eq("session-1"));
+        verify(manager).submitTask(eq(runContext), taskCaptor.capture(), eq("session-1"), any());
         SubAgentCompletionContract contract = taskCaptor.getValue().completionContract();
         assertThat(contract.requiredSuccessfulTools()).containsExactly("report_tool");
         assertThat(contract.requiredArtifacts()).containsExactly(

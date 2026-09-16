@@ -30,7 +30,7 @@ mvn test -pl harness-agent -am -Dtest=KnowledgeGraphToolTest -Dsurefire.failIfNo
 
 # Package & run (version comes from <revision> in root pom.xml)
 mvn clean package -pl harness-server -am -DskipTests
-java -jar harness-server/target/harness-server-0.6.1.jar
+java -jar harness-server/target/harness-server.jar
 
 # Docker stack (mysql, milvus, redis, searxng, document-parser, ...)
 docker compose --env-file .env -f docker/docker-compose.yml up -d --build
@@ -44,6 +44,6 @@ Before committing: run scope-appropriate tests, `git diff --check`, and `node --
 - Tenant/credentials/knowledge/graph scope comes from trusted `context.*` at the server boundary — never from model tool arguments.
 - Each Agent run uses one immutable `RunToolCatalog` snapshot; filtering is `excluding`/`allowing` on the snapshot, never per-request registry mutation.
 - Growing lists use cursor pagination with the shared `PageResponse<T>` contract (`items` + `pageInfo` with `limit + 1` semantics).
-- Version `0.6.1` lives only in root `pom.xml` `<revision>`; do not bump or edit release notes unasked.
+- The current version lives only in root `pom.xml` `<revision>`; do not bump or edit release notes unasked.
 - Do not restore removed legacy modules (`harness-env`, `harness-preprocess`, `harness-graph`, `harness-ai`, `harness-audit`) or legacy knowledge tools (`knowledge_base_search`, `knowledge_context_read`).
 - Never use `git reset --hard` or checkout whole files; the working tree contains intentional uncommitted TODO12 work — preserve it.

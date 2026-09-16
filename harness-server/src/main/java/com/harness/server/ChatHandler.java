@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.harness.agent.AgentOrchestrator;
 import com.harness.provider.impl.CancellableHttpClient;
+import com.harness.core.env.EnvConfig;
+import com.harness.core.env.EnvKey;
 import com.harness.core.model.*;
 import com.harness.input.multimodal.MultimodalParser;
 import com.harness.server.api.ApiErrorCode;
@@ -23,10 +25,26 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 
 public class ChatHandler {
 
     private static final Logger log = LoggerFactory.getLogger(ChatHandler.class);
+
+    /**
+     * Heartbeats share one small pool rather than a single thread: a client whose presence
+     * has gone away can leave a write blocked until the socket times out, and one stuck
+     * connection must not starve every other stream's heartbeat.
+     */
+    private static final ScheduledExecutorService SSE_KEEPALIVE_EXECUTOR =
+            Executors.newScheduledThreadPool(2, r -> {
+                Thread t = new Thread(r, "sse-keepalive");
+                t.setDaemon(true);
+                return t;
+            });
     private final AgentOrchestrator agent;
     private final ApiRequestAuthenticator authenticator;
     private final ConcurrentHashMap<String, CancellationToken> activeRequests;
@@ -106,79 +124,89 @@ public class ChatHandler {
 
             try (OutputStream out = res.getOutputStream()) {
                 if (agentContext.isStreaming()) {
-                    // Streaming mode: emit tokens as SSE events in real-time
-                    agent.streamRun(finalRawToken, req.text(),
-                            req.attachments() != null ? req.attachments() : Collections.emptyList(),
-                            finalSessionId, req.systemPrompt(), cancellationToken,
-                            event -> {
-                                try {
-                                    switch (event.type()) {
-                                        case START -> {
-                                            // Register sessionId for cancellation
-                                            String sid = (String) event.metadata().get("sessionId");
-                                            if (sid != null && !sid.isEmpty() && !sid.equals(requestId)) {
-                                                activeRequests.put(sid, cancellationToken);
-                                                resolvedSessionIdRef.set(sid);
-                                            }
-                                            writeSseEvent(out, "start",
-                                                    mapper.writeValueAsString(event.metadata()));
-                                        }
-                                        case TOKEN -> writeSseEvent(out, "token",
-                                                mapper.writeValueAsString(Map.of("text", event.data())));
-                                        case TOOL_CALL_CREATED -> writeSseEvent(out, "tool_call_created",
-                                                mapper.writeValueAsString(toolEventPayload(event, true)));
-                                        case TOOL_CALL_START -> writeSseEvent(out, "tool_call_start",
-                                                mapper.writeValueAsString(toolEventPayload(event, true)));
-                                        case TOOL_CALL_DONE -> writeSseEvent(out, "tool_call_done",
-                                                mapper.writeValueAsString(toolCompletionPayload(event)));
-                                        case TOOL_OUTPUT -> writeSseEvent(out, "tool_output",
-                                                mapper.writeValueAsString(
-                                                        ToolOutputSseMapper.toPayload(event)));
-                                        case CONFIRMATION_REQUIRED -> writeSseEvent(
-                                                out,
-                                                "confirmation_required",
-                                                mapper.writeValueAsString(event.metadata()));
-                                        case CONFIRMATION_RESOLVED -> writeSseEvent(
-                                                out,
-                                                "confirmation_resolved",
-                                                mapper.writeValueAsString(event.metadata()));
-                                        case STEP -> {
-                                            // ReActStep is serialized by Jackson, extract inspection from the map
-                                            Object stepObj = event.metadata().get("step");
-                                            String inspectionStatus = "PASS";
-                                            if (stepObj instanceof java.util.Map<?,?> stepMap) {
-                                                Object insp = stepMap.get("inspection");
-                                                if (insp instanceof java.util.Map<?,?> inspMap) {
-                                                    Object status = inspMap.get("status");
-                                                    if (status != null) inspectionStatus = status.toString();
+                    ScheduledFuture<?> keepalive =
+                            startSseKeepalive(out, cancellationToken, requestId);
+                    try {
+                        // Streaming mode: emit tokens as SSE events in real-time
+                        agent.streamRun(finalRawToken, req.text(),
+                                req.attachments() != null ? req.attachments() : Collections.emptyList(),
+                                finalSessionId, req.systemPrompt(), cancellationToken,
+                                event -> {
+                                    try {
+                                        switch (event.type()) {
+                                            case START -> {
+                                                // Register sessionId for cancellation
+                                                String sid = (String) event.metadata().get("sessionId");
+                                                if (sid != null && !sid.isEmpty() && !sid.equals(requestId)) {
+                                                    activeRequests.put(sid, cancellationToken);
+                                                    resolvedSessionIdRef.set(sid);
                                                 }
-                                            } else if (stepObj instanceof com.harness.core.model.ReActStep step) {
-                                                var insp = step.inspection();
-                                                if (insp != null) inspectionStatus = insp.status().name();
+                                                writeSseEvent(out, "start",
+                                                        mapper.writeValueAsString(event.metadata()));
                                             }
-                                            writeSseEvent(out, "step",
-                                                    mapper.writeValueAsString(Map.of("status", inspectionStatus)));
+                                            case TOKEN -> writeSseEvent(out, "token",
+                                                    mapper.writeValueAsString(Map.of("text", event.data())));
+                                            case TOOL_CALL_CREATED -> writeSseEvent(out, "tool_call_created",
+                                                    mapper.writeValueAsString(toolEventPayload(event, true)));
+                                            case TOOL_CALL_START -> writeSseEvent(out, "tool_call_start",
+                                                    mapper.writeValueAsString(toolEventPayload(event, true)));
+                                            case TOOL_CALL_DONE -> writeSseEvent(out, "tool_call_done",
+                                                    mapper.writeValueAsString(toolCompletionPayload(event)));
+                                            case TOOL_OUTPUT -> writeSseEvent(out, "tool_output",
+                                                    mapper.writeValueAsString(
+                                                            ToolOutputSseMapper.toPayload(event)));
+                                            case SUBAGENT_STATUS -> writeSseEvent(
+                                                    out,
+                                                    "subagent_status",
+                                                    mapper.writeValueAsString(event.metadata()));
+                                            case CONFIRMATION_REQUIRED -> writeSseEvent(
+                                                    out,
+                                                    "confirmation_required",
+                                                    mapper.writeValueAsString(event.metadata()));
+                                            case CONFIRMATION_RESOLVED -> writeSseEvent(
+                                                    out,
+                                                    "confirmation_resolved",
+                                                    mapper.writeValueAsString(event.metadata()));
+                                            case STEP -> {
+                                                // ReActStep is serialized by Jackson, extract inspection from the map
+                                                Object stepObj = event.metadata().get("step");
+                                                String inspectionStatus = "PASS";
+                                                if (stepObj instanceof java.util.Map<?,?> stepMap) {
+                                                    Object insp = stepMap.get("inspection");
+                                                    if (insp instanceof java.util.Map<?,?> inspMap) {
+                                                        Object status = inspMap.get("status");
+                                                        if (status != null) inspectionStatus = status.toString();
+                                                    }
+                                                } else if (stepObj instanceof com.harness.core.model.ReActStep step) {
+                                                    var insp = step.inspection();
+                                                    if (insp != null) inspectionStatus = insp.status().name();
+                                                }
+                                                writeSseEvent(out, "step",
+                                                        mapper.writeValueAsString(Map.of("status", inspectionStatus)));
+                                            }
+                                            case COMPRESS -> writeSseEvent(out, "compress",
+                                                    mapper.writeValueAsString(Map.of(
+                                                            "mode", event.metadata().get("mode"),
+                                                            "detail", event.data())));
+                                            case DONE -> {
+                                                Map<String, Object> donePayload = new java.util.HashMap<>(event.metadata());
+                                                donePayload.put("output", event.data() != null ? event.data() : "");
+                                                writeSseEvent(out, "done", mapper.writeValueAsString(donePayload));
+                                                completedNormally.set(true);
+                                            }
+                                            case CANCELLED -> writeSseEvent(out, "cancelled",
+                                                    mapper.writeValueAsString(Map.of("message", event.data())));
+                                            case ERROR -> writeSseEvent(out, "error",
+                                                    mapper.writeValueAsString(Map.of("error", event.data())));
                                         }
-                                        case COMPRESS -> writeSseEvent(out, "compress",
-                                                mapper.writeValueAsString(Map.of(
-                                                        "mode", event.metadata().get("mode"),
-                                                        "detail", event.data())));
-                                        case DONE -> {
-                                            Map<String, Object> donePayload = new java.util.HashMap<>(event.metadata());
-                                            donePayload.put("output", event.data() != null ? event.data() : "");
-                                            writeSseEvent(out, "done", mapper.writeValueAsString(donePayload));
-                                            completedNormally.set(true);
-                                        }
-                                        case CANCELLED -> writeSseEvent(out, "cancelled",
-                                                mapper.writeValueAsString(Map.of("message", event.data())));
-                                        case ERROR -> writeSseEvent(out, "error",
-                                                mapper.writeValueAsString(Map.of("error", event.data())));
+                                    } catch (IOException e) {
+                                        log.debug("[Server] Failed to write SSE event: {}", e.getMessage());
+                                        cancellationToken.cancel();
                                     }
-                                } catch (IOException e) {
-                                    log.debug("[Server] Failed to write SSE event: {}", e.getMessage());
-                                    cancellationToken.cancel();
-                                }
-                            }, thinkingLevel, contextUserId, agentContext);
+                                }, thinkingLevel, contextUserId, agentContext);
+                    } finally {
+                        keepalive.cancel(false);
+                    }
                 } else {
                     // Blocking mode: run agent
                     AgentResult result = agent.run(finalRawToken, req.text(),
@@ -270,6 +298,42 @@ public class ChatHandler {
         synchronized (out) {
             out.write(("event: " + eventType + "\n").getBytes(StandardCharsets.UTF_8));
             out.write(("data: " + data + "\n\n").getBytes(StandardCharsets.UTF_8));
+            out.flush();
+        }
+    }
+
+    /**
+     * Emits transport-level heartbeats for the lifetime of the run. A long tool call
+     * (image generation, document parsing) writes no business events for minutes, and
+     * with no bytes on the wire the client cannot tell a busy server from a dead one —
+     * it aborts, which then cancels the run. The comment frame is invisible to the
+     * client's SSE parser, it only proves the stream is alive.
+     */
+    private ScheduledFuture<?> startSseKeepalive(
+            OutputStream out, CancellationToken cancellationToken, String requestId) {
+        long seconds = EnvConfig.get().getInt(EnvKey.SSE_KEEPALIVE_SECONDS, 15);
+        return SSE_KEEPALIVE_EXECUTOR.scheduleAtFixedRate(() -> {
+            if (cancellationToken.isCancelled()) {
+                return;
+            }
+            try {
+                writeSseKeepalive(out);
+            } catch (IOException e) {
+                // No retry: a failed write means the peer is gone, which is a cancel
+                // signal, not a transient error. isCancelled() also guards the log so
+                // a disconnect is reported once, not once per interval.
+                if (!cancellationToken.isCancelled()) {
+                    log.info("[Server] SSE keepalive detected client disconnect: requestId={}, cause={}",
+                            requestId, e.getMessage());
+                    cancellationToken.cancel();
+                }
+            }
+        }, seconds, seconds, TimeUnit.SECONDS);
+    }
+
+    private static void writeSseKeepalive(OutputStream out) throws IOException {
+        synchronized (out) {
+            out.write(": keepalive\n\n".getBytes(StandardCharsets.UTF_8));
             out.flush();
         }
     }

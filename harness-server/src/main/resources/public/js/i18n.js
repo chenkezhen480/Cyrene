@@ -61,7 +61,7 @@ const messages = {
     enterCyrene: '进入 Cyrene', expandSidebar: '展开侧边栏', collapseSidebar: '收起侧边栏',
     inTimeRipples: '在时间的涟漪中', clickToEditUserId: '点击修改用户 ID', unset: '未设置',
     // ChatPage
-    setUserIdFirst: '请先设置用户 ID', majorCompress: '大压缩', minorCompress: '小压缩',
+    setUserIdFirst: '请先设置用户 ID', majorCompress: 'Turn 压缩',
     unknownError: '未知错误', requestFailed: '请求失败', invalidStreamEvent: '流事件格式无效',
     streamIdleTimeout: '服务端长时间没有响应，已中断本次请求',
     streamInterrupted: '响应流已结束，但未收到完成事件，本次请求已中断',
@@ -369,7 +369,7 @@ const messages = {
     enterCyrene: 'Enter Cyrene', expandSidebar: 'Expand sidebar', collapseSidebar: 'Collapse sidebar',
     inTimeRipples: 'In the ripples of time', clickToEditUserId: 'Click to edit User ID', unset: 'Not set',
     // ChatPage
-    setUserIdFirst: 'Please set your User ID first', majorCompress: 'Major compress', minorCompress: 'Minor compress',
+    setUserIdFirst: 'Please set your User ID first', majorCompress: 'Turn compression',
     unknownError: 'Unknown error', requestFailed: 'Request failed', invalidStreamEvent: 'Invalid stream event',
     streamIdleTimeout: 'The server stopped responding; this request was interrupted.',
     streamInterrupted: 'The response stream ended without a completion event; this request was interrupted.',

@@ -107,4 +107,16 @@ class StreamEventTest {
                 .containsEntry("output", output);
     }
 
+    @Test
+    void subAgentStatus_keepsParentToolCorrelationAndTypedStatus() {
+        var event = StreamEvent.subAgentStatus(new SubAgentLifecycleEvent(
+                "call-9", "sub-1", SubAgentLifecycleEvent.Status.RUNNING, ""));
+
+        assertThat(event.type()).isEqualTo(StreamEvent.Type.SUBAGENT_STATUS);
+        assertThat(event.metadata())
+                .containsEntry("toolCallId", "call-9")
+                .containsEntry("taskId", "sub-1")
+                .containsEntry("status", "RUNNING");
+    }
+
 }

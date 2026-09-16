@@ -8,6 +8,14 @@
     FAILED: new Set(),
     CANCELLED: new Set(),
   };
+  const subAgentTransitions = {
+    PREPARING: new Set(['RUNNING', 'FAILED', 'CANCELLED', 'TIMED_OUT']),
+    RUNNING: new Set(['COMPLETED', 'FAILED', 'CANCELLED', 'TIMED_OUT']),
+    COMPLETED: new Set(),
+    FAILED: new Set(),
+    CANCELLED: new Set(),
+    TIMED_OUT: new Set(),
+  };
 
   function canTransition(currentStatus, nextStatus) {
     if (!Object.hasOwn(transitions, nextStatus)) {
@@ -67,7 +75,27 @@
     return JSON.stringify(argumentsValue, null, 2);
   }
 
-  const api = { upsert, formatArguments };
+  function upsertSubAgent(message, payload) {
+    const toolCall = upsert(message, {
+      toolCallId: payload.toolCallId,
+      toolName: 'spawn_subagent',
+      status: 'CREATED',
+    });
+    const current = toolCall.subAgent?.status;
+    const allowed = current === payload.status
+      || (!current && Object.hasOwn(subAgentTransitions, payload.status))
+      || subAgentTransitions[current]?.has(payload.status);
+    if (!allowed) return toolCall.subAgent;
+    toolCall.subAgent = {
+      ...(toolCall.subAgent || {}),
+      taskId: payload.taskId || toolCall.subAgent?.taskId || '',
+      status: payload.status,
+      detail: payload.detail || '',
+    };
+    return toolCall.subAgent;
+  }
+
+  const api = { upsert, upsertSubAgent, formatArguments };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   root.CyreneToolCalls = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

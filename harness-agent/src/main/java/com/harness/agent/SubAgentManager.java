@@ -11,6 +11,7 @@ import com.harness.react.ReActRequest;
 import com.harness.react.ReActResult;
 import com.harness.core.model.CancellationToken;
 import com.harness.core.model.FinalOutputContract;
+import com.harness.core.model.SubAgentLifecycleEvent;
 import com.harness.core.model.RiskLevel;
 import com.harness.core.runtime.RunTrace;
 import com.harness.core.runtime.RunTraceFactory;
@@ -31,6 +32,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
 
 /**
  * Manages sub-agent lifecycle with per-run isolation.
@@ -127,7 +129,15 @@ public class SubAgentManager {
      * Open a new scope for a run. Called by AgentOrchestrator at the start of each request.
      */
     public SubAgentRunScope openScope(String runId) {
-        SubAgentRunScope scope = new SubAgentRunScope(runId, maxTasksPerRun);
+        return openScope(runId, event -> { });
+    }
+
+    public SubAgentRunScope openScope(
+            String runId,
+            Consumer<SubAgentLifecycleEvent> lifecycleListener
+    ) {
+        SubAgentRunScope scope = new SubAgentRunScope(
+                runId, maxTasksPerRun, lifecycleListener);
         scopes.put(runId, scope);
         log.debug("[SubAgentManager] Opened scope for run {}", runId);
         return scope;
@@ -176,6 +186,14 @@ public class SubAgentManager {
         return scopes.get(runId);
     }
 
+    public boolean hasDetachedTasks(String runId) {
+        SubAgentRunScope scope = scopes.get(runId);
+        return scope != null && scope.getAllTasks().values().stream()
+                .map(record -> record.deliveryState().get())
+                .anyMatch(state -> state == ResultDeliveryState.DETACHED
+                        || state == ResultDeliveryState.SESSION_RESUMED);
+    }
+
     /**
      * Generate a unique task ID.
      */
@@ -190,6 +208,15 @@ public class SubAgentManager {
      * @return the task record, or null if submission failed
      */
     public SubAgentTaskRecord submitTask(AgentRunContext runContext, SubAgentTask task, String sessionId) {
+        return submitTask(runContext, task, sessionId, null);
+    }
+
+    public SubAgentTaskRecord submitTask(
+            AgentRunContext runContext,
+            SubAgentTask task,
+            String sessionId,
+            String toolCallId
+    ) {
         String runId = runContext.runId();
         SubAgentRunScope scope = scopes.get(runId);
 
@@ -210,13 +237,14 @@ public class SubAgentManager {
         CancellationToken taskToken = CancellationToken.createChild(parentToken);
 
         // Register task in scope
-        SubAgentTaskRecord record = scope.registerTask(task, taskToken, sessionId);
+        SubAgentTaskRecord record = scope.registerTask(
+                task, taskToken, sessionId, runContext.turnId());
         if (record == null) {
             return null;  // Scope not open, spawn limit reached, or duplicate
         }
 
         // Execute async
-        executeTask(runContext, record);
+        executeTask(runContext, scope, record, toolCallId);
 
         return record;
     }
@@ -224,7 +252,12 @@ public class SubAgentManager {
     /**
      * Execute a task asynchronously with timeout.
      */
-    private void executeTask(AgentRunContext runContext, SubAgentTaskRecord record) {
+    private void executeTask(
+            AgentRunContext runContext,
+            SubAgentRunScope scope,
+            SubAgentTaskRecord record,
+            String toolCallId
+    ) {
         // Capture credentials from parent thread
         final Map<String, String> parentCredentials = HttpApiTool.getCurrentCredentialsSnapshot();
         final KnowledgeGraphTool.ContextSnapshot graphContext =
@@ -260,6 +293,8 @@ public class SubAgentManager {
                 activeTasks.decrementAndGet();
                 return record.completion().join();
             }
+            publishLifecycle(scope, toolCallId, record,
+                    SubAgentLifecycleEvent.Status.RUNNING, "");
 
             log.debug("[SubAgentManager] Executing task: id={}, activeTasks={}", taskId, activeTasks.get());
 
@@ -315,6 +350,7 @@ public class SubAgentManager {
                             taskId, result.output(), evaluation, duration, subTraceId);
                     record.markIncomplete(subResult);
                 }
+                publishTerminal(scope, toolCallId, record, subResult);
                 return subResult;
 
             } catch (Exception e) {
@@ -324,9 +360,11 @@ public class SubAgentManager {
                 if (record.isCancelRequested() || taskToken.isCancelled()) {
                     log.info("[SubAgentManager] Task {} cancelled after {}ms", taskId, duration);
                     record.markCancelled();
-                    return SubAgentResult.failure(
+                    SubAgentResult cancelled = SubAgentResult.failure(
                             taskId, "Cancelled", duration,
                             record.task().completionContract() != null);
+                    publishTerminal(scope, toolCallId, record, cancelled);
+                    return cancelled;
                 }
 
                 log.error("[SubAgentManager] Task {} failed in {}ms: {}", taskId, duration, e.getMessage());
@@ -334,6 +372,7 @@ public class SubAgentManager {
                         taskId, e.getMessage(), duration,
                         record.task().completionContract() != null);
                 record.fail(failResult);
+                publishTerminal(scope, toolCallId, record, failResult);
                 return failResult;
 
             } finally {
@@ -359,6 +398,8 @@ public class SubAgentManager {
                           log.warn("[SubAgentManager] Task {} timed out after {}s", record.taskId(), taskTimeoutSeconds);
                           record.markTimedOut();
                           record.taskCancellationToken().cancel();
+                          publishTerminal(scope, toolCallId, record,
+                                  record.storedResult());
                           // If detached, submit timeout event to session inbox
                           if (record.isDetached() && record.ownerSessionId() != null) {
                               SubAgentResult timeoutResult = SubAgentResult.failure(
@@ -403,6 +444,53 @@ public class SubAgentManager {
         });
     }
 
+    public void publishLifecycle(String runId, SubAgentLifecycleEvent event) {
+        SubAgentRunScope scope = scopes.get(runId);
+        if (scope != null) {
+            scope.publish(event);
+        }
+    }
+
+    private static void publishLifecycle(
+            SubAgentRunScope scope,
+            String toolCallId,
+            SubAgentTaskRecord record,
+            SubAgentLifecycleEvent.Status status,
+            String detail
+    ) {
+        if (toolCallId == null || toolCallId.isBlank()) {
+            return;
+        }
+        scope.publish(new SubAgentLifecycleEvent(
+                toolCallId, record.taskId(), status, detail));
+    }
+
+    private static void publishTerminal(
+            SubAgentRunScope scope,
+            String toolCallId,
+            SubAgentTaskRecord record,
+            SubAgentResult result
+    ) {
+        if (toolCallId == null || toolCallId.isBlank()
+                || !record.markLifecycleTerminalPublished()) {
+            return;
+        }
+        SubAgentLifecycleEvent.Status status = switch (record.status().get()) {
+            case SUCCEEDED -> SubAgentLifecycleEvent.Status.COMPLETED;
+            case CANCELLED -> SubAgentLifecycleEvent.Status.CANCELLED;
+            case TIMED_OUT -> SubAgentLifecycleEvent.Status.TIMED_OUT;
+            case INCOMPLETE, FAILED -> SubAgentLifecycleEvent.Status.FAILED;
+            default -> throw new IllegalStateException(
+                    "Sub-agent terminal event requires terminal task status");
+        };
+        String detail = result != null && result.error() != null
+                ? result.error()
+                : status == SubAgentLifecycleEvent.Status.FAILED
+                        ? "Sub-agent did not complete successfully"
+                        : "";
+        publishLifecycle(scope, toolCallId, record, status, detail);
+    }
+
     /**
      * Submit a completion event to the session inbox and trigger resume.
      * Uses CAS to ensure each task only submits one event (DETACHED → SESSION_RESUMED).
@@ -422,6 +510,7 @@ public class SubAgentManager {
                 sessionId,
                 record.taskId(),
                 record.task().description(),
+                record.ownerTurnId(),
                 result,
                 java.time.Instant.now(),
                 SessionInbox.SubAgentCompletedEvent.EventStatus.PENDING

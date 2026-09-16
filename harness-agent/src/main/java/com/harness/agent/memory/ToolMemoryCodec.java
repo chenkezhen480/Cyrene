@@ -68,6 +68,10 @@ final class ToolMemoryCodec {
         }
         metadata.put(TOOL_CALL_ID_KEY, result.toolCallId());
         metadata.put(TOOL_NAME_KEY, result.toolName());
+        metadata.put("status", result.executionStatus().name());
+        if (result.error() != null) {
+            metadata.put("error", result.error());
+        }
         blocks.set(0, new MessageBlock(
                 first.type(), first.text(), first.artifactId(), Map.copyOf(metadata)));
         return List.copyOf(blocks);
@@ -84,7 +88,8 @@ final class ToolMemoryCodec {
             }
             switch (message.role()) {
                 case "user" -> chatMessages.add(UserMessage.from(modelText));
-                case "assistant" -> chatMessages.add(AiMessage.from(modelText));
+                case "assistant", "assistant_partial" ->
+                        chatMessages.add(AiMessage.from(modelText));
                 case TOOL_CALL_ROLE -> chatMessages.add(decodeCalls(message));
                 case TOOL_RESULT_ROLE -> chatMessages.add(decodeResult(message));
                 default -> {

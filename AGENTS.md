@@ -17,7 +17,7 @@ Provider
 
 Keep framework code domain-neutral. Domain models, tenant identity sources, authorization, and graph semantics belong to the integrating system. Existing-system APIs use user credentials from trusted `context.credentials`; authorization remains the business system's responsibility.
 
-The root `pom.xml` `revision` is the only version source. Current version: `0.6.1`. Do not change it or release notes unless explicitly requested.
+The root `pom.xml` `revision` is the only current-version source. Do not change it or release notes unless explicitly requested.
 
 ### Version 0.5.10 implementation notes
 
@@ -56,7 +56,7 @@ mvn clean test -Dmaven.compiler.fork=true -DskipITs
 mvn test -pl harness-agent,harness-server -am -DskipITs
 mvn test -pl harness-agent -am -Dtest=KnowledgeGraphToolTest -Dsurefire.failIfNoSpecifiedTests=false -DskipITs
 mvn clean package -pl harness-server -am -DskipTests
-java -jar harness-server/target/harness-server-0.6.1.jar
+java -jar harness-server/target/harness-server.jar
 ```
 
 Quote complex or comma-containing `-D...` arguments in PowerShell. Before committing, run scope-appropriate tests plus:
