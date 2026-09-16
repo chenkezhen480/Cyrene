@@ -20,22 +20,12 @@ public final class SessionCacheMetrics {
         DATABASE
     }
 
-    public enum EvictionReason {
-        TTL,
-        USER_COUNT,
-        USER_BYTES,
-        GLOBAL_BYTES,
-        EXPLICIT
-    }
-
     private final String backend;
     private final boolean enabled;
     private final EnumMap<SessionCacheLookup.Outcome, LongAdder> lookups =
             new EnumMap<>(SessionCacheLookup.Outcome.class);
     private final EnumMap<LoadSource, LatencyAccumulator> loadLatencies =
             new EnumMap<>(LoadSource.class);
-    private final EnumMap<EvictionReason, LongAdder> evictions =
-            new EnumMap<>(EvictionReason.class);
     private final LongAdder refills = new LongAdder();
 
     public SessionCacheMetrics(String backend) {
@@ -50,9 +40,6 @@ public final class SessionCacheMetrics {
         }
         for (LoadSource source : LoadSource.values()) {
             loadLatencies.put(source, new LatencyAccumulator());
-        }
-        for (EvictionReason reason : EvictionReason.values()) {
-            evictions.put(reason, new LongAdder());
         }
     }
 
@@ -82,13 +69,7 @@ public final class SessionCacheMetrics {
         }
     }
 
-    public void recordEviction(EvictionReason reason) {
-        if (enabled) {
-            evictions.get(reason).increment();
-        }
-    }
-
-    public Snapshot snapshot(int activeSessions, long estimatedBytes) {
+    public Snapshot snapshot(int activeSessions) {
         EnumMap<SessionCacheLookup.Outcome, Long> lookupTotals =
                 new EnumMap<>(SessionCacheLookup.Outcome.class);
         lookups.forEach((key, value) -> lookupTotals.put(key, value.sum()));
@@ -97,18 +78,12 @@ public final class SessionCacheMetrics {
                 new EnumMap<>(LoadSource.class);
         loadLatencies.forEach((key, value) -> latencySnapshots.put(key, value.snapshot()));
 
-        EnumMap<EvictionReason, Long> evictionTotals =
-                new EnumMap<>(EvictionReason.class);
-        evictions.forEach((key, value) -> evictionTotals.put(key, value.sum()));
-
         return new Snapshot(
                 backend,
                 Map.copyOf(lookupTotals),
                 Map.copyOf(latencySnapshots),
                 refills.sum(),
-                Map.copyOf(evictionTotals),
-                activeSessions,
-                estimatedBytes);
+                activeSessions);
     }
 
     public record LatencySnapshot(long count, long totalMs, long maxMs) {
@@ -122,9 +97,7 @@ public final class SessionCacheMetrics {
             Map<SessionCacheLookup.Outcome, Long> lookupTotals,
             Map<LoadSource, LatencySnapshot> loadLatencies,
             long refillTotal,
-            Map<EvictionReason, Long> evictionTotals,
-            int activeSessions,
-            long estimatedBytes
+            int activeSessions
     ) {
     }
 

@@ -196,4 +196,4 @@ Email 2: cken48153@gmail.com
 
 ## License
 
-[MIT License](./LICENSE). Third-party dependencies remain subject to their respective licenses.
+[Apache License 2.0](./LICENSE). Third-party dependencies remain subject to their respective licenses.

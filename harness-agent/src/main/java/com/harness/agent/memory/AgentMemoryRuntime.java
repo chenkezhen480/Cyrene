@@ -47,6 +47,31 @@ public final class AgentMemoryRuntime {
 
     private static final Logger log = LoggerFactory.getLogger(AgentMemoryRuntime.class);
 
+    /**
+     * Per-session single-writer guards, striped by session hash.
+     *
+     * <p>One continuation — a run or a sub-agent resume — must write a session's transcript from
+     * its first message to its last before another one starts. The cache backends make each
+     * individual append atomic ({@code RPUSH} under a Lua existence check); this makes the
+     * continuation atomic. Without it two writers interleave and the history reads back as an
+     * assistant tool call whose results are separated by the other writer's messages, which
+     * every OpenAI-compatible provider rejects.
+     *
+     * <p>Static and striped on purpose: the transcript it guards is process-global, and a fixed
+     * stripe count bounds the pool without eviction — a collision only serializes two unrelated
+     * sessions, it never corrupts one.
+     */
+    private static final int SESSION_WRITE_STRIPES = 64;
+    private static final Object[] SESSION_WRITE_LOCKS = newSessionWriteLocks();
+
+    private static Object[] newSessionWriteLocks() {
+        Object[] stripes = new Object[SESSION_WRITE_STRIPES];
+        for (int i = 0; i < stripes.length; i++) {
+            stripes[i] = new Object();
+        }
+        return stripes;
+    }
+
     private final boolean enabled;
     private final ChatModelProvider chatModel;
     private final SessionStore sessionStore;
@@ -242,7 +267,7 @@ public final class AgentMemoryRuntime {
         List<MessageBlock> blocks = List.of(
                 new MessageBlock(MessageBlock.BlockType.TEXT, text, null));
         messageWriteWorker.submit(sessionId, rootTraceId, "user", blocks, false);
-        messageCache.append(
+        messageCache.appendIfPresent(
                 sessionId,
                 userId,
                 new MemoryMessage(0, sessionId, rootTraceId, "user", blocks, false, null));
@@ -275,7 +300,7 @@ public final class AgentMemoryRuntime {
         }
         String role = completesTurn ? "assistant" : "assistant_partial";
         messageWriteWorker.submit(sessionId, rootTraceId, role, blocks, false);
-        messageCache.append(
+        messageCache.appendIfPresent(
                 sessionId,
                 userId,
                 new MemoryMessage(0, sessionId, rootTraceId, role, blocks, false, null));
@@ -437,6 +462,24 @@ public final class AgentMemoryRuntime {
         }
     }
 
+    /**
+     * Runs {@code action} holding this session's single-writer guard. Callers wrap a whole
+     * continuation tail — persist the tool round, persist the assistant message, await the
+     * writes — so the next continuation only enters once the transcript is stable at the store,
+     * not merely at the cache.
+     *
+     * <p>ponytail: guards the write tail, not the run. A continuation that loaded history before
+     * another writer committed still builds its prompt from a stale tail. Widen the guard to the
+     * whole ReAct loop if that ever surfaces.
+     */
+    public static void withSessionWriteLock(String sessionId, Runnable action) {
+        Object lock = SESSION_WRITE_LOCKS[
+                Math.floorMod(sessionId.hashCode(), SESSION_WRITE_STRIPES)];
+        synchronized (lock) {
+            action.run();
+        }
+    }
+
     public void shutdown() {
         if (indexOutboxWorker != null) {
             indexOutboxWorker.stop();
@@ -460,7 +503,7 @@ public final class AgentMemoryRuntime {
         if (messageWriteWorker != null) {
             messageWriteWorker.submit(sessionId, rootTraceId, role, blocks, false);
         }
-        messageCache.append(
+        messageCache.appendIfPresent(
                 sessionId,
                 userId,
                 new MemoryMessage(0, sessionId, rootTraceId, role, blocks, false, null));

@@ -36,7 +36,7 @@ The root `pom.xml` `revision` is the only current-version source. Do not change 
 - SearXNG uses `HARNESS_TOOL_WEB_SEARCH_ENGINES` as the request-level engine-selection source. Bing keeps the configured higher weight, engine failures are diagnostic metadata rather than user-facing result text, secrets are supplied or generated at deployment, and the container, health check, internal URL, and host mapping consistently use port `8888`.
 - Trusted knowledge and graph request scopes are removed from untrusted HTTP context input and rebuilt at the server boundary. Model arguments cannot widen trusted tenant, graph, schema, subject, query, or knowledge scope.
 - The management UI reads the exact `PageResponse<T>` contract, supports responsive collection/file-name search and load-more interaction, and renders asynchronous failures explicitly.
-- Project licensing is MIT. Third-party libraries, images, services, and container images retain their own license terms.
+- Project licensing is Apache License 2.0. Third-party libraries, images, services, and container images retain their own license terms.
 
 ## Before Editing
 

@@ -83,9 +83,9 @@ class SessionContextLoaderTest {
 
         loader.load("s1", "u1", trace);
 
-        assertThat(metrics.snapshot(0, 0).lookupTotals()
+        assertThat(metrics.snapshot(0).lookupTotals()
                 .get(SessionCacheLookup.Outcome.ERROR)).isEqualTo(1);
-        assertThat(metrics.snapshot(0, 0).refillTotal()).isZero();
+        assertThat(metrics.snapshot(0).refillTotal()).isZero();
         ArgumentCaptor<Map<String, String>> metadata = ArgumentCaptor.forClass(Map.class);
         verify(trace).putMetadata(metadata.capture());
         assertThat(metadata.getValue())

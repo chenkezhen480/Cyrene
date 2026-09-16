@@ -1,0 +1,606 @@
+[INFO] Scanning for projects...
+[INFO] ------------------------------------------------------------------------
+[INFO] Reactor Build Order:
+[INFO] 
+[INFO] Cyrene Agent                                                       [pom]
+[INFO] Cyrene Core                                                        [jar]
+[INFO] Cyrene Provider                                                    [jar]
+[INFO] Cyrene Input                                                       [jar]
+[INFO] 
+[INFO] ---------------------< com.harness:harness-agent >----------------------
+[INFO] Building Cyrene Agent 0.6.2                                        [1/4]
+[INFO]   from pom.xml
+[INFO] --------------------------------[ pom ]---------------------------------
+[INFO] 
+[INFO] --- jacoco:0.8.12:prepare-agent (prepare-agent) @ harness-agent ---
+[INFO] argLine set to -javaagent:C:\\Users\\17685\\.m2\\repository\\org\\jacoco\\org.jacoco.agent\\0.8.12\\org.jacoco.agent-0.8.12-runtime.jar=destfile=C:\\projects\\ZhiDuYuan\\agent\\Cyrene-Agent\\target\\jacoco.exec
+[INFO] 
+[INFO] --- flatten:1.6.0:flatten (flatten) @ harness-agent ---
+[INFO] Generating flattened POM of project com.harness:harness-agent:pom:0.6.2...
+[INFO] 
+[INFO] --- jacoco:0.8.12:report (report) @ harness-agent ---
+[INFO] Skipping JaCoCo execution due to missing execution data file.
+[INFO] 
+[INFO] ----------------------< com.harness:harness-core >----------------------
+[INFO] Building Cyrene Core 0.6.2                                         [2/4]
+[INFO]   from harness-core\pom.xml
+[INFO] --------------------------------[ jar ]---------------------------------
+[INFO] 
+[INFO] --- jacoco:0.8.12:prepare-agent (prepare-agent) @ harness-core ---
+[INFO] argLine set to -javaagent:C:\\Users\\17685\\.m2\\repository\\org\\jacoco\\org.jacoco.agent\\0.8.12\\org.jacoco.agent-0.8.12-runtime.jar=destfile=C:\\projects\\ZhiDuYuan\\agent\\Cyrene-Agent\\harness-core\\target\\jacoco.exec
+[INFO] 
+[INFO] --- resources:3.3.1:resources (default-resources) @ harness-core ---
+[INFO] skip non existing resourceDirectory C:\projects\ZhiDuYuan\agent\Cyrene-Agent\harness-core\src\main\resources
+[INFO] 
+[INFO] --- flatten:1.6.0:flatten (flatten) @ harness-core ---
+[INFO] Generating flattened POM of project com.harness:harness-core:jar:0.6.2...
+[INFO] 
+[INFO] --- compiler:3.12.1:compile (default-compile) @ harness-core ---
+[INFO] Nothing to compile - all classes are up to date.
+[INFO] 
+[INFO] --- resources:3.3.1:testResources (default-testResources) @ harness-core ---
+[INFO] skip non existing resourceDirectory C:\projects\ZhiDuYuan\agent\Cyrene-Agent\harness-core\src\test\resources
+[INFO] 
+[INFO] --- compiler:3.12.1:testCompile (default-testCompile) @ harness-core ---
+[INFO] Nothing to compile - all classes are up to date.
+[INFO] 
+[INFO] --- surefire:3.2.3:test (default-test) @ harness-core ---
+[INFO] 
+[INFO] --- jacoco:0.8.12:report (report) @ harness-core ---
+[INFO] Loading execution data file C:\projects\ZhiDuYuan\agent\Cyrene-Agent\harness-core\target\jacoco.exec
+[INFO] Analyzed bundle 'Cyrene Core' with 115 classes
+[INFO] 
+[INFO] --------------------< com.harness:harness-provider >--------------------
+[INFO] Building Cyrene Provider 0.6.2                                     [3/4]
+[INFO]   from harness-provider\pom.xml
+[INFO] --------------------------------[ jar ]---------------------------------
+[INFO] 
+[INFO] --- jacoco:0.8.12:prepare-agent (prepare-agent) @ harness-provider ---
+[INFO] argLine set to -javaagent:C:\\Users\\17685\\.m2\\repository\\org\\jacoco\\org.jacoco.agent\\0.8.12\\org.jacoco.agent-0.8.12-runtime.jar=destfile=C:\\projects\\ZhiDuYuan\\agent\\Cyrene-Agent\\harness-provider\\target\\jacoco.exec
+[INFO] 
+[INFO] --- resources:3.3.1:resources (default-resources) @ harness-provider ---
+[INFO] Copying 1 resource from src\main\resources to target\classes
+[INFO] 
+[INFO] --- flatten:1.6.0:flatten (flatten) @ harness-provider ---
+[INFO] Generating flattened POM of project com.harness:harness-provider:jar:0.6.2...
+[INFO] 
+[INFO] --- compiler:3.12.1:compile (default-compile) @ harness-provider ---
+[INFO] Nothing to compile - all classes are up to date.
+[INFO] 
+[INFO] --- resources:3.3.1:testResources (default-testResources) @ harness-provider ---
+[INFO] skip non existing resourceDirectory C:\projects\ZhiDuYuan\agent\Cyrene-Agent\harness-provider\src\test\resources
+[INFO] 
+[INFO] --- compiler:3.12.1:testCompile (default-testCompile) @ harness-provider ---
+[INFO] Nothing to compile - all classes are up to date.
+[INFO] 
+[INFO] --- surefire:3.2.3:test (default-test) @ harness-provider ---
+[INFO] 
+[INFO] --- jacoco:0.8.12:report (report) @ harness-provider ---
+[INFO] Loading execution data file C:\projects\ZhiDuYuan\agent\Cyrene-Agent\harness-provider\target\jacoco.exec
+[INFO] Analyzed bundle 'Cyrene Provider' with 56 classes
+[INFO] 
+[INFO] ---------------------< com.harness:harness-input >----------------------
+[INFO] Building Cyrene Input 0.6.2                                        [4/4]
+[INFO]   from harness-input\pom.xml
+[INFO] --------------------------------[ jar ]---------------------------------
+[INFO] 
+[INFO] --- jacoco:0.8.12:prepare-agent (prepare-agent) @ harness-input ---
+[INFO] argLine set to -javaagent:C:\\Users\\17685\\.m2\\repository\\org\\jacoco\\org.jacoco.agent\\0.8.12\\org.jacoco.agent-0.8.12-runtime.jar=destfile=C:\\projects\\ZhiDuYuan\\agent\\Cyrene-Agent\\harness-input\\target\\jacoco.exec
+[INFO] 
+[INFO] --- resources:3.3.1:resources (default-resources) @ harness-input ---
+[INFO] skip non existing resourceDirectory C:\projects\ZhiDuYuan\agent\Cyrene-Agent\harness-input\src\main\resources
+[INFO] 
+[INFO] --- flatten:1.6.0:flatten (flatten) @ harness-input ---
+[INFO] Generating flattened POM of project com.harness:harness-input:jar:0.6.2...
+[INFO] 
+[INFO] --- compiler:3.12.1:compile (default-compile) @ harness-input ---
+[INFO] Nothing to compile - all classes are up to date.
+[INFO] 
+[INFO] --- resources:3.3.1:testResources (default-testResources) @ harness-input ---
+[INFO] skip non existing resourceDirectory C:\projects\ZhiDuYuan\agent\Cyrene-Agent\harness-input\src\test\resources
+[INFO] 
+[INFO] --- compiler:3.12.1:testCompile (default-testCompile) @ harness-input ---
+[INFO] Nothing to compile - all classes are up to date.
+[INFO] 
+[INFO] --- surefire:3.2.3:test (default-test) @ harness-input ---
+[INFO] Using auto detected provider org.apache.maven.surefire.junitplatform.JUnitPlatformProvider
+[INFO] 
+[INFO] -------------------------------------------------------
+[INFO]  T E S T S
+[INFO] -------------------------------------------------------
+[INFO] Running com.harness.input.memory.RedisSessionMessageCacheIT
+SLF4J(W): No SLF4J providers were found.
+SLF4J(W): Defaulting to no-operation (NOP) logger implementation
+SLF4J(W): See https://www.slf4j.org/codes.html#noProviders for further details.
+[ERROR] Tests run: 15, Failures: 1, Errors: 0, Skipped: 0, Time elapsed: 2.060 s <<< FAILURE! -- in com.harness.input.memory.RedisSessionMessageCacheIT
+[ERROR] com.harness.input.memory.RedisSessionMessageCacheIT.concurrentAppendsToTheSameSession_loseNothing -- Time elapsed: 0.384 s <<< FAILURE!
+java.lang.AssertionError: 
+
+Expected size: 321 but was: 223 in:
+[MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=start, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.858978900Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-0, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.869503700Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-1, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.874466600Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-0, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.869503700Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-2, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.876468300Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-1, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.878466800Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-2, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.880469600Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-3, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.879468300Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t4-0, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.869503700Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t5-0, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.869503700Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-3, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.882472400Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-4, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.882472400Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t5-1, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.884466700Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t1-13, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.884466700Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-4, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.884466700Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-5, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.885468900Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t4-26, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.898938700Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-5, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.898938700Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t5-2, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.896277100Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-6, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.900562800Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t6-0, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.869503700Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t2-0, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.869503700Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t1-16, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.901800700Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t0-0, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.869503700Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-6, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.901800700Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t5-3, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.901800700Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t4-29, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.902438Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-7, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.902438Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t6-1, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.902438Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t1-17, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.903207800Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t5-4, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.903207800Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t0-1, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.903207800Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-7, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.903207800Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t6-2, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.903888600Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t4-30, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.903888600Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-8, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.904394400Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t0-2, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.904909800Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-8, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.904909800Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t5-5, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.904909800Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t1-18, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.904909800Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-9, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.905960300Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t6-3, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.905960300Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t4-31, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.905960300Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t2-7, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.906483600Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-9, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.906483600Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t1-19, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.906483600Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t0-3, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.906483600Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t6-4, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.907662200Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-10, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.907662200Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t4-32, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.907662200Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t0-4, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.908320100Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-10, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.908320100Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t2-8, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.908320100Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t1-20, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.908320100Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-11, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.908320100Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t4-33, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.908320100Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t6-5, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.908320100Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t5-11, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.910070400Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t1-21, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.910070400Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-11, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.910070400Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t0-5, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.910070400Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-12, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.910070400Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t4-34, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.910576900Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t6-6, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.910576900Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t4-35, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.911583100Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t0-6, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.911583100Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t1-22, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.910576900Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t2-11, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.910576900Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-12, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.911583100Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-13, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.911583100Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t6-7, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.912584400Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t4-36, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.913091700Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-14, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.914099700Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t2-12, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.913091700Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t0-7, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.914099700Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t1-23, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.914099700Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-13, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.914099700Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t4-37, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.914099700Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t6-8, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.915098100Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t1-24, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.915098100Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t4-38, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.916099200Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t2-13, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.915098100Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t5-18, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.915098100Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-15, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.915098100Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-14, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.916099200Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t2-14, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.917743900Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t6-9, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.917099200Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t4-39, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.917743900Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t0-10, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.917743900Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-16, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.918253500Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t2-15, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.919299300Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t5-19, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.918253500Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t6-10, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.919803900Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t0-11, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.919803900Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t1-26, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.919803900Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-17, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.919803900Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t2-16, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.920809500Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-16, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.920809500Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t6-11, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.921592400Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t1-27, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.921592400Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t0-12, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.921592400Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-17, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.922100800Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t5-22, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.922100800Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t1-28, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.923091Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-18, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.922100800Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t2-17, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.922100800Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t0-13, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.923091Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-18, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.924314500Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t5-23, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.924314500Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t2-18, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.924314500Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t1-29, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.924314500Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-19, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.924314500Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t0-14, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.924946900Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t5-24, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.926195Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-19, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.926195Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t1-30, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.926195Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-20, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.926195Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t2-19, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.926195Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t5-25, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.927949600Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t0-15, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.927413400Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t2-20, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.927949600Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-21, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.927949600Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-20, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.927949600Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t1-31, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.927949600Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t5-26, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.929346400Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t0-16, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.929346400Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t2-21, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.929653800Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-21, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.929653800Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t1-32, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.929653800Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-22, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.929653800Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t5-27, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.930717900Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t0-17, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.930717900Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-23, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.931263100Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-22, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.930717900Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t2-22, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.931263100Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t1-33, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.931263100Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t5-28, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.932379500Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t0-18, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.932379500Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-24, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.932379500Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t1-34, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.932379500Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t2-23, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.933388900Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t5-29, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.933388900Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-23, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.933388900Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t0-19, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.934902200Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t1-35, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.934902200Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-25, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.934902200Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t2-24, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.936189300Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-24, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.935681700Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t5-30, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.936189300Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t0-20, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.936527100Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t1-36, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.937033Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-26, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.937033Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-25, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.937033Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t5-31, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.938040500Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t2-25, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.937033Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t1-37, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.938559400Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t0-21, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.938559400Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-27, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.938559400Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-26, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.939621500Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t2-26, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.939621500Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t5-32, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.939621500Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-28, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.940208500Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t0-22, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.940208500Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t6-31, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.940208500Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t2-27, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.941363Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t5-33, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.941363Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-27, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.941363Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t6-32, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.942812900Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-29, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.942812900Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t0-23, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.942812900Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t5-34, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.943870700Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-28, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.943870700Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t2-28, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.943870700Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-30, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.944526400Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t0-24, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.944526400Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t6-33, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.944526400Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-29, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.945067800Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t2-29, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.945067800Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t5-35, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.945067800Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t0-25, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.946133600Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-31, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.946133600Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t6-34, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.946133600Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t5-36, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.947246Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-30, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.947246Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t2-30, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.947246Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-32, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.947770600Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t6-35, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.947770600Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t0-26, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.947770600Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t0-27, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.948858Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t2-31, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.948858Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-33, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.948858Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t6-36, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.948858Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-31, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.948858Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t5-37, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.948858Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t5-38, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.950684600Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t2-32, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.950684600Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-32, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.950684600Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t0-28, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.951217100Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-34, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.950684600Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-33, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.954152700Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t5-39, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.954152700Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t0-29, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.954152700Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-35, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.954152700Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t2-33, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.955393600Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t0-30, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.956544900Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-34, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.956544900Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-36, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.956544900Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t2-34, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.957553700Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t0-31, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.957553700Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-35, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.957553700Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-37, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.957553700Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t0-32, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.958553500Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-38, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.958553500Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-36, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.958553500Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t2-35, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.958553500Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t2-36, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.960553200Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-37, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.960553200Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-39, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.960553200Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t2-37, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.963288900Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-38, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.963288900Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t2-38, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.964893500Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-39, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.964893500Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t2-39, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.966921200Z]]
+	at com.harness.input.memory.RedisSessionMessageCacheIT.concurrentAppendsToTheSameSession_loseNothing(RedisSessionMessageCacheIT.java:175)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+
+[INFO] 
+[INFO] Results:
+[INFO] 
+[ERROR] Failures: 
+[ERROR]   RedisSessionMessageCacheIT.concurrentAppendsToTheSameSession_loseNothing:175 
+Expected size: 321 but was: 223 in:
+[MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=start, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.858978900Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-0, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.869503700Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-1, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.874466600Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-0, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.869503700Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-2, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.876468300Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-1, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.878466800Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-2, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.880469600Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-3, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.879468300Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t4-0, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.869503700Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t5-0, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.869503700Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-3, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.882472400Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-4, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.882472400Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t5-1, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.884466700Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t1-13, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.884466700Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-4, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.884466700Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-5, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.885468900Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t4-26, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.898938700Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-5, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.898938700Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t5-2, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.896277100Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-6, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.900562800Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t6-0, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.869503700Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t2-0, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.869503700Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t1-16, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.901800700Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t0-0, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.869503700Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-6, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.901800700Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t5-3, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.901800700Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t4-29, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.902438Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-7, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.902438Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t6-1, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.902438Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t1-17, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.903207800Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t5-4, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.903207800Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t0-1, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.903207800Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-7, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.903207800Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t6-2, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.903888600Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t4-30, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.903888600Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-8, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.904394400Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t0-2, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.904909800Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-8, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.904909800Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t5-5, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.904909800Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t1-18, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.904909800Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-9, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.905960300Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t6-3, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.905960300Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t4-31, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.905960300Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t2-7, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.906483600Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-9, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.906483600Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t1-19, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.906483600Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t0-3, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.906483600Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t6-4, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.907662200Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-10, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.907662200Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t4-32, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.907662200Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t0-4, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.908320100Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-10, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.908320100Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t2-8, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.908320100Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t1-20, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.908320100Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-11, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.908320100Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t4-33, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.908320100Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t6-5, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.908320100Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t5-11, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.910070400Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t1-21, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.910070400Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-11, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.910070400Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t0-5, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.910070400Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-12, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.910070400Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t4-34, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.910576900Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t6-6, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.910576900Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t4-35, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.911583100Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t0-6, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.911583100Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t1-22, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.910576900Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t2-11, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.910576900Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-12, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.911583100Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-13, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.911583100Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t6-7, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.912584400Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t4-36, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.913091700Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-14, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.914099700Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t2-12, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.913091700Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t0-7, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.914099700Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t1-23, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.914099700Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-13, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.914099700Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t4-37, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.914099700Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t6-8, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.915098100Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t1-24, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.915098100Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t4-38, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.916099200Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t2-13, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.915098100Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t5-18, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.915098100Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-15, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.915098100Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-14, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.916099200Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t2-14, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.917743900Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t6-9, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.917099200Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t4-39, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.917743900Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t0-10, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.917743900Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-16, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.918253500Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t2-15, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.919299300Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t5-19, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.918253500Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t6-10, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.919803900Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t0-11, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.919803900Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t1-26, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.919803900Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-17, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.919803900Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t2-16, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.920809500Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-16, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.920809500Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t6-11, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.921592400Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t1-27, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.921592400Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t0-12, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.921592400Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-17, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.922100800Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t5-22, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.922100800Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t1-28, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.923091Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-18, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.922100800Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t2-17, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.922100800Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t0-13, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.923091Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-18, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.924314500Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t5-23, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.924314500Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t2-18, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.924314500Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t1-29, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.924314500Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-19, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.924314500Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t0-14, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.924946900Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t5-24, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.926195Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-19, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.926195Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t1-30, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.926195Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-20, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.926195Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t2-19, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.926195Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t5-25, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.927949600Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t0-15, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.927413400Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t2-20, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.927949600Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-21, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.927949600Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-20, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.927949600Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t1-31, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.927949600Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t5-26, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.929346400Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t0-16, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.929346400Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t2-21, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.929653800Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-21, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.929653800Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t1-32, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.929653800Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-22, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.929653800Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t5-27, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.930717900Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t0-17, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.930717900Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-23, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.931263100Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-22, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.930717900Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t2-22, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.931263100Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t1-33, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.931263100Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t5-28, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.932379500Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t0-18, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.932379500Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-24, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.932379500Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t1-34, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.932379500Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t2-23, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.933388900Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t5-29, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.933388900Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-23, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.933388900Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t0-19, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.934902200Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t1-35, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.934902200Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-25, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.934902200Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t2-24, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.936189300Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-24, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.935681700Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t5-30, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.936189300Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t0-20, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.936527100Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t1-36, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.937033Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-26, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.937033Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-25, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.937033Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t5-31, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.938040500Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t2-25, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.937033Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t1-37, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.938559400Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t0-21, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.938559400Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-27, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.938559400Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-26, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.939621500Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t2-26, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.939621500Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t5-32, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.939621500Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-28, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.940208500Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t0-22, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.940208500Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t6-31, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.940208500Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t2-27, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.941363Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t5-33, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.941363Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-27, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.941363Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t6-32, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.942812900Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-29, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.942812900Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t0-23, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.942812900Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t5-34, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.943870700Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-28, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.943870700Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t2-28, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.943870700Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-30, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.944526400Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t0-24, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.944526400Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t6-33, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.944526400Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-29, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.945067800Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t2-29, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.945067800Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t5-35, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.945067800Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t0-25, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.946133600Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-31, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.946133600Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t6-34, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.946133600Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t5-36, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.947246Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-30, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.947246Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t2-30, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.947246Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-32, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.947770600Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t6-35, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.947770600Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t0-26, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.947770600Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t0-27, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.948858Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t2-31, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.948858Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-33, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.948858Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t6-36, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.948858Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-31, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.948858Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t5-37, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.948858Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t5-38, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.950684600Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t2-32, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.950684600Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-32, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.950684600Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t0-28, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.951217100Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-34, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.950684600Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-33, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.954152700Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t5-39, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.954152700Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t0-29, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.954152700Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-35, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.954152700Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t2-33, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.955393600Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t0-30, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.956544900Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-34, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.956544900Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-36, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.956544900Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t2-34, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.957553700Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t0-31, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.957553700Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-35, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.957553700Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-37, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.957553700Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t0-32, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.958553500Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-38, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.958553500Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-36, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.958553500Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t2-35, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.958553500Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t2-36, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.960553200Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-37, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.960553200Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t3-39, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.960553200Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t2-37, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.963288900Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-38, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.963288900Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t2-38, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.964893500Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t7-39, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.964893500Z],
+    MemoryMessage[id=0, sessionId=null, traceId=null, role=user, content=[MessageBlock[type=TEXT, text=t2-39, artifactId=null, metadata=null]], isSummary=false, createdAt=2026-09-16T08:55:45.966921200Z]]
+[INFO] 
+[ERROR] Tests run: 15, Failures: 1, Errors: 0, Skipped: 0
+[INFO] 
+[INFO] ------------------------------------------------------------------------
+[INFO] Reactor Summary for Cyrene Agent 0.6.2:
+[INFO] 
+[INFO] Cyrene Agent ....................................... SUCCESS [  0.504 s]
+[INFO] Cyrene Core ........................................ SUCCESS [  1.208 s]
+[INFO] Cyrene Provider .................................... SUCCESS [  0.437 s]
+[INFO] Cyrene Input ....................................... FAILURE [  3.649 s]
+[INFO] ------------------------------------------------------------------------
+[INFO] BUILD FAILURE
+[INFO] ------------------------------------------------------------------------
+[INFO] Total time:  6.010 s
+[INFO] Finished at: 2026-09-16T16:55:46+08:00
+[INFO] ------------------------------------------------------------------------
+[ERROR] Failed to execute goal org.apache.maven.plugins:maven-surefire-plugin:3.2.3:test (default-test) on project harness-input: There are test failures.
+[ERROR] 
+[ERROR] Please refer to C:\projects\ZhiDuYuan\agent\Cyrene-Agent\harness-input\target\surefire-reports for the individual test results.
+[ERROR] Please refer to dump files (if any exist) [date].dump, [date]-jvmRun[N].dump and [date].dumpstream.
+[ERROR] -> [Help 1]
+[ERROR] 
+[ERROR] To see the full stack trace of the errors, re-run Maven with the -e switch.
+[ERROR] Re-run Maven using the -X switch to enable full debug logging.
+[ERROR] 
+[ERROR] For more information about the errors and possible solutions, please read the following articles:
+[ERROR] [Help 1] http://cwiki.apache.org/confluence/display/MAVEN/MojoFailureException
+[ERROR] 
+[ERROR] After correcting the problems, you can resume the build with the command
+[ERROR]   mvn <args> -rf :harness-input

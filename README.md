@@ -195,4 +195,4 @@ java -jar harness-server/target/harness-server.jar
 
 ## 许可证
 
-[MIT License](./LICENSE)。项目依赖的第三方组件继续适用其各自许可证。
+[Apache License 2.0](./LICENSE)。项目依赖的第三方组件继续适用其各自许可证。

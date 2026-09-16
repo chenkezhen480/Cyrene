@@ -148,16 +148,13 @@ public final class AgentRunCoordinator {
                     text,
                     result.output(),
                     !(finalOutputContract instanceof FinalOutputContract.JsonSchema));
-            memoryRuntime.persistToolMessages(
-                    result, prepared.sessionId(), prepared.userId(), trace.traceId());
             boolean confirmationRequired = requiresConfirmation(result);
             RiskLevel risk = determineRisk(result);
             trace.recordOutput(result.output(), risk, !confirmationRequired);
             scheduleReplyAudit(trace, result.output(), true);
-            memoryRuntime.persistAssistantMessage(
-                    prepared.sessionId(), prepared.userId(), trace.traceId(), assistantBlocks, true,
-                    completesTurn);
-            memoryRuntime.awaitMessageWrites(trace.traceId());
+            persistContinuationTail(
+                    result, prepared.sessionId(), prepared.userId(), trace.traceId(),
+                    assistantBlocks, completesTurn, true);
 
             AgentTrace agentTrace = trace.finish();
             log.info("Run complete: sessionId={}, steps={}, duration={}ms",
@@ -244,8 +241,6 @@ public final class AgentRunCoordinator {
 
             List<MessageBlock> assistantBlocks = finishAssistantBlocks(
                     blocks, text, result.output(), false);
-            memoryRuntime.persistToolMessages(
-                    result, prepared.sessionId(), prepared.userId(), trace.traceId());
             boolean confirmationRequired = requiresConfirmation(result);
             ConfirmationDecision decision = confirmationDecision.get();
             RiskLevel risk = decision != null ? RiskLevel.HIGH : determineRisk(result);
@@ -254,10 +249,9 @@ public final class AgentRunCoordinator {
                     : !confirmationRequired;
             trace.recordOutput(result.output(), risk, userConfirmed);
             scheduleReplyAudit(trace, result.output(), false);
-            memoryRuntime.persistAssistantMessage(
-                    prepared.sessionId(), prepared.userId(), trace.traceId(), assistantBlocks, false,
-                    completesTurn);
-            memoryRuntime.awaitMessageWrites(trace.traceId());
+            persistContinuationTail(
+                    result, prepared.sessionId(), prepared.userId(), trace.traceId(),
+                    assistantBlocks, completesTurn, false);
             finishTraceAsync(trace);
             memoryRuntime.updateActivityAsync(prepared.sessionId());
 
@@ -301,6 +295,28 @@ public final class AgentRunCoordinator {
         } finally {
             closeRunScope(runId);
         }
+    }
+
+    /**
+     * Persists one continuation's tail as a unit: tool round, assistant message, then wait for
+     * both to land. Held under the session's single-writer guard so a concurrent resume cannot
+     * slot its messages between a tool call and its results.
+     */
+    private void persistContinuationTail(
+            ReActResult result,
+            String sessionId,
+            String userId,
+            String traceId,
+            List<MessageBlock> assistantBlocks,
+            boolean completesTurn,
+            boolean updateActivity
+    ) {
+        AgentMemoryRuntime.withSessionWriteLock(sessionId, () -> {
+            memoryRuntime.persistToolMessages(result, sessionId, userId, traceId);
+            memoryRuntime.persistAssistantMessage(
+                    sessionId, userId, traceId, assistantBlocks, updateActivity, completesTurn);
+            memoryRuntime.awaitMessageWrites(traceId);
+        });
     }
 
     private static AgentRunRequest toRequest(AgentRunCommand command, boolean updateActivity) {

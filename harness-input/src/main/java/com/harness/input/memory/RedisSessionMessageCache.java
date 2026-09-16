@@ -1,6 +1,5 @@
 package com.harness.input.memory;
 
-import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
@@ -11,51 +10,67 @@ import com.harness.core.env.RedisConnectionPool;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import redis.clients.jedis.Jedis;
+import redis.clients.jedis.Transaction;
+import redis.clients.jedis.params.ScanParams;
+import redis.clients.jedis.resps.ScanResult;
 
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
 import java.util.function.Consumer;
 
 /**
- * Redis-backed distributed session message cache.
- * Uses Redis for cross-instance cache sharing with native TTL expiration.
- * All operations are best-effort — on Redis failure, degrades to cache-miss (DB fallback).
+ * Redis-backed session message cache with native sliding TTL.
+ *
+ * <p>The message store is the single source of truth: this cache only makes reloading a
+ * session's history cheaper. Every read and write refreshes the key's TTL, so an actively used
+ * session stays resident and an idle one disappears on its own — Redis is the only thing that
+ * removes entries. There is no LRU, no per-user quota and no memory accounting; memory pressure
+ * is Redis' own concern ({@code maxmemory} / {@code maxmemory-policy}).
+ *
+ * <p>A session is stored as a Redis list, one message per element, rather than one JSON array.
+ * Appending is then a native {@code RPUSH} guarded by a Lua script instead of a
+ * read-modify-write over the whole history: two threads appending to the same session can no
+ * longer lose one another's message, and a reader can never observe a partially written
+ * history. Both matter here — a lost or truncated element leaves an assistant tool call without
+ * its results, which every OpenAI-compatible provider rejects.
+ *
+ * <p>All operations are best-effort: on Redis failure the cache degrades to a miss and the
+ * caller reloads from the store.
  */
 public class RedisSessionMessageCache implements SessionMessageCache {
 
     private static final Logger log = LoggerFactory.getLogger(RedisSessionMessageCache.class);
-    private static final long BYTES_PER_MESSAGE = 2500;
 
     private static final ObjectMapper MAPPER = new ObjectMapper()
             .registerModule(new JavaTimeModule())
             .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
 
-    private static final TypeReference<List<MemoryMessage>> MSG_LIST_TYPE = new TypeReference<>() {};
+    /**
+     * Appends only when the key already exists, and refreshes its TTL. Atomic: the existence
+     * check and the write cannot be split, so a concurrent rebuild cannot be appended into and
+     * a missing entry is never resurrected as a one-message tail.
+     */
+    private static final String APPEND_IF_PRESENT_SCRIPT =
+            "if redis.call('EXISTS', KEYS[1]) == 1 then\n"
+                    + "  redis.call('RPUSH', KEYS[1], ARGV[1])\n"
+                    + "  redis.call('EXPIRE', KEYS[1], ARGV[2])\n"
+                    + "  return 1\n"
+                    + "end\n"
+                    + "return 0";
 
     private final String prefix;
     private final int ttlSeconds;
-    private final int maxSessionsPerUser;
-    private final long maxMemoryBytesPerUser;
-    private final long globalMaxMemoryBytes;
-    private final double evictionTargetRatio;
     private final SessionCacheMetrics metrics = new SessionCacheMetrics("redis");
 
     private Consumer<String> onEvict;
-
-    // Debounce: skip enforcePerUserLimits if recently enforced for the same user
-    private volatile String lastEnforcedUserId;
-    private volatile long lastEnforcedTime;
 
     public RedisSessionMessageCache() {
         EnvConfig cfg = EnvConfig.get();
         this.prefix = cfg.getString(EnvKey.MEMORY_REDIS_KEY_PREFIX, "harness");
         this.ttlSeconds = cfg.getInt(EnvKey.MEMORY_REDIS_TTL_MINUTES, 720) * 60;
-        this.maxSessionsPerUser = cfg.getInt(EnvKey.CACHE_MAX_SESSIONS_PER_USER, 10);
-        this.maxMemoryBytesPerUser = (long) cfg.getInt(EnvKey.CACHE_MAX_MB_PER_USER, 2) * 1024 * 1024;
-        this.globalMaxMemoryBytes = (long) cfg.getInt(EnvKey.CACHE_MAX_MB_GLOBAL, 4096) * 1024 * 1024;
-        this.evictionTargetRatio = cfg.getInt(EnvKey.CACHE_EVICTION_TARGET_RATIO, 50) / 100.0;
-
-        log.info("[Cache] RedisSessionMessageCache initialized: prefix={}, ttl={}s, maxPerUser={}, maxMBPerUser={}, globalMaxMB={}",
-                prefix, ttlSeconds, maxSessionsPerUser, maxMemoryBytesPerUser / (1024 * 1024), globalMaxMemoryBytes / (1024 * 1024));
+        log.info("[Cache] RedisSessionMessageCache initialized: prefix={}, ttl={}s", prefix, ttlSeconds);
     }
 
     @Override
@@ -66,17 +81,19 @@ public class RedisSessionMessageCache implements SessionMessageCache {
     @Override
     public SessionCacheLookup lookup(String sessionId) {
         try (Jedis jedis = RedisConnectionPool.getConnection()) {
-            String json = jedis.get(msgKey(sessionId));
-            if (json == null) {
+            List<String> elements = jedis.lrange(msgKey(sessionId), 0, -1);
+            if (elements.isEmpty()) {
                 return SessionCacheLookup.miss();
             }
-
-            List<MemoryMessage> messages = MAPPER.readValue(json, MSG_LIST_TYPE);
-            // Update access time
-            jedis.zadd(accessKey(), System.currentTimeMillis(), sessionId);
+            // Sliding TTL: a read is a use, so keep the entry alive.
+            jedis.expire(msgKey(sessionId), ttlSeconds);
+            List<MemoryMessage> messages = new ArrayList<>(elements.size());
+            for (String element : elements) {
+                messages.add(MAPPER.readValue(element, MemoryMessage.class));
+            }
             return SessionCacheLookup.hit(messages);
         } catch (Exception e) {
-            log.warn("[Cache] getIfPresent failed for session {}: {}", sessionId, e.getMessage());
+            log.warn("[Cache] lookup failed for session {}: {}", sessionId, e.getMessage());
             return SessionCacheLookup.error();
         }
     }
@@ -94,46 +111,21 @@ public class RedisSessionMessageCache implements SessionMessageCache {
     @Override
     public boolean putObserved(String sessionId, String userId, List<MemoryMessage> messages) {
         try (Jedis jedis = RedisConnectionPool.getConnection()) {
-            // Calculate old bytes if session already exists
-            long oldBytes = 0;
-            String existingUserId = jedis.hget(metaKey(sessionId), "userId");
-            String oldBytesStr = jedis.hget(metaKey(sessionId), "bytes");
-            if (oldBytesStr != null) {
-                oldBytes = Long.parseLong(oldBytesStr);
+            String[] elements = new String[messages.size()];
+            for (int i = 0; i < messages.size(); i++) {
+                elements[i] = MAPPER.writeValueAsString(messages.get(i));
             }
-
-            long newBytes = (long) messages.size() * BYTES_PER_MESSAGE;
-
-            // Store messages with TTL
-            String json = MAPPER.writeValueAsString(new ArrayList<>(messages));
-            jedis.setex(msgKey(sessionId), ttlSeconds, json);
-
-            // Store metadata with same TTL
-            jedis.hset(metaKey(sessionId), Map.of("userId", userId, "bytes", String.valueOf(newBytes)));
-            jedis.expire(metaKey(sessionId), ttlSeconds);
-
-            // Track user sessions
-            jedis.sadd(userSessionsKey(userId), sessionId);
-
-            // Update access time
-            jedis.zadd(accessKey(), System.currentTimeMillis(), sessionId);
-
-            // Update byte counters (delta)
-            long delta = newBytes - oldBytes;
-            if (delta != 0) {
-                jedis.incrBy(globalBytesKey(), delta);
+            // Replace-then-fill must not be observable halfway: a reader that saw the deletion
+            // without the refill would rebuild the entry from the store, and one that saw a
+            // partial fill would cache a truncated history.
+            Transaction transaction = jedis.multi();
+            transaction.del(msgKey(sessionId));
+            if (elements.length > 0) {
+                transaction.rpush(msgKey(sessionId), elements);
+                transaction.expire(msgKey(sessionId), ttlSeconds);
             }
-            // Adjust old user's bytes if user changed
-            if (existingUserId != null && !existingUserId.equals(userId) && oldBytes > 0) {
-                jedis.decrBy(userBytesKey(existingUserId), oldBytes);
-                jedis.srem(userSessionsKey(existingUserId), sessionId);
-            }
-            jedis.incrBy(userBytesKey(userId), newBytes - (existingUserId != null && existingUserId.equals(userId) ? oldBytes : 0));
-
-            // Enforce limits
-            enforcePerUserLimits(jedis, userId);
-            enforceGlobalMemoryLimit(jedis);
-            return jedis.exists(msgKey(sessionId));
+            transaction.exec();
+            return elements.length > 0;
         } catch (Exception e) {
             log.warn("[Cache] put failed for session {}: {}", sessionId, e.getMessage());
             return false;
@@ -141,40 +133,18 @@ public class RedisSessionMessageCache implements SessionMessageCache {
     }
 
     @Override
-    public void append(String sessionId, String userId, MemoryMessage message) {
+    public void appendIfPresent(String sessionId, String userId, MemoryMessage message) {
         try (Jedis jedis = RedisConnectionPool.getConnection()) {
-            // Fetch current messages
-            String json = jedis.get(msgKey(sessionId));
-            List<MemoryMessage> messages;
-            if (json != null) {
-                messages = MAPPER.readValue(json, MSG_LIST_TYPE);
-            } else {
-                messages = new ArrayList<>();
-            }
-
-            messages.add(message);
-
-            // Re-store with refreshed TTL
-            String newJson = MAPPER.writeValueAsString(messages);
-            jedis.setex(msgKey(sessionId), ttlSeconds, newJson);
-
-            // Update metadata
-            jedis.hset(metaKey(sessionId), Map.of("userId", userId, "bytes", String.valueOf((long) messages.size() * BYTES_PER_MESSAGE)));
-            jedis.expire(metaKey(sessionId), ttlSeconds);
-
-            // Track user sessions
-            jedis.sadd(userSessionsKey(userId), sessionId);
-
-            // Update access time
-            jedis.zadd(accessKey(), System.currentTimeMillis(), sessionId);
-
-            // Update byte counters
-            jedis.incrBy(userBytesKey(userId), BYTES_PER_MESSAGE);
-            jedis.incrBy(globalBytesKey(), BYTES_PER_MESSAGE);
-
-            // Enforce limits
-            enforcePerUserLimits(jedis, userId);
-            enforceGlobalMemoryLimit(jedis);
+            // A miss must stay a miss. Rebuilding the entry from this one message would publish
+            // a history that starts mid-conversation — for a Tool round that means tool results
+            // with no declaring assistant message, which every OpenAI-compatible provider
+            // rejects with "Messages with role 'tool' must be a response to a preceding message
+            // with 'tool_calls'". Leaving the key absent lets the next lookup() reload the full
+            // history from the store.
+            jedis.eval(
+                    APPEND_IF_PRESENT_SCRIPT,
+                    Collections.singletonList(msgKey(sessionId)),
+                    Arrays.asList(MAPPER.writeValueAsString(message), String.valueOf(ttlSeconds)));
         } catch (Exception e) {
             log.warn("[Cache] append failed for session {}: {}", sessionId, e.getMessage());
         }
@@ -183,11 +153,17 @@ public class RedisSessionMessageCache implements SessionMessageCache {
     @Override
     public void remove(String sessionId) {
         try (Jedis jedis = RedisConnectionPool.getConnection()) {
-            evictSessionInternal(
-                    jedis,
-                    sessionId,
-                    true,
-                    SessionCacheMetrics.EvictionReason.EXPLICIT);
+            if (jedis.del(msgKey(sessionId)) == 0) {
+                return;
+            }
+            log.debug("[Cache] Dropped session: {}", sessionId);
+            if (onEvict != null) {
+                try {
+                    onEvict.accept(sessionId);
+                } catch (Exception e) {
+                    log.warn("[Cache] onEvict callback failed for session {}: {}", sessionId, e.getMessage());
+                }
+            }
         } catch (Exception e) {
             log.warn("[Cache] remove failed for session {}: {}", sessionId, e.getMessage());
         }
@@ -196,7 +172,15 @@ public class RedisSessionMessageCache implements SessionMessageCache {
     @Override
     public int size() {
         try (Jedis jedis = RedisConnectionPool.getConnection()) {
-            return (int) jedis.zcard(accessKey());
+            String cursor = ScanParams.SCAN_POINTER_START;
+            ScanParams params = new ScanParams().match(msgKey("*")).count(200);
+            int count = 0;
+            do {
+                ScanResult<String> page = jedis.scan(cursor, params);
+                count += page.getResult().size();
+                cursor = page.getCursor();
+            } while (!ScanParams.SCAN_POINTER_START.equals(cursor));
+            return count;
         } catch (Exception e) {
             log.warn("[Cache] size failed: {}", e.getMessage());
             return 0;
@@ -205,39 +189,8 @@ public class RedisSessionMessageCache implements SessionMessageCache {
 
     @Override
     public int evictExpired() {
-        try (Jedis jedis = RedisConnectionPool.getConnection()) {
-            // Find sessions whose msg key no longer exists (expired by TTL)
-            List<String> allSessions = new ArrayList<>(jedis.zrange(accessKey(), 0, -1));
-            int evicted = 0;
-            for (String sid : allSessions) {
-                if (!jedis.exists(msgKey(sid))) {
-                    evictSessionInternal(
-                            jedis,
-                            sid,
-                            true,
-                            SessionCacheMetrics.EvictionReason.TTL);
-                    evicted++;
-                }
-            }
-            if (evicted > 0) {
-                log.info("[Cache] Evicted {} expired sessions (TTL={}s)", evicted, ttlSeconds);
-            }
-            return evicted;
-        } catch (Exception e) {
-            log.warn("[Cache] evictExpired failed: {}", e.getMessage());
-            return 0;
-        }
-    }
-
-    @Override
-    public long getGlobalEstimatedBytes() {
-        try (Jedis jedis = RedisConnectionPool.getConnection()) {
-            String val = jedis.get(globalBytesKey());
-            return val != null ? Long.parseLong(val) : 0;
-        } catch (Exception e) {
-            log.warn("[Cache] getGlobalEstimatedBytes failed: {}", e.getMessage());
-            return 0;
-        }
+        // Redis expires keys on its own; nothing to sweep.
+        return 0;
     }
 
     @Override
@@ -245,165 +198,7 @@ public class RedisSessionMessageCache implements SessionMessageCache {
         return metrics;
     }
 
-    // ========== Internal ==========
-
-    private void evictSessionInternal(
-            Jedis jedis,
-            String sessionId,
-            boolean notifyEvict,
-            SessionCacheMetrics.EvictionReason reason
-    ) {
-        // Get metadata before deletion
-        Double accessScore = jedis.zscore(accessKey(), sessionId);
-        String userId = jedis.hget(metaKey(sessionId), "userId");
-        String bytesStr = jedis.hget(metaKey(sessionId), "bytes");
-        long freed = bytesStr != null ? Long.parseLong(bytesStr) : 0;
-
-        // Delete msg and meta keys
-        jedis.del(msgKey(sessionId));
-        jedis.del(metaKey(sessionId));
-
-        // Remove from tracking structures
-        jedis.zrem(accessKey(), sessionId);
-        if (userId != null) {
-            jedis.srem(userSessionsKey(userId), sessionId);
-            if (freed > 0) {
-                jedis.decrBy(userBytesKey(userId), freed);
-            }
-        }
-        if (freed > 0) {
-            jedis.decrBy(globalBytesKey(), freed);
-        }
-
-        if (accessScore != null || userId != null || bytesStr != null) {
-            metrics.recordEviction(reason);
-        }
-
-        log.debug("[Cache] Evicted session: {}, freed {} bytes (user={}, notify={})", sessionId, freed, userId, notifyEvict);
-
-        if (notifyEvict && onEvict != null) {
-            try {
-                onEvict.accept(sessionId);
-            } catch (Exception e) {
-                log.warn("[Cache] onEvict callback failed for session {}: {}", sessionId, e.getMessage());
-            }
-        }
-    }
-
-    private void enforcePerUserLimits(Jedis jedis, String userId) {
-        // Debounce: skip if enforced within 1 second for the same user (batch appends trigger redundant checks)
-        long now = System.currentTimeMillis();
-        if (userId.equals(lastEnforcedUserId) && (now - lastEnforcedTime) < 1000) {
-            return;
-        }
-
-        // Session count limit
-        long sessionCount = jedis.scard(userSessionsKey(userId));
-        while (sessionCount > maxSessionsPerUser) {
-            String oldest = findOldestUserSession(jedis, userId);
-            if (oldest == null) break;
-            log.warn("[Cache] Per-user session limit exceeded: user={}, sessions={}, max={}, evicting {}",
-                    userId, sessionCount, maxSessionsPerUser, oldest);
-            evictSessionInternal(
-                    jedis,
-                    oldest,
-                    true,
-                    SessionCacheMetrics.EvictionReason.USER_COUNT);
-            sessionCount = jedis.scard(userSessionsKey(userId));
-        }
-
-        // Per-user memory limit
-        String userBytesStr = jedis.get(userBytesKey(userId));
-        long userBytes = userBytesStr != null ? Long.parseLong(userBytesStr) : 0;
-        while (userBytes > maxMemoryBytesPerUser) {
-            String oldest = findOldestUserSession(jedis, userId);
-            if (oldest == null) break;
-            log.warn("[Cache] Per-user memory limit exceeded: user={}, bytes={}MB > {}MB, evicting {}",
-                    userId, userBytes / (1024 * 1024), maxMemoryBytesPerUser / (1024 * 1024), oldest);
-            evictSessionInternal(
-                    jedis,
-                    oldest,
-                    true,
-                    SessionCacheMetrics.EvictionReason.USER_BYTES);
-            userBytesStr = jedis.get(userBytesKey(userId));
-            userBytes = userBytesStr != null ? Long.parseLong(userBytesStr) : 0;
-        }
-
-        lastEnforcedUserId = userId;
-        lastEnforcedTime = now;
-    }
-
-    private void enforceGlobalMemoryLimit(Jedis jedis) {
-        String globalBytesStr = jedis.get(globalBytesKey());
-        long globalBytes = globalBytesStr != null ? Long.parseLong(globalBytesStr) : 0;
-        long targetBytes = (long) (globalMaxMemoryBytes * evictionTargetRatio);
-
-        if (globalBytes <= globalMaxMemoryBytes) return;
-
-        log.warn("[Cache] Global memory limit exceeded: {}MB > {}MB, evicting to {}MB",
-                globalBytes / (1024 * 1024), globalMaxMemoryBytes / (1024 * 1024), targetBytes / (1024 * 1024));
-
-        while (globalBytes > targetBytes) {
-            // Get globally oldest session
-            Set<String> oldest = new HashSet<>(jedis.zrange(accessKey(), 0, 0));
-            if (oldest.isEmpty()) break;
-            String sid = oldest.iterator().next();
-            evictSessionInternal(
-                    jedis,
-                    sid,
-                    true,
-                    SessionCacheMetrics.EvictionReason.GLOBAL_BYTES);
-
-            globalBytesStr = jedis.get(globalBytesKey());
-            globalBytes = globalBytesStr != null ? Long.parseLong(globalBytesStr) : 0;
-        }
-
-        log.debug("[Cache] After global eviction: globalMB={}", globalBytes / (1024 * 1024));
-    }
-
-    /**
-     * Find the oldest session for a user by checking access scores.
-     */
-    private String findOldestUserSession(Jedis jedis, String userId) {
-        Set<String> sessions = jedis.smembers(userSessionsKey(userId));
-        if (sessions.isEmpty()) return null;
-
-        String oldest = null;
-        double oldestScore = Double.MAX_VALUE;
-
-        for (String sid : sessions) {
-            Double score = jedis.zscore(accessKey(), sid);
-            if (score != null && score < oldestScore) {
-                oldestScore = score;
-                oldest = sid;
-            }
-        }
-        return oldest;
-    }
-
-    // ========== Key helpers ==========
-
     private String msgKey(String sessionId) {
         return prefix + ":msg:" + sessionId;
-    }
-
-    private String metaKey(String sessionId) {
-        return prefix + ":meta:" + sessionId;
-    }
-
-    private String userSessionsKey(String userId) {
-        return prefix + ":user_sessions:" + userId;
-    }
-
-    private String accessKey() {
-        return prefix + ":access";
-    }
-
-    private String userBytesKey(String userId) {
-        return prefix + ":user_bytes:" + userId;
-    }
-
-    private String globalBytesKey() {
-        return prefix + ":global_bytes";
     }
 }

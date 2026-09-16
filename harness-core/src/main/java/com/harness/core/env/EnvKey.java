@@ -293,16 +293,8 @@ public final class EnvKey {
             "HARNESS_MEMORY_INDEX_OUTBOX_MAX_ATTEMPTS";
 
     // ==================== Cache (会话缓存管理) ====================
-    /** 缓存 session 过期时间(小时)，空闲超时自动淘汰，默认 12 */
+    /** 缓存 session 空闲过期时间(小时)，滑动刷新，默认 12 */
     public static final String CACHE_SESSION_TTL_HOURS        = "HARNESS_CACHE_SESSION_TTL_HOURS";
-    /** 单用户最大会话数，超出淘汰该用户最旧会话，默认 10 */
-    public static final String CACHE_MAX_SESSIONS_PER_USER    = "HARNESS_CACHE_MAX_SESSIONS_PER_USER";
-    /** 单用户缓存内存上限(MB)，超出淘汰该用户最旧会话，默认 2 */
-    public static final String CACHE_MAX_MB_PER_USER          = "HARNESS_CACHE_MAX_MB_PER_USER";
-    /** 全局缓存内存上限(MB)，默认 4096 */
-    public static final String CACHE_MAX_MB_GLOBAL            = "HARNESS_CACHE_MAX_MB_GLOBAL";
-    /** 全局淘汰目标比例(1-100)，内存降到此百分比以下停止淘汰，默认 50 */
-    public static final String CACHE_EVICTION_TARGET_RATIO    = "HARNESS_CACHE_EVICTION_TARGET_RATIO";
 
     // ==================== Cache (Redis 分布式缓存) ====================
     /** Redis 连接 URL，设置后启用 Redis 替换内存缓存 */

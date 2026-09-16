@@ -855,7 +855,7 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
 
                 // Execute ReAct loop
                 ReActLoop reActLoop = createRequestReActLoop(runToolCatalog);
-                ReActResult result = reActLoop.execute(new ReActRequest(
+                ReActResult loopResult = reActLoop.execute(new ReActRequest(
                         systemPrompt,
                         eventMessage.toString(),
                         historyChatMessages,
@@ -865,24 +865,28 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
                         null,
                         null));
                 boolean completesTurn = !subAgentManager.hasDetachedTasks(resumeRunId);
-                if (completesTurn) {
-                    result = lifecycleHooks.beforeFinal(
-                            new AgentLifecycleHooks.BeforeFinalContext(sessionId, result))
-                            .result();
-                }
+                ReActResult result = completesTurn
+                        ? lifecycleHooks.beforeFinal(
+                                new AgentLifecycleHooks.BeforeFinalContext(sessionId, loopResult))
+                                .result()
+                        : loopResult;
                 result.steps().forEach(trace::addStep);
                 recordReactStats(trace, result);
                 trace.recordOutput(result.output(), determineRisk(result), true);
 
-                // Save assistant message
+                // Save assistant message. Sub-agent events and this turn's own messages go in under
+                // one session guard: a run still in flight on the same session must not be able to
+                // write between them.
                 if (userId != null) {
-                    memoryRuntime.persistSubAgentEvents(sessionId, userId, turnId, events);
-                    memoryRuntime.persistToolMessages(result, sessionId, userId, turnId);
                     List<MessageBlock> asstBlocks = List.of(new MessageBlock(MessageBlock.BlockType.TEXT,
                             result.output() != null ? result.output() : "", null));
-                    memoryRuntime.persistAssistantMessage(
-                            sessionId, userId, turnId, asstBlocks, true, completesTurn);
-                    memoryRuntime.awaitMessageWrites(turnId);
+                    AgentMemoryRuntime.withSessionWriteLock(sessionId, () -> {
+                        memoryRuntime.persistSubAgentEvents(sessionId, userId, turnId, events);
+                        memoryRuntime.persistToolMessages(result, sessionId, userId, turnId);
+                        memoryRuntime.persistAssistantMessage(
+                                sessionId, userId, turnId, asstBlocks, true, completesTurn);
+                        memoryRuntime.awaitMessageWrites(turnId);
+                    });
                 }
                 trace.finish();
 
