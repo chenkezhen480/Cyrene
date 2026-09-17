@@ -18,7 +18,10 @@ import com.harness.tool.knowledge.KnowledgeIngestService;
 import com.harness.tool.knowledge.KnowledgeIngestWorker;
 import com.harness.tool.knowledge.KnowledgeDocumentLifecycleService;
 import com.harness.tool.knowledge.PersistentGraphSchemaWikiCompiler;
+import com.harness.tool.knowledge.PersistentGraphSpaceWikiCompiler;
 import com.harness.tool.knowledge.GraphCapabilityDescriber;
+import com.harness.tool.knowledge.GraphSchemaWikiCompiler;
+import com.harness.tool.knowledge.GraphSpaceWikiCompiler;
 import com.harness.tool.knowledge.authority.ContentAddressedArtifactStorage;
 import com.harness.tool.knowledge.authority.MysqlKnowledgeArtifactRepository;
 import com.harness.tool.knowledge.authority.MysqlKnowledgeIngestJobStore;
@@ -209,7 +212,8 @@ public class Main {
 
         KnowledgeWikiHandler wikiHandler = new KnowledgeWikiHandler(
                 new com.harness.tool.knowledge.KnowledgeWikiService(agent.knowledgeRepository(), agent.vectorStore()),
-                agent.graphSpaceAccessService());
+                agent.graphSpaceAccessService(),
+                agent.knowledgeGraphStore());
         app.get("/api/wiki", wikiHandler::list);
         app.get("/api/wiki/export", wikiHandler::exportAll);
         app.get("/api/wiki/{conceptId}", wikiHandler::get);
@@ -246,16 +250,30 @@ public class Main {
                 agent.graphSettings(),
                 mapper
         ));
-        GraphMutationCommitter graphMutationCommitter =
-                agent.knowledgeGraphStore()::applyChanges;
+        GraphMutationCommitter graphMutationCommitter = new GraphSpaceBindingRegistrar(
+                agent.knowledgeGraphStore()::applyChanges, agent.graphSpaceAccessService());
         GraphCapabilityDescriber graphCapabilityDescriber = new GraphCapabilityDescriber(
                 agent::chatModel, agent.embeddingModel().tokenEstimator());
+        GraphSchemaWikiCompiler graphSchemaWikiCompiler = new PersistentGraphSchemaWikiCompiler(
+                agent.knowledgeRepository(), graphCapabilityDescriber,
+                agent.wikiIdentityResolver());
+        GraphSpaceWikiCompiler graphSpaceWikiCompiler = new PersistentGraphSpaceWikiCompiler(
+                agent.knowledgeRepository(), agent.graphSchemaRegistry());
+        GraphDeletionService graphDeletionService = new GraphDeletionService(
+                agent.knowledgeGraphStore(),
+                agent.graphSpaceAccessService(),
+                agent.graphSchemaManagementService(),
+                graphSchemaWikiCompiler,
+                graphSpaceWikiCompiler,
+                agent.knowledgeRepository()
+        );
         GraphManagementHandler graphHandler = new GraphManagementHandler(
                 agent.knowledgeGraphStore(),
                 agent.graphSchemaRegistry(),
                 agent.graphSettings(),
                 graphRequestExecutor,
-                graphMutationCommitter
+                graphMutationCommitter,
+                graphDeletionService
         );
         GraphBuildService graphBuildService = new GraphBuildService(
                 graphMutationCommitter, graphDataConverterRegistry);
@@ -263,12 +281,10 @@ public class Main {
                 new GraphBuildHandler(graphBuildService, graphRequestExecutor);
         GraphSchemaManagementHandler graphSchemaHandler = new GraphSchemaManagementHandler(
                 agent.graphSchemaManagementService(),
-                agent.knowledgeGraphStore(),
                 agent.graphSettings(),
                 graphRequestExecutor,
-                new PersistentGraphSchemaWikiCompiler(
-                        agent.knowledgeRepository(), graphCapabilityDescriber,
-                        agent.wikiIdentityResolver())
+                graphSchemaWikiCompiler,
+                graphDeletionService
         );
         app.get("/api/graph/status", graphHandler::status);
         app.get("/api/graph/graphs", graphHandler::listGraphSpaces);
@@ -295,12 +311,25 @@ public class Main {
         app.delete("/api/graph/sources/{sourceId}", graphHandler::deleteSource);
         app.post("/api/graph/query", graphHandler::query);
 
+        // Tenant/identity tool permissions: resolved before a run exists, so a disabled tool
+        // is never offered to the model. The detached-resume turn has no request to resolve
+        // from and re-applies the tenant's DEFAULT profile instead.
+        ToolPermissionService toolPermissions = new ToolPermissionService();
+        agent.setToolDenylistResolver((tenantId, identity) ->
+                toolPermissions.resolveDisabledTools(tenantId, identity)
+                        .orElse(java.util.Set.of()));
+
         // Chat endpoint (SSE streaming)
-        ChatHandler chatHandler = new ChatHandler(agent, activeRequests);
+        ChatHandler chatHandler = new ChatHandler(agent, activeRequests, toolPermissions);
         app.post("/api/chat", chatHandler::handle);
         StructuredOutputHandler structuredOutputHandler =
-                new StructuredOutputHandler(agent, activeRequests);
+                new StructuredOutputHandler(agent, activeRequests, toolPermissions);
         app.post("/api/structured-output", structuredOutputHandler::handle);
+
+        ToolPermissionHandler toolPermissionHandler = new ToolPermissionHandler(
+                toolPermissions, agent.toolRegistry(), new ApiRequestAuthenticator());
+        app.get("/api/tool-permissions", toolPermissionHandler::get);
+        app.put("/api/tool-permissions", toolPermissionHandler::save);
 
         ConfirmationHandler confirmationHandler =
                 new ConfirmationHandler(agent.confirmationManager());

@@ -3,6 +3,10 @@ package com.harness.server;
 import com.harness.core.model.PageInfo;
 import com.harness.core.model.PageResponse;
 import com.harness.graph.config.GraphSettings;
+import com.harness.graph.model.GraphDeleteMode;
+import com.harness.graph.model.GraphDeleteRequest;
+import com.harness.graph.model.GraphDeleteResult;
+import com.harness.graph.model.GraphDeleteTarget;
 import com.harness.graph.model.GraphNode;
 import com.harness.graph.model.GraphNodePageRequest;
 import com.harness.graph.model.GraphSpacePageRequest;
@@ -48,7 +52,8 @@ class GraphManagementHandlerTest {
         when(graphStore.listNodes(any())).thenReturn(page);
 
         GraphManagementHandler handler = new GraphManagementHandler(
-                graphStore, schemaRegistry, settings, authenticator);
+                graphStore, schemaRegistry, settings, authenticator,
+                mock(GraphDeletionService.class));
         handler.listNodes(context);
 
         verify(authenticator).authenticate(context);
@@ -79,7 +84,8 @@ class GraphManagementHandlerTest {
         when(graphStore.listGraphSpaces(any())).thenReturn(page);
 
         GraphManagementHandler handler = new GraphManagementHandler(
-                graphStore, schemaRegistry, settings, authenticator);
+                graphStore, schemaRegistry, settings, authenticator,
+                mock(GraphDeletionService.class));
         handler.listGraphSpaces(context);
 
         verify(authenticator).authenticate(context);
@@ -92,20 +98,116 @@ class GraphManagementHandlerTest {
     }
 
     @Test
-    void rejectsDirectGraphSpaceDeletionOutsideSaga() {
-        KnowledgeGraphStore graphStore = mock(KnowledgeGraphStore.class);
-        GraphSchemaRegistry schemaRegistry = mock(GraphSchemaRegistry.class);
+    void deletesGraphSpaceThroughTheCascadeAndReturnsItsCounts() {
         GraphSettings settings = mock(GraphSettings.class);
+        GraphRequestAuthenticator authenticator = mock(GraphRequestAuthenticator.class);
+        GraphDeletionService deletionService = mock(GraphDeletionService.class);
+        Context context = mock(Context.class);
+        GraphDeletionService.GraphSpaceDeletionResult result =
+                new GraphDeletionService.GraphSpaceDeletionResult("students", "student-v1", 2, 1, 3);
+
+        when(context.queryParam("graphId")).thenReturn("students");
+        when(context.queryParam("schemaId")).thenReturn("student-v1");
+        when(context.json(any())).thenReturn(context);
+        when(deletionService.deleteSpace("students", "student-v1")).thenReturn(result);
+
+        GraphManagementHandler handler = new GraphManagementHandler(
+                mock(KnowledgeGraphStore.class), mock(GraphSchemaRegistry.class), settings,
+                authenticator, deletionService);
+        handler.deleteGraphSpace(context);
+
+        verify(authenticator).authenticate(context);
+        verify(deletionService).deleteSpace("students", "student-v1");
+        verify(context).json(result);
+    }
+
+    @Test
+    void deletesDetachedNodeWithTheModeTheConsoleSends() {
+        KnowledgeGraphStore graphStore = mock(KnowledgeGraphStore.class);
         GraphRequestAuthenticator authenticator = mock(GraphRequestAuthenticator.class);
         Context context = mock(Context.class);
 
-        when(context.status(405)).thenReturn(context);
+        when(context.pathParam("nodeId")).thenReturn("student-1");
+        when(context.queryParam("graphId")).thenReturn("students");
+        when(context.queryParam("schemaId")).thenReturn("student-v1");
+        when(context.queryParam("mode")).thenReturn("DETACH");
+        when(context.json(any())).thenReturn(context);
+        when(graphStore.delete(any())).thenReturn(new GraphDeleteResult(1, 2));
+
+        GraphManagementHandler handler = new GraphManagementHandler(
+                graphStore, mock(GraphSchemaRegistry.class), mock(GraphSettings.class),
+                authenticator, mock(GraphDeletionService.class));
+        handler.deleteNode(context);
+
+        ArgumentCaptor<GraphDeleteRequest> requestCaptor =
+                ArgumentCaptor.forClass(GraphDeleteRequest.class);
+        verify(graphStore).delete(requestCaptor.capture());
+        assertThat(requestCaptor.getValue()).isEqualTo(new GraphDeleteRequest(
+                "students", "student-v1", GraphDeleteTarget.NODE, "student-1",
+                GraphDeleteMode.DETACH));
+        verify(context).json(new GraphDeleteResult(1, 2));
+    }
+
+    @Test
+    void defaultsSourceDeletionToDerivedRowsOnly() {
+        KnowledgeGraphStore graphStore = mock(KnowledgeGraphStore.class);
+        Context context = mock(Context.class);
+
+        when(context.pathParam("sourceId")).thenReturn("doc-7");
+        when(context.queryParam("graphId")).thenReturn("students");
+        when(context.queryParam("schemaId")).thenReturn("student-v1");
+        when(context.json(any())).thenReturn(context);
+        when(graphStore.delete(any())).thenReturn(new GraphDeleteResult(0, 4));
+
+        GraphManagementHandler handler = new GraphManagementHandler(
+                graphStore, mock(GraphSchemaRegistry.class), mock(GraphSettings.class),
+                mock(GraphRequestAuthenticator.class), mock(GraphDeletionService.class));
+        handler.deleteSource(context);
+
+        ArgumentCaptor<GraphDeleteRequest> requestCaptor =
+                ArgumentCaptor.forClass(GraphDeleteRequest.class);
+        verify(graphStore).delete(requestCaptor.capture());
+        assertThat(requestCaptor.getValue().mode())
+                .isEqualTo(GraphDeleteMode.DELETE_DERIVED_ONLY);
+        assertThat(requestCaptor.getValue().target()).isEqualTo(GraphDeleteTarget.SOURCE);
+    }
+
+    @Test
+    void refusesSingleItemDeletionWhenTheGraphProviderIsDisabled() {
+        KnowledgeGraphStore graphStore = mock(KnowledgeGraphStore.class);
+        Context context = mock(Context.class);
+
+        when(graphStore.providerName()).thenReturn("none");
+        when(context.status(409)).thenReturn(context);
         when(context.json(any())).thenReturn(context);
 
         GraphManagementHandler handler = new GraphManagementHandler(
-                graphStore, schemaRegistry, settings, authenticator);
-        handler.deleteGraphSpace(context);
+                graphStore, mock(GraphSchemaRegistry.class), mock(GraphSettings.class),
+                mock(GraphRequestAuthenticator.class), mock(GraphDeletionService.class));
+        handler.deleteNode(context);
 
-        verify(context).status(405);
+        verify(graphStore, org.mockito.Mockito.never()).delete(any());
+        verify(context).status(409);
+    }
+
+    @Test
+    void refusesDerivedOnlyModeForNodeDeletion() {
+        KnowledgeGraphStore graphStore = mock(KnowledgeGraphStore.class);
+        Context context = mock(Context.class);
+
+        when(context.pathParam("nodeId")).thenReturn("student-1");
+        when(context.queryParam("graphId")).thenReturn("students");
+        when(context.queryParam("schemaId")).thenReturn("student-v1");
+        when(context.queryParam("mode")).thenReturn("DELETE_DERIVED_ONLY");
+        when(context.status(400)).thenReturn(context);
+        when(context.json(any())).thenReturn(context);
+
+        GraphManagementHandler handler = new GraphManagementHandler(
+                graphStore, mock(GraphSchemaRegistry.class), mock(GraphSettings.class),
+                mock(GraphRequestAuthenticator.class), mock(GraphDeletionService.class));
+        handler.deleteNode(context);
+
+        verify(graphStore, org.mockito.Mockito.never()).delete(any());
+        verify(context).status(400);
     }
 }

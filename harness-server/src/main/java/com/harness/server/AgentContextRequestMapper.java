@@ -17,6 +17,9 @@ public final class AgentContextRequestMapper {
         contextData.remove(AgentContext.KEY_GRAPH_REQUEST_CONTEXT);
         contextData.remove(AgentContext.KEY_KNOWLEDGE_REQUEST_CONTEXT);
         contextData.remove(AgentContext.KEY_NEEDS_GRAPH_KNOWLEDGE);
+        // Resolved from the tenant's stored profile, never from the request body: a caller
+        // must not be able to lift its own tool restriction.
+        contextData.remove(AgentContext.KEY_TOOL_DENYLIST);
         return contextData;
     }
 }

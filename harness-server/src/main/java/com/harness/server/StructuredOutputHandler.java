@@ -32,25 +32,30 @@ public final class StructuredOutputHandler {
     private final AgentOrchestrator agent;
     private final ConcurrentHashMap<String, CancellationToken> activeRequests;
     private final ApiRequestAuthenticator authenticator;
+    private final ToolPermissionService toolPermissions;
     private final StructuredOutputSchemaValidator schemaValidator;
     private final StructuredOutputValueValidator valueValidator;
 
     public StructuredOutputHandler(
             AgentOrchestrator agent,
-            ConcurrentHashMap<String, CancellationToken> activeRequests
+            ConcurrentHashMap<String, CancellationToken> activeRequests,
+            ToolPermissionService toolPermissions
     ) {
-        this(agent, activeRequests, new ApiRequestAuthenticator(), new ObjectMapper());
+        this(agent, activeRequests, new ApiRequestAuthenticator(), new ObjectMapper(),
+                toolPermissions);
     }
 
     StructuredOutputHandler(
             AgentOrchestrator agent,
             ConcurrentHashMap<String, CancellationToken> activeRequests,
             ApiRequestAuthenticator authenticator,
-            ObjectMapper objectMapper
+            ObjectMapper objectMapper,
+            ToolPermissionService toolPermissions
     ) {
         this.agent = agent;
         this.activeRequests = activeRequests;
         this.authenticator = authenticator;
+        this.toolPermissions = toolPermissions;
         this.schemaValidator = new StructuredOutputSchemaValidator(objectMapper);
         this.valueValidator = new StructuredOutputValueValidator(objectMapper);
     }
@@ -68,16 +73,21 @@ public final class StructuredOutputHandler {
                     request.outputSchema().name(),
                     request.outputSchema().schema(),
                     request.outputSchema().strict());
-            AgentContext agentContext = AgentContext.of(
-                    AgentContextRequestMapper.sanitize(request.context()));
+            AgentContext agentContext = toolPermissions.apply(AgentContext.of(
+                    AgentContextRequestMapper.sanitize(request.context())));
 
             String requestedSessionId = context.header("X-Session-Id");
             requestId = requestedSessionId != null
                     ? requestedSessionId
                     : UUID.randomUUID().toString();
-            cancellationToken = new CancellationToken();
-            cancellationToken.onCancel(CancellableHttpClient::cancelAll);
-            activeRequests.put(requestId, cancellationToken);
+            CancellationToken token = new CancellationToken();
+            cancellationToken = token;
+            token.addCancelCallback(
+                    () -> CancellableHttpClient.cancelThreads(token.allTrackedThreads()));
+            CancellationToken superseded = activeRequests.put(requestId, token);
+            if (superseded != null && superseded != token) {
+                superseded.cancel();
+            }
             HttpApiTool.setCurrentCredentials(agentContext.credentials());
 
             AgentResult result = agent.runStructured(
@@ -124,11 +134,13 @@ public final class StructuredOutputHandler {
                     context, 500, ApiErrorCode.INTERNAL_ERROR, e.getMessage());
         } finally {
             HttpApiTool.clearCurrentCredentials();
-            if (requestId != null) {
-                activeRequests.remove(requestId);
+            // Two-arg removal: a superseding run may already own these keys.
+            if (requestId != null && cancellationToken != null) {
+                activeRequests.remove(requestId, cancellationToken);
             }
-            if (resolvedSessionId != null && !resolvedSessionId.isBlank()) {
-                activeRequests.remove(resolvedSessionId);
+            if (resolvedSessionId != null && !resolvedSessionId.isBlank()
+                    && cancellationToken != null) {
+                activeRequests.remove(resolvedSessionId, cancellationToken);
             }
         }
     }

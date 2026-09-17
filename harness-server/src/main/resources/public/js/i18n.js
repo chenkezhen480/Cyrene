@@ -134,9 +134,10 @@ const messages = {
     graphSchemaCreated: 'Schema 已创建', graphSchemaSaved: 'Schema 已保存',
     graphSchemaEnabled: 'Schema 已启用', graphSchemaDisabled: 'Schema 已停用',
     graphEnableSchema: '启用', graphDisableSchema: '停用', graphChangingSchemaState: '处理中...',
-    graphDisableBeforeDelete: '请先停用 Schema 再删除', graphDeletingSchema: '删除中...',
-    graphSchemaDeleteConfirm: '确认删除这个 Schema？已有图数据不会被自动删除。',
-    graphSchemaDeleted: 'Schema 已删除',
+    graphSchemaDeleteHint: '删除 Schema 会一并删除它下面的图空间与访问映射；图数据很大时，建议先在图数据页删除对应图空间再删 Schema', graphDeletingSchema: '删除中...',
+    graphSchemaDeleteConfirm: '确认删除这个 Schema？它下面的所有图空间、图数据、访问映射和 Wiki 卡片都会被一并删除。图数据很多时耗时会较长，也可以先在图数据页逐个删除图空间。',
+    graphSchemaDeleted: 'Schema 已删除：{spaces} 个图空间 · {nodes} 个节点 · {relations} 条关系',
+    wikiCardFollowsEntity: '该卡片随 Schema / 图空间生命周期，请删除对应实体',
     graphSpiSchemaReadOnly: '该 Schema 来自 Java SPI，只能查看。请修改业务扩展代码后重启服务。',
     graphFocusEditor: '专注编辑', graphShowSchemaList: '显示 Schema 列表',
     graphDesignerVisualMode: '图形化设计', graphDesignerSourceMode: '高级 JSON',
@@ -310,6 +311,22 @@ const messages = {
     noEndpoints: '未发现接口', rescan: '重新扫描', confirmGenerate: '确认生成',
     configDone: '配置已生成', configDoneSubtitle: '涟漪已记录，记忆的种子已播下♪',
     configDoneHint: 'project-apis.json 已生成，可在「配置」页面查看和修改',
+    // Tenant / identity tool permissions
+    toolPermissions: '工具权限',
+    tenantId: '租户', tenantIdPlaceholder: '无租户体系填 000000',
+    identity: '身份', identityPlaceholder: '无身份体系填 DEFAULT',
+    tenantRequired: '请先填写租户',
+    loadTenant: '加载', loadTenantFirst: '点击「加载」查看该租户当前的身份配置', loading: '加载中…',
+    registeredTools: '系统已注册工具',
+    toolName: '工具名', toolDescription: '说明', capability: '能力',
+    disableAll: '全部禁用', clearAll: '全部启用',
+    disabledCount: '已禁用', disabledColumn: '禁用',
+    permissionsSaved: '工具权限已保存',
+    permissionRestricted: '已禁用部分工具', permissionUnrestricted: '未禁用任何工具（全部启用）',
+    toolPermissionHint: '勾选 = 禁用：保存后该身份不能使用勾选的工具；一个都不勾 = 什么都不禁用，即全部启用。'
+      + '身份取自请求 context.identity，未传则用 DEFAULT。工具列表来自 ToolRegistry，新增工具会自动出现在这里，'
+      + '默认可用（要禁用新工具需回到本页勾选）。只配置了部分身份时请同时配置 DEFAULT 行：未命中的身份回退到 DEFAULT 行，'
+      + '该行也没有则什么都不禁用。',
   },
   en: {
     // Knowledge management
@@ -443,9 +460,10 @@ const messages = {
     graphSchemaCreated: 'Schema created', graphSchemaSaved: 'Schema saved',
     graphSchemaEnabled: 'Schema enabled', graphSchemaDisabled: 'Schema disabled',
     graphEnableSchema: 'Enable', graphDisableSchema: 'Disable', graphChangingSchemaState: 'Working...',
-    graphDisableBeforeDelete: 'Disable the Schema before deleting it', graphDeletingSchema: 'Deleting...',
-    graphSchemaDeleteConfirm: 'Delete this Schema? Existing graph data will not be deleted automatically.',
-    graphSchemaDeleted: 'Schema deleted',
+    graphSchemaDeleteHint: 'Deleting a Schema also deletes its Graph Spaces and access bindings; for a large graph, delete the Graph Space on the graph data page first', graphDeletingSchema: 'Deleting...',
+    graphSchemaDeleteConfirm: 'Delete this Schema? Every Graph Space under it is deleted too, along with its graph data, access bindings, and Wiki card. A large graph takes longer; you can also delete its Graph Spaces on the graph data page first.',
+    graphSchemaDeleted: 'Schema deleted: {spaces} graph spaces · {nodes} nodes · {relations} relations',
+    wikiCardFollowsEntity: 'This card follows its Schema or Graph Space; delete the entity instead',
     graphSpiSchemaReadOnly: 'This Schema comes from Java SPI and is read-only. Change the business extension and restart the service.',
     graphFocusEditor: 'Focus editor', graphShowSchemaList: 'Show Schema list',
     graphDesignerVisualMode: 'Visual Designer', graphDesignerSourceMode: 'Advanced JSON',
@@ -620,6 +638,24 @@ const messages = {
     noEndpoints: 'No endpoints found', rescan: 'Rescan', confirmGenerate: 'Confirm & Generate',
     configDone: 'Config Generated', configDoneSubtitle: 'The ripples are recorded, seeds of memory have been sown ♪',
     configDoneHint: 'project-apis.json has been generated. View and edit in the "Config" page.',
+    // Tenant / identity tool permissions
+    toolPermissions: 'Tool Permissions',
+    tenantId: 'Tenant', tenantIdPlaceholder: 'Use 000000 when there is no tenant system',
+    identity: 'Identity', identityPlaceholder: 'Use DEFAULT when there is no identity system',
+    tenantRequired: 'Enter a tenant first',
+    loadTenant: 'Load', loadTenantFirst: "Choose Load to see this tenant's identities", loading: 'Loading…',
+    registeredTools: 'Registered tools',
+    toolName: 'Tool', toolDescription: 'Description', capability: 'Capability',
+    disableAll: 'Disable all', clearAll: 'Enable all',
+    disabledCount: 'disabled', disabledColumn: 'Disabled',
+    permissionsSaved: 'Tool permissions saved',
+    permissionRestricted: 'Some tools disabled', permissionUnrestricted: 'Nothing disabled (all tools on)',
+    toolPermissionHint: 'Checking a box disables that tool for this identity. Checking none '
+      + 'disables nothing, so every tool stays enabled. The identity comes from context.identity '
+      + 'and defaults to DEFAULT. The list comes from ToolRegistry, so new tools appear here '
+      + 'automatically and are enabled by default until you check them. When you configure only '
+      + 'some identities, also configure a DEFAULT row: an unmatched identity falls back to it, '
+      + 'and with no such row either, nothing is disabled.',
   },
 };
 

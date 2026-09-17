@@ -1,6 +1,7 @@
 package com.harness.agent.graph;
 
 import com.harness.core.model.PageResponse;
+import com.harness.core.model.AgentContext;
 
 import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
@@ -45,6 +46,17 @@ public final class MysqlGraphSpaceAccessService implements GraphSpaceAccessServi
             DELETE FROM graph_space_bindings
             WHERE graph_id = ?
               AND schema_id = ?
+            """;
+
+    private static final String DELETE_BINDINGS_BY_SCHEMA_SQL = """
+            DELETE FROM graph_space_bindings
+            WHERE schema_id = ?
+            """;
+
+    private static final String REGISTER_BINDING_SQL = """
+            INSERT INTO graph_space_bindings (tenant_id, graph_id, schema_id, permission)
+            VALUES (?, ?, ?, 'write')
+            ON DUPLICATE KEY UPDATE `id` = `id`
             """;
 
     private final GraphSpaceAccessConnectionProvider connectionProvider;
@@ -125,16 +137,45 @@ public final class MysqlGraphSpaceAccessService implements GraphSpaceAccessServi
 
     @Override
     public int deleteBindings(String graphId, String schemaId) {
-        graphId = requireText(graphId, "graphId");
-        schemaId = requireText(schemaId, "schemaId");
+        return deleteBindingsMatching(
+                DELETE_BINDINGS_SQL,
+                requireText(graphId, "graphId"),
+                requireText(schemaId, "schemaId")
+        );
+    }
+
+    @Override
+    public int deleteBindingsBySchema(String schemaId) {
+        return deleteBindingsMatching(
+                DELETE_BINDINGS_BY_SCHEMA_SQL,
+                requireText(schemaId, "schemaId")
+        );
+    }
+
+    /** Named apart from the public overloads so a call can never bind the SQL text as an argument. */
+    @Override
+    public void registerBinding(String tenantId, String graphId, String schemaId) {
+        try (Connection connection = connectionProvider.getConnection();
+             PreparedStatement statement = connection.prepareStatement(REGISTER_BINDING_SQL)) {
+            statement.setString(1, requireTenantId(tenantId));
+            statement.setString(2, requireText(graphId, "graphId"));
+            statement.setString(3, requireText(schemaId, "schemaId"));
+            statement.executeUpdate();
+        } catch (SQLException e) {
+            throw new GraphSpaceAccessException("Failed to register graph-space binding", e);
+        }
+    }
+
+    private int deleteBindingsMatching(String sql, String... parameters) {
         try (Connection connection = connectionProvider.getConnection()) {
             boolean originalAutoCommit = connection.getAutoCommit();
             try {
                 connection.setAutoCommit(false);
                 int deleted;
-                try (PreparedStatement statement = connection.prepareStatement(DELETE_BINDINGS_SQL)) {
-                    statement.setString(1, graphId);
-                    statement.setString(2, schemaId);
+                try (PreparedStatement statement = connection.prepareStatement(sql)) {
+                    for (int index = 0; index < parameters.length; index++) {
+                        statement.setString(index + 1, parameters[index]);
+                    }
                     deleted = statement.executeUpdate();
                 }
                 connection.commit();
@@ -155,11 +196,16 @@ public final class MysqlGraphSpaceAccessService implements GraphSpaceAccessServi
                 .encodeToString(Long.toString(id).getBytes(StandardCharsets.UTF_8));
     }
 
+    /**
+     * A missing tenant is the default tenant, exactly as {@link AgentContext#tenantId()} resolves it
+     * and as {@link OpenGraphSpaceAccessService} treats it: the framework rule is "missing values use
+     * 000000", not "refuse the request". A caller that names a different tenant still needs its own
+     * binding row, so this cannot widen anyone's scope.
+     */
     private static String requireTenantId(String tenantId) {
-        if (tenantId == null || tenantId.isBlank()) {
-            throw new IllegalArgumentException("tenantId is required");
-        }
-        return tenantId.trim();
+        return tenantId == null || tenantId.isBlank()
+                ? AgentContext.DEFAULT_TENANT_ID
+                : tenantId.trim();
     }
 
     private static String requireText(String value, String fieldName) {

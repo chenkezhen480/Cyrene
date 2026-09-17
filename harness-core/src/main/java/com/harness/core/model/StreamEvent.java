@@ -28,6 +28,20 @@ public record StreamEvent(
         ERROR
     }
 
+    /**
+     * Tag this event with the run it belongs to. Every event of one Agent run carries that
+     * run's id so a client that superseded the run can discard the late ones.
+     */
+    public StreamEvent withRunId(String runId) {
+        if (runId == null || runId.isBlank() || runId.equals(metadata.get("runId"))) {
+            return this;
+        }
+        // Not Map.copyOf: confirmation events legitimately carry null values.
+        Map<String, Object> tagged = new java.util.HashMap<>(metadata);
+        tagged.put("runId", runId);
+        return new StreamEvent(type, data, java.util.Collections.unmodifiableMap(tagged));
+    }
+
     public static StreamEvent start(String sessionId) {
         return new StreamEvent(Type.START, "", Map.of(
                 "sessionId", sessionId != null ? sessionId : ""

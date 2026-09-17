@@ -8,6 +8,7 @@ import com.harness.core.knowledge.KnowledgeStatus;
 import com.harness.graph.schema.GraphNodeTypeDefinition;
 import com.harness.graph.schema.GraphPropertyDefinition;
 import com.harness.graph.schema.GraphPropertyType;
+import com.harness.graph.schema.GraphRelationTypeDefinition;
 import com.harness.graph.schema.GraphSchemaDefinition;
 import com.harness.graph.schema.GraphSchemaDetails;
 import com.harness.graph.schema.GraphSchemaFormat;
@@ -23,6 +24,7 @@ import org.mockito.ArgumentCaptor;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -63,8 +65,14 @@ class PersistentGraphSchemaWikiCompilerTest {
         KnowledgeRevisionChange change = capturedChange();
         assertThat(change.concept().conceptType()).isEqualTo(KnowledgeConceptType.GRAPH_SCHEMA);
         assertThat(change.concept().status()).isEqualTo(KnowledgeStatus.STABLE);
+        // One statement per fact: the Schema's version and storage names are metadata, the relation
+        // direction is stated once as an edge, and the tool hint appears once.
         assertThat(change.revision().body())
-                .contains("Graph Schema student-v1", "Student", "name:STRING required", "query_graph", "Typical queries");
+                .contains("Graph Schema student-v1", "Nodes:\n- Student(name)", "Supported queries",
+                        "no relation leads into another", "query_graph")
+                .doesNotContain("- Version:", "Schema version", "Enabled:", "Format:", "Editable:",
+                        "AI capability description", "Typical queries", "Recommended tool",
+                        "queryable", "sortable", "bounded paths");
         assertThat(change.revision().description()).isEqualTo("AI description: find Student entities using query_graph.");
         assertThat(change.revision().body()).contains(change.revision().description());
         verify(describer).describe(details(true).definition());
@@ -154,6 +162,61 @@ class PersistentGraphSchemaWikiCompilerTest {
                 ArgumentCaptor.forClass(List.class);
         verify(repository).commitChanges(captor.capture());
         return captor.getValue().getFirst();
+    }
+
+    /**
+     * The card is a tool-capability index, not a graph manual: a relation is listed once as an edge,
+     * and multi-hop traversal is claimed only when relations actually chain.
+     */
+    @Test
+    void cardStaysCompactAndClaimsMultiHopOnlyWhenRelationsChain() {
+        when(repository.findById(any())).thenReturn(Optional.empty());
+
+        compiler.synchronize(chainedDetails());
+
+        String body = capturedChange().revision().body();
+        assertThat(body)
+                .contains("Student -[HAS_CAPABILITY]-> Capability", "Capability -[PART_OF]-> Domain",
+                        "bounded paths")
+                .doesNotContain("no relation leads into another", "AI capability description",
+                        "Typical queries", "- Version:");
+        // The pre-change card for this same Schema was roughly twice this size.
+        assertThat(body.length()).isLessThan(1_200);
+    }
+
+    /** A card is published for a disabled Schema too, and it says the Schema cannot be queried. */
+    @Test
+    void disabledSchemaCardStatesThatItCannotBeQueriedYet() {
+        when(repository.findById(any())).thenReturn(Optional.empty());
+        compiler.synchronize(details(true));
+        String enabledBody = capturedChange().revision().body();
+
+        clearInvocations(repository);
+        compiler.synchronize(details(false));
+        String disabledBody = capturedChange().revision().body();
+
+        assertThat(disabledBody)
+                .contains("This Schema is not enabled, so query_graph cannot read it yet.")
+                .contains("query_graph");
+        // The state is part of the card, so toggling rewrites it instead of leaving a stale claim.
+        assertThat(disabledBody).isNotEqualTo(enabledBody);
+        assertThat(enabledBody).doesNotContain("is not enabled");
+    }
+
+    private static GraphSchemaDetails chainedDetails() {
+        GraphSchemaDefinition definition = new GraphSchemaDefinition(
+                "student-v1", 2, GraphSchemaMode.STRICT,
+                Map.of("Student", new GraphNodeTypeDefinition("Student", Map.of()),
+                        "Capability", new GraphNodeTypeDefinition("Capability", Map.of()),
+                        "Domain", new GraphNodeTypeDefinition("Domain", Map.of())),
+                Map.of("HAS_CAPABILITY", new GraphRelationTypeDefinition(
+                                "HAS_CAPABILITY", Set.of("Student"), Set.of("Capability"), Map.of()),
+                        "PART_OF", new GraphRelationTypeDefinition(
+                                "PART_OF", Set.of("Capability"), Set.of("Domain"), Map.of())),
+                1, 2);
+        return new GraphSchemaDetails(
+                definition, true, GraphSchemaSource.MANAGED,
+                GraphSchemaFormat.JSON, true, "{}");
     }
 
     private static GraphSchemaDetails details(boolean enabled) {

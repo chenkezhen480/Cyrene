@@ -17,7 +17,6 @@ public class CancellationToken {
     private volatile boolean cancelled = false;
     private final Set<Thread> trackedThreads = ConcurrentHashMap.newKeySet();
     private final List<Runnable> onCancelCallbacks = new CopyOnWriteArrayList<>();
-    private volatile Runnable onCancel;
 
     // Parent-child support
     private final CancellationToken parent;
@@ -84,13 +83,20 @@ public class CancellationToken {
     }
 
     /**
-     * Register a callback to invoke on cancel (e.g., to cancel OkHttp calls).
-     * Only one callback is supported; subsequent calls overwrite.
-     * @deprecated Use {@link #addCancelCallback(Runnable)} instead for multiple callbacks.
+     * Every thread tracked by this token and its children, so a caller can scope a
+     * cleanup to exactly one run instead of every run in the process.
      */
-    @Deprecated
-    public void onCancel(Runnable callback) {
-        this.onCancel = callback;
+    public Set<Thread> allTrackedThreads() {
+        Set<Thread> result = ConcurrentHashMap.newKeySet();
+        collectTrackedThreads(result);
+        return result;
+    }
+
+    private void collectTrackedThreads(Set<Thread> sink) {
+        sink.addAll(trackedThreads);
+        for (CancellationToken child : children) {
+            child.collectTrackedThreads(sink);
+        }
     }
 
     /**
@@ -126,11 +132,6 @@ public class CancellationToken {
 
         // Execute all registered callbacks
         for (Runnable cb : onCancelCallbacks) {
-            try { cb.run(); } catch (Exception ignored) {}
-        }
-        // Also execute legacy single callback
-        Runnable cb = this.onCancel;
-        if (cb != null) {
             try { cb.run(); } catch (Exception ignored) {}
         }
         // Then interrupt threads (for blocking non-HTTP operations)

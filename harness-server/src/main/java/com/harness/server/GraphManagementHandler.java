@@ -4,6 +4,9 @@ import com.harness.core.model.PageResponse;
 import com.harness.graph.config.GraphSettings;
 import com.harness.graph.build.GraphMutationCommitter;
 import com.harness.graph.model.GraphChangeSet;
+import com.harness.graph.model.GraphDeleteMode;
+import com.harness.graph.model.GraphDeleteRequest;
+import com.harness.graph.model.GraphDeleteTarget;
 import com.harness.graph.model.GraphMutationBatch;
 import com.harness.graph.model.GraphNeighborhoodRequest;
 import com.harness.graph.model.GraphNode;
@@ -18,6 +21,7 @@ import com.harness.graph.store.KnowledgeGraphStore;
 import io.javalin.http.Context;
 
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Objects;
@@ -33,25 +37,30 @@ public final class GraphManagementHandler {
     private final GraphSettings settings;
     private final GraphRequestExecutor requestExecutor;
     private final GraphMutationCommitter mutationCommitter;
+    private final GraphDeletionService deletionService;
 
     public GraphManagementHandler(
             KnowledgeGraphStore graphStore,
             GraphSchemaRegistry schemaRegistry,
             GraphSettings settings,
-            GraphMutationCommitter mutationCommitter
+            GraphMutationCommitter mutationCommitter,
+            GraphDeletionService deletionService
     ) {
         this(graphStore, schemaRegistry, settings,
-                new GraphRequestExecutor(new GraphRequestAuthenticator()), mutationCommitter);
+                new GraphRequestExecutor(new GraphRequestAuthenticator()),
+                mutationCommitter, deletionService);
     }
 
     GraphManagementHandler(
             KnowledgeGraphStore graphStore,
             GraphSchemaRegistry schemaRegistry,
             GraphSettings settings,
-            GraphRequestAuthenticator requestAuthenticator
+            GraphRequestAuthenticator requestAuthenticator,
+            GraphDeletionService deletionService
     ) {
         this(graphStore, schemaRegistry, settings,
-                new GraphRequestExecutor(requestAuthenticator), unavailableCommitter());
+                new GraphRequestExecutor(requestAuthenticator),
+                unavailableCommitter(), deletionService);
     }
 
     GraphManagementHandler(
@@ -59,7 +68,8 @@ public final class GraphManagementHandler {
             GraphSchemaRegistry schemaRegistry,
             GraphSettings settings,
             GraphRequestExecutor requestExecutor,
-            GraphMutationCommitter mutationCommitter
+            GraphMutationCommitter mutationCommitter,
+            GraphDeletionService deletionService
     ) {
         this.graphStore = Objects.requireNonNull(graphStore, "graphStore");
         this.schemaRegistry = Objects.requireNonNull(schemaRegistry, "schemaRegistry");
@@ -67,6 +77,7 @@ public final class GraphManagementHandler {
         this.requestExecutor = Objects.requireNonNull(requestExecutor, "requestExecutor");
         this.mutationCommitter = Objects.requireNonNull(
                 mutationCommitter, "mutationCommitter");
+        this.deletionService = Objects.requireNonNull(deletionService, "deletionService");
     }
 
     public void status(Context context) {
@@ -170,8 +181,9 @@ public final class GraphManagementHandler {
     }
 
     public void deleteGraphSpace(Context context) {
-        context.status(405).json(Map.of(
-                "error", "Direct Graph Space deletion is disabled; submit a reviewed migration"));
+        execute(context, () -> context.json(deletionService.deleteSpace(
+                requiredQuery(context, "graphId"),
+                requiredQuery(context, "schemaId"))));
     }
 
     public void query(Context context) {
@@ -189,20 +201,61 @@ public final class GraphManagementHandler {
     }
 
     public void deleteNode(Context context) {
-        rejectDirectDelete(context);
+        deleteTarget(context, GraphDeleteTarget.NODE, context.pathParam("nodeId"));
     }
 
     public void deleteRelation(Context context) {
-        rejectDirectDelete(context);
+        deleteTarget(context, GraphDeleteTarget.RELATION, context.pathParam("relationId"));
     }
 
     public void deleteSource(Context context) {
-        rejectDirectDelete(context);
+        deleteTarget(context, GraphDeleteTarget.SOURCE, context.pathParam("sourceId"));
     }
 
-    private void rejectDirectDelete(Context context) {
-        context.status(405).json(Map.of(
-                "error", "Direct Graph deletion is disabled; use confirmed /api/graph/build"));
+    private void deleteTarget(Context context, GraphDeleteTarget target, String targetId) {
+        execute(context, () -> {
+            // The NoOp store answers a disabled provider with a store exception, which would surface
+            // as a server fault; a disabled capability is a conflict, not a failure.
+            GraphDeletionService.requireGraphProvider(graphStore);
+            context.json(graphStore.delete(new GraphDeleteRequest(
+                    requiredQuery(context, "graphId"),
+                    requiredQuery(context, "schemaId"),
+                    target,
+                    targetId,
+                    deleteMode(context, target)
+            )));
+        });
+    }
+
+    /**
+     * Resolves the deletion policy. A single item is removed only when it is unreferenced unless the
+     * caller asks for {@code DETACH}; a source deletion always removes its derived rows instead.
+     *
+     * <p>The store rejects the incompatible target/mode combinations, so they are refused here as
+     * invalid requests rather than surfacing as an operation failure.</p>
+     */
+    private static GraphDeleteMode deleteMode(Context context, GraphDeleteTarget target) {
+        String requested = optionalQuery(context, "mode").trim();
+        if (requested.isEmpty()) {
+            return target == GraphDeleteTarget.SOURCE
+                    ? GraphDeleteMode.DELETE_DERIVED_ONLY
+                    : GraphDeleteMode.REJECT_IF_REFERENCED;
+        }
+        GraphDeleteMode mode;
+        try {
+            mode = GraphDeleteMode.valueOf(requested.toUpperCase(Locale.ROOT));
+        } catch (IllegalArgumentException unknown) {
+            throw new IllegalArgumentException("Unknown graph delete mode: " + requested);
+        }
+        if (target == GraphDeleteTarget.SOURCE && mode != GraphDeleteMode.DELETE_DERIVED_ONLY) {
+            throw new IllegalArgumentException(
+                    "SOURCE deletion requires mode=DELETE_DERIVED_ONLY");
+        }
+        if (target != GraphDeleteTarget.SOURCE && mode == GraphDeleteMode.DELETE_DERIVED_ONLY) {
+            throw new IllegalArgumentException(
+                    "mode=DELETE_DERIVED_ONLY is only valid for SOURCE deletion");
+        }
+        return mode;
     }
 
     private int requestedLimit(Context context) {

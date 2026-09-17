@@ -16,6 +16,7 @@ import com.harness.agent.runtime.AgentRunPreparer;
 import com.harness.agent.runtime.AgentRunCoordinator;
 import com.harness.agent.runtime.AgentRunCoordinator.AgentRunCommand;
 import com.harness.agent.runtime.AgentToolRuntime;
+import com.harness.agent.runtime.ToolDenylistResolver;
 import com.harness.provider.*;
 import com.harness.react.*;
 import com.harness.trace.ReplyAuditor;
@@ -127,6 +128,7 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
     private final GraphKnowledgeRetriever graphKnowledgeRetriever;
     private final GraphSpaceAccessService graphSpaceAccessService;
     private final boolean knowledgeGraphToolEnabled;
+    private volatile ToolDenylistResolver toolDenylistResolver = ToolDenylistResolver.UNRESTRICTED;
 
     // Sub-agent subsystem
     private final SubAgentManager subAgentManager;
@@ -655,8 +657,11 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
         return Set.copyOf(unavailable);
     }
 
-    private RunToolCatalog createRunToolCatalog(Set<String> unavailableTools) {
-        return toolRegistry.snapshot().excluding(unavailableTools);
+    private RunToolCatalog createRunToolCatalog(
+            Set<String> unavailableTools,
+            Set<String> disabledTools
+    ) {
+        return toolRegistry.snapshot().excluding(unavailableTools).excluding(disabledTools);
     }
 
     private ReActLoop createRequestReActLoop(RunToolCatalog runToolCatalog) {
@@ -731,6 +736,18 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
         return wikiIdentityResolver;
     }
     public GraphSpaceAccessService graphSpaceAccessService() { return graphSpaceAccessService; }
+
+    /** Every registered tool, for the tenant tool-permission admin surface. */
+    public ToolRegistry toolRegistry() { return toolRegistry; }
+
+    /**
+     * Install the tenant tool-permission source. Used by the detached-resume turn, which runs
+     * without a request and so cannot carry a resolved denylist in its context.
+     */
+    public void setToolDenylistResolver(ToolDenylistResolver resolver) {
+        this.toolDenylistResolver = resolver != null ? resolver : ToolDenylistResolver.UNRESTRICTED;
+    }
+
     public GraphSchemaRegistry graphSchemaRegistry() { return graphSchemaRegistry; }
     public GraphSchemaManagementService graphSchemaManagementService() { return graphSchemaManagementService; }
     public GraphSettings graphSettings() { return graphSettings; }
@@ -814,7 +831,12 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
             // instead of silently falling back to a standalone tenant. No request-scoped
             // graph context exists on this path.
             Set<String> unavailableTools = detachedResumeUnavailableTools(resumeAgentContext);
-            RunToolCatalog runToolCatalog = createRunToolCatalog(unavailableTools);
+            // The originating request's identity is not persisted with the session, so a resume
+            // can only re-apply the tenant's DEFAULT profile. A tenant that restricts *only* a
+            // named identity would resume unrestricted here.
+            RunToolCatalog runToolCatalog = createRunToolCatalog(
+                    unavailableTools,
+                    toolDenylistResolver.resolve(tenantId, AgentContext.DEFAULT_IDENTITY));
             RunTrace trace = runtime.startTrace();
             trace.setSessionId(sessionId);
             trace.recordInput(userId, eventMessage.toString(), List.of());
@@ -832,7 +854,8 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
                 KnowledgeToolRuntimeContext.clear();
                 activateToolContext(userId, sessionId);
                 KnowledgeAccessService.setCurrentContext(tenantId, null);
-                KnowledgeToolRuntimeContext.activate(tenantId, userId, null, null, runToolCatalog);
+                KnowledgeToolRuntimeContext.activate(
+                        tenantId, userId, null, null, runToolCatalog, trace);
                 resumeRunId = openRunScope(
                         sessionId,
                         cancellationToken,

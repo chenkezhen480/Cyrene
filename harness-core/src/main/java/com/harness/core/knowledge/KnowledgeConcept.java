@@ -16,8 +16,30 @@ public record KnowledgeConcept(
         long version,
         Instant staleAfter,
         Instant createdAt,
-        Instant updatedAt
+        Instant updatedAt,
+        // When the recorded event happened. Only USER_EPISODE carries one; null elsewhere.
+        Instant eventTime
 ) {
+    /** Concept without an event time — every kind except User Episode. */
+    public KnowledgeConcept(
+            String id,
+            String tenantId,
+            String userId,
+            KnowledgeNamespaceType namespaceType,
+            String namespaceKey,
+            KnowledgeConceptType conceptType,
+            String logicalKey,
+            KnowledgeStatus status,
+            String currentRevisionId,
+            long version,
+            Instant staleAfter,
+            Instant createdAt,
+            Instant updatedAt
+    ) {
+        this(id, tenantId, userId, namespaceType, namespaceKey, conceptType, logicalKey, status,
+                currentRevisionId, version, staleAfter, createdAt, updatedAt, null);
+    }
+
     public KnowledgeConcept {
         id = KnowledgeModelSupport.requiredText(id, "id", 64);
         tenantId = KnowledgeModelSupport.optionalText(tenantId, "tenantId", 128);
@@ -36,6 +58,10 @@ public record KnowledgeConcept(
 
         if (conceptType.isUserOwned() && userId == null) {
             throw new IllegalArgumentException(conceptType.displayName() + " requires userId");
+        }
+        if (eventTime != null && conceptType != KnowledgeConceptType.USER_EPISODE) {
+            throw new IllegalArgumentException(
+                    "Only User Episode carries an event time, not " + conceptType.displayName());
         }
         if (conceptType == KnowledgeConceptType.OPERATION_PLAYBOOK && userId != null) {
             throw new IllegalArgumentException("Operation Playbook must not have userId");

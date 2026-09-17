@@ -3,11 +3,10 @@
 -- Database: agent（Docker Compose 部署由 MYSQL_DATABASE=agent 自动选择；
 --           手动执行前请先创建并选中数据库，例如：
 --           CREATE DATABASE IF NOT EXISTS `agent` DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;）
--- 包含：审计追踪、会话、消息、用户、知识权威层（metadata/偏好/制品/任务）
+-- 包含：审计追踪、会话、消息、用户、知识权威层（metadata/偏好/制品/任务）、身份工具禁用、图谱租户绑定
 -- 幂等：全部 CREATE TABLE IF NOT EXISTS，可在已有库重复执行。
--- 可选扩展：graph_space_bindings（图谱租户隔离表）单独保留在
---           schema-graph-space-bindings-mysql.sql，默认不安装；
---           该表一旦存在，框架即切换为租户绑定强制校验模式。
+-- 图空间访问绑定（graph_space_bindings）随本文件一起建立，见文件末尾；
+-- 建图空间时会自动为创建方租户登记绑定行，多租户部署再按需调整权限。
 -- ============================================================
 
 -- ========== 审计追踪表 ==========
@@ -137,6 +136,7 @@ CREATE TABLE IF NOT EXISTS knowledge_metadata (
     links                      JSON          NULL COMMENT '关联知识标识与关系类型 JSON 数组',
     version                    BIGINT        NOT NULL DEFAULT 0 COMMENT '乐观锁版本号',
     stale_after                DATETIME(3)   NULL COMMENT '失效时间，空值表示不自动到期',
+    event_time                 DATETIME(3)   NULL COMMENT '事件发生时间，仅用户情景记忆使用；空值回退到 updated_at 排序',
     created_at                 DATETIME(3)   NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '创建时间',
     updated_at                 DATETIME(3)   NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '更新时间',
     CONSTRAINT chk_metadata_type CHECK (concept_type <> 'USER_PREFERENCE'),
@@ -145,6 +145,8 @@ CREATE TABLE IF NOT EXISTS knowledge_metadata (
         (tenant_id, user_id, concept_type, logical_key, id),
     INDEX idx_concept_scope_status
         (tenant_id, user_id, namespace_type, concept_type, status, updated_at, id),
+    INDEX idx_concept_scope_event
+        (tenant_id, user_id, namespace_type, concept_type, status, event_time, id),
     INDEX idx_concept_namespace
         (tenant_id, namespace_type, namespace_key, concept_type, id),
     INDEX idx_concept_current_revision (current_version)
@@ -232,3 +234,71 @@ CREATE TABLE IF NOT EXISTS knowledge_tasks (
     INDEX idx_task_claim (task_type, status, available_at, sequence_id),
     INDEX idx_task_artifact (task_type, artifact_id, id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='统一后台任务及跨存储重试状态';
+
+-- ========== 租户/身份工具禁用表 ==========
+-- 工具本身不落库：名称、描述、Schema 一律来自 ToolRegistry，
+-- 这里只保存“某个租户的某个身份禁用哪些工具”。
+-- 空数组代表什么都不禁用，即全部工具可用；未配置的行回退到同租户的 DEFAULT 行，
+-- 两者都没有时同样全部可用。
+
+CREATE TABLE IF NOT EXISTS `tool_permission_profile` (
+    `id`                  BIGINT        NOT NULL AUTO_INCREMENT                     COMMENT '自增主键',
+    `tenant_id`           VARCHAR(128)  NOT NULL                                    COMMENT '所属租户，无租户体系的接入使用 000000',
+    `identity`            VARCHAR(128)  NOT NULL                                    COMMENT '工具身份，例如 teacher/parent/DEFAULT',
+    `disabled_tools_json` JSON          NOT NULL                                    COMMENT '该身份禁用的工具名 JSON 数组；空数组代表全部启用，工具定义仍以 ToolRegistry 为准',
+    `created_at`          DATETIME(3)   NOT NULL DEFAULT CURRENT_TIMESTAMP(3)       COMMENT '创建时间',
+    `updated_at`          DATETIME(3)   NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) COMMENT '更新时间',
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_profile_tenant_identity` (`tenant_id`, `identity`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='身份工具禁用 - 同一租户同一身份一份配置，空列表代表全部启用';
+
+-- 默认行：没有单独配置过的身份一律走它，空列表即什么都不禁用。
+INSERT INTO `tool_permission_profile` (`tenant_id`, `identity`, `disabled_tools_json`)
+VALUES ('000000', 'DEFAULT', JSON_ARRAY())
+ON DUPLICATE KEY UPDATE `tenant_id` = `tenant_id`;
+
+-- ========== 图空间访问绑定（租户 -> 图空间） ==========
+-- 使用约定：
+-- 1. HARNESS_GRAPH_PROVIDER 是知识图谱功能的唯一开关；值为 none 时不启用图功能。
+-- 2. 本表只维护“租户 -> 图空间”的访问映射，不负责启用或禁用知识图谱。
+-- 3. tenantId 由可信的系统后端通过请求 context 传入，不会作为 LLM 工具参数暴露。
+-- 4. 请求未提供 tenantId 时，框架固定使用默认租户 000000。
+-- 5. 本表存在即启用按租户强制校验：**没有任何绑定行的图空间对所有租户都不可读**
+--    （含 query_graph 与 Wiki 卡片）。因此建图空间时会自动为创建方（单租户即 000000）
+--    登记一行 write 绑定，多租户部署再按需增删。
+-- 6. 非默认租户必须配置绑定行，否则框架拒绝其图空间访问，防止跨租户读取。
+-- 7. 当前请求启动的子 Agent 会继承 tenantId；未保存原请求上下文的异步恢复流程不启用图工具。
+-- 8. 应用启动时探测本表；表不存在则回退为“图空间全局可读”，此时建图不会写绑定行。
+
+CREATE TABLE IF NOT EXISTS `graph_space_bindings` (
+    `id`          BIGINT          NOT NULL AUTO_INCREMENT COMMENT '自增主键及分页游标',
+    `tenant_id`   VARCHAR(128)    NOT NULL DEFAULT '000000' COMMENT '调用方租户ID，单租户默认000000',
+    `graph_id`    VARCHAR(128)    NOT NULL                COMMENT 'Neo4j图空间ID',
+    `schema_id`   VARCHAR(128)    NOT NULL                COMMENT '图谱Schema ID',
+    `description` VARCHAR(1000)   NOT NULL DEFAULT ''     COMMENT '图空间用途及数据关系说明，供Agent选择检索目标',
+    `permission`  VARCHAR(16)     NOT NULL DEFAULT 'read' COMMENT '权限（read/write/admin）',
+    `status`      VARCHAR(16)     NOT NULL DEFAULT 'active' COMMENT '状态（active/disabled）',
+    `created_at`  DATETIME(3)     NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '创建时间',
+    `updated_at`  DATETIME(3)     NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) COMMENT '更新时间',
+    PRIMARY KEY (`id`),
+    UNIQUE INDEX `idx_graph_binding_tenant_space` (`tenant_id`, `graph_id`, `schema_id`),
+    INDEX `idx_graph_binding_tenant_page` (`tenant_id`, `status`, `id`),
+    INDEX `idx_graph_binding_space` (`graph_id`, `schema_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='租户与图空间的访问绑定';
+
+-- 兼容更早创建过、没有 description 列的表。幂等：列已存在时为空操作。
+SET @graph_binding_description_exists = (
+    SELECT COUNT(*)
+    FROM `information_schema`.`columns`
+    WHERE `table_schema` = DATABASE()
+      AND `table_name` = 'graph_space_bindings'
+      AND `column_name` = 'description'
+);
+SET @graph_binding_description_migration = IF(
+    @graph_binding_description_exists = 0,
+    'ALTER TABLE `graph_space_bindings` ADD COLUMN `description` VARCHAR(1000) NOT NULL DEFAULT '''' COMMENT ''图空间用途及数据关系说明，供Agent选择检索目标'' AFTER `schema_id`',
+    'SELECT 1'
+);
+PREPARE graph_binding_description_statement FROM @graph_binding_description_migration;
+EXECUTE graph_binding_description_statement;
+DEALLOCATE PREPARE graph_binding_description_statement;

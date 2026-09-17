@@ -84,7 +84,7 @@ class MilvusKnowledgeProjectionIT {
                 new KnowledgeProjectionSearch(
                         "Catalog topic projection", vector(), null, null,
                         Set.of(KnowledgeConceptType.SOURCE_DOCUMENT),
-                        20, 20, 0.70, 0.10, 60));
+                        20, 20, 0.70, 0.10, 60)).hits();
 
         assertThat(hits).extracting(hit -> hit.projection().conceptId())
                 .contains(CATALOG_CONCEPT);
@@ -93,7 +93,7 @@ class MilvusKnowledgeProjectionIT {
                 new KnowledgeProjectionSearch(
                         "Graph space projection", vector(), "tenant-a", null,
                         Set.of(KnowledgeConceptType.GRAPH_SPACE),
-                        20, 20, 0.70, 0.10, 60));
+                        20, 20, 0.70, 0.10, 60)).hits();
         assertThat(graphHits).extracting(hit -> hit.projection().conceptId())
                 .contains(GRAPH_SPACE_CONCEPT);
     }
@@ -121,7 +121,7 @@ class MilvusKnowledgeProjectionIT {
                             "Scoped memory", vector(), "tenant-a", "user-a",
                             Set.of(KnowledgeConceptType.USER_EPISODE,
                                     KnowledgeConceptType.OPERATION_PLAYBOOK),
-                            20, 20, 0.70, 0.10, 60));
+                            20, 20, 0.70, 0.10, 60)).hits();
             assertThat(scoped).extracting(hit -> hit.projection().conceptId())
                     .contains(SCOPE_CONCEPTS.get(0), SCOPE_CONCEPTS.get(2))
                     .doesNotContain(SCOPE_CONCEPTS.get(1), SCOPE_CONCEPTS.get(3));
@@ -130,7 +130,7 @@ class MilvusKnowledgeProjectionIT {
                     new KnowledgeProjectionSearch(
                             "Scoped memory", vector(), "tenant-a", null,
                             Set.of(KnowledgeConceptType.USER_EPISODE),
-                            20, 20, 0.70, 0.10, 60));
+                            20, 20, 0.70, 0.10, 60)).hits();
             assertThat(unauthenticatedEpisodes).isEmpty();
         } finally {
             SCOPE_CONCEPTS.forEach(store::deleteConcept);

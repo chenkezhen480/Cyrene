@@ -33,7 +33,7 @@ public interface KnowledgeProjectionStore {
             String afterRevisionId,
             int limit);
 
-    List<KnowledgeProjectionHit> searchHybrid(KnowledgeProjectionSearch search);
+    KnowledgeProjectionSearchOutcome searchHybrid(KnowledgeProjectionSearch search);
 
     String providerName();
 }

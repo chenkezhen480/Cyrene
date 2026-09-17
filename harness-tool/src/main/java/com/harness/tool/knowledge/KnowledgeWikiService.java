@@ -104,6 +104,14 @@ public final class KnowledgeWikiService {
         AtomicReference<DeletionResult> result = new AtomicReference<>();
         repository.withAuthorityLock(id, () -> {
             var head = authorizedHead(id, authorized);
+            // Graph cards mirror their entity: deleting the card alone would be undone by the next
+            // Schema save, and a live graph space would keep pointing at a discontinued card.
+            if (head.concept().conceptType() == KnowledgeConceptType.GRAPH_SCHEMA
+                    || head.concept().conceptType() == KnowledgeConceptType.GRAPH_SPACE) {
+                throw new IllegalStateException(
+                        "A Graph Schema or Graph Space card follows its entity lifecycle;"
+                                + " delete the Schema or Graph Space instead");
+            }
             if (!Objects.equals(revisionId, head.currentVersion()))
                 throw new IllegalStateException("Wiki has changed; reload it before deleting");
             var snapshot = repository.findSnapshot(head.currentVersion());

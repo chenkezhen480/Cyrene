@@ -63,7 +63,11 @@ public final class KnowledgeReadTool implements Tool {
         int windowMax = documentExecutor.contextWindowMax();
         ObjectNode properties = objectMapper.createObjectNode();
         properties.set("handle", objectMapper.createObjectNode()
-                .put("type", "string").put("minLength", 1).put("maxLength", 4096));
+                .put("type", "string").put("minLength", 1).put("maxLength", 4096)
+                .put("description", "An exact handle string returned by knowledge_search. Copy it "
+                        + "character for character as one unbroken token: it is signed, so any "
+                        + "edit, truncation, or inserted line break makes it unusable and you must "
+                        + "search again. Each handle is single-use for this session only."));
         properties.set("before", integerProperty(0, windowMax)
                 .put("description", "Number of document chunks before the anchor; maximum "
                         + windowMax + " per call."));
@@ -80,6 +84,10 @@ public final class KnowledgeReadTool implements Tool {
                         + "A single call can move at most " + windowMax
                         + " document chunks in either direction; "
                         + "use handles on returned chunks to continue reading deeper into a document. "
+                        + "Handles are opaque signed tokens: pass them back byte for byte. If one is "
+                        + "rejected, run knowledge_search again rather than repairing the string, and "
+                        + "note that a search hit already carries a title and summary you can answer "
+                        + "from when a full read is not required. "
                         + "Graph handles return capability/Schema cards only; use query_graph for graph facts.",
                 schema,
                 com.harness.core.model.ToolCapability.RETRIEVAL);

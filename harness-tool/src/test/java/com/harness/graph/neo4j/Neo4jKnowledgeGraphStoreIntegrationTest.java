@@ -36,6 +36,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -285,6 +286,48 @@ class Neo4jKnowledgeGraphStoreIntegrationTest {
                     .isEqualTo(new com.harness.graph.model.GraphDeleteResult(0, 0));
 
             cleanupGraph(driver, graphId);
+        }
+    }
+
+    /**
+     * A space larger than one batch must be emptied across several committed transactions, and the
+     * reported counts must still describe the whole space.
+     */
+    @Test
+    void shouldDeleteASpaceLargerThanOneBatch() {
+        String uri = System.getProperty("graph.it.uri", "");
+        Assumptions.assumeFalse(uri.isBlank(), "Set -Dgraph.it.uri to run Neo4j integration tests");
+        String user = System.getProperty("graph.it.user", "neo4j");
+        String password = System.getProperty("graph.it.password", "test-password");
+        waitUntilReady(uri, user, password);
+
+        int totalNodes = 1_100;
+        String graphId = "graph-batch-" + UUID.randomUUID();
+        Driver driver = GraphDatabase.driver(uri, AuthTokens.basic(user, password));
+        Neo4jKnowledgeGraphStore store = new Neo4jKnowledgeGraphStore(
+                driver, settings(uri, user, password), registry(), new ObjectMapper());
+        try {
+            store.upsertBatch(new GraphMutationBatch(
+                    "batch-seed",
+                    graphId,
+                    "project-graph",
+                    IntStream.range(0, totalNodes)
+                            .mapToObj(index -> new GraphNode(
+                                    "person-" + index, Set.of("Person"),
+                                    Map.of("name", "Person " + index)))
+                            .toList(),
+                    List.of()
+            ));
+
+            var deleted = store.deleteGraphSpace(new GraphSpaceKey(graphId, "project-graph"));
+
+            assertThat(deleted.deletedNodes()).isEqualTo(totalNodes);
+            assertThat(store.deleteGraphSpace(new GraphSpaceKey(graphId, "project-graph")))
+                    .isEqualTo(new com.harness.graph.model.GraphDeleteResult(0, 0));
+
+            cleanupGraph(driver, graphId);
+        } finally {
+            driver.close();
         }
     }
 

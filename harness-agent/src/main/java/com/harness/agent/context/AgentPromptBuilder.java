@@ -136,6 +136,12 @@ public final class AgentPromptBuilder {
                 + "Cypher. To continue a document window, use a returned chunk handle with before/after; "
                 + "graph handles return capability cards only and recommend query_graph. Wiki hits share one hybrid RRF score; downstream document and graph results retain their "
                 + "own score semantics and must not be combined with Wiki scores. ");
+        prompt.append("When the question is about an earlier conversation, what the user asked before, or "
+                + "anything they call \"that thing we discussed\", rewrite it into a self-contained query that "
+                + "names the actual subject — with its synonyms, English name, and domain terms — instead of "
+                + "copying the user's wording; never add facts the user did not state. If the question names no "
+                + "subject at all, search with recent=true, which returns the user's most recent episodes in "
+                + "time order rather than by similarity. ");
         if (graphRequestContext != null && graphRequestContext.hasSubjectScope()) {
             prompt.append("The server has already fixed the graph space and subject scope; graph reads cannot expand it. ");
         } else if (graphRequestContext != null) {

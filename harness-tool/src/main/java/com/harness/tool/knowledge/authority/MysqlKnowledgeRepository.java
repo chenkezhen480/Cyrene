@@ -42,9 +42,11 @@ public final class MysqlKnowledgeRepository implements KnowledgeRepository {
     private final VectorStore vectorStore;
     private final ThreadLocal<Connection> projectionConnection = new ThreadLocal<>();
     private static final String HEAD_COLUMNS = "id, tenant_id, user_id, namespace_type, namespace_key, concept_type, logical_key, status, current_revision_id, links, version, stale_after, created_at, updated_at, revision_metadata";
+    // The UNION serves two tables with different columns, so event_time is projected explicitly in
+    // both branches: knowledge_metadata has it, user_preferences never does.
     private static final String HEADS = "(SELECT " + HEAD_COLUMNS.replace("current_revision_id", "current_version AS current_revision_id")
-            + ", route_type, route_data FROM knowledge_metadata UNION ALL SELECT " + HEAD_COLUMNS
-            + ", NULL AS route_type, JSON_OBJECT() AS route_data FROM user_preferences)";
+            + ", route_type, route_data, event_time FROM knowledge_metadata UNION ALL SELECT " + HEAD_COLUMNS
+            + ", NULL AS route_type, JSON_OBJECT() AS route_data, NULL AS event_time FROM user_preferences)";
 
     public MysqlKnowledgeRepository(ObjectMapper objectMapper) {
         this(MysqlConnectionPool::getConnection, objectMapper);
@@ -133,10 +135,18 @@ public final class MysqlKnowledgeRepository implements KnowledgeRepository {
         if (status != null) {
             sql.append(" AND status = ?");
         }
+        // A user episode is an event: its place in the list is when it happened, not when its row
+        // was last written, so restating an old episode must not jump it to the top. Every other
+        // kind has no event time and keeps ordering by last update.
+        String timeColumn = conceptType == KnowledgeConceptType.USER_EPISODE
+                ? "event_time"
+                : "updated_at";
         if (cursor != null) {
-            sql.append(" AND (updated_at < ? OR (updated_at = ? AND id < ?))");
+            sql.append(" AND (").append(timeColumn).append(" < ? OR (")
+                    .append(timeColumn).append(" = ? AND id < ?))");
         }
-        sql.append(" ORDER BY updated_at DESC, id DESC LIMIT ?");
+        sql.append(" ORDER BY ").append(timeColumn)
+                .append(" DESC, updated_at DESC, id DESC LIMIT ?");
 
         List<KnowledgeConcept> concepts = new ArrayList<>();
         try (Connection connection = connectionProvider.getConnection();
@@ -167,7 +177,10 @@ public final class MysqlKnowledgeRepository implements KnowledgeRepository {
         return PageResponse.fromFetched(
                 concepts,
                 limit,
-                concept -> concept.updatedAt() + "|" + concept.id());
+                // The cursor carries the same ordering key the query used.
+                concept -> (conceptType == KnowledgeConceptType.USER_EPISODE
+                        ? concept.eventTime()
+                        : concept.updatedAt()) + "|" + concept.id());
     }
 
     @Override
@@ -723,7 +736,7 @@ public final class MysqlKnowledgeRepository implements KnowledgeRepository {
         String sql = """
                 UPDATE %s
                 SET %s = ?, version = version + 1, status = ?,
-                    stale_after = ?, updated_at = ?
+                    stale_after = ?, event_time = ?, updated_at = ?
                 WHERE id = ? AND version = ?
                 """.formatted(tableFor(change.concept().conceptType()),
                         change.concept().conceptType() == KnowledgeConceptType.USER_PREFERENCE ? "current_revision_id" : "current_version");
@@ -731,9 +744,10 @@ public final class MysqlKnowledgeRepository implements KnowledgeRepository {
             statement.setString(1, change.revision().id());
             statement.setString(2, change.concept().status().storageValue());
             MysqlKnowledgeArtifactRepository.setInstant(statement, 3, change.concept().staleAfter());
-            statement.setTimestamp(4, Timestamp.from(change.concept().updatedAt()));
-            statement.setString(5, change.concept().id());
-            statement.setLong(6, change.expectedConceptVersion());
+            MysqlKnowledgeArtifactRepository.setInstant(statement, 4, change.concept().eventTime());
+            statement.setTimestamp(5, Timestamp.from(change.concept().updatedAt()));
+            statement.setString(6, change.concept().id());
+            statement.setLong(7, change.expectedConceptVersion());
             if (statement.executeUpdate() != 1) {
                 throw new KnowledgePersistenceException(
                         "Knowledge Concept optimistic lock conflict: " + change.concept().id());
@@ -809,6 +823,23 @@ public final class MysqlKnowledgeRepository implements KnowledgeRepository {
                 ? "current_revision_id" : "current_version");
     }
 
+    /**
+     * Reads a column only when the result set actually carries it.
+     *
+     * <p>{@code mapConcept} serves both {@code knowledge_metadata} and {@code user_preferences},
+     * and only the former has an event time — preferences explicitly reject one. A plain
+     * {@code getTimestamp} would therefore fail every preference read with "column not found",
+     * so the absence is handled where it is legitimate rather than at each call site.</p>
+     */
+    private static Instant optionalInstant(ResultSet resultSet, String column) throws SQLException {
+        try {
+            resultSet.findColumn(column);
+        } catch (SQLException absent) {
+            return null;
+        }
+        return instant(resultSet, column);
+    }
+
     private static KnowledgeConcept mapConcept(ResultSet resultSet, String versionColumn) throws SQLException {
         return new KnowledgeConcept(
                 resultSet.getString("id"),
@@ -824,7 +855,8 @@ public final class MysqlKnowledgeRepository implements KnowledgeRepository {
                 resultSet.getLong("version"),
                 instant(resultSet, "stale_after"),
                 instant(resultSet, "created_at"),
-                instant(resultSet, "updated_at"));
+                instant(resultSet, "updated_at"),
+                optionalInstant(resultSet, "event_time"));
     }
 
     private static KnowledgeLink mapLink(ResultSet resultSet) throws SQLException {

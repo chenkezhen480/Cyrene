@@ -426,6 +426,10 @@ const ChatPage = {
     const messages = ref([]);
     const inputText = ref('');
     const isStreaming = ref(false);
+    // The run whose events this page still accepts. A new message supersedes the old run, and
+    // anything the old run emits afterwards is discarded rather than written into the new answer.
+    const currentRunId = ref(null);
+    let activeRun = null;
     const messagesEl = ref(null);
     const attachedFiles = ref([]);
     const chatFileInput = ref(null);
@@ -683,6 +687,10 @@ const ChatPage = {
     }
 
     async function cancelOutput() {
+      // End the local stream first so the button responds immediately, then tell the server:
+      // a tool already in flight only actually stops when the run's token is cancelled.
+      // `stop()` rather than `abort()` so the cut-short stream reads as a cancel, not a failure.
+      if (activeRun) activeRun.stop();
       if (!currentSessionId.value) return;
       try {
         await CyreneAPI.cancelChat(currentSessionId.value);
@@ -729,7 +737,7 @@ const ChatPage = {
 
     async function sendMessage() {
       const text = inputText.value.trim();
-      if ((!text && attachedFiles.value.length === 0) || isStreaming.value) return;
+      if (!text && attachedFiles.value.length === 0) return;
 
       if (!userId.value) {
         showToast(t('setUserIdFirst'), 'error');
@@ -769,6 +777,10 @@ const ChatPage = {
       inputText.value = '';
       scrollToBottom();
 
+      // Supersede whatever was running: the user has moved on, and the previous run's late
+      // tool results must not land in this answer.
+      if (activeRun) activeRun.abort();
+
       isStreaming.value = true;
       messages.value.push({
         role: 'assistant',
@@ -786,6 +798,29 @@ const ChatPage = {
       let renderFrame = null;
       let streamDrainResolve = null;
       let terminalPayload = null;
+
+      // Lets a later send (or the Stop button) stop this run's reader and settle its pending
+      // render frame; without the resolve, this invocation's `await waitForStreamDrain()`
+      // could never return.
+      let stopRequested = false;
+      const tearDown = () => {
+        if (streamDrainResolve) {
+          const resolve = streamDrainResolve;
+          streamDrainResolve = null;
+          resolve();
+        }
+        if (reader) reader.cancel().catch(() => {});
+      };
+      const thisRun = {
+        // Superseded: a newer message replaced this run, so its stream just disappears.
+        abort: tearDown,
+        // Stopped: the user asked for it, so the cut-short stream is a cancel, not a failure.
+        stop() {
+          stopRequested = true;
+          tearDown();
+        },
+      };
+      activeRun = thisRun;
 
       const flushStreamFrame = () => {
         renderFrame = null;
@@ -844,8 +879,24 @@ const ChatPage = {
             return;
           }
 
+          // This invocation no longer owns the page — a newer message replaced it. Everything
+          // it still emits belongs to an answer nobody is watching, including a START that
+          // was in flight when it got superseded.
+          if (activeRun !== thisRun) return;
+
+          // A superseded run keeps emitting (its tools cannot always abort) — drop its tail.
+          // START is exempt: it is how a run announces the id every later frame is checked
+          // against, so whatever START arrives next is the one that becomes current.
+          if (type !== 'start'
+              && currentRunId.value !== null
+              && parsed.runId !== undefined
+              && parsed.runId !== currentRunId.value) {
+            return;
+          }
+
           switch (type) {
                   case 'start':
+                    if (parsed.runId) currentRunId.value = parsed.runId;
                     if (parsed.sessionId) {
                       currentSessionId.value = parsed.sessionId;
                     }
@@ -950,26 +1001,37 @@ const ChatPage = {
         // Reload sessions list
         loadSessions();
       } catch (e) {
-        messages.value[msgIdx].content = `⚠️ Error: ${e.message}`;
-        showToast(e.message, 'error');
+        // A superseded or stopped run is cut short on purpose; its error is noise, not a
+        // failure to report.
+        if (activeRun === thisRun && !stopRequested) {
+          messages.value[msgIdx].content = `⚠️ Error: ${e.message}`;
+          showToast(e.message, 'error');
+        }
       } finally {
         clearTimeout(idleTimer);
         if (renderFrame !== null) cancelAnimationFrame(renderFrame);
         if (reader) {
           reader.cancel().catch(() => {});
         }
+        const superseded = activeRun !== thisRun;
+        const abandoned = superseded || stopRequested || terminalEvent === 'cancelled';
         messages.value[msgIdx].toolCalls.forEach(toolCall => {
           if (['CREATED', 'RUNNING', 'AWAITING_CONFIRMATION'].includes(toolCall.status)) {
             upsertToolCall(messages.value[msgIdx], {
               toolCallId: toolCall.id,
-              status: terminalEvent === 'cancelled' ? 'CANCELLED' : 'FAILED',
-              errorSummary: terminalEvent === 'cancelled' ? '' : t('streamInterrupted'),
+              status: abandoned ? 'CANCELLED' : 'FAILED',
+              errorSummary: abandoned ? '' : t('streamInterrupted'),
             });
           }
         });
-        isStreaming.value = false;
-        pendingConfirmation.value = null;
-        confirmationAcknowledged.value = false;
+        // Only the run that still owns the page may touch shared state: a newer run may have
+        // started while this one was winding down.
+        if (!superseded) {
+          activeRun = null;
+          isStreaming.value = false;
+          pendingConfirmation.value = null;
+          confirmationAcknowledged.value = false;
+        }
         scrollToBottom();
       }
     }
@@ -1014,7 +1076,7 @@ const ChatPage = {
     }
 
     return {
-      Icons, t, sessions, currentSessionId, messages, inputText, isStreaming,
+      Icons, t, sessions, currentSessionId, messages, inputText, isStreaming, currentRunId,
       messagesEl, userId, renderMarkdown, stripArtifactLinks,
       pendingConfirmation, confirmationAcknowledged, confirmationSubmitting,
       isRecording, isUploadingVoice,
@@ -1082,7 +1144,7 @@ const ChatPage = {
                         <span v-else-if="tc.status === 'AWAITING_CONFIRMATION'"
                               class="tool-call-status tool-call-awaiting-status">!</span>
                         <span v-else-if="tc.status === 'SUCCEEDED'" class="tool-call-status tool-call-success">✅</span>
-                        <span v-else-if="tc.status === 'CANCELLED'" class="tool-call-status">⊘</span>
+                        <span v-else-if="tc.status === 'CANCELLED'" class="tool-call-status tool-call-cancelled">⊘</span>
                         <span v-else class="tool-call-status tool-call-error" :title="tc.errorSummary">❌</span>
                       </div>
                       <details v-if="tc.arguments" class="tool-call-arguments">
@@ -1190,7 +1252,8 @@ const ChatPage = {
                     <rect x="6" y="6" width="12" height="12" rx="2"/>
                   </svg>
                 </button>
-                <button v-else class="chat-send-btn" @click="sendMessage"
+                <!-- Kept visible while streaming so a new message can interrupt the current run. -->
+                <button v-if="!isStreaming || inputText.trim() || attachedFiles.length" class="chat-send-btn" @click="sendMessage"
                         :disabled="isRecording || isUploadingVoice || (!inputText.trim() && attachedFiles.length === 0)" :title="t('send')">
                   <span v-html="Icons.send" style="width:16px;height:16px;"></span>
                 </button>
@@ -1287,6 +1350,11 @@ const KnowledgePage = {
     const draftSummary = ref('');
     const wikiDirty = computed(() => selectedWiki.value !== null
       && (draftTitle.value !== selectedWiki.value.title || draftSummary.value !== selectedWiki.value.summary));
+    // Graph cards mirror their Schema or Graph Space, so they are discontinued by deleting that
+    // entity instead of by removing the card here.
+    const wikiCardFollowsEntity = computed(() => selectedWiki.value !== null
+      && (selectedWiki.value.conceptType === 'GRAPH_SCHEMA'
+        || selectedWiki.value.conceptType === 'GRAPH_SPACE'));
     const wikiPreview = computed(() => {
       const card = selectedWiki.value;
       if (!card) return '';
@@ -1525,7 +1593,8 @@ const KnowledgePage = {
       wikiType, wikiTypes, wikiCards, wikiPageInfo, wikiLoading, wikiError, selectedWiki, editingWiki,
       wikiDrawer, wikiExportError, wikiSaving, wikiDeleting, wikiExporting, draftTitle, draftSummary, wikiDirty, wikiPreview,
       loadCollections, loadDocuments, applyCollection, uploadFiles, openWiki, openDocumentWiki,
-      loadWiki, changeWikiType, saveWiki, deleteWiki, downloadWiki, openWikiDrawer, closeWikiDrawer, handleWikiBackdrop };
+      loadWiki, changeWikiType, saveWiki, deleteWiki, downloadWiki, openWikiDrawer, closeWikiDrawer, handleWikiBackdrop,
+      wikiCardFollowsEntity };
   },
   template: `
     <div class="knowledge-workspace">
@@ -1633,7 +1702,8 @@ const KnowledgePage = {
                 <button class="btn btn-ghost btn-sm" :class="{ 'wiki-tab-active': editingWiki }" @click="editingWiki = true">{{ t('edit') }}</button>
               </div>
               <div class="knowledge-wiki-toolbar">
-                <button class="btn btn-danger btn-sm" @click="deleteWiki" :disabled="wikiDeleting || wikiSaving || wikiExporting">{{ wikiDeleting ? t('wikiDeleting') : t('delete') }}</button>
+                <button v-if="!wikiCardFollowsEntity" class="btn btn-danger btn-sm" @click="deleteWiki" :disabled="wikiDeleting || wikiSaving || wikiExporting">{{ wikiDeleting ? t('wikiDeleting') : t('delete') }}</button>
+                <span v-else class="text-xs text-ash">{{ t('wikiCardFollowsEntity') }}</span>
                 <button class="btn btn-ghost btn-sm" @click="downloadWiki(false)" :disabled="wikiExporting || wikiSaving || wikiDeleting || wikiDirty" :title="wikiDirty ? t('wikiSaveBeforeExport') : ''">{{ wikiExporting ? t('exportingWiki') : t('exportWikiMd') }}</button>
               </div>
             </div>
@@ -5431,7 +5501,7 @@ const GraphBrowsePage = {
 };
 
 const DEFAULT_GRAPH_SCHEMA_JSON = JSON.stringify({
-  schemaId: 'student-capability-v1',
+  schemaId: 'new-schema',
   version: 1,
   mode: 'STRICT',
   nodeTypes: {
@@ -5553,7 +5623,7 @@ function graphDefinitionToDesigner(definition = {}) {
   }));
 
   return {
-    schemaId: definition.schemaId || 'student-capability-v1',
+    schemaId: definition.schemaId || 'new-schema',
     version: Number(definition.version) || 1,
     mode: GRAPH_SCHEMA_MODES.includes(definition.mode) ? definition.mode : 'STRICT',
     nodeTypes,
@@ -6406,13 +6476,16 @@ const GraphSchemaPage = {
     }
 
     async function deleteSchema() {
-      if (!details.value?.editable || details.value.enabled || deleting.value) return;
+      if (!details.value?.editable || deleting.value) return;
       if (!window.confirm(t('graphSchemaDeleteConfirm'))) return;
       deleting.value = true;
       error.value = '';
       try {
-        await CyreneAPI.deleteGraphSchemaConfig(selectedSchemaId.value);
-        showToast(t('graphSchemaDeleted'), 'success');
+        const result = await CyreneAPI.deleteGraphSchemaConfig(selectedSchemaId.value);
+        showToast(t('graphSchemaDeleted')
+          .replace('{spaces}', result.deletedSpaces)
+          .replace('{nodes}', result.deletedNodes)
+          .replace('{relations}', result.deletedRelations), 'success');
         selectedSchemaId.value = '';
         await refreshSchemas();
       } catch (e) {
@@ -6516,8 +6589,8 @@ const GraphSchemaPage = {
                     : details.enabled ? t('graphDisableSchema') : t('graphEnableSchema') }}
                 </button>
                 <button class="btn btn-danger btn-sm"
-                        :disabled="details.enabled || deleting"
-                        :title="details.enabled ? t('graphDisableBeforeDelete') : ''"
+                        :disabled="deleting"
+                        :title="t('graphSchemaDeleteHint')"
                         @click="deleteSchema">
                   {{ deleting ? t('graphDeletingSchema') : t('delete') }}
                 </button>
@@ -7254,6 +7327,181 @@ const ConfigPage = {
   `
 };
 
+// ── Tenant / identity tool permissions ──
+const ToolPermissionPage = {
+  components: { EmptyState },
+  setup() {
+    const Icons = inject('Icons');
+    const t = inject('t');
+    // Standalone installations have no tenant system; every request resolves to 000000.
+    const tenantId = ref('000000');
+    const identity = ref('DEFAULT');
+    const profiles = ref([]);
+    const tenants = ref([]);
+    const tools = ref([]);
+    const disabled = ref(new Set());
+    const loading = ref(false);
+    const saving = ref(false);
+    const error = ref('');
+    const restricted = ref(false);
+
+    function applyView(data) {
+      identity.value = data.identity || 'DEFAULT';
+      profiles.value = data.profiles || [];
+      tenants.value = data.tenants || [];
+      tools.value = data.tools || [];
+      disabled.value = new Set(data.disabledTools || []);
+      restricted.value = !!data.restricted;
+    }
+
+    async function load() {
+      if (!tenantId.value.trim()) {
+        error.value = t('tenantRequired');
+        return;
+      }
+      loading.value = true;
+      error.value = '';
+      try {
+        applyView(await CyreneAPI.getToolPermissions(
+          tenantId.value.trim(), identity.value.trim() || 'DEFAULT'));
+      } catch (e) {
+        error.value = e.message;
+      } finally {
+        loading.value = false;
+      }
+    }
+
+    async function loadTenants() {
+      try {
+        tenants.value = (await CyreneAPI.getToolPermissions()).tenants || [];
+      } catch (e) {
+        // The picker is a convenience; an empty list still lets a tenant be typed in.
+      }
+    }
+
+    function toggleTool(name) {
+      const next = new Set(disabled.value);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      disabled.value = next;
+    }
+
+    function disableAll() {
+      disabled.value = new Set(tools.value.map(tool => tool.name));
+    }
+
+    function clearAll() {
+      disabled.value = new Set();
+    }
+
+    async function save() {
+      saving.value = true;
+      error.value = '';
+      try {
+        await CyreneAPI.saveToolPermissions({
+          tenantId: tenantId.value.trim(),
+          identity: identity.value.trim() || 'DEFAULT',
+          disabledTools: [...disabled.value],
+        });
+        restricted.value = disabled.value.size > 0;
+        showToast(t('permissionsSaved'), 'success');
+        await load();
+      } catch (e) {
+        error.value = e.message;
+      } finally {
+        saving.value = false;
+      }
+    }
+
+    onMounted(loadTenants);
+
+    return {
+      Icons, t, tenantId, identity, profiles, tenants,
+      tools, disabled, loading, saving, error, restricted,
+      load, toggleTool, disableAll, clearAll, save,
+    };
+  },
+  template: `
+    <div>
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">{{ t('toolPermissions') }}</div>
+        </div>
+        <div class="card-body">
+          <div style="display: flex; flex-wrap: wrap; gap: var(--space-3); align-items: end;">
+            <div class="input-group" style="flex: 1 1 200px;">
+              <label class="input-label">{{ t('tenantId') }}</label>
+              <input class="input" v-model="tenantId" list="tenant-options"
+                     :placeholder="t('tenantIdPlaceholder')" />
+              <datalist id="tenant-options">
+                <option v-for="item in tenants" :key="item" :value="item"></option>
+              </datalist>
+            </div>
+            <div class="input-group" style="flex: 1 1 200px;">
+              <label class="input-label">{{ t('identity') }}</label>
+              <input class="input" v-model="identity" list="identity-options" :placeholder="t('identityPlaceholder')" />
+              <datalist id="identity-options">
+                <option v-for="item in profiles" :key="item" :value="item"></option>
+              </datalist>
+            </div>
+            <button class="btn btn-primary btn-input" @click="load" :disabled="loading">
+              {{ loading ? t('loading') : t('loadTenant') }}
+            </button>
+          </div>
+          <div class="text-xs text-ash mt-2">{{ t('toolPermissionHint') }}</div>
+          <div v-if="error" class="text-sm mt-2" style="color: var(--error);">{{ error }}</div>
+        </div>
+      </div>
+
+      <div class="card mt-4">
+        <div class="card-header">
+          <div class="card-title">
+            {{ t('registeredTools') }} ({{ t('disabledCount') }} {{ disabled.size }}/{{ tools.length }})
+          </div>
+          <div style="display: flex; gap: var(--space-2); align-items: center;">
+            <span :class="['tag', restricted ? 'tag-gold' : 'tag-dusk']">
+              {{ restricted ? t('permissionRestricted') : t('permissionUnrestricted') }}
+            </span>
+            <button class="btn btn-ghost btn-sm" @click="disableAll">{{ t('disableAll') }}</button>
+            <button class="btn btn-ghost btn-sm" @click="clearAll">{{ t('clearAll') }}</button>
+            <button class="btn btn-primary btn-sm" @click="save" :disabled="saving">
+              <span v-html="Icons.save" style="width:14px;height:14px;"></span>
+              {{ saving ? t('saving') : t('save') }}
+            </button>
+          </div>
+        </div>
+        <div class="card-body">
+          <table>
+            <thead>
+              <tr>
+                <th style="width: 60px;">{{ t('disabledColumn') }}</th>
+                <th>{{ t('toolName') }}</th>
+                <th>{{ t('capability') }}</th>
+                <th>{{ t('toolDescription') }}</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="tool in tools" :key="tool.name">
+                <td>
+                  <input type="checkbox" :checked="disabled.has(tool.name)"
+                         @change="toggleTool(tool.name)" />
+                </td>
+                <td style="font-family: monospace;">{{ tool.name }}</td>
+                <td><span class="tag tag-iris" style="font-size: 11px;">{{ tool.capability }}</span></td>
+                <td class="text-xs text-ash">{{ tool.description }}</td>
+              </tr>
+            </tbody>
+          </table>
+          <empty-state v-if="!tools.length"
+            :icon="Icons.tool"
+            :title="t('loadTenantFirst')"
+            :hint="t('toolPermissionHint')" />
+        </div>
+      </div>
+    </div>
+  `
+};
+
 // ── Main App ──
 const app = createApp({
   components: {
@@ -7266,6 +7514,7 @@ const app = createApp({
     AuditPage,
     ModelConfigPage,
     ConfigPage,
+    ToolPermissionPage,
   },
   setup() {
     const Icons = inject('Icons');
@@ -7312,6 +7561,7 @@ const app = createApp({
       { id: 'graph', label: t('graph'), icon: Icons.graph },
       { id: 'audit', label: t('audit'), icon: Icons.audit },
       { id: 'model-config', label: t('modelConfiguration'), icon: Icons.model },
+      { id: 'tool-permission', label: t('toolPermissions'), icon: Icons.tool },
       { id: 'config', label: t('config'), icon: Icons.config },
     ]);
 

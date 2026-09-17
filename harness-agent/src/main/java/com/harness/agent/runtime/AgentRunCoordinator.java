@@ -108,15 +108,18 @@ public final class AgentRunCoordinator {
     ) {
         long startedAt = System.currentTimeMillis();
         RunTrace trace = runtime.startTrace();
-        String runId = null;
+        String runId = UUID.randomUUID().toString();
         try {
             recordFinalOutputContract(trace, finalOutputContract);
             PreparedAgentRun prepared = runPreparer.prepare(toRequest(command, true), trace);
             RunToolCatalog toolCatalog = createToolCatalog(
-                    prepared.sessionId(), prepared.unavailableTools(), finalOutputContract);
+                    prepared.sessionId(),
+                    prepared.unavailableTools(),
+                    prepared.agentContext().toolDenylist(),
+                    finalOutputContract);
             prepared = runPreparer.complete(prepared, toolCatalog, trace);
-            runId = openRunScope(
-                    prepared.sessionId(), command.cancellationToken(), toolCatalog, trace, null);
+            openRunScope(
+                    runId, prepared.sessionId(), command.cancellationToken(), toolCatalog, trace, null);
 
             List<MessageBlock> blocks = new ArrayList<>();
             StringBuilder text = new StringBuilder();
@@ -189,22 +192,29 @@ public final class AgentRunCoordinator {
     public void stream(AgentRunCommand command, StreamCallback callback) {
         long startedAt = System.currentTimeMillis();
         RunTrace trace = runtime.startTrace();
-        String runId = null;
+        // Minted before the first event: every frame of this run is tagged with it, and the
+        // client keys its "is this still my run" filter on the value carried by START.
+        String runId = UUID.randomUUID().toString();
+        StreamCallback runCallback = event -> callback.onEvent(event.withRunId(runId));
         try {
             PreparedAgentRun prepared = runPreparer.prepare(toRequest(command, false), trace);
-            callback.onEvent(StreamEvent.start(prepared.sessionId()));
+            runCallback.onEvent(StreamEvent.start(prepared.sessionId()));
 
-            RunToolCatalog toolCatalog = createToolCatalog(prepared.sessionId(), prepared.unavailableTools(), new FinalOutputContract.Text());
+            RunToolCatalog toolCatalog = createToolCatalog(
+                    prepared.sessionId(),
+                    prepared.unavailableTools(),
+                    prepared.agentContext().toolDenylist(),
+                    new FinalOutputContract.Text());
             prepared = runPreparer.complete(prepared, toolCatalog, trace);
             CompressionOutcome compression = prepared.compressionOutcome();
-            emitCompressionEvents(compression, callback);
-            runId = openRunScope(
-                    prepared.sessionId(), command.cancellationToken(), toolCatalog, trace, callback);
+            emitCompressionEvents(compression, runCallback);
+            openRunScope(
+                    runId, prepared.sessionId(), command.cancellationToken(), toolCatalog, trace, runCallback);
             List<MessageBlock> blocks = new ArrayList<>();
             StringBuilder text = new StringBuilder();
             AtomicReference<ConfirmationDecision> confirmationDecision = new AtomicReference<>();
             ReActListener listener = streamingListener(
-                    callback, trace, blocks, text, confirmationDecision);
+                    runCallback, trace, blocks, text, confirmationDecision);
             ConfirmationExecutionContext confirmationContext = new ConfirmationExecutionContext(
                     prepared.userId(),
                     prepared.sessionId(),
@@ -255,7 +265,7 @@ public final class AgentRunCoordinator {
             finishTraceAsync(trace);
             memoryRuntime.updateActivityAsync(prepared.sessionId());
 
-            callback.onEvent(StreamEvent.done(
+            runCallback.onEvent(StreamEvent.done(
                     result.output(),
                     trace.traceId(),
                     prepared.sessionId(),
@@ -273,11 +283,11 @@ public final class AgentRunCoordinator {
                 trace.recordOutput(
                         "Error: " + persistenceFailure.getMessage(), RiskLevel.HIGH, false);
                 finishTraceAsync(trace);
-                callback.onEvent(StreamEvent.error(friendlyErrorMessage(persistenceFailure)));
+                runCallback.onEvent(StreamEvent.error(friendlyErrorMessage(persistenceFailure)));
                 return;
             }
             finishTraceAsync(trace);
-            callback.onEvent(StreamEvent.cancelled());
+            runCallback.onEvent(StreamEvent.cancelled());
         } catch (Exception e) {
             Exception reportedFailure = e;
             try {
@@ -291,7 +301,7 @@ public final class AgentRunCoordinator {
             trace.recordOutput(
                     "Error: " + reportedFailure.getMessage(), RiskLevel.HIGH, false);
             finishTraceAsync(trace);
-            callback.onEvent(StreamEvent.error(friendlyErrorMessage(reportedFailure)));
+            runCallback.onEvent(StreamEvent.error(friendlyErrorMessage(reportedFailure)));
         } finally {
             closeRunScope(runId);
         }
@@ -480,14 +490,14 @@ public final class AgentRunCoordinator {
         };
     }
 
-    private String openRunScope(
+    private void openRunScope(
+            String runId,
             String sessionId,
             CancellationToken cancellationToken,
             RunToolCatalog toolCatalog,
             RunTrace trace,
             StreamCallback callback
     ) {
-        String runId = UUID.randomUUID().toString();
         subAgentManager.openScope(runId, event -> {
             if (callback != null) {
                 callback.onEvent(StreamEvent.subAgentStatus(event));
@@ -503,7 +513,6 @@ public final class AgentRunCoordinator {
                 .map(ToolSpec::name)
                 .collect(Collectors.joining(",")));
         trace.putMetadata(metadata);
-        return runId;
     }
 
     private void closeRunScope(String runId) {
@@ -521,13 +530,20 @@ public final class AgentRunCoordinator {
     private RunToolCatalog createToolCatalog(
             String sessionId,
             Set<String> unavailableTools,
+            Set<String> disabledTools,
             FinalOutputContract finalOutputContract
     ) {
-        RunToolCatalog catalog = toolRegistry.snapshot().excluding(unavailableTools);
+        // Both sets only ever remove tools; excluding() is a no-op for a null or empty set,
+        // which is what "nothing disabled for this tenant + identity" resolves to.
+        RunToolCatalog catalog =
+                toolRegistry.snapshot().excluding(unavailableTools).excluding(disabledTools);
         if (catalog.get(FileReadTool.TOOL_NAME) instanceof FileReadTool fileTool) {
             catalog = catalog.replacing(fileTool.forSession(sessionId));
         }
-        if (finalOutputContract instanceof FinalOutputContract.JsonSchema jsonSchema) {
+        // replacing() re-adds a missing tool, so both replaces are guarded by membership: a tool
+        // the tenant disabled must stay gone rather than come back as a request-scoped variant.
+        if (finalOutputContract instanceof FinalOutputContract.JsonSchema jsonSchema
+                && catalog.contains(StructuredOutputTool.TOOL_NAME)) {
             return catalog.replacing(StructuredOutputTool.terminal(jsonSchema));
         }
         return catalog;

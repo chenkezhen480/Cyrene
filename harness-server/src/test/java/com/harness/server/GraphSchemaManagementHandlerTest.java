@@ -8,13 +8,13 @@ import com.harness.graph.schema.GraphSchemaManagementService;
 import com.harness.graph.schema.GraphSchemaMode;
 import com.harness.graph.schema.GraphSchemaSource;
 import com.harness.graph.schema.GraphSchemaSummary;
-import com.harness.graph.store.KnowledgeGraphStore;
 import com.harness.tool.knowledge.GraphSchemaWikiCompiler;
 import io.javalin.http.Context;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -28,7 +28,6 @@ class GraphSchemaManagementHandlerTest {
     @Test
     void authenticatesAndListsSchemaConfigsWithCursorPagination() {
         GraphSchemaManagementService service = mock(GraphSchemaManagementService.class);
-        KnowledgeGraphStore graphStore = mock(KnowledgeGraphStore.class);
         GraphSettings settings = mock(GraphSettings.class);
         GraphRequestAuthenticator authenticator = mock(GraphRequestAuthenticator.class);
         GraphSchemaWikiCompiler wikiCompiler = mock(GraphSchemaWikiCompiler.class);
@@ -44,7 +43,8 @@ class GraphSchemaManagementHandlerTest {
 
         GraphSchemaManagementHandler handler =
                 new GraphSchemaManagementHandler(
-                        service, graphStore, settings, authenticator, wikiCompiler);
+                        service, settings, authenticator, wikiCompiler,
+                        mock(GraphDeletionService.class));
         handler.list(context);
 
         verify(authenticator).authenticate(context);
@@ -60,12 +60,11 @@ class GraphSchemaManagementHandlerTest {
     @Test
     void parsesCreateRequestAndDelegatesToService() {
         GraphSchemaManagementService service = mock(GraphSchemaManagementService.class);
-        KnowledgeGraphStore graphStore = mock(KnowledgeGraphStore.class);
         GraphSettings settings = mock(GraphSettings.class);
         GraphRequestAuthenticator authenticator = mock(GraphRequestAuthenticator.class);
         GraphSchemaWikiCompiler wikiCompiler = mock(GraphSchemaWikiCompiler.class);
         Context context = mock(Context.class);
-        GraphSchemaDetails details = mock(GraphSchemaDetails.class);
+        GraphSchemaDetails details = details(true);
         GraphSchemaManagementHandler.GraphSchemaWriteRequest request =
                 new GraphSchemaManagementHandler.GraphSchemaWriteRequest(
                         "yaml", "schemaId: managed-schema", true);
@@ -78,7 +77,8 @@ class GraphSchemaManagementHandlerTest {
 
         GraphSchemaManagementHandler handler =
                 new GraphSchemaManagementHandler(
-                        service, graphStore, settings, authenticator, wikiCompiler);
+                        service, settings, authenticator, wikiCompiler,
+                        mock(GraphDeletionService.class));
         handler.create(context);
 
         verify(authenticator).authenticate(context);
@@ -86,49 +86,88 @@ class GraphSchemaManagementHandlerTest {
         verify(wikiCompiler).synchronize(details);
     }
 
+    /**
+     * Both states publish a card: creating a Schema has to show what it can answer before it is
+     * switched on, and the card itself states when the Schema is not enabled. Only deleting a Schema
+     * discontinues its card.
+     */
     @Test
-    void rejectsSchemaDeletionWhileGraphSpacesStillUseIt() {
+    void publishesACardForBothEnabledAndDisabledSchemas() {
         GraphSchemaManagementService service = mock(GraphSchemaManagementService.class);
-        KnowledgeGraphStore graphStore = mock(KnowledgeGraphStore.class);
-        GraphSettings settings = mock(GraphSettings.class);
-        GraphRequestAuthenticator authenticator = mock(GraphRequestAuthenticator.class);
         GraphSchemaWikiCompiler wikiCompiler = mock(GraphSchemaWikiCompiler.class);
         Context context = mock(Context.class);
-
-        when(context.pathParam("schemaId")).thenReturn("student-schema");
-        when(context.status(409)).thenReturn(context);
-        when(graphStore.hasGraphSpacesForSchema("student-schema")).thenReturn(true);
-
-        GraphSchemaManagementHandler handler =
-                new GraphSchemaManagementHandler(
-                        service, graphStore, settings, authenticator, wikiCompiler);
-        handler.delete(context);
-
-        verify(graphStore).hasGraphSpacesForSchema("student-schema");
-        verify(service, never()).delete("student-schema");
-        verify(wikiCompiler, never()).deprecate("student-schema");
-        verify(context).status(409);
-    }
-
-    @Test
-    void deprecatesWikiConceptAfterDeletingUnusedSchema() {
-        GraphSchemaManagementService service = mock(GraphSchemaManagementService.class);
-        KnowledgeGraphStore graphStore = mock(KnowledgeGraphStore.class);
-        GraphSettings settings = mock(GraphSettings.class);
-        GraphRequestAuthenticator authenticator = mock(GraphRequestAuthenticator.class);
-        GraphSchemaWikiCompiler wikiCompiler = mock(GraphSchemaWikiCompiler.class);
-        Context context = mock(Context.class);
+        GraphSchemaDetails disabled = details(false);
+        GraphSchemaDetails enabled = details(true);
 
         when(context.pathParam("schemaId")).thenReturn("student-schema");
         when(context.json(any())).thenReturn(context);
-        when(graphStore.hasGraphSpacesForSchema("student-schema")).thenReturn(false);
+        when(service.enable("student-schema")).thenReturn(enabled);
+        when(service.disable("student-schema")).thenReturn(disabled);
+        GraphSchemaManagementHandler handler = new GraphSchemaManagementHandler(
+                service, mock(GraphSettings.class), mock(GraphRequestAuthenticator.class),
+                wikiCompiler, mock(GraphDeletionService.class));
+
+        handler.enable(context);
+        handler.disable(context);
+
+        verify(wikiCompiler).synchronize(enabled);
+        verify(wikiCompiler).synchronize(disabled);
+        verify(wikiCompiler, never()).deprecate(any());
+    }
+
+    private static GraphSchemaDetails details(boolean enabled) {
+        return new GraphSchemaDetails(
+                new com.harness.graph.schema.GraphSchemaDefinition(
+                        "student-schema", 1, com.harness.graph.schema.GraphSchemaMode.STRICT,
+                        Map.of("Student", new com.harness.graph.schema.GraphNodeTypeDefinition(
+                                "Student", Map.of())),
+                        Map.of(), 1, 2),
+                enabled, GraphSchemaSource.MANAGED, GraphSchemaFormat.JSON, true, "{}");
+    }
+
+    @Test
+    void cascadesSchemaDeletionAndReturnsWhatWasRemoved() {
+        GraphSchemaManagementService service = mock(GraphSchemaManagementService.class);
+        GraphSettings settings = mock(GraphSettings.class);
+        GraphRequestAuthenticator authenticator = mock(GraphRequestAuthenticator.class);
+        GraphSchemaWikiCompiler wikiCompiler = mock(GraphSchemaWikiCompiler.class);
+        GraphDeletionService deletionService = mock(GraphDeletionService.class);
+        Context context = mock(Context.class);
+        GraphDeletionService.SchemaDeletionResult result =
+                new GraphDeletionService.SchemaDeletionResult(
+                        "student-schema", true, true, 2, 7, 5, 3);
+
+        when(context.pathParam("schemaId")).thenReturn("student-schema");
+        when(context.json(any())).thenReturn(context);
+        when(deletionService.deleteSchema("student-schema")).thenReturn(result);
 
         GraphSchemaManagementHandler handler = new GraphSchemaManagementHandler(
-                service, graphStore, settings, authenticator, wikiCompiler);
+                service, settings, authenticator, wikiCompiler, deletionService);
         handler.delete(context);
 
-        verify(service).delete("student-schema");
-        verify(wikiCompiler).deprecate("student-schema");
+        verify(authenticator).authenticate(context);
+        verify(deletionService).deleteSchema("student-schema");
+        verify(context).json(result);
+    }
+
+    @Test
+    void reportsRefusedSchemaDeletionAsConflict() {
+        GraphSchemaManagementService service = mock(GraphSchemaManagementService.class);
+        GraphDeletionService deletionService = mock(GraphDeletionService.class);
+        Context context = mock(Context.class);
+
+        when(context.pathParam("schemaId")).thenReturn("spi-schema");
+        when(context.status(409)).thenReturn(context);
+        when(context.json(any())).thenReturn(context);
+        when(deletionService.deleteSchema("spi-schema")).thenThrow(
+                new IllegalStateException("SPI graph schemas are read-only: spi-schema"));
+
+        GraphSchemaManagementHandler handler = new GraphSchemaManagementHandler(
+                service, mock(GraphSettings.class), mock(GraphRequestAuthenticator.class),
+                mock(GraphSchemaWikiCompiler.class), deletionService);
+        handler.delete(context);
+
+        verify(context).status(409);
     }
 
     private static GraphSchemaSummary summary(String schemaId) {

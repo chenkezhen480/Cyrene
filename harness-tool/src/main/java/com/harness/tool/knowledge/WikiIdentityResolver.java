@@ -96,7 +96,7 @@ public final class WikiIdentityResolver {
         var hits = projectionStore.searchHybrid(new KnowledgeProjectionSearch(
                 query, embedding.vector(), tenantId, userId,
                 catalog ? namespaceType : null, catalog ? namespaceKey : null, true,
-                Set.of(type), 20, CANDIDATE_LIMIT, 0.70, 0.10, 60));
+                Set.of(type), 20, CANDIDATE_LIMIT, 0.70, 0.10, 60)).hits();
         if (hits.isEmpty()) return Optional.empty();
 
         Map<String, KnowledgeHead> heads = new LinkedHashMap<>(repository.findAuthorityByIds(

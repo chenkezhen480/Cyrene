@@ -139,7 +139,8 @@ public final class AgentRunPreparer {
                 prepared.userId(),
                 prepared.agentContext().knowledgeRequestContext(),
                 prepared.agentContext().graphRequestContext(),
-                toolCatalog);
+                toolCatalog,
+                trace);
 
         String dynamicKnowledgeContext = null;
         if (longTermKnowledgeRetriever != null) {

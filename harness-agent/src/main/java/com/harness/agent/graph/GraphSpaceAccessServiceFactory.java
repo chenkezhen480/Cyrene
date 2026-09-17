@@ -46,7 +46,9 @@ public final class GraphSpaceAccessServiceFactory {
             return new MysqlGraphSpaceAccessService(connectionProvider);
         }
 
-        log.info("[KnowledgeGraph] graph-space bindings inactive; optional table '{}' is not installed",
+        log.info("[KnowledgeGraph] graph-space bindings inactive; table '{}' is not installed yet,"
+                        + " so graph spaces stay globally readable (apply the current schema to enforce"
+                        + " per-tenant access)",
                 MysqlGraphSpaceAccessService.TABLE_NAME);
         return new OpenGraphSpaceAccessService(graphStore);
     }

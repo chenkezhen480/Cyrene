@@ -25,6 +25,42 @@ class KnowledgeHandleCodecTest {
     }
 
     @Test
+    void toleratesLineBreaksAModelInsertedWhileCopyingTheHandle() {
+        // Models re-wrap long opaque tokens; a handle that came back with a line break at column
+        // 76 is still the same handle and must not be rejected as a signature failure.
+        KnowledgeHandle handle = KnowledgeHandle.concept(
+                KnowledgeConceptType.USER_EPISODE, "concept-1", "revision-1",
+                KnowledgeRouteTarget.USER_MEMORY);
+        String encoded = codec.encode(handle);
+        StringBuilder wrapped = new StringBuilder();
+        for (int i = 0; i < encoded.length(); i++) {
+            if (i > 0 && i % 76 == 0) {
+                wrapped.append('\n');
+            }
+            wrapped.append(encoded.charAt(i));
+        }
+
+        assertThat(codec.decode(wrapped.toString())).isEqualTo(handle);
+        assertThat(codec.decode("  " + encoded + "  \n")).isEqualTo(handle);
+    }
+
+    @Test
+    void reportsAnAlteredHandleAsAlteredRatherThanAsAnUnreadablePayload() {
+        // The actionable reason must survive: the model's only correct next step is to search
+        // again, which a generic "invalid payload" does not tell it.
+        KnowledgeHandle handle = KnowledgeHandle.concept(
+                KnowledgeConceptType.USER_EPISODE, "concept-1", "revision-1",
+                KnowledgeRouteTarget.USER_MEMORY);
+        String encoded = codec.encode(handle);
+        String altered = encoded.substring(0, encoded.length() - 1)
+                + (encoded.endsWith("A") ? "B" : "A");
+
+        assertThatThrownBy(() -> codec.decode(altered))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("knowledge_search again");
+    }
+
+    @Test
     void documentHandle_roundTripsStableScopeWithoutOwnerClaims() {
         KnowledgeHandle handle = KnowledgeHandle.document(
                 KnowledgeConceptType.SOURCE_DOCUMENT,

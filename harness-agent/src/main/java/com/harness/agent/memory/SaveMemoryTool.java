@@ -158,10 +158,15 @@ public final class SaveMemoryTool implements Tool {
             } else if (arguments.has("activationTags")) {
                 throw new IllegalArgumentException("activationTags is only supported for user preferences");
             }
+            // The resolved event time feeds both the revision metadata (and therefore the Milvus
+            // projection) and the authority row, so the two can never disagree about when the
+            // episode happened. It stays null for every other kind.
+            Instant eventTime = null;
             if (type == KnowledgeConceptType.USER_EPISODE) {
-                Instant eventTime = previous == null ? now : Instant.parse(
+                Instant carried = previous == null ? now : Instant.parse(
                         previous.currentRevision().metadata().get("eventTime").toString());
-                metadata.put("eventTime", instant(arguments, "eventTime", eventTime).toString());
+                eventTime = instant(arguments, "eventTime", carried);
+                metadata.put("eventTime", eventTime.toString());
             }
             long version = previous == null ? 0 : previous.concept().version();
             String hash = KnowledgeIdentity.sha256(mapper.writeValueAsBytes(
@@ -179,7 +184,8 @@ public final class SaveMemoryTool implements Tool {
                     type.isUserOwned() ? KnowledgeNamespaceType.USER_MEMORY
                             : KnowledgeNamespaceType.OPERATION_MEMORY,
                     null, type, logicalKey, KnowledgeStatus.STABLE, revision.id(), version + 1,
-                    expiresAt, previous == null ? now : previous.concept().createdAt(), now);
+                    expiresAt, previous == null ? now : previous.concept().createdAt(), now,
+                    eventTime);
             List<KnowledgeIndexTask> tasks = preference ? List.of() : List.of(new KnowledgeIndexTask(null, conceptId, revision.id(),
                     KnowledgeIndexOperation.UPSERT_CURRENT, KnowledgeIndexTaskStatus.PENDING,
                     0, now, null, null, null, now));

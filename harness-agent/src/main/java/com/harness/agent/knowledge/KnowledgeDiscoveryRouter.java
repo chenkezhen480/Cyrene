@@ -8,15 +8,20 @@ import com.harness.core.env.EnvKey;
 import com.harness.core.knowledge.KnowledgeConcept;
 import com.harness.core.knowledge.KnowledgeConceptType;
 import com.harness.core.knowledge.KnowledgeHandle;
+import com.harness.core.knowledge.KnowledgeNamespaceType;
+import com.harness.core.knowledge.KnowledgeRevision;
 import com.harness.core.knowledge.KnowledgeRouteTarget;
 import com.harness.core.knowledge.KnowledgeStatus;
+import com.harness.core.model.PageResponse;
 import com.harness.provider.EmbeddingModelProvider;
 import com.harness.tool.knowledge.authority.KnowledgeHead;
 import com.harness.tool.knowledge.authority.KnowledgeRepository;
 import com.harness.tool.knowledge.index.KnowledgeProjection;
 import com.harness.tool.knowledge.index.KnowledgeProjectionHit;
 import com.harness.tool.knowledge.index.KnowledgeProjectionSearch;
+import com.harness.tool.knowledge.index.KnowledgeProjectionSearchOutcome;
 import com.harness.tool.knowledge.index.KnowledgeProjectionStore;
+import com.harness.tool.knowledge.index.KnowledgeRetrievalDiagnostics;
 import com.harness.tool.rag.RagRetriever;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -24,6 +29,7 @@ import org.slf4j.LoggerFactory;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.EnumSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -42,6 +48,10 @@ public final class KnowledgeDiscoveryRouter {
     public static final double DENSE_THRESHOLD = 0.70;
     public static final double SPARSE_THRESHOLD = 0.10;
     public static final int RRF_K = 60;
+
+    /** Extra episode rows read so expired ones cannot shrink a recent-recall answer. */
+    private static final int STALE_OVERFETCH = 20;
+    private static final int MAX_RECENT_SCAN = 200;
 
     private static final Set<KnowledgeConceptType> SEARCHABLE_TYPES = Set.of(
             KnowledgeConceptType.SOURCE_DOCUMENT,
@@ -99,13 +109,21 @@ public final class KnowledgeDiscoveryRouter {
         }
         Objects.requireNonNull(context, "context");
         Set<KnowledgeConceptType> types = searchableTypes(requestedTypes);
-        if (types.isEmpty()) return List.of();
+        if (types.isEmpty()) {
+            // Reachable from the model (a knowledgeTypes value outside the searchable set), and
+            // it must still overwrite the previous search's counters rather than leave them
+            // describing a search that never ran.
+            recordSearchDiagnostics(
+                    context, "hybrid", normalizedQuery, types, null, 0, 0);
+            return List.of();
+        }
         float[] embedding = requireEmbedding(normalizedQuery);
-        List<KnowledgeProjectionHit> hits = projectionStore.searchHybrid(
+        KnowledgeProjectionSearchOutcome outcome = projectionStore.searchHybrid(
                 new KnowledgeProjectionSearch(
                         normalizedQuery, embedding, context.tenantId(), context.userId(), types,
                         settings.laneTopK(), settings.fusedTopK(),
                         settings.denseThreshold(), settings.sparseThreshold(), settings.rrfK()));
+        List<KnowledgeProjectionHit> hits = outcome.hits();
         Map<String, KnowledgeHead> heads = new LinkedHashMap<>(repository.findAuthorityByIds(hits.stream()
                 .map(hit -> hit.projection().conceptId()).distinct().toList()));
         for (var hit : hits) {
@@ -126,7 +144,156 @@ public final class KnowledgeDiscoveryRouter {
                         hit.projection(), heads, context,
                         readableGraphSchemas, readableGraphSpaces))
                 .toList();
-        return routeWiki(normalizedQuery, current, heads, context, limit);
+        List<DiscoveredKnowledge> results =
+                routeWiki(normalizedQuery, current, heads, context, limit);
+        recordSearchDiagnostics(context, "hybrid", normalizedQuery, types,
+                outcome.diagnostics(), current.size(), results.size());
+        return results;
+    }
+
+    /**
+     * Answer a history question that has no searchable subject ("what did I ask before?").
+     *
+     * <p>Such a question cannot score well against any single episode, so hybrid search is the
+     * wrong instrument: this lists the most recent live USER_EPISODE revisions for the caller
+     * instead. It stays inside the Wiki lifecycle — the rows, scope checks and staleness rule
+     * are the same ones {@code knowledge_search} already applies.</p>
+     */
+    public List<DiscoveredKnowledge> recentEpisodes(
+            int limit,
+            KnowledgeToolRuntimeContext context
+    ) {
+        if (limit < 1 || limit > 20) {
+            throw new IllegalArgumentException("limit must be between 1 and 20");
+        }
+        Objects.requireNonNull(context, "context");
+        if (context.userId() == null) {
+            throw new IllegalArgumentException(
+                    "Recent memory recall requires a userId; "
+                            + "an anonymous caller has no episode scope");
+        }
+        // Staleness is only known after the rows are read, so a page of expired episodes would
+        // shrink the answer below `limit` — or empty it — while live ones sit further down.
+        // ponytail: fixed over-fetch, page with KnowledgeConceptCursor if expiring episodes
+        // ever become common enough to exhaust it.
+        int overFetch = Math.min(limit + STALE_OVERFETCH, MAX_RECENT_SCAN);
+        PageResponse<KnowledgeConcept> page = repository.findPage(
+                context.tenantId(), context.userId(),
+                KnowledgeNamespaceType.USER_MEMORY, KnowledgeConceptType.USER_EPISODE,
+                KnowledgeStatus.STABLE, null, overFetch);
+        List<DiscoveredKnowledge> results = new ArrayList<>();
+        int rank = 1;
+        for (KnowledgeConcept concept : page.items()) {
+            if (results.size() >= limit) break;
+            // findPage(status=stable) does not apply stale_after; the scan-based callers filter
+            // it explicitly and so must this path, or expired episodes resurface here.
+            if (concept.isStaleAt(clock.instant())) continue;
+            KnowledgeHead head = repository.findAuthorityById(concept.id()).orElse(null);
+            if (head == null || head.currentRevision() == null) {
+                continue;
+            }
+            KnowledgeRevision revision =
+                    repository.findMetadataSnapshot(head.currentVersion()).revision();
+            results.add(new DiscoveredKnowledge(
+                    KnowledgeConceptType.USER_EPISODE,
+                    concept.id(),
+                    head.currentVersion(),
+                    head.routeType(),
+                    KnowledgeHandle.concept(
+                            KnowledgeConceptType.USER_EPISODE,
+                            concept.id(),
+                            head.currentVersion(),
+                            head.routeType()),
+                    revision.title(),
+                    summarize(revision.description()),
+                    "recencyRank",
+                    rank++,
+                    List.of(memoryAnchors(
+                            concept.id(), head.currentVersion(), concept.eventTime())),
+                    Map.of(),
+                    concept.eventTime()));
+        }
+        // Written with the same key set as the hybrid path and null diagnostics, so a trace never
+        // mixes lane evidence from an earlier search with a recall that never touched Milvus.
+        recordSearchDiagnostics(
+                context, "recent", "", Set.of(KnowledgeConceptType.USER_EPISODE), null, 0,
+                results.size());
+        return List.copyOf(results);
+    }
+
+    /**
+     * Records one search's evidence, so an empty result can be told apart from a result that was
+     * cut by a threshold.
+     *
+     * <p>Every key is written on every path even when the value does not apply, because the trace
+     * merges metadata: leaving a key out would silently attribute the previous search's numbers
+     * to this one. Keys are otherwise last-write-wins — a run that searches several times keeps
+     * the evidence of its most recent search only.</p>
+     *
+     * @param diagnostics the lane evidence, or null for a path that runs no vector lanes
+     */
+    private static void recordSearchDiagnostics(
+            KnowledgeToolRuntimeContext context,
+            String mode,
+            String query,
+            Set<KnowledgeConceptType> types,
+            KnowledgeRetrievalDiagnostics diagnostics,
+            int authorizedHits,
+            int finalHits
+    ) {
+        if (context.runTrace() == null) {
+            return;
+        }
+        Map<String, String> metadata = new LinkedHashMap<>();
+        metadata.put("knowledge_search_mode", mode);
+        metadata.put("knowledge_search_query", truncate(query, 200));
+        metadata.put("knowledge_search_types", types.stream()
+                .sorted(Comparator.comparing(KnowledgeConceptType::name))
+                .map(KnowledgeConceptType::name)
+                .collect(java.util.stream.Collectors.joining(",")));
+        metadata.put("knowledge_search_collections",
+                diagnostics == null ? "" : String.join(",", diagnostics.collections()));
+        metadata.put("knowledge_search_dense_candidates",
+                countText(diagnostics, knowledge -> knowledge.denseCandidates()));
+        metadata.put("knowledge_search_dense_best_score",
+                diagnostics == null ? "" : scoreText(diagnostics.denseBestScore()));
+        metadata.put("knowledge_search_dense_threshold",
+                thresholdText(diagnostics, knowledge -> knowledge.denseThreshold()));
+        metadata.put("knowledge_search_dense_kept",
+                countText(diagnostics, knowledge -> knowledge.denseKept()));
+        metadata.put("knowledge_search_sparse_candidates",
+                countText(diagnostics, knowledge -> knowledge.sparseCandidates()));
+        metadata.put("knowledge_search_sparse_best_score",
+                diagnostics == null ? "" : scoreText(diagnostics.sparseBestScore()));
+        metadata.put("knowledge_search_sparse_threshold",
+                thresholdText(diagnostics, knowledge -> knowledge.sparseThreshold()));
+        metadata.put("knowledge_search_sparse_kept",
+                countText(diagnostics, knowledge -> knowledge.sparseKept()));
+        metadata.put("knowledge_search_fused_candidates",
+                countText(diagnostics, knowledge -> knowledge.fusedCandidates()));
+        metadata.put("knowledge_search_authorized_hits", String.valueOf(authorizedHits));
+        metadata.put("knowledge_search_final_hits", String.valueOf(finalHits));
+        context.runTrace().putMetadata(metadata);
+    }
+
+    private static String countText(
+            KnowledgeRetrievalDiagnostics diagnostics,
+            java.util.function.ToIntFunction<KnowledgeRetrievalDiagnostics> extractor) {
+        return diagnostics == null ? "" : String.valueOf(extractor.applyAsInt(diagnostics));
+    }
+
+    private static String thresholdText(
+            KnowledgeRetrievalDiagnostics diagnostics,
+            java.util.function.ToDoubleFunction<KnowledgeRetrievalDiagnostics> extractor) {
+        return diagnostics == null ? "" : String.valueOf(extractor.applyAsDouble(diagnostics));
+    }
+
+    private static String scoreText(Double score) {
+        return score == null ? "" : String.format(java.util.Locale.ROOT, "%.4f", score);
+    }
+
+    private static String truncate(String value, int max) {
+        return value.length() <= max ? value : value.substring(0, max) + "…";
     }
 
     private boolean currentAndReadable(
@@ -152,6 +319,13 @@ public final class KnowledgeDiscoveryRouter {
         }
         if (concept.conceptType() == KnowledgeConceptType.GRAPH_SPACE
                 && !readableGraphSpaces.contains(concept.id())) {
+            return false;
+        }
+        // A Schema card is published before its Schema is enabled, so that creating one shows what it
+        // can answer; it must not reach the model as an available capability until it is enabled.
+        if ((concept.conceptType() == KnowledgeConceptType.GRAPH_SCHEMA
+                || concept.conceptType() == KnowledgeConceptType.GRAPH_SPACE)
+                && Boolean.FALSE.equals(head.currentRevision().metadata().get("enabled"))) {
             return false;
         }
         if ((concept.conceptType() == KnowledgeConceptType.GRAPH_SCHEMA
@@ -281,7 +455,7 @@ public final class KnowledgeDiscoveryRouter {
                         List.of(Map.of(
                                 "documentId", documentId,
                                 "revisionId", revisionId,
-                                "chunkIndex", document.chunkIndex())), Map.of()));
+                                "chunkIndex", document.chunkIndex())), Map.of(), null));
             }
         }
         return Map.copyOf(results);
@@ -312,7 +486,8 @@ public final class KnowledgeDiscoveryRouter {
                 List.of(Map.of(
                         "documentId", projection.conceptId(),
                         "revisionId", projection.revisionId())),
-                Map.of());
+                Map.of(),
+                null);
     }
 
     private DiscoveredKnowledge conceptResult(
@@ -330,7 +505,8 @@ public final class KnowledgeDiscoveryRouter {
                 head.currentRevision().title(),
                 summarize(projection.description() == null
                         ? projection.content() : projection.description()),
-                scoreType(projection.conceptType()), hit.rrfScore(), List.of(), graphRouteHint);
+                scoreType(projection.conceptType()), hit.rrfScore(), List.of(), graphRouteHint,
+                projection.eventTime());
     }
 
     /**
@@ -353,10 +529,9 @@ public final class KnowledgeDiscoveryRouter {
                 head.currentRevision().title(),
                 summarize(memoryBody(projection)),
                 scoreType(projection.conceptType()), hit.rrfScore(),
-                List.of(Map.of(
-                        "memoryId", projection.conceptId(),
-                        "revisionId", projection.revisionId())),
-                Map.of());
+                List.of(memoryAnchors(projection)),
+                Map.of(),
+                projection.eventTime());
     }
 
     /** Hydrates the validated hit from the dedicated memory collection, falling back to the catalog summary. */
@@ -459,6 +634,26 @@ public final class KnowledgeDiscoveryRouter {
             throw new IllegalArgumentException("query must contain 1 to 4096 characters");
         }
         return query.trim();
+    }
+
+    /**
+     * Source anchors for a memory hit, carrying the event time when there is one so the model can
+     * say when something happened rather than only that it happened.
+     */
+    private static Map<String, Object> memoryAnchors(KnowledgeProjection projection) {
+        return memoryAnchors(
+                projection.conceptId(), projection.revisionId(), projection.eventTime());
+    }
+
+    private static Map<String, Object> memoryAnchors(
+            String conceptId, String revisionId, java.time.Instant eventTime) {
+        Map<String, Object> anchors = new LinkedHashMap<>();
+        anchors.put("memoryId", conceptId);
+        anchors.put("revisionId", revisionId);
+        if (eventTime != null) {
+            anchors.put("eventTime", eventTime.toString());
+        }
+        return Map.copyOf(anchors);
     }
 
     private static String metadataText(Map<String, Object> metadata, String key) {

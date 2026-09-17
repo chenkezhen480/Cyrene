@@ -52,18 +52,24 @@ public class CancellableHttpClient implements HttpClient {
     }
 
     /**
-     * Cancel all active streaming HTTP requests. Called from CancellationToken.
+     * Cancel the active streaming HTTP requests issued by exactly these threads.
+     *
+     * <p>Scoped by caller on purpose: a run may only abort its own requests. A process-wide
+     * cancel would let one session's Stop button tear down every other session's in-flight
+     * model call.</p>
      */
-    public static void cancelAll() {
+    public static void cancelThreads(java.util.Collection<Thread> threads) {
+        if (threads == null || threads.isEmpty()) {
+            return;
+        }
         int count = 0;
-        for (var entry : activeFutures.entrySet()) {
-            CompletableFuture<?> future = entry.getValue();
-            if (!future.isDone()) {
+        for (Thread thread : threads) {
+            CompletableFuture<?> future = activeFutures.remove(thread);
+            if (future != null && !future.isDone()) {
                 future.cancel(true);
                 count++;
             }
         }
-        activeFutures.clear();
         if (count > 0) {
             log.info("[CancellableHttpClient] Cancelled {} active streaming requests", count);
         }

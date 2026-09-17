@@ -41,7 +41,7 @@ class MysqlCompactKnowledgeIT {
                     try (var tables = statement.executeQuery("SELECT COUNT(*) FROM information_schema.tables "
                             + "WHERE table_schema = '" + database + "' AND table_comment <> ''")) {
                         tables.next();
-                        assertThat(tables.getInt(1)).isEqualTo(8);
+                        assertThat(tables.getInt(1)).isEqualTo(10);
                     }
                     try (var columns = statement.executeQuery("SELECT COUNT(*) FROM information_schema.columns "
                             + "WHERE table_schema = '" + database + "' AND column_comment = ''")) {
@@ -78,6 +78,46 @@ class MysqlCompactKnowledgeIT {
                         .isInstanceOf(KnowledgePersistenceException.class);
                 assertThat(repository.findRevisionPage("concept1", null, 10).items()).hasSize(1);
                 assertThat(repository.findVerificationPage("rev1", null, 10).items()).hasSize(2);
+
+                // findAuthorityByIds projects an explicit UNION of knowledge_metadata and
+                // user_preferences (HEAD_COLUMNS). A column added to only one of the two tables,
+                // or dropped from the projection, makes every Wiki read fail here with
+                // "Cannot read knowledge authority" — so assert the head actually resolves.
+                assertThat(repository.findAuthorityByIds(List.of("concept1")))
+                        .containsKey("concept1");
+
+                // A head row must carry the event time too: findAuthorityByIds projects an explicit
+                // UNION, so a column added only to knowledge_metadata is silently absent there and
+                // the same episode would read back with an event time in one path and none in the
+                // other. Inserted raw to keep this about the projection, not episode validation.
+                try (var connection = DriverManager.getConnection(url, user, password);
+                     var insert = connection.createStatement()) {
+                    insert.executeUpdate("INSERT INTO knowledge_metadata (id, tenant_id, user_id, "
+                            + "namespace_type, concept_type, logical_key, status, current_version, "
+                            + "route_type, route_data, version, event_time, created_at, updated_at, "
+                            + "revision_metadata) VALUES ('ep1', 'tenant1', 'user1', 'USER_MEMORY', "
+                            + "'USER_EPISODE', 'ep1', 'stable', 'eprev1', 'USER_MEMORY', "
+                            + "JSON_OBJECT(), 1, '2026-01-02 03:04:05', NOW(3), NOW(3), NULL)");
+                }
+                assertThat(repository.findAuthorityByIds(List.of("ep1")).get("ep1").concept().eventTime())
+                        .as("the authority head must carry the event time it was written with")
+                        .isEqualTo(java.time.Instant.parse("2026-01-02T03:04:05Z"));
+
+                // The same mapper serves user_preferences, which has no event_time column at all,
+                // so a preference read must not require it. Inserted raw because the point is the
+                // read path, not preference validation.
+                try (var connection = DriverManager.getConnection(url, user, password);
+                     var insert = connection.createStatement()) {
+                    insert.executeUpdate("INSERT INTO user_preferences (id, tenant_id, user_id, "
+                            + "namespace_type, concept_type, logical_key, status, current_revision_id, "
+                            + "version, created_at, updated_at, snapshot) VALUES ('pref1', 'tenant1', "
+                            + "'user1', 'USER_MEMORY', 'USER_PREFERENCE', 'response.language', 'stable', "
+                            + "'prefrev1', 1, NOW(3), NOW(3), JSON_OBJECT())");
+                }
+                assertThat(repository.findPage("tenant1", "user1", KnowledgeNamespaceType.USER_MEMORY,
+                        KnowledgeConceptType.USER_PREFERENCE, KnowledgeStatus.STABLE, null, 10)
+                        .items()).singleElement()
+                        .satisfies(preference -> assertThat(preference.eventTime()).isNull());
             } finally {
                 ddl.execute("DROP DATABASE " + database);
             }

@@ -38,15 +38,37 @@ class GraphCapabilityDescriberTest {
         ArgumentCaptor<List<ChatMessage>> captor = ArgumentCaptor.forClass(List.class);
         verify(model).chat(captor.capture());
         String input = ((UserMessage) captor.getValue().getLast()).singleText();
-        assertThat(input).contains("Student", "Class", "BELONGS_TO: Student -> Class", "Max depth: 3")
-                .doesNotContain("sensitiveProperty", "private-schema-id");
+        // Reachability, not a raw depth number: Class has no out-relations, so no two-hop path exists
+        // and the model must not describe one.
+        assertThat(input).contains("Student", "Class", "BELONGS_TO: Student -> Class",
+                        "no relation leads into another")
+                .doesNotContain("sensitiveProperty", "private-schema-id", "bounded paths");
+    }
+
+    @Test void reportsTraversalAsMultiHopOnlyWhenRelationsChain() {
+        activateModel("学生与班级的关系图，使用 query_graph 查询。");
+        GraphSchemaDefinition chained = new GraphSchemaDefinition("chain-schema", 1, GraphSchemaMode.STRICT,
+                Map.of("Student", new GraphNodeTypeDefinition("Student", Map.of()),
+                        "Class", new GraphNodeTypeDefinition("Class", Map.of())),
+                Map.of("BELONGS_TO", new GraphRelationTypeDefinition("BELONGS_TO",
+                                Set.of("Student"), Set.of("Class"), Map.of()),
+                        "MENTORS", new GraphRelationTypeDefinition("MENTORS",
+                                Set.of("Class"), Set.of("Student"), Map.of())), 1, 3);
+
+        describer.describe(chained);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<ChatMessage>> captor = ArgumentCaptor.forClass(List.class);
+        verify(model).chat(captor.capture());
+        assertThat(((UserMessage) captor.getValue().getLast()).singleText())
+                .contains("relations chain", "up to depth 3");
     }
 
     @Test void rejectsInvalidModelDescriptionsAndDisabledOrInsufficientModels() {
-        activateModel("x".repeat(2049));
-        assertThatThrownBy(() -> describer.describe(schema())).hasMessageContaining("1 to 2048 characters");
+        activateModel("x".repeat(301));
+        assertThatThrownBy(() -> describer.describe(schema())).hasMessageContaining("1 to 300 characters");
         when(model.chat(anyList())).thenReturn(ChatResponse.builder().aiMessage(AiMessage.from(" ")).build());
-        assertThatThrownBy(() -> describer.describe(schema())).hasMessageContaining("1 to 2048 characters");
+        assertThatThrownBy(() -> describer.describe(schema())).hasMessageContaining("1 to 300 characters");
         clearInvocations(model);
         when(provider.contextWindow()).thenReturn(10);
         assertThatThrownBy(() -> describer.describe(schema())).hasMessageContaining("context window");

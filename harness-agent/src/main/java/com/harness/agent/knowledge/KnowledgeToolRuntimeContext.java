@@ -2,6 +2,7 @@ package com.harness.agent.knowledge;
 
 import com.harness.core.model.GraphRequestContext;
 import com.harness.core.model.KnowledgeRequestContext;
+import com.harness.core.runtime.RunTrace;
 import com.harness.tool.RunToolCatalog;
 
 import java.util.Set;
@@ -12,7 +13,8 @@ public record KnowledgeToolRuntimeContext(
         String userId,
         KnowledgeRequestContext knowledgeRequestContext,
         GraphRequestContext graphRequestContext,
-        Set<String> authorizedTools
+        Set<String> authorizedTools,
+        RunTrace runTrace
 ) {
     private static final ThreadLocal<KnowledgeToolRuntimeContext> CURRENT = new ThreadLocal<>();
 
@@ -29,6 +31,17 @@ public record KnowledgeToolRuntimeContext(
             GraphRequestContext graphRequestContext,
             RunToolCatalog catalog
     ) {
+        activate(tenantId, userId, knowledgeRequestContext, graphRequestContext, catalog, null);
+    }
+
+    public static void activate(
+            String tenantId,
+            String userId,
+            KnowledgeRequestContext knowledgeRequestContext,
+            GraphRequestContext graphRequestContext,
+            RunToolCatalog catalog,
+            RunTrace runTrace
+    ) {
         if (catalog == null) {
             throw new IllegalArgumentException("catalog is required");
         }
@@ -38,7 +51,8 @@ public record KnowledgeToolRuntimeContext(
                 knowledgeRequestContext,
                 graphRequestContext,
                 catalog.getAll().stream().map(spec -> spec.name()).collect(
-                        java.util.stream.Collectors.toUnmodifiableSet())));
+                        java.util.stream.Collectors.toUnmodifiableSet()),
+                runTrace));
     }
 
     public static KnowledgeToolRuntimeContext requireCurrent(String toolName) {
@@ -54,9 +68,15 @@ public record KnowledgeToolRuntimeContext(
         return CURRENT.get();
     }
 
+    /**
+     * Restores the inherited scope with the inheriting run's own trace. A sub-agent records its
+     * retrieval evidence in its own trace; writing it into the parent's would overwrite the
+     * parent's last search.
+     */
     public static void restoreForCatalog(
             KnowledgeToolRuntimeContext snapshot,
-            RunToolCatalog catalog
+            RunToolCatalog catalog,
+            RunTrace runTrace
     ) {
         if (snapshot == null) {
             CURRENT.remove();
@@ -67,7 +87,8 @@ public record KnowledgeToolRuntimeContext(
                 snapshot.userId(),
                 snapshot.knowledgeRequestContext(),
                 snapshot.graphRequestContext(),
-                catalog);
+                catalog,
+                runTrace);
     }
 
     public static void clear() {

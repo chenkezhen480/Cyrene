@@ -44,7 +44,8 @@ class StructuredOutputHandlerTest {
                 any(), any(), anyList(), any(), isNull(), any(), any(), any(), any(), any()))
                 .thenReturn(result("{\"eligible\":true,\"reason\":\"qualified\"}"));
         StructuredOutputHandler handler = new StructuredOutputHandler(
-                agent, new ConcurrentHashMap<>(), authenticator, objectMapper);
+                agent, new ConcurrentHashMap<>(), authenticator, objectMapper,
+                ToolPermissionStub.absent().service());
 
         handler.handle(context);
 
@@ -89,7 +90,8 @@ class StructuredOutputHandlerTest {
                 any(), any(), anyList(), any(), isNull(), any(), any(), any(), any(), any()))
                 .thenReturn(result("not-json"));
         StructuredOutputHandler handler = new StructuredOutputHandler(
-                agent, new ConcurrentHashMap<>(), authenticator, objectMapper);
+                agent, new ConcurrentHashMap<>(), authenticator, objectMapper,
+                ToolPermissionStub.absent().service());
 
         handler.handle(context);
 

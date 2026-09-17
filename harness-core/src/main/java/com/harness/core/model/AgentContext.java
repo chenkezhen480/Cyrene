@@ -2,6 +2,7 @@ package com.harness.core.model;
 
 import java.util.HashMap;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -16,6 +17,17 @@ public record AgentContext(
     public static final String KEY_USER_ID = "userId";
     public static final String KEY_TENANT_ID = "tenantId";
     public static final String DEFAULT_TENANT_ID = "000000";
+    /**
+     * Caller identity used to pick a tool permission profile. Integrations that have no
+     * identity concept leave it unset and every caller resolves to {@link #DEFAULT_IDENTITY}.
+     */
+    public static final String KEY_IDENTITY = "identity";
+    public static final String DEFAULT_IDENTITY = "DEFAULT";
+    /**
+     * Server-resolved tool denylist. Unlike {@link #KEY_IDENTITY} this is never read from the
+     * request: it comes from the tenant's stored permission profile.
+     */
+    public static final String KEY_TOOL_DENYLIST = "toolDenylist";
     public static final String KEY_OUTPUT_MODE = "outputMode";
     public static final String KEY_ENABLE_THINKING = "enableThinking";
     public static final String KEY_THINKING_LEVEL = "thinkingLevel";
@@ -76,6 +88,35 @@ public record AgentContext(
             throw new IllegalArgumentException("tenantId must not exceed 128 characters");
         }
         return Optional.of(tenantId);
+    }
+
+    /**
+     * The tools this caller may not use. Empty means nothing is disabled — the stored list is
+     * empty or no profile exists for this tenant + identity — so every registered tool stays
+     * available.
+     */
+    public Set<String> toolDenylist() {
+        Object value = data.get(KEY_TOOL_DENYLIST);
+        if (!(value instanceof Iterable<?> values)) {
+            return Set.of();
+        }
+        Set<String> result = new LinkedHashSet<>();
+        for (Object item : values) {
+            if (item != null && !item.toString().isBlank()) {
+                result.add(item.toString().trim());
+            }
+        }
+        return Set.copyOf(result);
+    }
+
+    /** Copy with a server-resolved tool denylist installed. Empty is a no-op. */
+    public AgentContext withToolDenylist(Set<String> disabledTools) {
+        if (disabledTools == null || disabledTools.isEmpty()) {
+            return this;
+        }
+        Map<String, Object> copy = new HashMap<>(data);
+        copy.put(KEY_TOOL_DENYLIST, List.copyOf(disabledTools));
+        return new AgentContext(copy);
     }
 
     public Boolean enableThinking() {

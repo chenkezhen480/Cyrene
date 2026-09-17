@@ -140,6 +140,22 @@ class KnowledgeWikiServiceTest {
                     assertThat(task.operation()).isEqualTo(KnowledgeIndexOperation.DELETE_CONCEPT));
         });
     }
+    /**
+     * A graph card mirrors its Schema or Graph Space. Deleting it alone would be undone by the next
+     * Schema save and would leave a live space pointing at a discontinued card, so it is refused.
+     */
+    @Test
+    void deleteRefusesGraphSchemaAndGraphSpaceCards() {
+        for (var type : List.of(KnowledgeConceptType.GRAPH_SCHEMA, KnowledgeConceptType.GRAPH_SPACE)) {
+            setup(type);
+
+            assertThatThrownBy(() -> service.delete("doc-1", "rev-1", ignored -> true))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("follows its entity lifecycle");
+            verify(repository, never()).commitChanges(any());
+        }
+    }
+
     @Test
     void globalManagementExportIncludesAllOwnersAcrossCollectionsAndPagesWithoutDuplicatingGraphDescriptions() {
         var cursor = new KnowledgeConceptCursor(now, "hidden");

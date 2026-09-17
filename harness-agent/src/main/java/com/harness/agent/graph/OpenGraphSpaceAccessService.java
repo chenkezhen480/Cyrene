@@ -8,7 +8,12 @@ import com.harness.graph.store.KnowledgeGraphStore;
 import java.util.Objects;
 
 /**
- * Default standalone mode: every graph space in the configured graph store is readable.
+ * Standalone mode: every graph space in the configured graph store is readable.
+ *
+ * <p>Reached when the graph provider is {@code none}, when MySQL storage is disabled, or when the
+ * database has not had the current {@code sql/schema-mysql.sql} applied and so has no binding table.
+ * A database created from that schema always has the table, which means it runs in the enforced
+ * {@link MysqlGraphSpaceAccessService} mode instead.</p>
  */
 public final class OpenGraphSpaceAccessService implements GraphSpaceAccessService {
 
@@ -49,12 +54,36 @@ public final class OpenGraphSpaceAccessService implements GraphSpaceAccessServic
         return 0;
     }
 
+    @Override
+    public int deleteBindingsBySchema(String schemaId) {
+        return 0;
+    }
+
+    @Override
+    public void registerBinding(String tenantId, String graphId, String schemaId) {
+        // No binding table: every tenant already reads every graph space in the store.
+    }
+
+    /**
+     * Rejects a caller that names a tenant other than the standalone default.
+     *
+     * <p>A missing tenant resolves to {@link AgentContext#DEFAULT_TENANT_ID}, the same way
+     * {@code AgentContext.tenantId()} resolves it everywhere else — an unscoped standalone caller
+     * is the default tenant, not a separate case. Only a caller that actually identifies as some
+     * other tenant needs the binding table to be told what it may read.</p>
+     */
     private static void requireStandaloneTenant(String tenantId) {
-        if (!AgentContext.DEFAULT_TENANT_ID.equals(tenantId)) {
+        if (!AgentContext.DEFAULT_TENANT_ID.equals(normalizeTenant(tenantId))) {
             throw new GraphSpaceAccessException(
-                    "The optional graph-space binding table is required for tenant " + tenantId
+                    "The graph-space binding table is required for tenant " + tenantId
             );
         }
     }
 
+    /** Blank and absent both mean the standalone default, exactly as AgentContext does it. */
+    private static String normalizeTenant(String tenantId) {
+        return tenantId == null || tenantId.isBlank()
+                ? AgentContext.DEFAULT_TENANT_ID
+                : tenantId.trim();
+    }
 }

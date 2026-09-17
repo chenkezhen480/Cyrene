@@ -24,6 +24,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -38,7 +39,7 @@ class PersistentGraphSpaceWikiCompilerTest {
                 .thenReturn(Optional.empty());
         PersistentGraphSpaceWikiCompiler compiler =
                 new PersistentGraphSpaceWikiCompiler(
-                        repository, schemaRegistry(), describer(), identityResolver);
+                        repository, schemaRegistry(), identityResolver);
         GraphChangeSet changeSet = changeSet();
 
         compiler.synchronize(changeSet,
@@ -57,9 +58,14 @@ class PersistentGraphSpaceWikiCompilerTest {
         assertThat(change.concept().logicalKey()).isEqualTo("graph-a");
         assertThat(change.concept().status()).isEqualTo(KnowledgeStatus.STABLE);
         assertThat(change.revision().body())
-                .contains("Graph Space graph-a", "Schema: schema-a", "Student", "Class", "KNOWS", "query_graph", "Typical queries")
-                .doesNotContain("Alice", "Bob");
-        assertThat(change.revision().description()).isEqualTo("AI description: discover Student and Class relationships using query_graph.");
+                .contains("Graph Space graph-a", "Schema: schema-a", "Nodes:",
+                        "Student -[KNOWS]-> Student", "Supported queries",
+                        // Student is both a source and a target of KNOWS, so a two-hop path exists.
+                        "bounded paths", "query_graph")
+                .doesNotContain("Alice", "Bob", "AI capability description", "- Version:", "Typical queries");
+        // The space card carries a generated one-liner, never a model-written description: describing
+        // what a graph can answer is the Schema card's job.
+        assertThat(change.revision().description()).isEqualTo("Graph Space graph-a on Schema schema-a.");
         assertThat(change.revision().body()).contains(change.revision().description());
         assertThat(change.revision().metadata())
                 .containsEntry("recommendedTool", "query_graph")
@@ -83,14 +89,13 @@ class PersistentGraphSpaceWikiCompilerTest {
     @Test
     void existingStableGraphSpaceDoesNotCreateRevisionPerMutation() {
         KnowledgeRepository repository = mock(KnowledgeRepository.class);
-        GraphCapabilityDescriber describer = describer();
         PersistentGraphSpaceWikiCompiler compiler =
-                new PersistentGraphSpaceWikiCompiler(repository, schemaRegistry(), describer);
+                new PersistentGraphSpaceWikiCompiler(repository, schemaRegistry());
         when(repository.findById(any())).thenReturn(Optional.empty());
         compiler.synchronize(changeSet(),
                 new GraphMutationResult("request-1", true, 2, 1));
         KnowledgeRevisionChange first = capture(repository);
-        org.mockito.Mockito.clearInvocations(repository, describer);
+        org.mockito.Mockito.clearInvocations(repository);
         when(repository.findById(any())).thenReturn(Optional.of(
                 new KnowledgeHead(first.concept(), first.revision())));
 
@@ -98,25 +103,61 @@ class PersistentGraphSpaceWikiCompilerTest {
                 new GraphMutationResult("request-1", true, 2, 1));
 
         verify(repository, never()).commitChanges(any());
-        verify(describer, never()).describe(any());
+    }
+
+    /**
+     * The card is looked up by the identity {@code synchronize} wrote. A different namespaceKey or
+     * logicalKey here would create a second orphan concept instead of discontinuing this one.
+     */
+    @Test
+    void deprecateUsesTheSameConceptIdentityAsSynchronize() {
+        KnowledgeRepository repository = mock(KnowledgeRepository.class);
+        when(repository.findById(any())).thenReturn(Optional.empty());
+        PersistentGraphSpaceWikiCompiler compiler =
+                new PersistentGraphSpaceWikiCompiler(repository, schemaRegistry());
+        compiler.synchronize(changeSet(), new GraphMutationResult("request-1", true, 2, 1));
+        KnowledgeRevisionChange created = capture(repository);
+
+        reset(repository);
+        when(repository.findById(created.concept().id()))
+                .thenReturn(Optional.of(new KnowledgeHead(created.concept(), created.revision())));
+
+        compiler.deprecate("graph-a", "schema-a");
+
+        verify(repository).findById(created.concept().id());
+        KnowledgeRevisionChange deprecated = capture(repository);
+        assertThat(deprecated.concept().id()).isEqualTo(created.concept().id());
+        assertThat(deprecated.concept().status()).isEqualTo(KnowledgeStatus.DEPRECATED);
+        assertThat(deprecated.concept().namespaceKey()).isEqualTo("graph-a:schema-a");
+        assertThat(deprecated.concept().logicalKey()).isEqualTo("graph-a");
+        assertThat(deprecated.revision().body()).contains("Status: deprecated");
+        assertThat(deprecated.indexTasks()).singleElement()
+                .satisfies(task -> assertThat(task.operation())
+                        .isEqualTo(KnowledgeIndexOperation.DELETE_CONCEPT));
     }
 
     @Test
-    void descriptionFailureDoesNotWriteAFakeSuccessfulWiki() {
+    void deprecateIsIdempotentForAnAlreadyDiscontinuedSpace() {
         KnowledgeRepository repository = mock(KnowledgeRepository.class);
         when(repository.findById(any())).thenReturn(Optional.empty());
-        GraphCapabilityDescriber describer = describer();
-        when(describer.describe(any())).thenThrow(new IllegalStateException("model unavailable"));
-        var compiler = new PersistentGraphSpaceWikiCompiler(repository, schemaRegistry(), describer);
-        assertThatThrownBy(() -> compiler.synchronize(changeSet(), new GraphMutationResult("request-1", true, 2, 1)))
-                .hasMessageContaining("model unavailable");
-        verify(repository, never()).commitChanges(any());
-    }
+        PersistentGraphSpaceWikiCompiler compiler =
+                new PersistentGraphSpaceWikiCompiler(repository, schemaRegistry());
+        compiler.synchronize(changeSet(), new GraphMutationResult("request-1", true, 2, 1));
+        KnowledgeRevisionChange created = capture(repository);
+        var stable = created.concept();
+        var discontinued = new com.harness.core.knowledge.KnowledgeConcept(
+                stable.id(), stable.tenantId(), stable.userId(), stable.namespaceType(),
+                stable.namespaceKey(), stable.conceptType(), stable.logicalKey(),
+                KnowledgeStatus.DEPRECATED, stable.currentRevisionId(), 2, null,
+                stable.createdAt(), stable.updatedAt());
 
-    private static GraphCapabilityDescriber describer() {
-        GraphCapabilityDescriber describer = mock(GraphCapabilityDescriber.class);
-        when(describer.describe(any())).thenReturn("AI description: discover Student and Class relationships using query_graph.");
-        return describer;
+        reset(repository);
+        when(repository.findById(any()))
+                .thenReturn(Optional.of(new KnowledgeHead(discontinued, created.revision())));
+
+        compiler.deprecate("graph-a", "schema-a");
+
+        verify(repository, never()).commitChanges(any());
     }
 
     private static KnowledgeRevisionChange capture(KnowledgeRepository repository) {

@@ -48,20 +48,26 @@ public class ChatHandler {
     private final AgentOrchestrator agent;
     private final ApiRequestAuthenticator authenticator;
     private final ConcurrentHashMap<String, CancellationToken> activeRequests;
+    private final ToolPermissionService toolPermissions;
     private final ObjectMapper mapper;
 
-    public ChatHandler(AgentOrchestrator agent, ConcurrentHashMap<String, CancellationToken> activeRequests) {
-        this(agent, activeRequests, new ApiRequestAuthenticator());
+    public ChatHandler(
+            AgentOrchestrator agent,
+            ConcurrentHashMap<String, CancellationToken> activeRequests,
+            ToolPermissionService toolPermissions) {
+        this(agent, activeRequests, new ApiRequestAuthenticator(), toolPermissions);
     }
 
     ChatHandler(
             AgentOrchestrator agent,
             ConcurrentHashMap<String, CancellationToken> activeRequests,
-            ApiRequestAuthenticator authenticator
+            ApiRequestAuthenticator authenticator,
+            ToolPermissionService toolPermissions
     ) {
         this.agent = agent;
         this.activeRequests = activeRequests;
         this.authenticator = authenticator;
+        this.toolPermissions = toolPermissions;
         this.mapper = new ObjectMapper();
         log.info("[Server] ChatHandler initialized: authMode={}", authenticator.authMode());
     }
@@ -90,11 +96,18 @@ public class ChatHandler {
                 return;
             }
 
-            // Register cancellation token
+            // Register the cancellation token, superseding any run already in flight for this
+            // session: a new message means the previous run is no longer wanted. Scoped to this
+            // run's own threads so one session's Stop cannot abort another session's model call.
             String requestId = sessionId != null ? sessionId : java.util.UUID.randomUUID().toString();
             CancellationToken cancellationToken = new CancellationToken();
-            cancellationToken.onCancel(CancellableHttpClient::cancelAll);
-            activeRequests.put(requestId, cancellationToken);
+            cancellationToken.addCancelCallback(
+                    () -> CancellableHttpClient.cancelThreads(cancellationToken.allTrackedThreads()));
+            CancellationToken superseded = activeRequests.put(requestId, cancellationToken);
+            if (superseded != null && superseded != cancellationToken) {
+                log.info("[Server] Superseding in-flight run for session: {}", requestId);
+                superseded.cancel();
+            }
 
             // Set up SSE streaming response via raw servlet response
             HttpServletResponse res = ctx.res();
@@ -111,11 +124,18 @@ public class ChatHandler {
             final java.util.concurrent.atomic.AtomicReference<String> resolvedSessionIdRef =
                     new java.util.concurrent.atomic.AtomicReference<>(null);
 
+            // The id of the run currently owning this response, adopted from its START event.
+            // Every later frame is stamped with it so a client can drop a superseded run's tail.
+            final java.util.concurrent.atomic.AtomicReference<String> runIdRef =
+                    new java.util.concurrent.atomic.AtomicReference<>(null);
+
             // Track whether the request completed normally (for auto-cancel on disconnect)
             final java.util.concurrent.atomic.AtomicBoolean completedNormally =
                     new java.util.concurrent.atomic.AtomicBoolean(false);
 
-            AgentContext agentContext = toAgentContext(req);
+            // Tools are filtered before the run exists: a tool this tenant+identity may not
+            // use is never handed to the model, so the agent cannot know it exists at all.
+            AgentContext agentContext = toolPermissions.apply(toAgentContext(req));
             ThinkingLevel thinkingLevel = agentContext.thinkingLevel();
             String contextUserId = agentContext.userId();
 
@@ -123,15 +143,22 @@ public class ChatHandler {
             HttpApiTool.setCurrentCredentials(agentContext.credentials());
 
             try (OutputStream out = res.getOutputStream()) {
+                SseStream sse = new SseStream(out, mapper, runIdRef);
                 if (agentContext.isStreaming()) {
                     ScheduledFuture<?> keepalive =
-                            startSseKeepalive(out, cancellationToken, requestId);
+                            startSseKeepalive(sse, cancellationToken, requestId);
                     try {
                         // Streaming mode: emit tokens as SSE events in real-time
                         agent.streamRun(finalRawToken, req.text(),
                                 req.attachments() != null ? req.attachments() : Collections.emptyList(),
                                 finalSessionId, req.systemPrompt(), cancellationToken,
                                 event -> {
+                                    // A tool that ignores cancellation (image generation, a long
+                                    // download) reports back long after the run died. Its result
+                                    // belongs to a run nobody is waiting for any more.
+                                    if (isLateEventOfCancelledRun(cancellationToken, event)) {
+                                        return;
+                                    }
                                     try {
                                         switch (event.type()) {
                                             case START -> {
@@ -141,32 +168,27 @@ public class ChatHandler {
                                                     activeRequests.put(sid, cancellationToken);
                                                     resolvedSessionIdRef.set(sid);
                                                 }
-                                                writeSseEvent(out, "start",
-                                                        mapper.writeValueAsString(event.metadata()));
+                                                Object runId = event.metadata().get("runId");
+                                                if (runId != null) {
+                                                    runIdRef.set(runId.toString());
+                                                }
+                                                sse.emit("start", event.metadata());
                                             }
-                                            case TOKEN -> writeSseEvent(out, "token",
-                                                    mapper.writeValueAsString(Map.of("text", event.data())));
-                                            case TOOL_CALL_CREATED -> writeSseEvent(out, "tool_call_created",
-                                                    mapper.writeValueAsString(toolEventPayload(event, true)));
-                                            case TOOL_CALL_START -> writeSseEvent(out, "tool_call_start",
-                                                    mapper.writeValueAsString(toolEventPayload(event, true)));
-                                            case TOOL_CALL_DONE -> writeSseEvent(out, "tool_call_done",
-                                                    mapper.writeValueAsString(toolCompletionPayload(event)));
-                                            case TOOL_OUTPUT -> writeSseEvent(out, "tool_output",
-                                                    mapper.writeValueAsString(
-                                                            ToolOutputSseMapper.toPayload(event)));
-                                            case SUBAGENT_STATUS -> writeSseEvent(
-                                                    out,
-                                                    "subagent_status",
-                                                    mapper.writeValueAsString(event.metadata()));
-                                            case CONFIRMATION_REQUIRED -> writeSseEvent(
-                                                    out,
-                                                    "confirmation_required",
-                                                    mapper.writeValueAsString(event.metadata()));
-                                            case CONFIRMATION_RESOLVED -> writeSseEvent(
-                                                    out,
-                                                    "confirmation_resolved",
-                                                    mapper.writeValueAsString(event.metadata()));
+                                            case TOKEN -> sse.emit("token", Map.of("text", event.data()));
+                                            case TOOL_CALL_CREATED -> sse.emit(
+                                                    "tool_call_created", toolEventPayload(event, true));
+                                            case TOOL_CALL_START -> sse.emit(
+                                                    "tool_call_start", toolEventPayload(event, true));
+                                            case TOOL_CALL_DONE -> sse.emit(
+                                                    "tool_call_done", toolCompletionPayload(event));
+                                            case TOOL_OUTPUT -> sse.emit(
+                                                    "tool_output", ToolOutputSseMapper.toPayload(event));
+                                            case SUBAGENT_STATUS -> sse.emit(
+                                                    "subagent_status", event.metadata());
+                                            case CONFIRMATION_REQUIRED -> sse.emit(
+                                                    "confirmation_required", event.metadata());
+                                            case CONFIRMATION_RESOLVED -> sse.emit(
+                                                    "confirmation_resolved", event.metadata());
                                             case STEP -> {
                                                 // ReActStep is serialized by Jackson, extract inspection from the map
                                                 Object stepObj = event.metadata().get("step");
@@ -181,23 +203,21 @@ public class ChatHandler {
                                                     var insp = step.inspection();
                                                     if (insp != null) inspectionStatus = insp.status().name();
                                                 }
-                                                writeSseEvent(out, "step",
-                                                        mapper.writeValueAsString(Map.of("status", inspectionStatus)));
+                                                sse.emit("step", Map.of("status", inspectionStatus));
                                             }
-                                            case COMPRESS -> writeSseEvent(out, "compress",
-                                                    mapper.writeValueAsString(Map.of(
-                                                            "mode", event.metadata().get("mode"),
-                                                            "detail", event.data())));
+                                            case COMPRESS -> sse.emit("compress", Map.of(
+                                                    "mode", event.metadata().get("mode"),
+                                                    "detail", event.data()));
                                             case DONE -> {
                                                 Map<String, Object> donePayload = new java.util.HashMap<>(event.metadata());
                                                 donePayload.put("output", event.data() != null ? event.data() : "");
-                                                writeSseEvent(out, "done", mapper.writeValueAsString(donePayload));
+                                                sse.emit("done", donePayload);
                                                 completedNormally.set(true);
                                             }
-                                            case CANCELLED -> writeSseEvent(out, "cancelled",
-                                                    mapper.writeValueAsString(Map.of("message", event.data())));
-                                            case ERROR -> writeSseEvent(out, "error",
-                                                    mapper.writeValueAsString(Map.of("error", event.data())));
+                                            case CANCELLED -> sse.emit("cancelled",
+                                                    Map.of("message", event.data()));
+                                            case ERROR -> sse.emit("error",
+                                                    Map.of("error", event.data()));
                                         }
                                     } catch (IOException e) {
                                         log.debug("[Server] Failed to write SSE event: {}", e.getMessage());
@@ -229,8 +249,7 @@ public class ChatHandler {
                     }
 
                     // Emit START event with sessionId (first event for client)
-                    writeSseEvent(out, "start", mapper.writeValueAsString(Map.of(
-                            "sessionId", resolvedSessionId)));
+                    sse.emit("start", Map.of("sessionId", resolvedSessionId));
 
                     Map<String, Object> doneData = new java.util.HashMap<>();
                     doneData.put("output", result.output() != null ? result.output() : "");
@@ -251,7 +270,7 @@ public class ChatHandler {
                                 "previewUrl", a.previewUrl()
                         )).toList());
                     }
-                    writeSseEvent(out, "done", mapper.writeValueAsString(doneData));
+                    sse.emit("done", doneData);
                     completedNormally.set(true);
                 }
 
@@ -259,10 +278,9 @@ public class ChatHandler {
                 long duration = System.currentTimeMillis() - start;
                 log.error("[Server] Chat error after {}ms: {}", duration, e.getMessage(), e);
                 try {
-                    OutputStream out = res.getOutputStream();
                     String friendlyMsg = com.harness.agent.AgentOrchestrator.friendlyErrorMessage(e);
-                    Map<String, String> errorData = Map.of("error", friendlyMsg);
-                    writeSseEvent(out, "error", mapper.writeValueAsString(errorData));
+                    new SseStream(res.getOutputStream(), mapper, runIdRef)
+                            .emit("error", Map.of("error", friendlyMsg));
                 } catch (IOException ex) {
                     log.debug("[Server] Failed to write error event to stream: {}", ex.getMessage());
                 }
@@ -280,10 +298,12 @@ public class ChatHandler {
                         requestId, completedNormally.get(), System.currentTimeMillis() - start);
 
                 HttpApiTool.clearCurrentCredentials();
-                activeRequests.remove(requestId);
+                // Two-arg removal: a superseding run may already own these keys, and this run
+                // finishing must not unregister the run that replaced it.
+                activeRequests.remove(requestId, cancellationToken);
                 String alias = resolvedSessionIdRef.get();
                 if (alias != null) {
-                    activeRequests.remove(alias);
+                    activeRequests.remove(alias, cancellationToken);
                 }
             }
 
@@ -294,11 +314,44 @@ public class ChatHandler {
         }
     }
 
-    private void writeSseEvent(OutputStream out, String eventType, String data) throws IOException {
-        synchronized (out) {
-            out.write(("event: " + eventType + "\n").getBytes(StandardCharsets.UTF_8));
-            out.write(("data: " + data + "\n\n").getBytes(StandardCharsets.UTF_8));
-            out.flush();
+    /**
+     * The only writer for one SSE response. Serializes framing, and stamps every frame with
+     * the run it belongs to so a client can discard the tail of a run it already superseded.
+     */
+    private static final class SseStream {
+        private final OutputStream out;
+        private final ObjectMapper mapper;
+        private final java.util.concurrent.atomic.AtomicReference<String> runId;
+
+        SseStream(
+                OutputStream out,
+                ObjectMapper mapper,
+                java.util.concurrent.atomic.AtomicReference<String> runId
+        ) {
+            this.out = out;
+            this.mapper = mapper;
+            this.runId = runId;
+        }
+
+        void emit(String eventType, Map<String, ?> payload) throws IOException {
+            Map<String, Object> body = new java.util.HashMap<>(payload);
+            String currentRunId = runId.get();
+            if (currentRunId != null && !currentRunId.isBlank()) {
+                body.put("runId", currentRunId);
+            }
+            synchronized (out) {
+                out.write(("event: " + eventType + "\n").getBytes(StandardCharsets.UTF_8));
+                out.write(("data: " + mapper.writeValueAsString(body) + "\n\n")
+                        .getBytes(StandardCharsets.UTF_8));
+                out.flush();
+            }
+        }
+
+        void keepalive() throws IOException {
+            synchronized (out) {
+                out.write(": keepalive\n\n".getBytes(StandardCharsets.UTF_8));
+                out.flush();
+            }
         }
     }
 
@@ -310,14 +363,14 @@ public class ChatHandler {
      * client's SSE parser, it only proves the stream is alive.
      */
     private ScheduledFuture<?> startSseKeepalive(
-            OutputStream out, CancellationToken cancellationToken, String requestId) {
+            SseStream sse, CancellationToken cancellationToken, String requestId) {
         long seconds = EnvConfig.get().getInt(EnvKey.SSE_KEEPALIVE_SECONDS, 15);
         return SSE_KEEPALIVE_EXECUTOR.scheduleAtFixedRate(() -> {
             if (cancellationToken.isCancelled()) {
                 return;
             }
             try {
-                writeSseKeepalive(out);
+                sse.keepalive();
             } catch (IOException e) {
                 // No retry: a failed write means the peer is gone, which is a cancel
                 // signal, not a transient error. isCancelled() also guards the log so
@@ -331,11 +384,17 @@ public class ChatHandler {
         }, seconds, seconds, TimeUnit.SECONDS);
     }
 
-    private static void writeSseKeepalive(OutputStream out) throws IOException {
-        synchronized (out) {
-            out.write(": keepalive\n\n".getBytes(StandardCharsets.UTF_8));
-            out.flush();
-        }
+    /**
+     * A cancelled run may still receive tool output: ReAct emits it before its own
+     * post-execution cancellation check, and a tool that cannot abort runs to completion.
+     * Terminal frames stay so the client can still close the stream it opened.
+     */
+    private static boolean isLateEventOfCancelledRun(
+            CancellationToken cancellationToken, StreamEvent event) {
+        return cancellationToken.isCancelled()
+                && event.type() != StreamEvent.Type.CANCELLED
+                && event.type() != StreamEvent.Type.ERROR
+                && event.type() != StreamEvent.Type.DONE;
     }
 
     private Map<String, Object> toolEventPayload(

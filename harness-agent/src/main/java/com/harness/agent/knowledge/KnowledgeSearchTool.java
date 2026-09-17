@@ -46,7 +46,13 @@ public final class KnowledgeSearchTool implements Tool {
                 .put("maxLength", 4096)
                 .put("description", "Complete standalone knowledge query in natural language. Include the "
                         + "entity names and enough context to stand alone — the index does not see this "
-                        + "conversation."));
+                        + "conversation. When the user refers to an earlier conversation, do not copy "
+                        + "their wording: rewrite it into a self-contained query that names what was "
+                        + "actually discussed. \"remember the Redis thing\" becomes \"the user's earlier "
+                        + "discussion of Redis, local caching, cache architecture, and the tradeoffs "
+                        + "between Redis and a local cache\". Add synonyms, the English term, and the "
+                        + "domain vocabulary the source material would use, but never invent facts the "
+                        + "user did not state."));
         ObjectNode types = objectMapper.createObjectNode()
                 .put("type", "array")
                 .put("description", "Optional filter to restrict the search to specific kinds. "
@@ -69,6 +75,13 @@ public final class KnowledgeSearchTool implements Tool {
         properties.set("knowledgeTypes", types);
         properties.set("limit", objectMapper.createObjectNode()
                 .put("type", "integer").put("minimum", 1).put("maximum", 20));
+        properties.set("recent", objectMapper.createObjectNode()
+                .put("type", "boolean")
+                .put("description", "Set true only for a question about the history itself that names "
+                        + "no subject — \"what did I ask before?\", \"what have we discussed lately?\". "
+                        + "It lists this user's most recent episodes in time order instead of searching "
+                        + "semantically, so a subject-bearing query must leave it unset. When true, "
+                        + "knowledgeTypes may only be USER_EPISODE."));
         ObjectNode schema = objectMapper.createObjectNode().put("type", "object");
         schema.set("properties", properties);
         schema.putArray("required").add("query");
@@ -84,6 +97,11 @@ public final class KnowledgeSearchTool implements Tool {
                         + "Search before answering whenever the request could depend on earlier sessions, "
                         + "uploaded material, or known entity relations — including when the user did not "
                         + "explicitly ask for a search. "
+                        + "For anything the user asked or decided earlier, rewrite their phrasing into a "
+                        + "self-contained query built from the actual subject before searching; a verbatim "
+                        + "copy of \"that Redis thing\" matches nothing. "
+                        + "A question with no subject at all (\"what did I ask before?\") cannot be matched "
+                        + "semantically — use recent=true for those. "
                         + "Scores retain route-specific semantics. Use knowledge_read for source details. "
                         + "Graph hits are capability/Schema cards, not graph facts: "
                         + "use graphRouteHint.recommendedTool (query_graph) with the discovered graphId/schemaId to query Neo4j.",
@@ -101,10 +119,14 @@ public final class KnowledgeSearchTool implements Tool {
         try {
             String query = requiredText(arguments, "query");
             int limit = integer(arguments, "limit", 10);
-            Set<KnowledgeConceptType> requestedTypes = requestedTypes(arguments);
+            boolean recent = bool(arguments, "recent");
+            Set<KnowledgeConceptType> requestedTypes = requestedTypes(arguments, recent);
             KnowledgeToolRuntimeContext context =
                     KnowledgeToolRuntimeContext.requireCurrent(TOOL_NAME);
-            List<Hit> hits = router.search(query, requestedTypes, limit, context).stream()
+            List<DiscoveredKnowledge> discovered = recent
+                    ? router.recentEpisodes(limit, context)
+                    : router.search(query, requestedTypes, limit, context);
+            List<Hit> hits = discovered.stream()
                     .map(hit -> new Hit(
                             hit.knowledgeKind(),
                             hit.conceptId(),
@@ -116,13 +138,15 @@ public final class KnowledgeSearchTool implements Tool {
                             hit.scoreType(),
                             hit.score(),
                             hit.sourceAnchors(),
-                            hit.graphRouteHint()))
+                            hit.graphRouteHint(),
+                            hit.eventTime() == null ? null : hit.eventTime().toString()))
                     .toList();
+            Map<String, Object> meta = recent
+                    ? Map.of("scorePolicy", "recency-order")
+                    : Map.of("scorePolicy", "route-specific");
             ToolEnvelope<SearchData> envelope = hits.isEmpty()
-                    ? ToolEnvelope.empty(new SearchData(hits), null,
-                            Map.of("scorePolicy", "route-specific"))
-                    : ToolEnvelope.success(new SearchData(hits), null,
-                            Map.of("scorePolicy", "route-specific"));
+                    ? ToolEnvelope.empty(new SearchData(hits), null, meta)
+                    : ToolEnvelope.success(new SearchData(hits), null, meta);
             return ToolExecutionOutcome.succeeded(
                     ToolOutput.text(objectMapper.writeValueAsString(envelope)),
                     hits.isEmpty() ? ResultStatus.EMPTY : ResultStatus.AVAILABLE);
@@ -134,9 +158,11 @@ public final class KnowledgeSearchTool implements Tool {
         }
     }
 
-    private static Set<KnowledgeConceptType> requestedTypes(JsonNode arguments) {
+    private static Set<KnowledgeConceptType> requestedTypes(JsonNode arguments, boolean recent) {
         JsonNode values = arguments == null ? null : arguments.get("knowledgeTypes");
-        if (values == null || values.isNull()) return Set.of();
+        if (values == null || values.isNull()) {
+            return recent ? Set.of(KnowledgeConceptType.USER_EPISODE) : Set.of();
+        }
         if (!values.isArray()) {
             throw new IllegalArgumentException("knowledgeTypes must be an array");
         }
@@ -152,7 +178,22 @@ public final class KnowledgeSearchTool implements Tool {
             }
             types.add(type);
         });
+        if (recent && !types.equals(Set.of(KnowledgeConceptType.USER_EPISODE))) {
+            // Recall walks USER_EPISODE by time, so another kind silently cannot be served.
+            throw new IllegalArgumentException(
+                    "recent=true only applies to USER_EPISODE; drop knowledgeTypes or set it to "
+                            + "[USER_EPISODE]");
+        }
         return Set.copyOf(types);
+    }
+
+    private static boolean bool(JsonNode arguments, String field) {
+        JsonNode value = arguments == null ? null : arguments.get(field);
+        if (value == null || value.isNull()) return false;
+        if (!value.isBoolean()) {
+            throw new IllegalArgumentException(field + " must be a boolean");
+        }
+        return value.booleanValue();
     }
 
     private static String requiredText(JsonNode arguments, String field) {
@@ -189,7 +230,10 @@ public final class KnowledgeSearchTool implements Tool {
             String scoreType,
             double score,
             List<Map<String, Object>> sourceAnchors,
-            Map<String, Object> graphRouteHint
+            Map<String, Object> graphRouteHint,
+            // ISO-8601 event time, on User Episode hits only. A string rather than an Instant so
+            // the envelope serializes without depending on the mapper's Java-time module.
+            String eventTime
     ) {
     }
 }

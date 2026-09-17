@@ -12,26 +12,38 @@ const sendMessage = source.slice(source.indexOf('    async function sendMessage(
 const appendText = source.slice(source.indexOf('function appendAssistantText('),
   source.indexOf('function appendStructuredData('));
 
-async function runChat(events, closes = false) {
+async function runChat(events, closes = false, overrides = {}, stopOnRead = 0) {
   const timers = new Set();
   const state = {
     inputText: { value: 'question' }, attachedFiles: { value: [] },
     isStreaming: { value: false }, userId: { value: 'alice' },
     messages: { value: [] }, currentSessionId: { value: '' }, thinkingLevelIndex: { value: 0 },
     pendingConfirmation: { value: { requestId: 'pending' } }, confirmationAcknowledged: { value: true },
+    currentRunId: { value: null },
     toasts: [], reads: 0, cancelled: false, scheduledFrames: 0,
+    ...overrides,
   };
   const reader = {
     async read() {
       state.reads++;
-      if (state.reads === 1) return { done: false, value: new TextEncoder().encode(events) };
+      if (state.reads === 1) {
+        return { done: false, value: new TextEncoder().encode(events) };
+      }
+      if (stopOnRead === state.reads && stopFn) {
+        stopFn();
+        return { done: true };
+      }
       if (closes) return { done: true };
       throw new Error('read continued after terminal event');
     },
     async cancel() { state.cancelled = true; },
   };
-  const send = runInNewContext(appendText + sendMessage + '\nsendMessage;', {
+  let stopFn = null;
+  const api = runInNewContext(appendText + sendMessage
+    + '\n({ sendMessage, currentRun: () => activeRun });', {
     ...state, Map, TextDecoder, CyreneSSE, upsertToolCall,
+    // ChatPage setup state the send loop reads and writes across invocations.
+    activeRun: null,
     CyreneAPI: { async chat() { return { body: { getReader: () => reader } }; } },
     t: key => key, showToast: text => state.toasts.push(text), scrollToBottom() {}, loadSessions() {},
     SSE_LIVENESS_TIMEOUT_MS: 90_000, STREAM_CHARS_PER_FRAME: 8,
@@ -53,7 +65,8 @@ async function runChat(events, closes = false) {
     },
     cancelAnimationFrame: timer => clearTimeout(timer),
   });
-  await send();
+  stopFn = () => api.currentRun()?.stop();
+  await api.sendMessage();
   assert.equal(state.isStreaming.value, false);
   assert.equal(state.pendingConfirmation.value, null);
   assert.equal(state.cancelled, true);
@@ -78,6 +91,36 @@ test('streamed final text is not duplicated by done or overwritten by later even
   assert.equal(state.messages.value[1].content, 'answer rendered over frames');
   assert.ok(state.scheduledFrames > 1);
   assert.deepEqual(state.toasts, []);
+});
+
+test('frames carrying another run id are dropped instead of rendered', async () => {
+  const state = await runChat('event: start\ndata: {"sessionId":"s1","runId":"run-B"}\n\n'
+    + 'event: token\ndata: {"runId":"run-A","text":"stale image result "}\n\n'
+    + 'event: tool_call_done\ndata: {"runId":"run-A","toolCallId":"call-1","toolName":"image_generation","status":"SUCCEEDED","durationMs":20000}\n\n'
+    + 'event: token\ndata: {"runId":"run-B","text":"fresh answer"}\n\n'
+    + 'event: done\ndata: {"runId":"run-B","output":"fresh answer"}\n\n');
+  assert.equal(state.currentRunId.value, 'run-B');
+  assert.equal(state.messages.value[1].content, 'fresh answer');
+  assert.equal(state.messages.value[1].toolCalls.length, 0);
+});
+
+test('a run adopts its own id rather than one left over from the previous run', async () => {
+  const state = await runChat('event: start\ndata: {"sessionId":"s1","runId":"run-B"}\n\n'
+    + 'event: token\ndata: {"runId":"run-B","text":"second answer"}\n\n'
+    + 'event: done\ndata: {"runId":"run-B","output":"second answer"}\n\n',
+    false, { currentRunId: { value: 'run-A' } });
+  // The previous run's id must not make this run's own START look like a stale frame.
+  assert.equal(state.currentRunId.value, 'run-B');
+  assert.equal(state.messages.value[1].content, 'second answer');
+});
+
+test('Stop reads as a cancel, not as a broken stream', async () => {
+  const state = await runChat('event: start\ndata: {"runId":"run-A"}\n\n'
+    + 'event: tool_call_start\ndata: {"runId":"run-A","toolCallId":"call-1","toolName":"knowledge_read","status":"RUNNING"}\n\n',
+    false, {}, 2);
+  assert.deepEqual(state.toasts, []);
+  assert.doesNotMatch(String(state.messages.value[1].content), /streamInterrupted/);
+  assert.equal(state.messages.value[1].toolCalls[0].status, 'CANCELLED');
 });
 
 test('EOF without a terminal event reports interruption and finishes running tool cards', async () => {

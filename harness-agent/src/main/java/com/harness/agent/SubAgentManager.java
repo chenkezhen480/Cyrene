@@ -291,6 +291,10 @@ public class SubAgentManager {
             if (!record.start()) {
                 log.warn("[SubAgentManager] Task {} already in terminal state, skipping", taskId);
                 activeTasks.decrementAndGet();
+                // Untrack before leaving: this worker belongs to a process-wide pool and is about
+                // to run another session's task, so leaving it on this token would let a later
+                // cancel of this run abort whichever request that thread is running by then.
+                taskToken.untrackThread(currentThread);
                 return record.completion().join();
             }
             publishLifecycle(scope, toolCallId, record,
@@ -302,21 +306,25 @@ public class SubAgentManager {
                 FinalOutputContract outputContract = finalOutputContract(record.task());
                 RunToolCatalog subAgentToolCatalog =
                         runContext.toolCatalog().allowing(record.task().tools());
-                if (outputContract instanceof FinalOutputContract.JsonSchema jsonSchema) {
+                if (outputContract instanceof FinalOutputContract.JsonSchema jsonSchema
+                        && subAgentToolCatalog.contains(StructuredOutputTool.TOOL_NAME)) {
                     subAgentToolCatalog = subAgentToolCatalog.replacing(
                             StructuredOutputTool.terminal(jsonSchema));
                 }
+                // The task's own trace must exist before the knowledge context is restored: the
+                // restored context is what a knowledge_search inside this task records into, and
+                // pointing it at the parent trace would overwrite the parent's own search.
+                RunTrace trace = traceFactory.start();
+                trace.setSessionId(runContext.sessionId());
+                trace.recordInput(null, record.task().description(), List.of());
+                trace.recordLlmMeta("sub-agent", "sub-agent");
                 KnowledgeToolRuntimeContext.restoreForCatalog(
-                        unifiedKnowledgeContext, subAgentToolCatalog);
+                        unifiedKnowledgeContext, subAgentToolCatalog, trace);
 
                 ReActLoop reActLoop = reActLoopFactory.create(subAgentToolCatalog, toolExecutor);
 
                 // Build system prompt from LLM-generated persona + systemPrompt + context
                 String systemPrompt = buildSubAgentPrompt(record.task());
-                RunTrace trace = traceFactory.start();
-                trace.setSessionId(runContext.sessionId());
-                trace.recordInput(null, record.task().description(), List.of());
-                trace.recordLlmMeta("sub-agent", "sub-agent");
 
                 // Execute with task-specific cancellation token
                 ReActResult result = reActLoop.execute(new ReActRequest(

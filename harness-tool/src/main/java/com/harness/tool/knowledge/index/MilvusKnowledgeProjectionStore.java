@@ -9,14 +9,12 @@ import com.harness.core.model.PageResponse;
 import io.milvus.v2.common.IndexParam;
 import io.milvus.response.QueryResultsWrapper;
 import io.milvus.v2.client.MilvusClientV2;
-import io.milvus.v2.service.vector.request.AnnSearchReq;
 import io.milvus.v2.service.vector.request.DeleteReq;
-import io.milvus.v2.service.vector.request.HybridSearchReq;
 import io.milvus.v2.service.vector.request.QueryIteratorReq;
+import io.milvus.v2.service.vector.request.SearchReq;
 import io.milvus.v2.service.vector.request.UpsertReq;
 import io.milvus.v2.service.vector.request.data.EmbeddedText;
 import io.milvus.v2.service.vector.request.data.FloatVec;
-import io.milvus.v2.service.vector.request.ranker.RRFRanker;
 import io.milvus.v2.service.vector.response.SearchResp;
 import io.milvus.orm.iterator.QueryIterator;
 import org.slf4j.Logger;
@@ -246,64 +244,122 @@ public final class MilvusKnowledgeProjectionStore implements KnowledgeProjection
     }
 
     @Override
-    public List<KnowledgeProjectionHit> searchHybrid(KnowledgeProjectionSearch search) {
+    public KnowledgeProjectionSearchOutcome searchHybrid(KnowledgeProjectionSearch search) {
         java.util.Objects.requireNonNull(search, "search");
         validateSearchScope(search);
         List<KnowledgeProjectionHit> hits = new ArrayList<>();
+        List<KnowledgeRetrievalDiagnostics> lanes = new ArrayList<>();
         for (SearchTarget target : searchTargets(search)) {
-            hits.addAll(searchHybrid(target.collection(), target.search()));
+            LaneSearch lane = searchLanes(target.collection(), target.search());
+            hits.addAll(lane.hits());
+            lanes.add(lane.diagnostics());
         }
-        return hits.stream()
+        List<KnowledgeProjectionHit> fused = hits.stream()
                 .sorted(Comparator.comparingDouble(KnowledgeProjectionHit::rrfScore)
                         .reversed()
                         .thenComparing(hit -> hit.projection().revisionId()))
                 .limit(search.fusedTopK())
                 .toList();
+        // fusedCandidates is the unique revision count surviving fusion before the final limit;
+        // each lane reports its own hit count, so the merge would sum rather than dedupe them.
+        KnowledgeRetrievalDiagnostics merged = KnowledgeRetrievalDiagnostics.merge(
+                lanes, search.denseThreshold(), search.sparseThreshold());
+        return new KnowledgeProjectionSearchOutcome(fused, merged);
     }
 
-    private List<KnowledgeProjectionHit> searchHybrid(
-            String collection,
-            KnowledgeProjectionSearch search
-    ) {
+    /**
+     * Runs the dense and sparse lanes as two plain searches instead of one {@code hybridSearch}.
+     *
+     * <p>Milvus applies {@code radius} server-side, so a fused response can never say whether a
+     * lane was empty or merely below the threshold — the exact question a "why did my search
+     * miss" investigation needs answered. Searching the lanes separately keeps the sub-threshold
+     * neighbours visible, and the fusion stays identical because
+     * {@link ReciprocalRankFusion} uses the same one-based RRF formula as the server ranker.</p>
+     */
+    private LaneSearch searchLanes(String collection, KnowledgeProjectionSearch search) {
         try {
             String filter = searchFilter(search);
-            AnnSearchReq dense = AnnSearchReq.builder()
-                    .vectorFieldName("embedding")
-                    .vectors(List.of(new FloatVec(floatList(search.embedding()))))
-                    .topK(search.laneTopK())
-                    .expr(filter)
-                    .params(radius(search.denseThreshold()))
-                    .metricType(IndexParam.MetricType.COSINE)
-                    .build();
-            AnnSearchReq sparse = AnnSearchReq.builder()
-                    .vectorFieldName("sparse_content")
-                    .vectors(List.of(new EmbeddedText(search.query())))
-                    .topK(search.laneTopK())
-                    .expr(filter)
-                    .params(radius(search.sparseThreshold()))
-                    .metricType(IndexParam.MetricType.BM25)
-                    .build();
-            SearchResp response = client.hybridSearch(HybridSearchReq.builder()
+            List<String> outFields = outputFields(search.conceptTypes());
+            SearchResp denseResponse = client.search(SearchReq.builder()
                     .collectionName(collection)
-                    .searchRequests(List.of(dense, sparse))
-                    .ranker(new RRFRanker(search.rrfK()))
-                    .outFields(outputFields(search.conceptTypes()))
-                    .topK(search.fusedTopK())
+                    .annsField("embedding")
+                    .data(List.of(new FloatVec(floatList(search.embedding()))))
+                    .topK(search.laneTopK())
+                    .filter(filter)
+                    .metricType(IndexParam.MetricType.COSINE)
+                    .outputFields(outFields)
                     .build());
-            if (response.getSearchResults().isEmpty()) {
-                return List.of();
+            SearchResp sparseResponse = client.search(SearchReq.builder()
+                    .collectionName(collection)
+                    .annsField("sparse_content")
+                    .data(List.of(new EmbeddedText(search.query())))
+                    .topK(search.laneTopK())
+                    .filter(filter)
+                    .metricType(IndexParam.MetricType.BM25)
+                    .outputFields(outFields)
+                    .build());
+
+            List<SearchResp.SearchResult> denseRows = firstResults(denseResponse);
+            List<SearchResp.SearchResult> sparseRows = firstResults(sparseResponse);
+
+            List<KnowledgeProjection> keptDense = new ArrayList<>();
+            List<KnowledgeProjection> keptSparse = new ArrayList<>();
+            int keptDenseCount = 0;
+            int keptSparseCount = 0;
+            for (SearchResp.SearchResult row : denseRows) {
+                if (scoreOf(row) >= search.denseThreshold()) {
+                    keptDense.add(mapProjection(row.getEntity()));
+                    keptDenseCount++;
+                }
             }
-            List<KnowledgeProjectionHit> hits = new ArrayList<>();
-            for (SearchResp.SearchResult result : response.getSearchResults().getFirst()) {
-                hits.add(new KnowledgeProjectionHit(
-                        mapProjection(result.getEntity()),
-                        result.getScore() == null ? 0.0 : result.getScore()));
+            for (SearchResp.SearchResult row : sparseRows) {
+                if (scoreOf(row) >= search.sparseThreshold()) {
+                    keptSparse.add(mapProjection(row.getEntity()));
+                    keptSparseCount++;
+                }
             }
-            return List.copyOf(hits);
+            List<KnowledgeProjectionHit> fused = ReciprocalRankFusion.fuse(
+                    keptDense, keptSparse, search.rrfK(), search.fusedTopK());
+            return new LaneSearch(fused, new KnowledgeRetrievalDiagnostics(
+                    List.of(collection),
+                    denseRows.size(), bestScore(denseRows), search.denseThreshold(), keptDenseCount,
+                    sparseRows.size(), bestScore(sparseRows), search.sparseThreshold(),
+                    keptSparseCount,
+                    fused.size()));
         } catch (Exception e) {
             throw new IllegalStateException(
                     "Failed to search Milvus Knowledge projection '" + collection + "'", e);
         }
+    }
+
+    private static List<SearchResp.SearchResult> firstResults(SearchResp response) {
+        if (response == null || response.getSearchResults() == null
+                || response.getSearchResults().isEmpty()) {
+            return List.of();
+        }
+        List<SearchResp.SearchResult> rows = response.getSearchResults().getFirst();
+        return rows == null ? List.of() : rows;
+    }
+
+    private static double scoreOf(SearchResp.SearchResult result) {
+        return result.getScore() == null ? 0.0 : result.getScore();
+    }
+
+    private static Double bestScore(List<SearchResp.SearchResult> rows) {
+        Double best = null;
+        for (SearchResp.SearchResult row : rows) {
+            double score = scoreOf(row);
+            if (best == null || score > best) {
+                best = score;
+            }
+        }
+        return best;
+    }
+
+    private record LaneSearch(
+            List<KnowledgeProjectionHit> hits,
+            KnowledgeRetrievalDiagnostics diagnostics
+    ) {
     }
 
     @Override
@@ -443,10 +499,6 @@ public final class MilvusKnowledgeProjectionStore implements KnowledgeProjection
         List<Float> floats = new ArrayList<>(values.length);
         for (float value : values) floats.add(value);
         return floats;
-    }
-
-    private static String radius(double threshold) {
-        return "{\"radius\":" + threshold + "}";
     }
 
     private static String literal(String value) {

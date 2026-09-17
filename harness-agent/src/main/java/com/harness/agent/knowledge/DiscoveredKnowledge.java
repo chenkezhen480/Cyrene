@@ -19,7 +19,9 @@ public record DiscoveredKnowledge(
         String scoreType,
         double score,
         List<Map<String, Object>> sourceAnchors,
-        Map<String, Object> graphRouteHint
+        Map<String, Object> graphRouteHint,
+        // When the recorded event happened; only User Episode hits carry one.
+        java.time.Instant eventTime
 ) {
     public DiscoveredKnowledge {
         sourceAnchors = sourceAnchors == null ? List.of() : List.copyOf(sourceAnchors);

@@ -115,8 +115,10 @@ class WikiIdentityResolverTest {
     }
 
     private void candidate(KnowledgeHead head) {
-        when(projectionStore.searchHybrid(any())).thenReturn(List.of(
-                new KnowledgeProjectionHit(projection(head), 0.03)));
+        when(projectionStore.searchHybrid(any())).thenReturn(
+                new KnowledgeProjectionSearchOutcome(
+                        List.of(new KnowledgeProjectionHit(projection(head), 0.03)),
+                        KnowledgeRetrievalDiagnostics.empty(0.70, 0.10)));
         when(repository.findAuthorityByIds(List.of(head.concept().id())))
                 .thenReturn(Map.of(head.concept().id(), head));
         when(projectionStore.findRevisionSnapshot(head.currentRevision().id()))

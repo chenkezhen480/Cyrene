@@ -81,6 +81,8 @@ services:
         condition: service_healthy
       milvus:
         condition: service_healthy
+      neo4j:
+        condition: service_healthy
       redis:
         condition: service_healthy
       searxng:
@@ -278,19 +280,17 @@ services:
   # Redis 7 - 会话缓存（分布式）
   # ============================================================
   # ============================================================
-  # Neo4j Community - optional structured knowledge graph
-  # Start with: docker compose --env-file ../.env --profile graph up -d
+  # Neo4j Community - structured knowledge graph
+  # Started with the default stack: docker compose --env-file ../.env up -d
   # ============================================================
   neo4j:
     image: neo4j:5.26.28
     container_name: cyrene-neo4j
-    profiles:
-      - graph
     ports:
       - "127.0.0.1:${HARNESS_GRAPH_NEO4J_HTTP_PORT:-7474}:7474"
       - "127.0.0.1:${HARNESS_GRAPH_NEO4J_BOLT_PORT:-7687}:7687"
     environment:
-      # Empty password makes Neo4j fail explicitly only when the graph profile is started.
+      # Empty password makes Neo4j fail explicitly instead of starting with a guessable default.
       NEO4J_AUTH: neo4j/${HARNESS_GRAPH_NEO4J_PASSWORD:-}
       HARNESS_GRAPH_NEO4J_PASSWORD: ${HARNESS_GRAPH_NEO4J_PASSWORD:-}
       NEO4J_server_memory_heap_initial__size: ${HARNESS_GRAPH_NEO4J_HEAP_INITIAL:-512m}
@@ -298,10 +298,13 @@ services:
       NEO4J_server_memory_pagecache_size: ${HARNESS_GRAPH_NEO4J_PAGECACHE:-512m}
       # 避免每个数据库启动时预占 256 MiB；不影响事务日志持久化和恢复。
       NEO4J_db_tx__log_preallocate: "false"
+      # 慢查询/长事务写进 logs/query.log，超时类问题才有据可查。
+      NEO4J_dbms_logs_query_threshold: ${HARNESS_GRAPH_NEO4J_SLOW_QUERY_THRESHOLD:-5s}
     volumes:
       - ./neo4j/data:/data
-    tmpfs:
-      - /logs:size=64m
+      - ./neo4j/logs:/logs
+    # heap 1G + pagecache 512m + JVM/OS 余量；容器自身不设限会吃到宿主机满。
+    mem_limit: ${HARNESS_GRAPH_NEO4J_MEMORY_LIMIT:-2560m}
     healthcheck:
       test:
         - CMD-SHELL

@@ -677,6 +677,13 @@ h3 {
   transform: translateY(-1px);
 }
 
+/* Same box as .input (padding, font size, border) so a button can sit on an input grid row. */
+.btn-input {
+  padding: var(--space-3) var(--space-4);
+  font-size: var(--text-base);
+  white-space: nowrap;
+}
+
 .btn-secondary {
   background: transparent;
   color: var(--mist);
@@ -1501,6 +1508,7 @@ input[type="file"].input::file-selector-button:hover {
 }
 .tool-call-success { color: #4ade80; }
 .tool-call-error { color: #f87171; }
+.tool-call-cancelled { color: var(--ash); }
 @keyframes pulse-opacity {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.4; }

@@ -62,7 +62,7 @@ class LongTermKnowledgeRetrieverTest {
                         Set.of(PreferenceActivationTagRegistry.CODE_TASK)),
                 new KnowledgeToolRuntimeContext(
                         "tenant-a", "user-a", null, null,
-                        Set.of("knowledge_search", "knowledge_read")),
+                        Set.of("knowledge_search", "knowledge_read"), null),
                 10_000,
                 RunTrace.noop());
 
@@ -102,7 +102,7 @@ class LongTermKnowledgeRetrieverTest {
                         Set.of(PreferenceActivationTagRegistry.CODE_TASK)),
                 new KnowledgeToolRuntimeContext(
                         "tenant-a", "user-a", null, null,
-                        Set.of("knowledge_search", "knowledge_read")),
+                        Set.of("knowledge_search", "knowledge_read"), null),
                 10_000,
                 RunTrace.noop());
 

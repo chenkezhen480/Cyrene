@@ -102,6 +102,19 @@ const CyreneAPI = (() => {
     return request('DELETE', `/api/chat/${sessionId}`);
   }
 
+  // ── Tenant / identity tool permissions ──
+  function getToolPermissions(tenantId, identity) {
+    const params = new URLSearchParams();
+    if (tenantId) params.set('tenantId', tenantId);
+    if (identity) params.set('identity', identity);
+    const query = params.toString();
+    return request('GET', `/api/tool-permissions${query ? `?${query}` : ''}`);
+  }
+
+  function saveToolPermissions(payload) {
+    return request('PUT', '/api/tool-permissions', payload);
+  }
+
   function approveConfirmation(requestId, userId, sessionId) {
     return request(
       'POST',
@@ -404,6 +417,7 @@ const CyreneAPI = (() => {
     setToken, getToken, onTokenRefresh,
     login,
     chat, cancelChat, approveConfirmation, rejectConfirmation, uploadFile,
+    getToolPermissions, saveToolPermissions,
     getModelConfiguration, updateModelConfiguration,
     createSession, listSessions, getSession, getMessages, getSessionStats, closeSession,
     listCollections, uploadKnowledge, listKnowledge, listWiki, getWiki, updateWiki, deleteWiki, exportWiki, exportAllWiki,

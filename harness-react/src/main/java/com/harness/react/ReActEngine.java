@@ -435,28 +435,32 @@ public class ReActEngine implements ReActLoop {
                 long llmStart = System.currentTimeMillis();
                 CompletableFuture<ChatResponse> responseFuture = new CompletableFuture<>();
 
-                streamingChatModel.chat(reqBuilder.build(), new StreamingChatResponseHandler() {
-                    @Override
-                    public void onPartialResponse(String text) {
-                        if (!guardedFinalStreaming && listener != null) {
-                            listener.onToken(text);
-                        }
-                    }
-
-                    @Override
-                    public void onCompleteResponse(ChatResponse response) {
-                        responseFuture.complete(response);
-                    }
-
-                    @Override
-                    public void onError(Throwable error) {
-                        responseFuture.completeExceptionally(error);
-                    }
-                });
-
-                ChatResponse response;
+                // Tracked before the request starts, not after it returns. The streaming HTTP future
+                // is keyed by the calling thread, and this thread then blocks on it for the whole
+                // stream, so a cancel arriving mid-stream can only reach that future while the
+                // thread is already registered with the token.
                 if (cancellationToken != null) cancellationToken.trackCurrentThread();
+                ChatResponse response;
                 try {
+                    streamingChatModel.chat(reqBuilder.build(), new StreamingChatResponseHandler() {
+                        @Override
+                        public void onPartialResponse(String text) {
+                            if (!guardedFinalStreaming && listener != null) {
+                                listener.onToken(text);
+                            }
+                        }
+
+                        @Override
+                        public void onCompleteResponse(ChatResponse response) {
+                            responseFuture.complete(response);
+                        }
+
+                        @Override
+                        public void onError(Throwable error) {
+                            responseFuture.completeExceptionally(error);
+                        }
+                    });
+
                     response = responseFuture.get(llmTimeoutSeconds, TimeUnit.SECONDS);
                 } catch (TimeoutException e) {
                     log.error("[L3-ReAct] Streaming LLM call timed out after {}s", llmTimeoutSeconds);

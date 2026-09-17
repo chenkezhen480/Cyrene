@@ -11,9 +11,7 @@ import com.harness.core.knowledge.KnowledgeRevision;
 import com.harness.core.knowledge.KnowledgeSource;
 import com.harness.core.knowledge.KnowledgeSourceType;
 import com.harness.core.knowledge.KnowledgeStatus;
-import com.harness.graph.schema.GraphNodeTypeDefinition;
 import com.harness.graph.schema.GraphPropertyDefinition;
-import com.harness.graph.schema.GraphRelationTypeDefinition;
 import com.harness.graph.schema.GraphSchemaDefinition;
 import com.harness.graph.schema.GraphSchemaDetails;
 import com.harness.tool.knowledge.authority.KnowledgeHead;
@@ -26,7 +24,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.TreeMap;
+import java.util.TreeSet;
 
 /** Transactionally writes Graph Schema Wiki revisions and their Catalog outbox tasks. */
 public final class PersistentGraphSchemaWikiCompiler implements GraphSchemaWikiCompiler {
@@ -62,15 +62,18 @@ public final class PersistentGraphSchemaWikiCompiler implements GraphSchemaWikiC
         Instant now = Instant.now();
         long expectedVersion = existing == null ? 0 : existing.concept().version();
         long revisionNumber = expectedVersion + 1;
-        String body = renderBody(schema);
-        String sourceHash = KnowledgeIdentity.sha256(body);
+        String structuralBody = renderBody(schema);
+        String sourceHash = KnowledgeIdentity.sha256(structuralBody);
         if (existing != null
                 && existing.concept().status() == KnowledgeStatus.STABLE
                 && sourceHash.equals(existing.currentRevision().metadata().get("capabilitySourceHash"))) {
             return;
         }
         String summary = capabilityDescriber.describe(definition);
-        body += "\n## AI capability description\n" + summary + '\n';
+        // The description leads the card, where it reads as the one-line summary of the graph. It is
+        // added after the hash check on the structural part so an unchanged Schema still skips the
+        // model call entirely.
+        String body = withSummary(structuralBody, summary);
         if (existing == null && identityResolver != null) {
             var resolution = identityResolver.resolve(
                     KnowledgeConceptType.GRAPH_SCHEMA, null, null,
@@ -163,38 +166,68 @@ public final class PersistentGraphSchemaWikiCompiler implements GraphSchemaWikiC
 
     private static String renderBody(GraphSchemaDetails schema) {
         GraphSchemaDefinition definition = schema.definition();
-        StringBuilder body = new StringBuilder()
-                .append("# Graph Schema ").append(definition.schemaId()).append("\n\n")
-                .append("- Version: ").append(definition.version()).append('\n')
-                .append("- Mode: ").append(definition.mode()).append('\n')
-                .append("- Enabled: ").append(schema.enabled()).append('\n')
-                .append("- Source: ").append(schema.source()).append('\n')
-                .append("- Format: ").append(schema.format()).append('\n')
-                .append("- Editable: ").append(schema.editable()).append('\n')
-                .append("- Resource: ").append(resourceUri(definition.schemaId())).append('\n');
-        appendSchemaDefinition(body, definition);
-        body.append("\nRecommended tool: query_graph\n")
-                .append("This card describes graph capabilities only. Entity and relationship facts stay in Neo4j.\n");
+        StringBuilder body = new StringBuilder("# Graph Schema ").append(definition.schemaId())
+                .append("\n\n");
+        appendSchemaDefinition(body, definition, schema.enabled());
         return body.toString();
     }
 
-    static void appendSchemaDefinition(StringBuilder body, GraphSchemaDefinition definition) {
-        body.append("- Schema version: ").append(definition.version()).append('\n')
-                .append("- Schema mode: ").append(definition.mode()).append('\n')
-                .append("- Default max depth: ").append(definition.defaultMaxDepth()).append('\n')
-                .append("- Max depth: ").append(definition.maxDepth())
-                .append("\n\n## Node types\n");
-        new TreeMap<>(definition.nodeTypes()).forEach((label, nodeType) ->
-                appendNodeType(body, label, nodeType));
-        body.append("\n## Relation types\n");
+    /** Places the model-written one-liner directly under the title. */
+    static String withSummary(String structuralBody, String summary) {
+        int head = structuralBody.indexOf("\n\n");
+        if (head < 0 || summary == null || summary.isBlank()) {
+            return structuralBody;
+        }
+        return structuralBody.substring(0, head + 2) + summary + "\n\n"
+                + structuralBody.substring(head + 2);
+    }
+
+    /**
+     * Renders the whole card as structure, queryable boundary, and the tool to call.
+     *
+     * <p>Deliberately compact: this card exists so the model decides whether to call query_graph and
+     * with which labels, not so it can read the graph. Restating a relation in prose after listing it
+     * as an edge, or repeating the Schema's own version, mode and storage names, adds tokens without
+     * adding a decision. Concrete nodes and relations are always read from Neo4j.</p>
+     *
+     * <p>A disabled Schema still gets a card, because its owner needs to see what it can answer
+     * before enabling it, but the card says so: {@code query_graph} cannot read it, and
+     * {@code KnowledgeDiscoveryRouter} leaves disabled cards out of the Agent's capability hints.</p>
+     */
+    static void appendSchemaDefinition(
+            StringBuilder body,
+            GraphSchemaDefinition definition,
+            boolean enabled
+    ) {
+        body.append("Nodes:\n");
+        new TreeMap<>(definition.nodeTypes()).forEach((label, nodeType) -> {
+            body.append("- ").append(label);
+            appendPropertyNames(body, nodeType.properties());
+            body.append('\n');
+        });
+        body.append("\nRelations:\n");
         if (definition.relationTypes().isEmpty()) {
             body.append("- None\n");
         } else {
-            new TreeMap<>(definition.relationTypes()).forEach((type, relationType) ->
-                    appendRelationType(body, type, relationType));
+            new TreeMap<>(definition.relationTypes()).forEach((type, relation) ->
+                    body.append("- ").append(String.join(", ", new TreeSet<>(relation.sourceLabels())))
+                            .append(" -[").append(type).append("]-> ")
+                            .append(String.join(", ", new TreeSet<>(relation.targetLabels())))
+                            .append('\n'));
         }
-        body.append("\n## Typical queries\n");
+        body.append("\nSupported queries:\n");
         typicalQueries(definition).forEach(query -> body.append("- ").append(query).append('\n'));
+        body.append("\nTraversal: default depth ").append(definition.defaultMaxDepth())
+                .append(", max depth ").append(definition.maxDepth());
+        if (!hasMultiHopPath(definition)) {
+            body.append("; no relation leads into another, so every query stays within one hop");
+        }
+        body.append('.');
+        if (!enabled) {
+            body.append("\n\nThis Schema is not enabled, so query_graph cannot read it yet.");
+        }
+        body.append("\n\nUse query_graph to read actual graph data. This card describes structure only;"
+                + " entities and relations live in Neo4j.\n");
     }
 
     static List<String> typicalQueries(GraphSchemaDefinition definition) {
@@ -205,59 +238,30 @@ public final class PersistentGraphSchemaWikiCompiler implements GraphSchemaWikiC
                 queries.add("Which " + String.join(", ", new java.util.TreeSet<>(relation.targetLabels()))
                         + " entities are connected to " + String.join(", ", new java.util.TreeSet<>(relation.sourceLabels()))
                         + " by " + type + "?"));
-        if (!definition.relationTypes().isEmpty()) {
+        // Only claim path traversal when a relation's target type is also a relation's source type.
+        if (hasMultiHopPath(definition)) {
             queries.add("What relationships and bounded paths connect these entities?");
         }
         return List.copyOf(queries);
     }
 
-    private static void appendNodeType(
-            StringBuilder body,
-            String label,
-            GraphNodeTypeDefinition nodeType
-    ) {
-        body.append("- ").append(label);
-        appendProperties(body, nodeType.properties());
-        body.append('\n');
+    /** True when some relation can be followed by another, i.e. a two-hop path can exist. */
+    static boolean hasMultiHopPath(GraphSchemaDefinition definition) {
+        Set<String> targets = definition.relationTypes().values().stream()
+                .flatMap(relation -> relation.targetLabels().stream())
+                .collect(java.util.stream.Collectors.toSet());
+        return definition.relationTypes().values().stream()
+                .anyMatch(relation -> relation.sourceLabels().stream().anyMatch(targets::contains));
     }
 
-    private static void appendRelationType(
-            StringBuilder body,
-            String type,
-            GraphRelationTypeDefinition relationType
-    ) {
-        body.append("- ").append(type)
-                .append(": ").append(String.join(", ", new java.util.TreeSet<>(
-                        relationType.sourceLabels())))
-                .append(" -> ").append(String.join(", ", new java.util.TreeSet<>(
-                        relationType.targetLabels())));
-        appendProperties(body, relationType.properties());
-        body.append('\n');
-    }
-
-    private static void appendProperties(
+    private static void appendPropertyNames(
             StringBuilder body,
             Map<String, GraphPropertyDefinition> properties
     ) {
         if (properties.isEmpty()) {
             return;
         }
-        body.append(" [");
-        boolean first = true;
-        for (Map.Entry<String, GraphPropertyDefinition> entry
-                : new TreeMap<>(properties).entrySet()) {
-            if (!first) {
-                body.append(", ");
-            }
-            GraphPropertyDefinition property = entry.getValue();
-            body.append(entry.getKey()).append(':').append(property.type());
-            if (property.required()) body.append(" required");
-            if (property.sensitive()) body.append(" sensitive");
-            if (property.queryable()) body.append(" queryable");
-            if (property.sortable()) body.append(" sortable");
-            first = false;
-        }
-        body.append(']');
+        body.append('(').append(String.join(", ", new TreeSet<>(properties.keySet()))).append(')');
     }
 
     private static Map<String, Object> metadata(GraphSchemaDetails schema) {

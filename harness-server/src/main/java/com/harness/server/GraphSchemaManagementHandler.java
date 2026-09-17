@@ -6,55 +6,54 @@ import com.harness.graph.schema.GraphSchemaDetails;
 import com.harness.graph.schema.GraphSchemaFormat;
 import com.harness.graph.schema.GraphSchemaManagementService;
 import com.harness.graph.schema.GraphSchemaSummary;
-import com.harness.graph.store.KnowledgeGraphStore;
 import com.harness.tool.knowledge.GraphSchemaWikiCompiler;
 import io.javalin.http.Context;
 
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 
 public final class GraphSchemaManagementHandler {
 
     private final GraphSchemaManagementService schemaService;
-    private final KnowledgeGraphStore graphStore;
     private final GraphSettings settings;
     private final GraphRequestExecutor requestExecutor;
     private final GraphSchemaWikiCompiler wikiCompiler;
+    private final GraphDeletionService deletionService;
 
     public GraphSchemaManagementHandler(
             GraphSchemaManagementService schemaService,
-            KnowledgeGraphStore graphStore,
             GraphSettings settings,
-            GraphSchemaWikiCompiler wikiCompiler
+            GraphSchemaWikiCompiler wikiCompiler,
+            GraphDeletionService deletionService
     ) {
-        this(schemaService, graphStore, settings,
-                new GraphRequestExecutor(new GraphRequestAuthenticator()), wikiCompiler);
+        this(schemaService, settings,
+                new GraphRequestExecutor(new GraphRequestAuthenticator()),
+                wikiCompiler, deletionService);
     }
 
     GraphSchemaManagementHandler(
             GraphSchemaManagementService schemaService,
-            KnowledgeGraphStore graphStore,
             GraphSettings settings,
             GraphRequestAuthenticator requestAuthenticator,
-            GraphSchemaWikiCompiler wikiCompiler
+            GraphSchemaWikiCompiler wikiCompiler,
+            GraphDeletionService deletionService
     ) {
-        this(schemaService, graphStore, settings,
-                new GraphRequestExecutor(requestAuthenticator), wikiCompiler);
+        this(schemaService, settings,
+                new GraphRequestExecutor(requestAuthenticator), wikiCompiler, deletionService);
     }
 
     GraphSchemaManagementHandler(
             GraphSchemaManagementService schemaService,
-            KnowledgeGraphStore graphStore,
             GraphSettings settings,
             GraphRequestExecutor requestExecutor,
-            GraphSchemaWikiCompiler wikiCompiler
+            GraphSchemaWikiCompiler wikiCompiler,
+            GraphDeletionService deletionService
     ) {
         this.schemaService = Objects.requireNonNull(schemaService, "schemaService");
-        this.graphStore = Objects.requireNonNull(graphStore, "graphStore");
         this.settings = Objects.requireNonNull(settings, "settings");
         this.requestExecutor = Objects.requireNonNull(requestExecutor, "requestExecutor");
         this.wikiCompiler = Objects.requireNonNull(wikiCompiler, "wikiCompiler");
+        this.deletionService = Objects.requireNonNull(deletionService, "deletionService");
     }
 
     public void list(Context context) {
@@ -118,18 +117,10 @@ public final class GraphSchemaManagementHandler {
         });
     }
 
+    /** Deletes the Schema and everything scoped to it: graph spaces, bindings, and Wiki cards. */
     public void delete(Context context) {
-        execute(context, () -> {
-            String schemaId = context.pathParam("schemaId");
-            if (graphStore.hasGraphSpacesForSchema(schemaId)) {
-                throw new IllegalStateException(
-                        "Delete graph spaces that use this Schema before deleting it: " + schemaId
-                );
-            }
-            schemaService.delete(schemaId);
-            wikiCompiler.deprecate(schemaId);
-            context.json(Map.of("schemaId", schemaId, "deleted", true));
-        });
+        execute(context, () -> context.json(
+                deletionService.deleteSchema(context.pathParam("schemaId"))));
     }
 
     private int requestedLimit(Context context) {

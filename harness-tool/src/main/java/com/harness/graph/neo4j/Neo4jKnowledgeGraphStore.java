@@ -57,6 +57,8 @@ public final class Neo4jKnowledgeGraphStore implements KnowledgeGraphStore {
     private static final Logger log = LoggerFactory.getLogger(Neo4jKnowledgeGraphStore.class);
     private static final String BASE_NODE_LABEL = "HarnessGraphNode";
     private static final String MUTATION_LABEL = "HarnessGraphMutation";
+    /** Nodes removed per committed transaction when deleting a whole Graph Space. */
+    private static final int DELETE_BATCH_SIZE = 1000;
 
     private final Driver driver;
     private final GraphSettings settings;
@@ -319,32 +321,50 @@ public final class Neo4jKnowledgeGraphStore implements KnowledgeGraphStore {
     @Override
     public GraphDeleteResult deleteGraphSpace(GraphSpaceKey graphSpaceKey) {
         try (Session session = driver.session(writeSessionConfig)) {
-            return session.executeWrite(transaction -> {
-                Record counts = transaction.run("""
-                        MATCH (node:HarnessGraphNode)
-                        WHERE node.graphId = $graphId
-                          AND node.schemaId = $schemaId
-                        OPTIONAL MATCH (node)-[relation]->()
-                        WHERE relation.graphId = $graphId
-                          AND relation.schemaId = $schemaId
-                        RETURN count(DISTINCT node) AS nodeCount,
-                               count(DISTINCT relation) AS relationCount
-                        """, parameters(
-                        "graphId", graphSpaceKey.graphId(),
-                        "schemaId", graphSpaceKey.schemaId()
-                )).single();
-                int nodeCount = counts.get("nodeCount").asInt();
-                int relationCount = counts.get("relationCount").asInt();
+            // Counted before anything is removed: DETACH DELETE also drops the relations.
+            Record counts = session.executeRead(transaction -> transaction.run("""
+                    MATCH (node:HarnessGraphNode)
+                    WHERE node.graphId = $graphId
+                      AND node.schemaId = $schemaId
+                    OPTIONAL MATCH (node)-[relation]->()
+                    WHERE relation.graphId = $graphId
+                      AND relation.schemaId = $schemaId
+                    RETURN count(DISTINCT node) AS nodeCount,
+                           count(DISTINCT relation) AS relationCount
+                    """, parameters(
+                    "graphId", graphSpaceKey.graphId(),
+                    "schemaId", graphSpaceKey.schemaId()
+            )).single(), queryTransactionConfig);
+            int nodeCount = counts.get("nodeCount").asInt();
+            int relationCount = counts.get("relationCount").asInt();
 
-                transaction.run("""
+            // Deleted in committed batches rather than one transaction. A whole space can be
+            // arbitrarily large, and a single transaction that must finish inside the query timeout
+            // fails on size and on any stall; each batch here gets its own budget, and an
+            // interrupted deletion is completed by calling this again.
+            // The iteration bound is derived from the counted size, not left open: if a batch ever
+            // stopped removing nodes, an unbounded loop here would hammer the database forever.
+            int maxBatches = nodeCount / DELETE_BATCH_SIZE + 2;
+            for (int batch = 0; batch < maxBatches; batch++) {
+                int deleted = session.executeWrite(transaction -> transaction.run("""
                         MATCH (node:HarnessGraphNode)
                         WHERE node.graphId = $graphId
                           AND node.schemaId = $schemaId
-                        DETACH DELETE node
+                        WITH node LIMIT $batchSize
+                        WITH collect(node) AS batch
+                        FOREACH (item IN batch | DETACH DELETE item)
+                        RETURN size(batch) AS deleted
                         """, parameters(
                         "graphId", graphSpaceKey.graphId(),
-                        "schemaId", graphSpaceKey.schemaId()
-                )).consume();
+                        "schemaId", graphSpaceKey.schemaId(),
+                        "batchSize", DELETE_BATCH_SIZE
+                )).single().get("deleted").asInt(), queryTransactionConfig);
+                if (deleted == 0) {
+                    break;
+                }
+            }
+
+            session.executeWrite(transaction -> {
                 transaction.run("""
                         MATCH (mutation:HarnessGraphMutation)
                         WHERE mutation.graphId = $graphId
@@ -354,8 +374,9 @@ public final class Neo4jKnowledgeGraphStore implements KnowledgeGraphStore {
                         "graphId", graphSpaceKey.graphId(),
                         "schemaId", graphSpaceKey.schemaId()
                 )).consume();
-                return new GraphDeleteResult(nodeCount, relationCount);
+                return null;
             }, queryTransactionConfig);
+            return new GraphDeleteResult(nodeCount, relationCount);
         } catch (Neo4jException | GraphStoreException e) {
             throw new GraphStoreException("Failed to delete graph space: " + e.getMessage(), e);
         }
@@ -382,7 +403,9 @@ public final class Neo4jKnowledgeGraphStore implements KnowledgeGraphStore {
 
     @Override
     public GraphDeleteResult delete(GraphDeleteRequest request) {
-        schemaRegistry.require(request.schemaId());
+        // Deliberately not gated on the Schema registry: deletion is addressed by storage key, and a
+        // Schema that was disabled or deleted must still have its remaining data cleanable. An
+        // unknown schemaId simply matches nothing.
         try (Session session = driver.session(writeSessionConfig)) {
             return session.executeWrite(transaction -> switch (request.target()) {
                 case NODE -> deleteNode(transaction, request);
