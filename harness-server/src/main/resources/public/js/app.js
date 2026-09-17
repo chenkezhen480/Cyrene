@@ -450,6 +450,136 @@ const ChatPage = {
     let microphoneStream = null;
     let recordingChunks = [];
 
+    // 语音回答是边生成边合成、分段送达的。
+    //
+    // 播放用 Web Audio 的调度式：每段解码成 AudioBuffer，按时间轴首尾相接 start(when)，
+    // 拼接是采样级精确的 —— 换成 <audio> 元素接力的话，每换一个元素都要重新解码 + 起播，
+    // 句间会露出一声咔哒。
+    //
+    // 但不能一拿到第一段就开播：合成每段有约 1 秒的固定开销，段太短时合成速度会追不上
+    // 模型出字，音频播完就要干等下一段。所以先攒够 START_BUFFER_SECONDS 再开口，
+    // 之后音轨就一直是满的。（流结束时立即放行，免得短回答被硬等。）
+    const VOICE_START_BUFFER_SECONDS = 3.5;
+    let voiceUrlQueue = [];
+    let voiceBuffers = [];
+    let voiceBufferedSeconds = 0;
+    let voiceStarted = false;
+    let voiceStreamEnded = false;
+    let voiceNextStart = 0;
+    let voiceSources = [];
+    let voiceDecoding = false;
+    let voiceContext = null;
+
+    function voiceAudioContext() {
+      if (!voiceContext) voiceContext = new AudioContext();
+      if (voiceContext.state === 'suspended') {
+        voiceContext.resume().catch(() => {});
+      }
+      return voiceContext;
+    }
+
+    // 全链路计数。服务端日志显示「每段都按时到达」而耳朵听到断续时，唯一能定位的办法
+    // 是把 received → decoded → played 三段对上；差额停在哪一步就是哪一步的锅。
+    let voiceStats = null;
+    const resetVoiceStats = () => {
+      voiceStats = { received: 0, decoded: 0, decodeFailed: 0, played: 0, ended: 0 };
+    };
+    resetVoiceStats();
+
+    function enqueueVoiceSegment(seq, url) {
+      if (!url) return;
+      voiceStats.received++;
+      console.log(`[Voice] received seq=${seq} queueDepth=${voiceUrlQueue.length + 1}`);
+      voiceUrlQueue.push({ seq, url });
+      decodeAheadVoiceSegments();
+    }
+
+    async function decodeAheadVoiceSegments() {
+      if (voiceDecoding) return;
+      voiceDecoding = true;
+      try {
+        while (voiceUrlQueue.length > 0) {
+          const { seq, url } = voiceUrlQueue.shift();
+          const startedAt = performance.now();
+          try {
+            const context = voiceAudioContext();
+            const bytes = await (await fetch(url)).arrayBuffer();
+            const decoded = await context.decodeAudioData(bytes);
+            voiceStats.decoded++;
+            console.log(`[Voice] decoded seq=${seq} bytes=${bytes.byteLength}`
+              + ` duration=${decoded.duration.toFixed(2)}s`
+              + ` rate=${decoded.sampleRate} decodeMs=${Math.round(performance.now() - startedAt)}`);
+            voiceBuffers.push({ seq, decoded });
+            voiceBufferedSeconds += decoded.duration;
+          } catch (e) {
+            // 这一段彻底丢了。之前这里只弹个 toast，等于把「整段音频缺失」伪装成
+            // 「TTS 有点卡」——必须留下可对齐的证据。
+            voiceStats.decodeFailed++;
+            console.error(`[Voice] decode FAILED seq=${seq} url=${url}`, e);
+            showToast(t('voicePlaybackBlocked'), 'error');
+          }
+        }
+        scheduleVoiceSegments();
+      } finally {
+        voiceDecoding = false;
+      }
+    }
+
+    function scheduleVoiceSegments() {
+      if (!voiceStarted && !voiceStreamEnded
+          && voiceBufferedSeconds < VOICE_START_BUFFER_SECONDS) {
+        return;
+      }
+      voiceStarted = true;
+      const context = voiceAudioContext();
+      while (voiceBuffers.length > 0) {
+        const { seq, decoded } = voiceBuffers.shift();
+        voiceBufferedSeconds -= decoded.duration;
+        // 上一段还没播完就接在它后面，已经播完了就立刻开始——两种情况下都没有缝。
+        const startAt = Math.max(context.currentTime + 0.02, voiceNextStart);
+        const source = context.createBufferSource();
+        source.buffer = decoded;
+        source.connect(context.destination);
+        source.start(startAt);
+        const gap = startAt - voiceNextStart;
+        if (voiceStats.played > 0 && gap > 0.05) {
+          // 排程本身就是连续的；出现正间隔只能说明这一段到得比上一段播完还晚。
+          console.warn(`[Voice] GAP before seq=${seq}: ${gap.toFixed(2)}s`
+            + ` (segment arrived after the previous one finished)`);
+        }
+        voiceStats.played++;
+        voiceNextStart = startAt + decoded.duration;
+        voiceSources.push(source);
+        source.onended = () => {
+          voiceStats.ended++;
+          voiceSources = voiceSources.filter(item => item !== source);
+        };
+      }
+    }
+
+    /** 本轮不再有新的音频段了：把攒着的立刻放出去。 */
+    function finishVoicePlayback() {
+      voiceStreamEnded = true;
+      scheduleVoiceSegments();
+      // 收到 ≠ 解码成功 ≠ 播出去。三个数不一致就说明段在某一步掉了。
+      console.log(`[Voice] received=${voiceStats.received} decoded=${voiceStats.decoded}`
+        + ` decodeFailed=${voiceStats.decodeFailed} played=${voiceStats.played}`);
+    }
+
+    function stopVoicePlayback() {
+      voiceUrlQueue = [];
+      voiceBuffers = [];
+      voiceBufferedSeconds = 0;
+      voiceStarted = false;
+      voiceStreamEnded = false;
+      voiceNextStart = 0;
+      voiceSources.forEach(source => {
+        try { source.stop(); } catch (_) { /* 已播完的 source 无法再停，忽略 */ }
+      });
+      voiceSources = [];
+      resetVoiceStats();
+    }
+
     // Known file extensions for URL auto-detection on paste (office docs, images, video, audio)
     const FILE_URL_REGEX = /https?:\/\/[^\s<>"'`]+?\.(?:pdf|docx?|xlsx?|pptx?|csv|json|rtf|odt|ods|txt|md|png|jpe?g|gif|webp|svg|bmp|tiff?|mp[34]|wav|ogg|webm|avi|mov|mkv|flv|wmv)(?:\?[^\s]*)?/gi;
 
@@ -460,6 +590,58 @@ const ChatPage = {
         'audio/ogg;codecs=opus',
       ];
       return candidates.find(type => MediaRecorder.isTypeSupported(type)) || '';
+    }
+
+    // 上游 ASR 只接受 wav/mp3，而 MediaRecorder 只会产出 webm/opus（Chrome）或 mp4/aac（Safari）——
+    // 浏览器产出的任何一种容器它都不收。decodeAudioData 认得的正是浏览器自己录出来的格式，
+    // 所以这里统一解回 PCM 再自行封装 WAV：两个浏览器走同一条路，不必各自处理容器差异。
+    async function convertRecordingToWav(blob) {
+      const audioContext = new AudioContext({ sampleRate: 16000 });
+      try {
+        const decoded = await audioContext.decodeAudioData(await blob.arrayBuffer());
+        return encodeWav(decoded, audioContext.sampleRate);
+      } finally {
+        audioContext.close();
+      }
+    }
+
+    function encodeWav(audioBuffer, sampleRate) {
+      // 下行混单声道：语音识别用不上立体声，体积直接减半。
+      const frames = audioBuffer.length;
+      const channelCount = audioBuffer.numberOfChannels;
+      const channels = [];
+      for (let c = 0; c < channelCount; c++) {
+        channels.push(audioBuffer.getChannelData(c));
+      }
+      const samples = new Int16Array(frames);
+      for (let i = 0; i < frames; i++) {
+        let mixed = 0;
+        for (let c = 0; c < channelCount; c++) mixed += channels[c][i];
+        const value = Math.max(-1, Math.min(1, mixed / channelCount));
+        samples[i] = value < 0 ? value * 0x8000 : value * 0x7fff;
+      }
+
+      const buffer = new ArrayBuffer(44 + samples.length * 2);
+      const view = new DataView(buffer);
+      writeAscii(view, 0, 'RIFF');
+      view.setUint32(4, 36 + samples.length * 2, true);
+      writeAscii(view, 8, 'WAVE');
+      writeAscii(view, 12, 'fmt ');
+      view.setUint32(16, 16, true);                 // fmt 块长度
+      view.setUint16(20, 1, true);                  // PCM
+      view.setUint16(22, 1, true);                  // 单声道
+      view.setUint32(24, sampleRate, true);
+      view.setUint32(28, sampleRate * 2, true);     // 字节率
+      view.setUint16(32, 2, true);                  // 块对齐
+      view.setUint16(34, 16, true);                 // 位深
+      writeAscii(view, 36, 'data');
+      view.setUint32(40, samples.length * 2, true);
+      new Int16Array(buffer, 44).set(samples);
+      return new Blob([buffer], { type: 'audio/wav' });
+    }
+
+    function writeAscii(view, offset, text) {
+      for (let i = 0; i < text.length; i++) view.setUint8(offset + i, text.charCodeAt(i));
     }
 
     async function toggleVoiceInput() {
@@ -500,16 +682,21 @@ const ChatPage = {
       releaseMicrophone();
       let item = null;
       try {
-        const extension = recordedType.includes('ogg') ? 'ogg' : 'webm';
-        const audioFile = new File([audioBlob], `voice-input.${extension}`, { type: recordedType });
-        item = reactive({ file: audioFile, url: null, uploading: true, error: null });
+        const audioFile = new File(
+          [await convertRecordingToWav(audioBlob)], 'voice-input.wav', { type: 'audio/wav' });
+        item = reactive({ file: audioFile, url: null, uploading: true, error: null, voice: true });
         attachedFiles.value.push(item);
         const result = await CyreneAPI.uploadFile(audioFile);
         item.url = result.url;
         item.uploading = false;
-        if (!inputText.value.trim()) inputText.value = t('voiceInputPrompt');
+        // Released before the send, not in the finally: sendMessage awaits the whole turn, and
+        // the UI would otherwise read "uploading" and stay disabled for its entire duration.
+        isUploadingVoice.value = false;
+        // The recording is the message. Asking the user to press send again would be asking
+        // them to confirm the thing they just said.
+        await sendMessage({ voice: true });
       } catch (e) {
-        if (item) {
+        if (item && !item.url) {
           item.uploading = false;
           item.error = e.message;
         }
@@ -640,6 +827,8 @@ const ChatPage = {
     }
 
     async function selectSession(sid) {
+      // 上一轮回答的音频不属于用户现在看的这页。
+      stopVoicePlayback();
       currentSessionId.value = sid;
       try {
         const page = requirePageResponse(
@@ -656,12 +845,14 @@ const ChatPage = {
     }
 
     async function newSession() {
+      stopVoicePlayback();
       currentSessionId.value = null;
       messages.value = [];
     }
 
     async function deleteSession(sid) {
       if (!confirm(t('deleteSessionConfirm'))) return;
+      stopVoicePlayback();
       const sessionIndex = sessions.value.findIndex(session => session.id === sid);
       const removedSession = sessionIndex >= 0 ? sessions.value[sessionIndex] : null;
       const clearedCurrent = currentSessionId.value === sid;
@@ -735,7 +926,7 @@ const ChatPage = {
       }
     }
 
-    async function sendMessage() {
+    async function sendMessage(options = {}) {
       const text = inputText.value.trim();
       if (!text && attachedFiles.value.length === 0) return;
 
@@ -764,16 +955,27 @@ const ChatPage = {
         return;
       }
 
+      // A recording is not an ordinary attachment: it travels under its own key so the server
+      // transcribes it deterministically, and never reaches the model as a file it might try
+      // to transcribe a second time.
+      const voiceFile = options.voice ? files.find(f => f.voice && f.url) : null;
+      const interactionMode = voiceFile ? 'VOICE' : 'TEXT';
+      const regularFiles = files.filter(f => f !== voiceFile);
+
       // 获取已上传的文件相对路径
-      const fileUrls = files.filter(f => f.url).map(f => ({ url: f.url, name: f.file.name }));
+      const fileUrls = regularFiles.filter(f => f.url).map(f => ({ url: f.url, name: f.file.name }));
 
       // Add user message to UI (with file indicator)
-      let displayContent = text;
-      if (files.length > 0) {
-        const fileList = files.map(f => `📎 ${f.file.name}`).join('\n');
-        displayContent = text ? `${fileList}\n\n${text}` : fileList;
+      const fileList = regularFiles.map(f => `📎 ${f.file.name}`).join('\n');
+      let displayContent;
+      if (voiceFile) {
+        // Stands in until voice_transcript arrives with the recognized words.
+        displayContent = fileList ? `${fileList}\n\n🎙️ ${t('voiceMessage')}` : `🎙️ ${t('voiceMessage')}`;
+      } else {
+        displayContent = fileList ? (text ? `${fileList}\n\n${text}` : fileList) : text;
       }
       messages.value.push({ role: 'user', content: displayContent });
+      const userMsgIdx = messages.value.length - 1;
       inputText.value = '';
       scrollToBottom();
 
@@ -804,6 +1006,8 @@ const ChatPage = {
       // could never return.
       let stopRequested = false;
       const tearDown = () => {
+        // 只在被抢占或用户点停时静音；正常结束时不能停，最后一段还要播完。
+        stopVoicePlayback();
         if (streamDrainResolve) {
           const resolve = streamDrainResolve;
           streamDrainResolve = null;
@@ -864,8 +1068,12 @@ const ChatPage = {
         if (fileUrls.length > 0) {
           context.File = fileUrls.length === 1 ? fileUrls[0].url : fileUrls.map(f => f.url);
         }
+        if (voiceFile) {
+          context.VoiceInput = voiceFile.url;
+        }
 
-        const resp = await CyreneAPI.chat(currentSessionId.value, text, context);
+        const resp = await CyreneAPI.chat(
+          currentSessionId.value, text, context, [], interactionMode);
 
         reader = resp.body.getReader();
         const decoder = new TextDecoder();
@@ -946,7 +1154,36 @@ const ChatPage = {
                   case 'compress':
                     messages.value[msgIdx].compressions.push(parsed);
                     break;
+                  case 'voice_transcript':
+                    // The user's actual words, recognized server-side. Replaces the placeholder.
+                    if (typeof parsed.text === 'string' && parsed.text) {
+                      messages.value[userMsgIdx].content = parsed.text;
+                    }
+                    break;
+                  case 'voice_segment':
+                    // 边生成边合成的一段。只负责当场播出，不落块——否则每条回答都会在
+                    // 消息里留下一列小播放器，而且会随会话一起持久化。
+                    enqueueVoiceSegment(parsed.seq, parsed.downloadUrl);
+                    break;
+                  case 'voice_output':
+                    appendArtifact(messages.value[msgIdx], parsed);
+                    // streamedSegments > 0 表示这段回答刚才已经边生成边念过了，
+                    // 这里只留一个可整段重听的播放器，不再重念一遍。
+                    // 非流式路径没有分段，保持原行为：整段合成后自动播放。
+                    if (!parsed.streamedSegments) {
+                      enqueueVoiceSegment(0, parsed.downloadUrl);
+                    }
+                    // 本轮音频到此为止，攒着的可以放了。
+                    finishVoicePlayback();
+                    break;
+                  case 'voice_error':
+                    // Deliberately not terminal: the text answer is still on its way, and
+                    // losing it because the audio could not be produced would be worse.
+                    showToast(parsed.message || t('requestFailed'), 'error');
+                    break;
                   case 'done':
+                    // 兜底：万一没有 voice_output（回答为空），也别把攒着的音频扣住。
+                    finishVoicePlayback();
                     terminalPayload = parsed;
                     if (!receivedText && !Array.isArray(parsed.blocks)
                         && typeof parsed.output === 'string') {
@@ -1063,6 +1300,7 @@ const ChatPage = {
         try { mediaRecorder?.stop(); } catch (_) { /* recorder already stopped */ }
       }
       releaseMicrophone();
+      stopVoicePlayback();
     });
 
     // Artifact helpers
@@ -1178,9 +1416,11 @@ const ChatPage = {
                         <video v-else-if="(block.metadata && block.metadata.type === 'VIDEO') || (!block.metadata?.type && block.metadata?.mimeType && block.metadata.mimeType.startsWith('video/'))"
                                controls :src="getArtifactPreviewUrl(block.artifactId)"
                                style="max-width:100%;border-radius:8px;margin:8px 0;"></video>
+                        <!-- 原生 <audio> 控件默认是浅色的，在深色气泡里很跳。color-scheme:dark
+                             是让浏览器把控件渲染成深色的标准做法，比滤镜可靠。 -->
                         <audio v-else-if="(block.metadata && block.metadata.type === 'AUDIO') || (!block.metadata?.type && block.metadata?.mimeType && block.metadata.mimeType.startsWith('audio/'))"
                                controls :src="getArtifactPreviewUrl(block.artifactId)"
-                               style="width:100%;margin:8px 0;"></audio>
+                               style="width:100%;height:38px;margin:8px 0;color-scheme:dark;border-radius:19px;"></audio>
                         <a v-else :href="getArtifactUrl(block.artifactId)">📎 {{ (block.metadata && block.metadata.name) || 'file' }}</a>
                       </span>
                       <pre v-else-if="block.type === 'STRUCTURED_DATA'" class="structured-data-block"><code>{{ formatStructuredData(block.metadata && block.metadata.data) }}</code></pre>

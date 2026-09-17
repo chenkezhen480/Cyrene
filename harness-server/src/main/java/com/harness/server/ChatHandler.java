@@ -3,6 +3,8 @@ package com.harness.server;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.harness.agent.AgentOrchestrator;
+import com.harness.agent.voice.VoiceConversationService;
+import com.harness.agent.voice.VoiceSpeechStream;
 import com.harness.provider.impl.CancellableHttpClient;
 import com.harness.core.env.EnvConfig;
 import com.harness.core.env.EnvKey;
@@ -49,6 +51,7 @@ public class ChatHandler {
     private final ApiRequestAuthenticator authenticator;
     private final ConcurrentHashMap<String, CancellationToken> activeRequests;
     private final ToolPermissionService toolPermissions;
+    private final VoiceConversationService voice;
     private final ObjectMapper mapper;
 
     public ChatHandler(
@@ -68,6 +71,7 @@ public class ChatHandler {
         this.activeRequests = activeRequests;
         this.authenticator = authenticator;
         this.toolPermissions = toolPermissions;
+        this.voice = agent.voiceConversation();
         this.mapper = new ObjectMapper();
         log.info("[Server] ChatHandler initialized: authMode={}", authenticator.authMode());
     }
@@ -109,6 +113,16 @@ public class ChatHandler {
                 superseded.cancel();
             }
 
+            // A voice turn is transcribed before the stream opens. Every way it can fail --
+            // provider not configured, unreadable or oversized recording, no speech in the
+            // audio -- is an ordinary request error the client already knows how to show, and
+            // none of them may reach the agent: an answer is worthless if the turn it belongs
+            // to could not be heard or understood.
+            final ChatRequest effectiveRequest = req.isVoice() ? transcribeVoiceTurn(req, ctx, requestId, cancellationToken) : req;
+            if (effectiveRequest == null) {
+                return;
+            }
+
             // Set up SSE streaming response via raw servlet response
             HttpServletResponse res = ctx.res();
             res.setContentType("text/event-stream");
@@ -135,7 +149,7 @@ public class ChatHandler {
 
             // Tools are filtered before the run exists: a tool this tenant+identity may not
             // use is never handed to the model, so the agent cannot know it exists at all.
-            AgentContext agentContext = toolPermissions.apply(toAgentContext(req));
+            AgentContext agentContext = toolPermissions.apply(toAgentContext(effectiveRequest));
             ThinkingLevel thinkingLevel = agentContext.thinkingLevel();
             String contextUserId = agentContext.userId();
 
@@ -144,14 +158,31 @@ public class ChatHandler {
 
             try (OutputStream out = res.getOutputStream()) {
                 SseStream sse = new SseStream(out, mapper, runIdRef);
+                // Sent before `start`: the transcript is what the user said, and it is known
+                // before the run that answers it exists. Text turns emit nothing here.
+                if (req.isVoice()) {
+                    sse.emit("voice_transcript", Map.of("text", effectiveRequest.text()));
+                }
+                // Speaks the answer while it is still being written, so the first words are
+                // heard instead of waited for. Null for text turns, and for the blocking path,
+                // which synthesizes its finished output in one piece.
+                final VoiceSpeechStream speech = req.isVoice() && agentContext.isStreaming()
+                        && voice != null
+                        ? voice.openSpeechStream(
+                                () -> resolvedSessionIdRef.get() != null
+                                        ? resolvedSessionIdRef.get()
+                                        : finalSessionId,
+                                cancellationToken::isCancelled,
+                                new SseSpeechListener(sse, effectiveRequest.text()))
+                        : null;
                 if (agentContext.isStreaming()) {
                     ScheduledFuture<?> keepalive =
                             startSseKeepalive(sse, cancellationToken, requestId);
                     try {
                         // Streaming mode: emit tokens as SSE events in real-time
-                        agent.streamRun(finalRawToken, req.text(),
-                                req.attachments() != null ? req.attachments() : Collections.emptyList(),
-                                finalSessionId, req.systemPrompt(), cancellationToken,
+                        agent.streamRun(finalRawToken, effectiveRequest.text(),
+                                effectiveRequest.attachments() != null ? effectiveRequest.attachments() : Collections.emptyList(),
+                                finalSessionId, effectiveRequest.systemPrompt(), cancellationToken,
                                 event -> {
                                     // A tool that ignores cancellation (image generation, a long
                                     // download) reports back long after the run died. Its result
@@ -174,7 +205,12 @@ public class ChatHandler {
                                                 }
                                                 sse.emit("start", event.metadata());
                                             }
-                                            case TOKEN -> sse.emit("token", Map.of("text", event.data()));
+                                            case TOKEN -> {
+                                                sse.emit("token", Map.of("text", event.data()));
+                                                if (speech != null) {
+                                                    speech.accept(event.data());
+                                                }
+                                            }
                                             case TOOL_CALL_CREATED -> sse.emit(
                                                     "tool_call_created", toolEventPayload(event, true));
                                             case TOOL_CALL_START -> sse.emit(
@@ -211,6 +247,12 @@ public class ChatHandler {
                                             case DONE -> {
                                                 Map<String, Object> donePayload = new java.util.HashMap<>(event.metadata());
                                                 donePayload.put("output", event.data() != null ? event.data() : "");
+                                                // Blocks until every queued segment is spoken and the
+                                                // merged recording is out: the client stops reading at
+                                                // `done` and would drop anything sent after it.
+                                                if (speech != null) {
+                                                    speech.complete((String) donePayload.get("output"));
+                                                }
                                                 sse.emit("done", donePayload);
                                                 completedNormally.set(true);
                                             }
@@ -226,12 +268,15 @@ public class ChatHandler {
                                 }, thinkingLevel, contextUserId, agentContext);
                     } finally {
                         keepalive.cancel(false);
+                        if (speech != null) {
+                            speech.close();
+                        }
                     }
                 } else {
                     // Blocking mode: run agent
-                    AgentResult result = agent.run(finalRawToken, req.text(),
-                            req.attachments() != null ? req.attachments() : Collections.emptyList(),
-                            finalSessionId, req.systemPrompt(), cancellationToken, thinkingLevel, contextUserId, agentContext);
+                    AgentResult result = agent.run(finalRawToken, effectiveRequest.text(),
+                            effectiveRequest.attachments() != null ? effectiveRequest.attachments() : Collections.emptyList(),
+                            finalSessionId, effectiveRequest.systemPrompt(), cancellationToken, thinkingLevel, contextUserId, agentContext);
 
                     long duration = System.currentTimeMillis() - start;
                     log.info("[Server] Chat completed: traceId={}, steps={}, risk={}, duration={}ms",
@@ -270,6 +315,8 @@ public class ChatHandler {
                                 "previewUrl", a.previewUrl()
                         )).toList());
                     }
+                    emitVoiceOutput(sse, req.isVoice(), cancellationToken,
+                            result.output(), resolvedSessionId, effectiveRequest.text());
                     sse.emit("done", doneData);
                     completedNormally.set(true);
                 }
@@ -311,6 +358,128 @@ public class ChatHandler {
             long duration = System.currentTimeMillis() - start;
             log.error("[Server] Chat setup error after {}ms: {}", duration, e.getMessage(), e);
             ApiResponses.error(ctx, 500, ApiErrorCode.INTERNAL_ERROR, e.getMessage());
+        }
+    }
+
+    /**
+     * Runs ASR for a voice turn and returns the request the agent should actually see: the
+     * transcript as the user's message, everything else untouched. Returns {@code null} when
+     * the turn was rejected, in which case the error response has already been written.
+     */
+    private ChatRequest transcribeVoiceTurn(
+            ChatRequest req,
+            Context ctx,
+            String requestId,
+            CancellationToken cancellationToken
+    ) {
+        try {
+            VoiceConversationService.VoiceTurn turn = voice.prepare(req.context());
+            log.info("[Server] Voice turn transcribed: {} chars", turn.transcript().length());
+            return new ChatRequest(
+                    turn.transcript(),
+                    req.attachments(),
+                    req.systemPrompt(),
+                    req.context(),
+                    req.graphScope(),
+                    req.interactionMode());
+        } catch (VoiceConversationService.VoiceException e) {
+            log.warn("[Server] Voice turn rejected before the agent ran: {}", e.getMessage());
+            // The SSE stream was never opened, so nothing downstream will unregister this run.
+            activeRequests.remove(requestId, cancellationToken);
+            ApiResponses.error(ctx, 400, ApiErrorCode.INVALID_REQUEST, e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Speaks a finished answer as an artifact.
+     *
+     * <p>One synthesis call on the complete output, never one per streamed token. A failure
+     * here is reported but never rethrown: the user already has the text answer, and losing it
+     * because the audio could not be produced would be a strictly worse outcome than silence.
+     * The frame always precedes {@code done}, because the client stops reading at it.</p>
+     */
+    private void emitVoiceOutput(
+            SseStream sse,
+            boolean voiceTurn,
+            CancellationToken cancellationToken,
+            String output,
+            String sessionId,
+            String transcript
+    ) throws IOException {
+        if (!voiceTurn) {
+            return;
+        }
+        // A stopped run must not start speaking on its way out.
+        if (cancellationToken.isCancelled()) {
+            return;
+        }
+        try {
+            Artifact artifact = voice.synthesize(output, sessionId);
+            Map<String, Object> payload = new HashMap<>(ToolOutputSseMapper.artifactPayload(artifact));
+            payload.put("text", output != null ? output : "");
+            payload.put("transcript", transcript != null ? transcript : "");
+            sse.emit("voice_output", payload);
+        } catch (Exception e) {
+            log.warn("[Server] Voice synthesis failed, keeping the text answer: {}", e.getMessage());
+            sse.emit("voice_error", Map.of("message", e.getMessage() != null ? e.getMessage() : ""));
+        }
+    }
+
+    /**
+     * Bridges the incrementally synthesized speech onto one SSE response. Segments arrive as
+     * they are spoken so the client can play them back to back, and a single merged recording
+     * follows at the end so the turn keeps one replayable file instead of one per sentence.
+     */
+    private static final class SseSpeechListener implements VoiceSpeechStream.Listener {
+        private final SseStream sse;
+        private final String transcript;
+
+        SseSpeechListener(SseStream sse, String transcript) {
+            this.sse = sse;
+            this.transcript = transcript != null ? transcript : "";
+        }
+
+        @Override
+        public void onSegment(int sequence, String text, Artifact artifact) {
+            Map<String, Object> payload =
+                    new HashMap<>(ToolOutputSseMapper.artifactPayload(artifact));
+            payload.put("seq", sequence);
+            payload.put("text", text);
+            emit("voice_segment", payload);
+        }
+
+        @Override
+        public void onSegmentFailure(int sequence, String text, String message) {
+            // Never terminal: the text answer is unaffected and the rest of the audio still comes.
+            emit("voice_error", Map.of("seq", sequence, "message", message));
+        }
+
+        @Override
+        public void onComplete(Artifact merged, int segmentCount, String finalText) {
+            Map<String, Object> payload =
+                    new HashMap<>(ToolOutputSseMapper.artifactPayload(merged));
+            payload.put("text", finalText != null ? finalText : "");
+            payload.put("transcript", transcript);
+            // Tells the client the words were already spoken as they were generated, so it
+            // offers the recording for replay without reading the answer aloud a second time.
+            payload.put("streamedSegments", segmentCount);
+            emit("voice_output", payload);
+        }
+
+        @Override
+        public void onCompleteFailure(String message) {
+            emit("voice_error", Map.of("message", message));
+        }
+
+        private void emit(String type, Map<String, Object> payload) {
+            try {
+                sse.emit(type, payload);
+            } catch (IOException e) {
+                // A dead connection is not this listener's to report; the run's own write path
+                // will notice and cancel.
+                log.debug("[Server] Failed to write voice event {}: {}", type, e.getMessage());
+            }
         }
     }
 
@@ -443,7 +612,18 @@ public class ChatHandler {
             List<MultimodalParser.RawAttachment> attachments,
             String systemPrompt,
             Map<String, Object> context,
-            GraphScopeRequest graphScope) {
+            GraphScopeRequest graphScope,
+            String interactionMode) {
+
+        public ChatRequest {
+            // Absent on the wire means a text turn, so a client that never learned about the
+            // field keeps its exact previous behaviour.
+            interactionMode = VoiceConversationService.interactionMode(interactionMode);
+        }
+
+        public boolean isVoice() {
+            return VoiceConversationService.MODE_VOICE.equals(interactionMode);
+        }
     }
 
     public record GraphScopeRequest(

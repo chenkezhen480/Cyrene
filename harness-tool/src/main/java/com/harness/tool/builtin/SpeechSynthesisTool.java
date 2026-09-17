@@ -9,6 +9,7 @@ import com.harness.core.model.ToolOutput;
 import com.harness.core.model.ToolSpec;
 import com.harness.provider.VoiceModelProvider;
 import com.harness.tool.TypedOutputTool;
+import com.harness.tool.artifact.ArtifactSessionContext;
 
 import java.util.List;
 import java.util.Objects;
@@ -19,7 +20,6 @@ public final class SpeechSynthesisTool implements TypedOutputTool {
 
     public static final String TOOL_NAME = "synthesize_speech";
     private static final ObjectMapper MAPPER = new ObjectMapper();
-    private static final String OUTPUT_MIME_TYPE = "audio/mpeg";
 
     @FunctionalInterface
     public interface ArtifactStorer {
@@ -72,9 +72,11 @@ public final class SpeechSynthesisTool implements TypedOutputTool {
             }
             Artifact artifact = artifactStorer.store(
                     audio,
-                    "speech-" + UUID.randomUUID() + ".mp3",
-                    OUTPUT_MIME_TYPE,
-                    null);
+                    "speech-" + UUID.randomUUID() + "." + provider.synthesizeFileExtension(),
+                    provider.synthesizeMimeType(),
+                    // The run this call belongs to. Passing null left the audio unowned, so it
+                    // never appeared under the session that asked for it.
+                    ArtifactSessionContext.current());
             return ToolOutput.artifacts("Speech synthesis completed.", List.of(artifact));
         } catch (ToolExecutionException e) {
             throw e;

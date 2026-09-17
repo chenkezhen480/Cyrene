@@ -8,6 +8,7 @@ import com.harness.core.model.ToolExecutionOutcome;
 import com.harness.core.model.ToolResult;
 import com.harness.core.env.EnvConfig;
 import com.harness.core.env.EnvKey;
+import com.harness.tool.artifact.ArtifactSessionContext;
 import com.harness.tool.confirmation.ConfirmationDecision;
 import com.harness.tool.confirmation.ConfirmationExecutionContext;
 import com.harness.tool.confirmation.ConfirmationManager;
@@ -70,7 +71,8 @@ public class ToolExecutor {
         }
 
         notifyExecutionStart(confirmationContext, toolCall);
-        return executeTool(toolCall, tool);
+        return executeTool(toolCall, tool,
+                confirmationContext != null ? confirmationContext.sessionId() : null);
     }
 
     private ToolResult executeAfterConfirmation(ToolCall toolCall, Tool tool,
@@ -114,7 +116,7 @@ public class ToolExecutor {
         log.info("[L3-Tool] Confirmation approved [{}]: tool={}",
                 request.requestId(), toolCall.toolName());
         notifyExecutionStart(context, toolCall);
-        return executeTool(toolCall, tool);
+        return executeTool(toolCall, tool, context.sessionId());
     }
 
     private void notifyExecutionStart(ConfirmationExecutionContext context, ToolCall toolCall) {
@@ -123,13 +125,14 @@ public class ToolExecutor {
         }
     }
 
-    private ToolResult executeTool(ToolCall toolCall, Tool tool) {
+    private ToolResult executeTool(ToolCall toolCall, Tool tool, String sessionId) {
         String name = toolCall.toolName();
         long start = System.currentTimeMillis();
         String argsStr = toolCall.arguments() != null ? toolCall.arguments().toString() : "null";
         log.debug("[L3-Tool] Executing [{}] with args: {}", name,
                 argsStr.length() > 200 ? argsStr.substring(0, 200) + "..." : argsStr);
         currentToolCallId.set(toolCall.id());
+        ArtifactSessionContext.set(sessionId);
         try {
             ToolExecutionOutcome outcome = tool.executeOutcome(toolCall.arguments());
             long duration = System.currentTimeMillis() - start;
@@ -147,6 +150,7 @@ public class ToolExecutor {
             return ToolResult.fail(toolCall.id(), name, "Unexpected error: " + e.getMessage(), duration);
         } finally {
             currentToolCallId.remove();
+            ArtifactSessionContext.clear();
         }
     }
 

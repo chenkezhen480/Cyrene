@@ -377,7 +377,8 @@ public final class AgentToolRuntime {
         }
     }
 
-    private AudioTranscriptionTool.AudioSource loadAudioSource(String reference) {
+    /** Shared with the voice conversation pipeline, which resolves the same references. */
+    public AudioTranscriptionTool.AudioSource loadAudioSource(String reference) {
         String normalizedReference = reference != null ? reference.trim() : "";
         if (normalizedReference.startsWith("/api/artifacts/")) {
             String artifactId = normalizedReference.substring("/api/artifacts/".length());
@@ -426,22 +427,35 @@ public final class AgentToolRuntime {
         }
     }
 
-    private static String detectAudioMimeType(Path path) throws java.io.IOException {
-        String detected = Files.probeContentType(path);
-        if (detected != null && detected.toLowerCase(Locale.ROOT).startsWith("audio/")) {
-            return detected;
-        }
+    /**
+     * Extension first, content probing only as a fallback. Probe returns null on many Linux
+     * and Docker filesystems, and returns {@code audio/x-m4a} on macOS — a type the voice
+     * provider does not accept, so a recording that is plainly an m4a would be rejected.
+     */
+    private static String detectAudioMimeType(Path path) {
         String name = path.getFileName().toString().toLowerCase(Locale.ROOT);
         int extensionIndex = name.lastIndexOf('.');
         String extension = extensionIndex >= 0 ? name.substring(extensionIndex + 1) : "";
-        return switch (extension) {
+        String byExtension = switch (extension) {
             case "mp3" -> "audio/mpeg";
             case "m4a", "mp4" -> "audio/mp4";
             case "wav" -> "audio/wav";
             case "webm" -> "audio/webm";
             case "ogg" -> "audio/ogg";
-            default -> "application/octet-stream";
+            default -> null;
         };
+        if (byExtension != null) {
+            return byExtension;
+        }
+        try {
+            String detected = Files.probeContentType(path);
+            if (detected != null && detected.toLowerCase(Locale.ROOT).startsWith("audio/")) {
+                return detected;
+            }
+        } catch (java.io.IOException e) {
+            log.debug("[Tool] Content probe failed for {}: {}", name, e.getMessage());
+        }
+        return "application/octet-stream";
     }
 
     private void registerMcpTools() {

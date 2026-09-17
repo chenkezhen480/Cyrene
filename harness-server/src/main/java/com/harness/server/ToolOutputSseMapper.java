@@ -44,7 +44,8 @@ final class ToolOutputSseMapper {
         return text.substring(0, endIndex);
     }
 
-    private static Map<String, Object> artifactPayload(Artifact artifact) {
+    /** Shared with the voice pipeline, whose output is an artifact but not a tool result. */
+    static Map<String, Object> artifactPayload(Artifact artifact) {
         Map<String, Object> payload = new HashMap<>();
         payload.put("artifactId", artifact.id());
         payload.put("name", artifact.name() != null ? artifact.name() : "");

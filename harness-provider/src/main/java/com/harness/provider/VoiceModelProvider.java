@@ -45,6 +45,16 @@ public interface VoiceModelProvider {
      */
     default boolean isSynthesizeAvailable() { return false; }
 
+    /**
+     * MIME type of the bytes {@link #synthesize} returns. The caller stores the result as a
+     * playable artifact, so it needs to describe the audio accurately — a provider that
+     * returns wav labeled as mp3 produces a file no player will open by type.
+     */
+    default String synthesizeMimeType() { return "audio/mpeg"; }
+
+    /** File extension matching {@link #synthesizeMimeType()}, without the dot. */
+    default String synthesizeFileExtension() { return "mp3"; }
+
     default int timeoutSeconds() { return 120; }
 
     default long maxTranscriptionSizeBytes() { return 20L * 1024 * 1024; }

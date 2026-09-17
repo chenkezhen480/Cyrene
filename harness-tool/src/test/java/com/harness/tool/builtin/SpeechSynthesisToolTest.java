@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.harness.core.model.Artifact;
 import com.harness.provider.VoiceCapabilities;
 import com.harness.provider.VoiceModelProvider;
+import com.harness.tool.artifact.ArtifactSessionContext;
 import org.junit.jupiter.api.Test;
 
 import java.io.InputStream;
@@ -48,6 +49,48 @@ class SpeechSynthesisToolTest {
         assertThat(output.artifacts()).containsExactly(artifact);
         assertThat(output.text()).isEqualTo("Speech synthesis completed.");
         assertThat(tool.spec().name()).isEqualTo(SpeechSynthesisTool.TOOL_NAME);
+    }
+
+    @Test
+    void executeOutput_bindsTheArtifactToTheRunningSession() {
+        AtomicReference<String> storedSession = new AtomicReference<>("unset");
+        SpeechSynthesisTool tool = new SpeechSynthesisTool(
+                new StubVoiceProvider(),
+                (data, name, mimeType, sessionId) -> {
+                    storedSession.set(sessionId);
+                    return artifact();
+                });
+
+        ArtifactSessionContext.set("session-42");
+        try {
+            tool.executeOutput(MAPPER.createObjectNode().put("text", "hello").put("voice", "nova"));
+        } finally {
+            ArtifactSessionContext.clear();
+        }
+
+        // Without this the audio is stored unowned and never appears under its session.
+        assertThat(storedSession.get()).isEqualTo("session-42");
+    }
+
+    @Test
+    void executeOutput_leavesTheArtifactUnownedOutsideARun() {
+        AtomicReference<String> storedSession = new AtomicReference<>("unset");
+        SpeechSynthesisTool tool = new SpeechSynthesisTool(
+                new StubVoiceProvider(),
+                (data, name, mimeType, sessionId) -> {
+                    storedSession.set(sessionId);
+                    return artifact();
+                });
+
+        tool.executeOutput(MAPPER.createObjectNode().put("text", "hello").put("voice", "nova"));
+
+        assertThat(storedSession.get()).isNull();
+    }
+
+    private static Artifact artifact() {
+        return new Artifact(
+                "artifact-1", null, "speech.mp3", Artifact.ArtifactType.AUDIO,
+                "audio/mpeg", 3, "speech.mp3", Instant.EPOCH);
     }
 
     private static class StubVoiceProvider implements VoiceModelProvider {

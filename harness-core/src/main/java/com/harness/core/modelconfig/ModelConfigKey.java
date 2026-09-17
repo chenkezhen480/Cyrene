@@ -43,6 +43,11 @@ public final class ModelConfigKey {
     public static final String VOICE_BASE_URL = "voice.baseUrl";
     public static final String VOICE_ASR_MODEL = "voice.asrModel";
     public static final String VOICE_TTS_MODEL = "voice.ttsModel";
+    /**
+     * 合成音频的编码格式，同时决定落盘产物的 MIME 与扩展名。
+     * 默认 {@code mp3}（OpenAI 兼容后端）；智谱等不接受 mp3 的后端改为 {@code wav}。
+     */
+    public static final String VOICE_RESPONSE_FORMAT = "voice.responseFormat";
     public static final String VOICE_TIMEOUT_SECONDS = "voice.timeoutSeconds";
     public static final String VOICE_ASR_MAX_SIZE_MB = "voice.asrMaxSizeMb";
     public static final String VOICE_DEFAULT_VOICE = "voice.defaultVoice";
@@ -96,7 +101,9 @@ public final class ModelConfigKey {
             d(VISION_BASE_URL, "vision", "视觉模型接口地址"), d(VISION_MODEL, "vision", "视觉模型名称"),
             d(VOICE_PROVIDER, "voice", "语音模型服务商"), d(VOICE_API_KEY, "voice", "语音模型密钥", true),
             d(VOICE_BASE_URL, "voice", "语音模型接口地址"), d(VOICE_ASR_MODEL, "voice", "语音识别模型"),
-            d(VOICE_TTS_MODEL, "voice", "语音合成模型"), d(VOICE_TIMEOUT_SECONDS, "voice", "语音请求超时秒数"),
+            d(VOICE_TTS_MODEL, "voice", "语音合成模型"),
+            d(VOICE_RESPONSE_FORMAT, "voice", "语音合成格式", "select", List.of("mp3", "wav", "pcm")),
+            d(VOICE_TIMEOUT_SECONDS, "voice", "语音请求超时秒数"),
             d(VOICE_ASR_MAX_SIZE_MB, "voice", "语音文件上限 MB"), d(VOICE_DEFAULT_VOICE, "voice", "默认音色"),
             d(EMBEDDING_PROVIDER, "embedding", "向量模型服务商"), d(EMBEDDING_API_KEY, "embedding", "向量模型密钥", true),
             d(EMBEDDING_BASE_URL, "embedding", "向量模型接口地址"), d(EMBEDDING_MODEL, "embedding", "向量模型名称"),

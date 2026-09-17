@@ -15,6 +15,7 @@ import okhttp3.Response;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -28,7 +29,23 @@ public class OpenAiVoiceModelProvider implements VoiceModelProvider {
     private static final List<String> INPUT_MIME_TYPES = List.of(
             "audio/mpeg", "audio/mp3", "audio/mp4", "audio/wav", "audio/x-wav",
             "audio/webm", "audio/ogg");
-    private static final List<String> OUTPUT_FORMATS = List.of("mp3");
+    /**
+     * Encodings this provider knows how to request and to label correctly. Not every backend
+     * accepts every value: OpenAI serves all of them, while e.g. Zhipu rejects {@code mp3} and
+     * answers {@code wav} or raw {@code pcm} instead.
+     */
+    private static final Map<String, String> RESPONSE_FORMAT_MIME_TYPES = new LinkedHashMap<>();
+
+    static {
+        RESPONSE_FORMAT_MIME_TYPES.put("mp3", "audio/mpeg");
+        RESPONSE_FORMAT_MIME_TYPES.put("wav", "audio/wav");
+        RESPONSE_FORMAT_MIME_TYPES.put("aac", "audio/aac");
+        RESPONSE_FORMAT_MIME_TYPES.put("flac", "audio/flac");
+        RESPONSE_FORMAT_MIME_TYPES.put("opus", "audio/ogg");
+        RESPONSE_FORMAT_MIME_TYPES.put("pcm", "audio/pcm");
+    }
+
+    static final String DEFAULT_RESPONSE_FORMAT = "mp3";
 
     private final String apiKey;
     private final String baseUrl;
@@ -38,11 +55,14 @@ public class OpenAiVoiceModelProvider implements VoiceModelProvider {
     private final OkHttpClient http;
     private final ObjectMapper mapper;
     private String defaultVoice = "alloy";
+    private String responseFormat = DEFAULT_RESPONSE_FORMAT;
     private int timeoutSeconds = 120;
 
     public OpenAiVoiceModelProvider(ModelConfig config) {
         this(configurationFrom(config));
         this.defaultVoice = config.getString(ModelConfigKey.VOICE_DEFAULT_VOICE, "alloy");
+        this.responseFormat = requireResponseFormat(
+                config.getString(ModelConfigKey.VOICE_RESPONSE_FORMAT, DEFAULT_RESPONSE_FORMAT));
         this.timeoutSeconds = config.getInt(ModelConfigKey.VOICE_TIMEOUT_SECONDS, 120);
     }
 
@@ -150,7 +170,7 @@ public class OpenAiVoiceModelProvider implements VoiceModelProvider {
                 true,
                 true,
                 INPUT_MIME_TYPES,
-                OUTPUT_FORMATS);
+                List.of(responseFormat));
     }
 
     @Override
@@ -184,7 +204,7 @@ public class OpenAiVoiceModelProvider implements VoiceModelProvider {
             payload.put("input", text);
             payload.put("voice", voice);
             payload.put("speed", 1.0);
-            payload.put("response_format", "mp3");
+            payload.put("response_format", responseFormat);
             return authorizedRequest(baseUrl + "/audio/speech")
                     .post(RequestBody.create(mapper.writeValueAsBytes(payload), JSON_TYPE))
                     .build();
@@ -197,6 +217,27 @@ public class OpenAiVoiceModelProvider implements VoiceModelProvider {
         return new Request.Builder()
                 .url(url)
                 .header("Authorization", "Bearer " + apiKey);
+    }
+
+    @Override
+    public String synthesizeMimeType() {
+        return RESPONSE_FORMAT_MIME_TYPES.get(responseFormat);
+    }
+
+    /** {@code opus} is the one format whose container name differs from the extension. */
+    @Override
+    public String synthesizeFileExtension() {
+        return "opus".equals(responseFormat) ? "ogg" : responseFormat;
+    }
+
+    private static String requireResponseFormat(String format) {
+        String normalized = format == null ? "" : format.trim().toLowerCase(Locale.ROOT);
+        if (!RESPONSE_FORMAT_MIME_TYPES.containsKey(normalized)) {
+            throw new IllegalStateException(ModelConfigKey.VOICE_RESPONSE_FORMAT
+                    + " must be one of " + RESPONSE_FORMAT_MIME_TYPES.keySet()
+                    + ", got '" + format + "'");
+        }
+        return normalized;
     }
 
     private static String normalizeInputMimeType(String mimeType) {
@@ -270,6 +311,9 @@ public class OpenAiVoiceModelProvider implements VoiceModelProvider {
         OkHttpClient client = new OkHttpClient.Builder()
                 .connectTimeout(Math.min(timeoutSeconds, 30), TimeUnit.SECONDS)
                 .readTimeout(timeoutSeconds, TimeUnit.SECONDS)
+                // Uploading a 20MB recording on a slow link would otherwise hit OkHttp's 10s
+                // default and be reported as a generic failure, hiding which stage blew up.
+                .writeTimeout(timeoutSeconds, TimeUnit.SECONDS)
                 .build();
         return new ProviderConfiguration(
                 config.requireString(ModelConfigKey.VOICE_API_KEY),

@@ -69,12 +69,12 @@ const CyreneAPI = (() => {
   }
 
   // ── Chat (SSE) ──
-  function chat(sessionId, text, context = {}, attachments = []) {
+  function chat(sessionId, text, context = {}, attachments = [], interactionMode = 'TEXT') {
     const headers = { 'Content-Type': 'application/json' };
     if (_token) headers['Authorization'] = `Bearer ${_token}`;
     if (sessionId) headers['X-Session-Id'] = sessionId;
 
-    const body = { text, context, attachments };
+    const body = { text, context, attachments, interactionMode };
     return fetch('/api/chat', { method: 'POST', headers, body: JSON.stringify(body) })
       .then(requireOkResponse);
   }

@@ -51,14 +51,41 @@ class ModelProviderRuntimeTest {
         assertThat(runtime.delegates().chat().modelName()).isEqualTo("second-model");
     }
 
+    @Test
+    void voiceDelegateForwardsTheConfiguredOutputFormat() {
+        ModelProviderRuntime runtime = new ModelProviderRuntime(
+                providers("model", new FixedFormatVoiceProvider("audio/wav", "wav")),
+                ModelConfig.empty());
+
+        // The delegate is its own VoiceModelProvider. A method it does not explicitly forward
+        // falls back to the interface default, which silently labels wav bytes as mp3.
+        assertThat(runtime.delegates().voice().synthesizeMimeType()).isEqualTo("audio/wav");
+        assertThat(runtime.delegates().voice().synthesizeFileExtension()).isEqualTo("wav");
+    }
+
+    private record FixedFormatVoiceProvider(String mimeType, String extension)
+            implements VoiceModelProvider {
+        @Override public String transcribe(java.io.InputStream audio, String type) {
+            return "";
+        }
+        @Override public byte[] synthesize(String text, String voice) { return new byte[0]; }
+        @Override public String synthesizeMimeType() { return mimeType; }
+        @Override public String synthesizeFileExtension() { return extension; }
+        @Override public String providerName() { return "fixed"; }
+    }
+
     private static ModelProviders providers(String chatModelName) {
+        return providers(chatModelName, mock(VoiceModelProvider.class));
+    }
+
+    private static ModelProviders providers(String chatModelName, VoiceModelProvider voice) {
         ChatModelProvider chat = mock(ChatModelProvider.class);
         when(chat.modelName()).thenReturn(chatModelName);
         when(chat.providerName()).thenReturn("test");
         return new ModelProviders(
                 chat,
                 mock(VisionModelProvider.class),
-                mock(VoiceModelProvider.class),
+                voice,
                 mock(EmbeddingModelProvider.class),
                 mock(RerankModelProvider.class),
                 mock(RealtimeModelProvider.class),

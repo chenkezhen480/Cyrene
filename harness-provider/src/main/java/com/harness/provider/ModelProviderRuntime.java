@@ -154,6 +154,14 @@ public final class ModelProviderRuntime {
             return current().voice().maxTranscriptionSizeBytes();
         }
         @Override public String defaultVoice() { return current().voice().defaultVoice(); }
+        // Interface defaults are not forwarded automatically: without these two the delegate
+        // silently reports OpenAI's mp3 no matter what the active provider actually returns.
+        @Override public String synthesizeMimeType() {
+            return current().voice().synthesizeMimeType();
+        }
+        @Override public String synthesizeFileExtension() {
+            return current().voice().synthesizeFileExtension();
+        }
     }
 
     private final class EmbeddingDelegate implements EmbeddingModelProvider {

@@ -32,8 +32,9 @@ public class FileUploadHandler {
             "png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "tiff", "tif",
             // Video
             "mp4", "webm", "avi", "mov", "mkv", "flv", "wmv",
-            // Audio
-            "mp3", "wav", "ogg"
+            // Audio. m4a is what Safari's MediaRecorder produces; webm is accepted above as
+            // a video container, which is how a Chrome recording has always slipped through.
+            "mp3", "wav", "ogg", "m4a"
     );
 
     public FileUploadHandler(String baseDir) {

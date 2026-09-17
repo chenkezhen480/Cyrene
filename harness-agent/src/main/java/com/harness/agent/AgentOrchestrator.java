@@ -17,6 +17,7 @@ import com.harness.agent.runtime.AgentRunCoordinator;
 import com.harness.agent.runtime.AgentRunCoordinator.AgentRunCommand;
 import com.harness.agent.runtime.AgentToolRuntime;
 import com.harness.agent.runtime.ToolDenylistResolver;
+import com.harness.agent.voice.VoiceConversationService;
 import com.harness.provider.*;
 import com.harness.react.*;
 import com.harness.trace.ReplyAuditor;
@@ -146,6 +147,9 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
     private final ArtifactStore artifactStore;
     private final ArtifactStorageService artifactStorageService;
 
+    // Fixed ASR/TTS pipeline for microphone turns
+    private final VoiceConversationService voiceConversation;
+
     public AgentOrchestrator() {
         // Create or migrate model.conf before initializing external infrastructure.
         ModelConfig initialModelConfig = loadModelConfiguration();
@@ -215,6 +219,12 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
                 initialModelConfig);
         this.toolRegistry = toolRuntime.tools();
         this.skillRegistry = toolRuntime.skills();
+        // Reads the provider through the runtime delegate, so a model.conf hot-swap applies
+        // to the next turn instead of pinning whichever generation existed at startup.
+        this.voiceConversation = new VoiceConversationService(
+                () -> runtime.providers().voice(),
+                toolRuntime::loadAudioSource,
+                artifactStorageService::store);
         this.promptBuilder = new AgentPromptBuilder(skillRegistry, artifactStorageService);
         toolRegistry.register(new FileReadTool(
                 artifactStore, documentConversionService, documentSummarizer, null));
@@ -710,6 +720,8 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
     public EmbeddingModelProvider embeddingModel() { return runtime.providers().embedding(); }
     public RerankModelProvider rerankModel() { return runtime.providers().rerank(); }
     public RealtimeModelProvider realtimeModel() { return runtime.providers().realtime(); }
+    public VoiceModelProvider voiceModel() { return runtime.providers().voice(); }
+    public VoiceConversationService voiceConversation() { return voiceConversation; }
     public ReActLoopFactory reActLoopFactory() { return runtime.reActLoops(); }
 
     // Expose memory stores for external use (e.g., cleanup scheduler)
