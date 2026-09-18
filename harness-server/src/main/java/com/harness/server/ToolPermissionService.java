@@ -1,12 +1,14 @@
 package com.harness.server;
 
 import com.harness.core.model.AgentContext;
+import com.harness.tool.filesystem.CodeWorkspaceTool;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * Resolves which tools one caller may use.
@@ -120,11 +122,30 @@ public final class ToolPermissionService {
                 : identity.trim();
         Optional<Set<String>> exact = store.findDisabledTools(tenant, scopedIdentity);
         if (exact.isPresent()) {
-            return exact;
+            return exact.map(ToolPermissionService::modernize);
         }
         if (!AgentContext.DEFAULT_IDENTITY.equals(scopedIdentity)) {
-            return store.findDisabledTools(tenant, AgentContext.DEFAULT_IDENTITY);
+            return store.findDisabledTools(tenant, AgentContext.DEFAULT_IDENTITY)
+                    .map(ToolPermissionService::modernize);
         }
         return Optional.empty();
+    }
+
+    /**
+     * Rewrite the pre-merge code-tool names in a stored profile to the tool that now carries them.
+     *
+     * <p>Profiles written before the six file tools were merged key on {@code read} / {@code edit} /
+     * {@code write}. Those names match no registered tool, so leaving them alone would silently hand
+     * a tenant that had disabled writes a tool that can write — the opposite of the fail-closed
+     * direction this list exists for. Applied on both lookups so the exact and DEFAULT rows agree.</p>
+     *
+     * <p>They collapse to the whole tool, not to one action: the admin page manages permissions one
+     * name per tool, and a {@code code_workspace.edit} it can neither show nor re-save would leave
+     * the page claiming a tenant is unrestricted while its requests are filtered.</p>
+     */
+    private static Set<String> modernize(Set<String> disabledTools) {
+        return disabledTools.stream()
+                .map(CodeWorkspaceTool::ownerOf)
+                .collect(Collectors.toUnmodifiableSet());
     }
 }

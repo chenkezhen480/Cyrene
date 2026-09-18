@@ -29,11 +29,14 @@ import com.harness.tool.builtin.SpeechSynthesisTool;
 import com.harness.tool.builtin.StructuredOutputTool;
 import com.harness.tool.builtin.VideoGenerationTool;
 import com.harness.tool.builtin.WebSearchTool;
-import com.harness.tool.discovery.CodeGlobTool;
-import com.harness.tool.discovery.CodeGrepTool;
 import com.harness.tool.discovery.ReadClassHierarchyTool;
+import com.harness.tool.filesystem.CodeWorkspaceTool;
+import com.harness.tool.filesystem.FileSystemAccessPolicy;
+import com.harness.tool.filesystem.FileSystemWorkspace;
 import com.harness.tool.mcp.McpServerConfig;
 import com.harness.tool.mcp.McpToolDiscovery;
+import com.harness.tool.shell.CommandPolicy;
+import com.harness.tool.shell.ShellTool;
 import com.harness.tool.skill.LoadSkillTool;
 import com.harness.tool.skill.SkillRegistry;
 import com.harness.tool.web.BrowserControlTool;
@@ -199,7 +202,66 @@ public final class AgentToolRuntime {
         PreparedModelTools modelTools = prepareModelTools(modelConfig);
         modelTools.replacements().values().forEach(toolRegistry::register);
 
+        registerCodeTools();
+        registerShellTool();
         registerDiscoveryTools(resolveConfiguredProjectRoot());
+    }
+
+    /**
+     * Diagnostic command execution: Docker, Git, build tools.
+     *
+     * <p>On by default, but only nominally available: {@link CommandPolicy} is default deny, so what
+     * this actually grants out of the box is read-only inspection (docker ps/logs/inspect, git
+     * status/diff/log, version queries). Anything that changes state asks for confirmation, and
+     * everything else is refused until an operator lists it. Set
+     * {@code HARNESS_SHELL_ENABLED=false} to withdraw even that, or deny {@code shell} for a
+     * tenant + identity to withdraw it from particular callers.
+     */
+    private void registerShellTool() {
+        if (!EnvConfig.get().getBool(EnvKey.SHELL_ENABLED, true)) {
+            log.info("[Shell] Disabled by {}", EnvKey.SHELL_ENABLED);
+            return;
+        }
+        FileSystemAccessPolicy accessPolicy = FileSystemAccessPolicy.host(
+                EnvConfig.get().getString(EnvKey.CODE_AGENT_ROOT, null),
+                EnvConfig.get().getCommaList(EnvKey.CODE_BACKEND_ROOTS),
+                FileSystemAccessPolicy.Settings.fromEnv());
+        Path workingDirectory = accessPolicy.searchRoot();
+        toolRegistry.register(new ShellTool(
+                CommandPolicy.fromEnv(), accessPolicy, workingDirectory));
+        log.warn("[Shell] ENABLED — diagnostic command execution is registered for every identity "
+                + "not explicitly denied it; cwd={}", workingDirectory);
+    }
+
+    /**
+     * Local-file read/write tools. Reads reach the whole machine in host scope — the point is to let
+     * the Agent inspect real middleware and SDK configuration — while writes are confined by
+     * {@link FileSystemAccessPolicy} to the Agent's own source root plus configured backend roots.
+     */
+    private void registerCodeTools() {
+        if (!EnvConfig.get().getBool(EnvKey.CODE_TOOLS_ENABLED, true)) {
+            log.info("[CodeTools] Local file tools disabled ({}={})",
+                    EnvKey.CODE_TOOLS_ENABLED, false);
+            return;
+        }
+        FileSystemAccessPolicy policy = FileSystemAccessPolicy.host(
+                EnvConfig.get().getString(EnvKey.CODE_AGENT_ROOT, null),
+                EnvConfig.get().getCommaList(EnvKey.CODE_BACKEND_ROOTS),
+                FileSystemAccessPolicy.Settings.fromEnv());
+        FileSystemWorkspace workspace = FileSystemWorkspace.host(policy.searchRoot());
+
+        // One published tool over the six actions. The confirm-required list is passed in rather
+        // than left to ToolExecutor's name comparison, so an operator who listed `edit` or `write`
+        // in HARNESS_RISK_CONFIRM_TOOLS keeps being asked after the merge.
+        CodeWorkspaceTool codeWorkspace = CodeWorkspaceTool.of(policy, workspace,
+                EnvConfig.get().getCommaList(EnvKey.RISK_CONFIRM_TOOLS));
+        toolRegistry.register(codeWorkspace);
+        // Resolving the backend here forces the ripgrep probe at startup rather than on first use, so
+        // the log states which implementation is actually live.
+        log.info("[CodeTools] Registered {} actions={}; readScope={}, searchBackend={}, backendRoots={}",
+                CodeWorkspaceTool.TOOL_NAME, codeWorkspace.availableActions(),
+                policy.settings().readScope(), policy.searchBackend().name(),
+                EnvConfig.get().getCommaList(EnvKey.CODE_BACKEND_ROOTS));
     }
 
     /** Build model-backed tools without publishing them to request snapshots. */
@@ -495,13 +557,18 @@ public final class AgentToolRuntime {
         }
     }
 
+    /**
+     * Read-only source inspection for existing-system API discovery.
+     *
+     * <p>The glob/grep tools that used to live here are gone: discovery now runs the ordinary
+     * {@code read}/{@code glob}/{@code grep} tools inside a confined, read-only workspace. Only the
+     * class-hierarchy reader remains project-root scoped, because nothing else needs the parent-class
+     * walk it does.
+     */
     private void registerDiscoveryTools(Path projectRoot) {
         if (projectRoot == null) {
             return;
         }
-        Set<String> excludes = Set.of();
-        toolRegistry.register(new CodeGlobTool(projectRoot, excludes));
-        toolRegistry.register(new CodeGrepTool(projectRoot, excludes));
         toolRegistry.register(new ReadClassHierarchyTool(projectRoot));
     }
 
@@ -510,11 +577,8 @@ public final class AgentToolRuntime {
             return;
         }
         Path projectRoot = normalizeProjectRoot(configuredRoot);
-        Set<String> excludes = Set.of();
-        toolRegistry.replace(new CodeGlobTool(projectRoot, excludes));
-        toolRegistry.replace(new CodeGrepTool(projectRoot, excludes));
         toolRegistry.replace(new ReadClassHierarchyTool(projectRoot));
-        log.info("[Discovery] Re-registered discovery tools with projectRoot={}", projectRoot);
+        log.info("[Discovery] Re-registered read_class_hierarchy with projectRoot={}", projectRoot);
     }
 
     private static Path normalizeProjectRoot(String configuredRoot) {

@@ -1,5 +1,6 @@
 package com.harness.react;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.harness.core.model.ReActStep;
 import com.harness.core.model.ToolCall;
 import com.harness.core.model.ToolResult;
@@ -34,7 +35,7 @@ public class AdaptiveReflector {
     /** 单工具允许的反思次数；用尽后再失败一次即硬停。 */
     private final int threshold;
 
-    /** Per-tool consecutive non-PASS count. Key = tool name. */
+    /** Per-tool consecutive non-PASS count. Key = tool name, plus the action when it carries one. */
     private final Map<String, Integer> toolFailureCounts = new HashMap<>();
 
     public AdaptiveReflector() {
@@ -65,13 +66,13 @@ public class AdaptiveReflector {
 
         // Update per-tool counters: SUCCESS resets, everything else increments.
         for (int i = 0; i < toolCalls.size(); i++) {
-            String toolName = toolCalls.get(i).toolName();
+            String key = failureKey(toolCalls.get(i));
             ToolResult result = (toolResults != null && i < toolResults.size()) ? toolResults.get(i) : null;
 
             if (isSuccess(result)) {
-                toolFailureCounts.put(toolName, 0);
+                toolFailureCounts.put(key, 0);
             } else {
-                toolFailureCounts.merge(toolName, 1, Integer::sum);
+                toolFailureCounts.merge(key, 1, Integer::sum);
             }
         }
 
@@ -105,18 +106,33 @@ public class AdaptiveReflector {
     }
 
     /**
+     * The counter key for one call. A tool that carries an {@code action} argument — a merged tool
+     * standing in for several capabilities — is counted per action, so a run that searches twice,
+     * lists twice and reads once is not treated as one tool failing five times. Tools without an
+     * {@code action} keep the plain name and behave exactly as before.
+     */
+    private static String failureKey(ToolCall call) {
+        JsonNode arguments = call.arguments();
+        JsonNode action = arguments == null ? null : arguments.get("action");
+        if (action == null || !action.isTextual() || action.asText().isBlank()) {
+            return call.toolName();
+        }
+        return call.toolName() + "." + action.asText();
+    }
+
+    /**
      * Determine if a tool's recent calls all used the same arguments.
      * "Stuck" = same tool + same args → LLM is retrying blindly.
      * "Struggling" = same tool + different args → LLM is trying but failing.
      */
-    private boolean detectStuckOnSameArgs(String toolName, List<ReActStep> allSteps, int window) {
+    private boolean detectStuckOnSameArgs(String key, List<ReActStep> allSteps, int window) {
         if (allSteps == null || allSteps.size() < window) return false;
 
-        // Collect the last `window` calls to this specific tool
+        // Collect the last `window` calls to this specific tool or action
         List<String> recentArgs = allSteps.stream()
                 .filter(s -> s.toolCalls() != null)
                 .flatMap(s -> s.toolCalls().stream())
-                .filter(tc -> toolName.equals(tc.toolName()))
+                .filter(tc -> key.equals(failureKey(tc)))
                 .map(tc -> tc.arguments() != null ? tc.arguments().toString() : "null")
                 .toList();
 

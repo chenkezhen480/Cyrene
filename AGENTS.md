@@ -99,7 +99,7 @@ Keep dependencies one-way around `core -> provider/input/tool/react/trace -> age
 
 ## Existing-System API Discovery
 
-- Prefer OpenAPI/Swagger. Without a specification, the discovery Agent may inspect source only through restricted `code_glob`, `code_grep`, and `read_class_hierarchy` tools.
+- Prefer OpenAPI/Swagger. Without a specification, the discovery Agent may inspect source only through the confined, read-only `read`, `glob`, `grep`, `tree`, and `read_class_hierarchy` tools.
 - Traverse at most two parent levels. Do not scan unrelated files to increase recall.
 - Collect method, path, parameter JSON Schema, return type, authentication mode, and token injection location. Require developer review before writing `project-apis.json` and hot-loading tools.
 - Credentials come from trusted `context.credentials`. The key must match the endpoint `credentialKey`; `HttpApiTool` injects it at the configured header, query, or other location.

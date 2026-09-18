@@ -118,10 +118,12 @@ public final class ToolPermissionHandler {
                 throw new IllegalArgumentException("disabledTools is required");
             }
             // A saved name that no longer exists in the registry would disable nothing while
-            // still showing in the admin list, so reject it here where it is fixable.
+            // still showing in the admin list, so reject it here where it is fixable. Taken from
+            // the same list get() reports, so a page that round-trips what it was given can always
+            // save it back.
             Set<String> registered = new LinkedHashSet<>();
-            for (ToolSpec spec : toolRegistry.getAll()) {
-                registered.add(spec.name());
+            for (ToolView tool : registeredTools()) {
+                registered.add(tool.name());
             }
             Set<String> unknown = new LinkedHashSet<>(request.disabledTools());
             unknown.removeAll(registered);
@@ -151,7 +153,14 @@ public final class ToolPermissionHandler {
         }
     }
 
-    private List<ToolView> registeredTools() {
+    /**
+     * One row per registered tool, in registry order. A merged tool gets one row like any other:
+     * the permission store keys on a tool name, and a name is all a tenant can be denied.
+     *
+     * <p>Package-private for the test: this list is the vocabulary that {@code save} accepts and
+     * {@code get} reports, and the two drifting apart is a bug no round trip would surface.</p>
+     */
+    List<ToolView> registeredTools() {
         List<ToolView> tools = new ArrayList<>();
         for (ToolSpec spec : toolRegistry.getAll()) {
             tools.add(new ToolView(

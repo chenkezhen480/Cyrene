@@ -138,7 +138,7 @@ public final class EnvKey {
             "HARNESS_TOOL_BROWSER_SESSION_TTL_SECONDS";
     public static final String TOOL_FFMPEG_ENABLED       = "HARNESS_TOOL_FFMPEG_ENABLED";
     public static final String TOOL_FFMPEG_PATH          = "HARNESS_TOOL_FFMPEG_PATH";
-    /** 工具返回结果数量上限（code_glob/code_grep 等），默认 100 */
+    /** 工具返回结果数量上限（glob/grep 等），默认 100 */
     public static final String TOOL_MAX_RESULTS         = "HARNESS_TOOL_MAX_RESULTS";
 
     // ==================== ReAct ====================
@@ -358,8 +358,42 @@ public final class EnvKey {
     public static final String SKILL_DIR = "HARNESS_SKILL_DIR";
 
     // ==================== Project Discovery ====================
-    /** 功能总开关（true 时 code_glob/code_grep/read_class_hierarchy 工具对正常会话可用），默认 true */
+    /** 功能总开关（true 时 read_class_hierarchy 工具对正常会话可用），默认 true */
     public static final String PROJECT_DISCOVERY_ENABLED        = "HARNESS_PROJECT_DISCOVERY_ENABLED";
     /** 声明式配置文件路径，默认 ./project-apis.json */
     public static final String PROJECT_APIS_CONFIG_FILE         = "HARNESS_PROJECT_APIS_CONFIG_FILE";
+
+    // ==================== Code Tools (代码读写) ====================
+    /** 功能总开关（true 时 read/glob/grep/edit/write 工具对正常会话可用），默认 true */
+    public static final String CODE_TOOLS_ENABLED        = "HARNESS_CODE_TOOLS_ENABLED";
+    /** 读取范围：host = 本机任意可读路径；workspace = 仅 agentRoot + backendRoots，默认 host */
+    public static final String CODE_READ_SCOPE           = "HARNESS_CODE_READ_SCOPE";
+    /** Agent 自身源码目录，同时是可写根之一；缺省为进程工作目录 */
+    public static final String CODE_AGENT_ROOT           = "HARNESS_CODE_AGENT_ROOT";
+    /** 对接后端源码目录，逗号分隔；只来自服务端配置，缺省为空 */
+    public static final String CODE_BACKEND_ROOTS        = "HARNESS_CODE_BACKEND_ROOTS";
+    /** 可选加速后端：ripgrep 可执行文件路径。留空（默认）时使用内置 Java NIO 实现 */
+    public static final String CODE_RG_PATH              = "HARNESS_CODE_RG_PATH";
+    /** 单次代码工具的返回字节上限，默认 262144 */
+    public static final String CODE_MAX_OUTPUT_BYTES     = "HARNESS_CODE_MAX_OUTPUT_BYTES";
+    /** read 工具单次返回的最大行数，默认 2000 */
+    public static final String CODE_READ_MAX_LINES       = "HARNESS_CODE_READ_MAX_LINES";
+    /** ripgrep 单次执行超时（秒），默认 30 */
+    public static final String CODE_RG_TIMEOUT_SECONDS   = "HARNESS_CODE_RG_TIMEOUT_SECONDS";
+    /** edit 工具可处理的单文件上限（MB），默认 10 */
+    public static final String CODE_EDIT_MAX_FILE_MB     = "HARNESS_CODE_EDIT_MAX_FILE_MB";
+
+    // ==================== Shell (环境诊断命令执行) ====================
+    /** 功能总开关，默认 true；注意默认只放行只读诊断命令，表外一律拒绝 */
+    public static final String SHELL_ENABLED           = "HARNESS_SHELL_ENABLED";
+    /** 追加到内置 allow 表的规则，逗号分隔，每条是空格分隔的 argv 前缀，如 "docker top,git blame" */
+    public static final String SHELL_ALLOW             = "HARNESS_SHELL_ALLOW";
+    /** 追加到内置 confirm 表的规则，格式同 SHELL_ALLOW */
+    public static final String SHELL_CONFIRM           = "HARNESS_SHELL_CONFIRM";
+    /** 单次执行超时（秒），默认 60 */
+    public static final String SHELL_TIMEOUT_SECONDS   = "HARNESS_SHELL_TIMEOUT_SECONDS";
+    /** 单次返回字节上限（stdout+stderr），默认 262144 */
+    public static final String SHELL_MAX_OUTPUT_BYTES  = "HARNESS_SHELL_MAX_OUTPUT_BYTES";
+    /** docker logs 未指定 --tail 时自动追加的行数，默认 500 */
+    public static final String SHELL_LOG_TAIL_LINES    = "HARNESS_SHELL_LOG_TAIL_LINES";
 }

@@ -95,4 +95,61 @@ class AdaptiveReflectorTest {
                 steps,
                 "must query the graph");
     }
+
+    /**
+     * A merged tool stands in for several capabilities, so its failures are counted per action.
+     * Three different actions each failing once is three pieces of work going wrong, not one tool
+     * failing three times in a row.
+     */
+    @Test
+    void aMergedToolCountsEachActionSeparately() {
+        AdaptiveReflector reflector = new AdaptiveReflector(2);
+        List<ReActStep> steps = new ArrayList<>();
+
+        for (String action : List.of("read", "glob", "grep")) {
+            AdaptiveReflector.ReflectionSignal signal = failAction(reflector, steps, action);
+            assertThat(signal.hardLimit()).as("action %s", action).isFalse();
+        }
+    }
+
+    @Test
+    void repeatingOneActionOfAMergedToolStillHardStops() {
+        AdaptiveReflector reflector = new AdaptiveReflector(2);
+        List<ReActStep> steps = new ArrayList<>();
+
+        assertThat(failAction(reflector, steps, "read").hardLimit()).isFalse();
+        assertThat(failAction(reflector, steps, "read").hardLimit()).isFalse();
+        // Budget spent on `read`; the next `read` failure still ends tool planning.
+        assertThat(failAction(reflector, steps, "read").hardLimit()).isTrue();
+    }
+
+    private static AdaptiveReflector.ReflectionSignal failAction(
+            AdaptiveReflector reflector,
+            List<ReActStep> steps,
+            String action
+    ) {
+        ToolCall call = new ToolCall(
+                "call-" + steps.size(),
+                "code_workspace",
+                MAPPER.createObjectNode().put("action", action));
+        ToolResult result = ToolResult.fail(
+                call.id(), call.toolName(), "no such file", 1);
+        ReActStep.InspectionResult inspection = new ReActStep.InspectionResult(
+                ReActStep.InspectionResult.InspectionStatus.TOOL_ERROR,
+                "no such file");
+        steps.add(new ReActStep(
+                steps.size() + 1,
+                null,
+                call.toolName(),
+                List.of(call),
+                List.of(result),
+                "",
+                inspection));
+        return reflector.shouldReflect(
+                inspection,
+                List.of(call),
+                List.of(result),
+                steps,
+                "look at the code");
+    }
 }

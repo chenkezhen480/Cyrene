@@ -46,6 +46,34 @@ class ToolPermissionServiceTest {
         assertThat(resolved.toolDenylist()).containsExactly("image_generation");
     }
 
+    /**
+     * Profiles outlive tool names. A row written before the code tools were merged says {@code edit},
+     * which no longer matches a registered tool — leaving it alone would hand that tenant back the
+     * write access it had explicitly been denied.
+     *
+     * <p>It collapses to the tool rather than to one action so the admin page, which manages one
+     * entry per tool, reports the same thing the runtime enforces.</p>
+     */
+    @Test
+    void rewritesPreMergeCodeToolNamesToTheToolThatNowCarriesThem() {
+        ToolPermissionService service = ToolPermissionStub.empty()
+                .profile(TENANT, "teacher", "edit", "write", "image_generation")
+                .service();
+
+        assertThat(service.resolveDisabledTools(TENANT, "teacher").orElseThrow())
+                .containsExactlyInAnyOrder("code_workspace", "image_generation");
+    }
+
+    @Test
+    void rewritesTheNamesOnTheDefaultRowToo() {
+        ToolPermissionService service = ToolPermissionStub.empty()
+                .profile(TENANT, AgentContext.DEFAULT_IDENTITY, "read")
+                .service();
+
+        assertThat(service.resolveDisabledTools(TENANT, "unknown-identity").orElseThrow())
+                .containsExactly("code_workspace");
+    }
+
     @Test
     void aStoredEmptyListDisablesNothing() {
         // The documented meaning of an empty list: nothing is banned, so every tool stays on.

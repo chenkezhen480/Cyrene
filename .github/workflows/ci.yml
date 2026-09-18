@@ -24,8 +24,15 @@ jobs:
           distribution: 'temurin'
           cache: 'maven'
 
+      # Only the ripgrep/NIO consistency tests need this; the NIO backend is the complete default.
+      # With CYRENE_REQUIRE_RG set, those tests fail rather than skip if this step ever breaks.
+      - name: Install ripgrep
+        run: sudo apt-get update && sudo apt-get install -y ripgrep
+
       - name: Build and test
         run: mvn -B verify
+        env:
+          CYRENE_REQUIRE_RG: 'true'
 
       - name: Upload coverage report
         if: always()

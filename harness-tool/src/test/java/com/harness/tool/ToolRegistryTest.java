@@ -4,9 +4,13 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.harness.core.model.ToolSpec;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.harness.tool.filesystem.CodeWorkspaceTool;
+import com.harness.tool.filesystem.FileSystemAccessPolicy;
+import com.harness.tool.filesystem.FileSystemWorkspace;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.nio.file.Path;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -126,6 +130,89 @@ class ToolRegistryTest {
         assertThat(filtered.get("blocked")).isNull();
         assertThat(filtered.contains("blocked")).isFalse();
         assertThat(filtered.size()).isEqualTo(1);
+    }
+
+    /**
+     * The tenant/identity permission store and the management UI both key on tool name, so what a
+     * name removes is part of the contract. The code tools publish one tool, and a name either
+     * removes that tool or one of the actions behind it — never nothing, which is what the pre-merge
+     * spellings would do if {@code excluding} only matched registered names.
+     */
+    @Test
+    void runCatalog_removesTheCodeWorkspaceWhollyOrOneActionAtATime() {
+        FileSystemAccessPolicy policy = FileSystemAccessPolicy.host(
+                Path.of(".").toAbsolutePath().toString(), List.of(),
+                FileSystemAccessPolicy.Settings.defaults());
+        FileSystemWorkspace workspace = FileSystemWorkspace.host(policy.searchRoot());
+        registry.register(CodeWorkspaceTool.of(policy, workspace, List.of()));
+
+        RunToolCatalog whole = registry.snapshot().excluding(Set.of(CodeWorkspaceTool.TOOL_NAME));
+        assertThat(whole.get(CodeWorkspaceTool.TOOL_NAME)).isNull();
+        assertThat(whole.contains(CodeWorkspaceTool.TOOL_NAME)).isFalse();
+
+        for (String actionName : List.of("code_workspace.edit", "edit")) {
+            RunToolCatalog narrowed = registry.snapshot().excluding(Set.of(actionName));
+            assertThat(narrowed.contains(CodeWorkspaceTool.TOOL_NAME))
+                    .as("%s must narrow rather than remove the tool", actionName)
+                    .isTrue();
+            assertThat(narrowed.getAll()).extracting(ToolSpec::name)
+                    .containsExactly(CodeWorkspaceTool.TOOL_NAME);
+            assertThat(((CodeWorkspaceTool) narrowed.get(CodeWorkspaceTool.TOOL_NAME))
+                    .availableActions())
+                    .containsExactly("read", "glob", "grep", "tree", "write");
+        }
+
+        // Denying the write actions still leaves a tool worth publishing.
+        assertThat(registry.snapshot().excluding(Set.of("edit", "write"))
+                .contains(CodeWorkspaceTool.TOOL_NAME)).isTrue();
+
+        // Denying every action leaves nothing worth publishing, so the tool goes rather than
+        // staying as an empty enum the provider has to make sense of.
+        RunToolCatalog emptied = registry.snapshot().excluding(CodeWorkspaceTool.ACTIONS);
+        assertThat(emptied.contains(CodeWorkspaceTool.TOOL_NAME)).isFalse();
+    }
+
+    /**
+     * A sub-agent's allowlist is written by the model at spawn time and validated against the
+     * parent catalog, so it may name one action — or the pre-merge spelling of one — rather than
+     * the whole tool.
+     */
+    @Test
+    void runCatalog_allowsTheCodeWorkspaceWhollyOrOneActionAtATime() {
+        FileSystemAccessPolicy policy = FileSystemAccessPolicy.host(
+                Path.of(".").toAbsolutePath().toString(), List.of(),
+                FileSystemAccessPolicy.Settings.defaults());
+        registry.register(CodeWorkspaceTool.of(
+                policy, FileSystemWorkspace.host(policy.searchRoot()), List.of()));
+
+        RunToolCatalog whole = registry.snapshot().allowing(Set.of(CodeWorkspaceTool.TOOL_NAME));
+        assertThat(whole.allowing(Set.of(CodeWorkspaceTool.TOOL_NAME))).isSameAs(whole);
+
+        RunToolCatalog partial = registry.snapshot().allowing(Set.of("code_workspace.read", "tree"));
+        assertThat(((CodeWorkspaceTool) partial.get(CodeWorkspaceTool.TOOL_NAME)).availableActions())
+                .containsExactly("read", "tree");
+        assertThat(partial.contains("read")).isTrue();
+        assertThat(partial.contains("edit")).isFalse();
+
+        assertThat(registry.snapshot().allowing(Set.of("nothing-like-this"))
+                .contains(CodeWorkspaceTool.TOOL_NAME)).isFalse();
+    }
+
+    @Test
+    void runCatalog_containsAnswersForActionsAsWellAsTools() {
+        FileSystemAccessPolicy policy = FileSystemAccessPolicy.host(
+                Path.of(".").toAbsolutePath().toString(), List.of(),
+                FileSystemAccessPolicy.Settings.defaults());
+        registry.register(CodeWorkspaceTool.of(
+                policy, FileSystemWorkspace.host(policy.searchRoot()), List.of()));
+
+        RunToolCatalog catalog = registry.snapshot();
+
+        assertThat(catalog.contains(CodeWorkspaceTool.TOOL_NAME)).isTrue();
+        assertThat(catalog.contains("code_workspace.read")).isTrue();
+        assertThat(catalog.contains("read")).isTrue();
+        assertThat(catalog.contains("code_workspace.teleport")).isFalse();
+        assertThat(catalog.contains("shell")).isFalse();
     }
 
     @Test

@@ -1,6 +1,7 @@
 package com.harness.tool;
 
 import com.harness.core.model.ToolSpec;
+import com.harness.tool.filesystem.CodeWorkspaceTool;
 
 import java.util.Collection;
 import java.util.LinkedHashMap;
@@ -42,25 +43,56 @@ public final class RunToolCatalog implements ToolCatalog {
         this.specifications = List.copyOf(specifications);
     }
 
+    /**
+     * Return a catalog without the named tools.
+     *
+     * <p>A name may also address one action of a merged tool ({@code code_workspace.edit}) or its
+     * pre-merge spelling ({@code edit}). That is handled here rather than at each call site because
+     * every caller — the per-request denylist, the detached-resume re-resolution — must agree, and a
+     * missed call site would silently leave a denied action in front of the model.</p>
+     */
     public RunToolCatalog excluding(Collection<String> excludedToolNames) {
         Set<String> excluded = excludedToolNames == null
                 ? Set.of()
                 : Set.copyOf(excludedToolNames);
-        if (excluded.isEmpty() || tools.keySet().stream().noneMatch(excluded::contains)) {
+        if (excluded.isEmpty()) {
             return this;
         }
         LinkedHashMap<String, Tool> filtered = new LinkedHashMap<>();
-        tools.forEach((name, tool) -> {
-            if (!excluded.contains(name)) {
-                filtered.put(name, tool);
+        Map<String, ToolSpec> narrowedSpecs = new LinkedHashMap<>();
+        for (Map.Entry<String, Tool> entry : tools.entrySet()) {
+            String name = entry.getKey();
+            Tool tool = entry.getValue();
+            if (excluded.contains(name)) {
+                continue;
             }
-        });
-        List<ToolSpec> filteredSpecifications = specifications.stream()
-                .filter(specification -> !excluded.contains(specification.name()))
-                .toList();
-        return new RunToolCatalog(version, filtered, filteredSpecifications);
+            if (tool instanceof CodeWorkspaceTool codeWorkspace) {
+                CodeWorkspaceTool narrowed = codeWorkspace.denying(excluded);
+                if (!narrowed.hasActions()) {
+                    continue;
+                }
+                if (narrowed != codeWorkspace) {
+                    narrowedSpecs.put(name, narrowed.spec());
+                }
+                filtered.put(name, narrowed);
+                continue;
+            }
+            filtered.put(name, tool);
+        }
+        // No name matched anything: same tools, so the caller's snapshot is still valid. The
+        // narrowed check comes first because narrowing removes nothing — a denylist naming only
+        // `code_workspace.edit` leaves the tool count untouched while still restricting it.
+        if (narrowedSpecs.isEmpty() && filtered.size() == tools.size()) {
+            return this;
+        }
+        return new RunToolCatalog(version, filtered, narrowed(filtered, narrowedSpecs));
     }
 
+    /**
+     * Return a catalog containing only the named tools. An allowlist may address a merged tool's
+     * actions instead of the whole tool, so a sub-agent granted only {@code code_workspace.read}
+     * never receives the write actions.
+     */
     public RunToolCatalog allowing(Collection<String> allowedToolNames) {
         Set<String> allowed = allowedToolNames == null
                 ? Set.of()
@@ -69,15 +101,38 @@ public final class RunToolCatalog implements ToolCatalog {
             return this;
         }
         LinkedHashMap<String, Tool> filtered = new LinkedHashMap<>();
-        tools.forEach((name, tool) -> {
+        Map<String, ToolSpec> narrowedSpecs = new LinkedHashMap<>();
+        for (Map.Entry<String, Tool> entry : tools.entrySet()) {
+            String name = entry.getKey();
+            Tool tool = entry.getValue();
+            if (tool instanceof CodeWorkspaceTool codeWorkspace) {
+                CodeWorkspaceTool narrowed = codeWorkspace.allowing(allowed);
+                if (!narrowed.hasActions()) {
+                    continue;
+                }
+                if (narrowed != codeWorkspace) {
+                    narrowedSpecs.put(name, narrowed.spec());
+                }
+                filtered.put(name, narrowed);
+                continue;
+            }
             if (allowed.contains(name)) {
                 filtered.put(name, tool);
             }
-        });
-        List<ToolSpec> filteredSpecifications = specifications.stream()
-                .filter(specification -> allowed.contains(specification.name()))
+        }
+        return new RunToolCatalog(version, filtered, narrowed(filtered, narrowedSpecs));
+    }
+
+    /**
+     * The surviving specifications, reusing the cached instances. Only a narrowed merged tool has to
+     * be re-derived; re-specifying the whole catalog on every filtered run would undo the point of
+     * caching them.
+     */
+    private List<ToolSpec> narrowed(Map<String, Tool> filtered, Map<String, ToolSpec> narrowedSpecs) {
+        return specifications.stream()
+                .filter(specification -> filtered.containsKey(specification.name()))
+                .map(specification -> narrowedSpecs.getOrDefault(specification.name(), specification))
                 .toList();
-        return new RunToolCatalog(version, filtered, filteredSpecifications);
     }
 
     /**
@@ -107,7 +162,13 @@ public final class RunToolCatalog implements ToolCatalog {
 
     @Override
     public boolean contains(String name) {
-        return tools.containsKey(name);
+        if (tools.containsKey(name)) {
+            return true;
+        }
+        // A merged tool answers to its actions too, so a sub-agent contract may require
+        // `code_workspace.read` — or its pre-merge spelling `read` — and still mean something.
+        return tools.get(CodeWorkspaceTool.TOOL_NAME) instanceof CodeWorkspaceTool codeWorkspace
+                && codeWorkspace.supports(name);
     }
 
     @Override

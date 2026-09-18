@@ -11,7 +11,14 @@ import com.harness.core.runtime.RunTrace;
 import com.harness.tool.ToolExecutor;
 import com.harness.tool.ToolRegistry;
 import com.harness.tool.confirmation.ConfirmationManager;
-import com.harness.tool.discovery.*;
+import com.harness.tool.discovery.OpenApiSpecParser;
+import com.harness.tool.discovery.ReadClassHierarchyTool;
+import com.harness.tool.filesystem.FileSystemAccessPolicy;
+import com.harness.tool.filesystem.FileSystemWorkspace;
+import com.harness.tool.filesystem.GlobTool;
+import com.harness.tool.filesystem.GrepTool;
+import com.harness.tool.filesystem.ReadTool;
+import com.harness.tool.filesystem.TreeTool;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -24,10 +31,9 @@ import java.util.*;
  *
  * <ol>
  *   <li>Probe for OpenAPI/Swagger spec → deterministic parse if found</li>
- *   <li>If no spec, LLM-guided scan using 3 tools:
+ *   <li>If no spec, LLM-guided scan using the read-only code tools:
  *       <ul>
- *         <li>{@code code_glob} — locate controller/route files</li>
- *         <li>{@code code_grep} — find endpoint annotations</li>
+ *         <li>{@code glob} / {@code grep} / {@code read} — confined to {@code sourceRoot}, cannot write</li>
  *         <li>{@code read_class_hierarchy} — read DTO/VO classes with inheritance</li>
  *       </ul>
  *   </li>
@@ -89,11 +95,18 @@ public class ProjectDiscoveryService {
      * then read_class_hierarchy for DTO/VO classes.
      */
     private ProjectApiConfig scanByLLMWithTools(Path sourceRoot, String baseUrl) {
-        // Build tool registry with 3 discovery tools
-        Set<String> excludes = Set.of();  // sensitive file exclusions are built into each tool
+        // Same read/glob/grep tools a normal session gets, but behind a confined read-only
+        // workspace: the scan can see the project it was pointed at and nothing else, and edit and
+        // write are never registered at all — absence, not a prompt instruction.
+        FileSystemAccessPolicy policy = FileSystemAccessPolicy.confined(
+                sourceRoot.toString(), FileSystemAccessPolicy.Settings.fromEnv());
+        FileSystemWorkspace workspace = FileSystemWorkspace.readOnly(policy.searchRoot());
+
         ToolRegistry discoveryRegistry = new ToolRegistry();
-        discoveryRegistry.register(new CodeGlobTool(sourceRoot, excludes));
-        discoveryRegistry.register(new CodeGrepTool(sourceRoot, excludes));
+        discoveryRegistry.register(new ReadTool(policy, workspace));
+        discoveryRegistry.register(new GlobTool(policy, workspace));
+        discoveryRegistry.register(new GrepTool(policy, workspace));
+        discoveryRegistry.register(new TreeTool(policy, workspace));
         discoveryRegistry.register(new ReadClassHierarchyTool(sourceRoot));
         ToolExecutor discoveryExecutor = new ToolExecutor(confirmationManager);
 
@@ -155,20 +168,28 @@ public class ProjectDiscoveryService {
 
             项目路径: %s
 
-            你可以使用以下工具：
-            - code_glob(pattern) — 按 glob 模式查找文件，返回匹配的文件路径列表
-            - code_grep(regex, glob?) — 按正则搜索文件内容，返回匹配行及上下文（±7行）
+            你可以使用以下工具（搜索路径不传时默认就是上面的项目路径）：
+            - tree(path?, depth?) — 看目录结构，先搞清楚项目怎么划分的。depth 默认 2
+            - glob(pattern, path?, cursor?, limit?) — 按 glob 模式查找文件，返回绝对路径；
+              结果多时会给出 next_cursor，传回来即可翻下一页
+            - grep(pattern, path?, glob?, output_mode?, context?) — 按正则搜索文件内容；
+              output_mode 取 content（默认，返回匹配行）/ files_with_matches / count
+            - read(file_path, offset?, limit?) — 读取文件内容（带行号）
             - read_class_hierarchy(className) — 读取一个类及其父类（最多2层），返回合并后的字段列表和 JSON Schema
 
             ═══ 工作流程 ═══
 
+            第零步：先看结构
+              用 tree 摸清模块划分，再决定去哪里找接口。
+              示例：tree(depth=2)
+
             第一步：定位控制器文件
-              用 code_glob 找到所有控制器/路由文件。
-              示例：code_glob("**/*Controller.java")
+              用 glob 找到所有控制器/路由文件。
+              示例：glob(pattern="**/*Controller.java")
 
             第二步：搜索接口注解
-              用 code_grep 在控制器文件中搜索路由注解。
-              示例：code_grep(regex="@GetMapping|@PostMapping|@PutMapping|@DeleteMapping", glob="**/*Controller.java")
+              用 grep 在控制器文件中搜索路由注解。
+              示例：grep(pattern="@GetMapping|@PostMapping|@PutMapping|@DeleteMapping", glob="**/*Controller.java", context=3)
 
             第三步：读取 DTO/VO 类结构
               从第二步的结果中，识别出参数类型名称（如 UserDTO、CourseVO、QueryForm 等）。
@@ -226,7 +247,7 @@ public class ProjectDiscoveryService {
             - read_class_hierarchy 返回的 JSON Schema 直接用作 parameters 值
             - 无参数时用：{"type":"object","properties":{}}
             - read_class_hierarchy 能正常返回结果时，继续用它读取下一个类
-            - 如果 read_class_hierarchy 返回 "Class not found"，先用 code_glob 查找文件路径，再重试
+            - 如果 read_class_hierarchy 返回 "Class not found"，先用 glob 查找文件路径，再重试
             - 尽量在一次响应中调用多个工具（如同时读取多个 DTO 类），减少轮次
             """.formatted(sourceRoot);
     }

@@ -7742,6 +7742,74 @@ const ToolPermissionPage = {
   `
 };
 
+// ── Realtime omni-modal test dock ──
+// 控制台右侧的测试栏。目前只有摄像头：打开先弹一句"还没做完"，关掉之后画面上只剩下摄像头，
+// 给后续接实时全模态模型（RealtimeModelProvider.startSession/send）留一个干净的落点。
+const RealtimeTestDock = {
+  emits: ['close'],
+  setup(props, { emit }) {
+    const t = inject('t');
+    const videoEl = ref(null);
+    // 打开就弹，弹窗关掉之前不碰摄像头——授权提示只应该在用户已经看过说明之后出现。
+    const showNotice = ref(true);
+    let cameraStream = null;
+
+    async function startCamera() {
+      // 能力检查放在 try 前面，和 toggleVoiceInput 一样：拿不到 API 和用户拒绝是两回事，
+      // 提示文案也不同（非安全上下文下 mediaDevices 直接是 undefined）。
+      if (!navigator.mediaDevices?.getUserMedia) {
+        showToast(t('cameraUnavailable'), 'error');
+        return;
+      }
+      try {
+        cameraStream = await navigator.mediaDevices.getUserMedia({ video: true });
+        await nextTick();
+        // srcObject 只能手动赋值，属性绑定给不了 MediaStream，所以要等 <video> 挂上。
+        if (videoEl.value) videoEl.value.srcObject = cameraStream;
+      } catch (e) {
+        stopCamera();
+        showToast(`${t('cameraDenied')}: ${e.message}`, 'error');
+      }
+    }
+
+    function stopCamera() {
+      cameraStream?.getTracks().forEach(track => track.stop());
+      cameraStream = null;
+      if (videoEl.value) videoEl.value.srcObject = null;
+    }
+
+    function dismissNotice() {
+      showNotice.value = false;
+      startCamera();
+    }
+
+    // 这个组件挂在 .page-container 外面，不受 keep-alive 影响，切页面/关面板都会走到这里，
+    // 不会留着一个亮着的摄像头。
+    onUnmounted(stopCamera);
+
+    return { t, videoEl, showNotice, dismissNotice, close: () => emit('close') };
+  },
+  template: `
+    <aside class="test-dock">
+      <button class="btn btn-ghost btn-sm test-dock-close" @click="close"
+              :title="t('closePanel')" :aria-label="t('closePanel')">✕</button>
+      <video ref="videoEl" autoplay playsinline muted></video>
+
+      <div v-if="showNotice" class="modal-overlay">
+        <div class="modal" style="max-width: 420px;">
+          <div class="modal-header">
+            <div class="modal-title">{{ t('realtimeTest') }}</div>
+          </div>
+          <div class="modal-body">{{ t('realtimeNotReady') }}</div>
+          <div class="modal-footer">
+            <button class="btn btn-primary" @click="dismissNotice">{{ t('confirm') }}</button>
+          </div>
+        </div>
+      </div>
+    </aside>
+  `
+};
+
 // ── Main App ──
 const app = createApp({
   components: {
@@ -7755,12 +7823,14 @@ const app = createApp({
     ModelConfigPage,
     ConfigPage,
     ToolPermissionPage,
+    RealtimeTestDock,
   },
   setup() {
     const Icons = inject('Icons');
     const currentPage = ref('chat');
     const sidebarOpen = ref(false);
     const sidebarCollapsed = ref(false);
+    const testDockOpen = ref(false);
     const showPreConfig = ref(false);
     const configExists = ref(true);
 
@@ -7858,7 +7928,8 @@ const app = createApp({
     });
 
     return {
-      Icons, currentPage, sidebarOpen, sidebarCollapsed, showPreConfig, configExists,
+      Icons, currentPage, sidebarOpen, sidebarCollapsed, testDockOpen,
+      showPreConfig, configExists,
       navItems, pageTitle, t, locale,
       userId, showWelcome, editingUser, editUserId,
       confirmUserId, startEditUser, cancelEditUser,
@@ -7943,6 +8014,10 @@ const app = createApp({
           <header class="header">
             <h2 class="header-title">{{ pageTitle }}</h2>
             <div class="header-actions">
+              <!-- Realtime omni-modal test dock -->
+              <button class="btn btn-ghost btn-sm" @click="testDockOpen = !testDockOpen">
+                {{ t('realtimeTest') }}
+              </button>
               <!-- Language toggle -->
               <button class="lang-toggle" @click="locale = locale === 'zh' ? 'en' : 'zh'" :title="locale === 'zh' ? 'Switch to English' : '切换到中文'">
                 {{ locale === 'zh' ? 'EN' : '中' }}
@@ -7972,6 +8047,9 @@ const app = createApp({
             </keep-alive>
           </div>
         </main>
+
+        <!-- Right-hand test dock: mounts only while open, so the camera follows its lifetime. -->
+        <realtime-test-dock v-if="testDockOpen" @close="testDockOpen = false" />
       </div>
     </div>
   `

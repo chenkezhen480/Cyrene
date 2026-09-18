@@ -464,6 +464,46 @@ h3 {
   overflow: hidden;
 }
 
+/* ── Realtime test dock (console shell, third column next to .main-content) ── */
+/* 不打开就不渲染，所以这里不需要为"收起"留任何状态。 */
+.test-dock {
+  flex: 0 0 auto;
+  width: min(420px, 34vw);
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  padding: var(--space-3);
+  background: rgba(13, 9, 21, 0.34);
+  border-left: 1px solid rgba(139, 126, 200, 0.12);
+}
+
+.test-dock video {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  object-fit: cover;
+  border-radius: var(--radius-md);
+  background: #000;
+  display: block;
+}
+
+.test-dock-close {
+  position: absolute;
+  top: var(--space-3);
+  right: var(--space-3);
+  z-index: 1;
+}
+
+/* 窄屏撑满整屏；侧边栏在 768px 变抽屉是同一套思路。 */
+@media (max-width: 920px) {
+  .test-dock {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    z-index: var(--z-modal);
+  }
+}
+
 /* ── Header ── */
 .header {
   height: var(--header-height);
