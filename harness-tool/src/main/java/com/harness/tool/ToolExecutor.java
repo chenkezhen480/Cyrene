@@ -56,14 +56,21 @@ public class ToolExecutor {
         }
 
         Tool tool = authorizedTool;
-        boolean confirmationRequired = requiresConfirmation(tool, toolCall.arguments());
+        boolean confirmationRequired;
+        String summary;
+        try {
+            confirmationRequired = requiresConfirmation(tool, toolCall.arguments());
+            summary = confirmationRequired ? confirmationSummary(tool, toolCall.arguments()) : null;
+        } catch (ToolExecutionException e) {
+            return ToolResult.fail(toolCall.id(), name, e.getMessage(), 0);
+        }
         if (confirmationRequired) {
             if (confirmationContext != null) {
                 return executeAfterConfirmation(
                         toolCall,
                         tool,
                         confirmationContext,
-                        confirmationSummary(tool, toolCall.arguments()));
+                        summary);
             }
             String message = "Tool requires explicit confirmation before execution: " + name;
             log.warn("[L3-Tool] Blocked [{}]: confirmation required", name);

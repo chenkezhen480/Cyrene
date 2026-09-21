@@ -14,23 +14,20 @@ import java.util.Set;
  * <p>Three outcomes, in order: a command matching the confirm table asks the operator; one matching
  * the allow table runs immediately; <b>anything else also asks the operator</b>. An allow list can
  * only anticipate the commands its author thought of, and the person reading the confirmation sees
- * the exact argv — a better judge of an unanticipated command than the list is. The cost is real
- * and worth stating: for unrecognised commands the confirmation prompt <em>is</em> the policy, so
- * if the operator approves without reading, nothing else is standing there.
+ * the exact command line — a better judge of an unanticipated command than the list is.
  *
- * <p>A few commands are refused outright rather than offered for approval, because what they break
- * is this tool's own structure rather than a permission question: a second shell (which would
- * restore every metacharacter hazard argv-only invocation removes), a path instead of a bare
- * executable name (which would let a writable directory supply a binary sharing an allowed name),
- * and log following (which never returns). None of those become safe by being read carefully.
+ * <p>A few commands and syntax patterns are refused outright rather than offered for approval,
+ * because they violate safety invariants: file redirection ({@code >}, {@code >>}, {@code <}),
+ * file-writing utilities ({@code tee}, {@code out-file}, etc.), subshell spawning ({@code bash},
+ * {@code sh}, etc.), paths instead of bare executable names (which would let a writable directory
+ * supply a binary sharing an allowed name), and log following (which never returns). None of those
+ * become safe by being read carefully.
  *
- * <p>Rules match on the executable name plus a prefix of the argument list, compared token by
- * token. That granularity is the point: {@code docker ps} may be allowed while {@code docker rm} is
- * not, because the second token has to match exactly.
+ * <p>Rules match on the executable name plus a prefix of the argument list, token by token.
+ * In a pipeline (e.g. {@code ps aux | grep java}), each stage is verified individually.
  *
- * <p>This class is <b>not</b> the only defence and should not be read as one. The real boundaries
- * are elsewhere: the command is never handed to a shell (see {@link ShellTool}), and per-tenant
- * tool permissions can remove {@code shell} from a run entirely.
+ * <p>This class works together with {@link ShellTool}, which executes commands in the system shell
+ * with strict byte output ceilings, timeout limits, and per-tenant tool permissions.
  */
 public final class CommandPolicy {
 
@@ -48,31 +45,45 @@ public final class CommandPolicy {
     }
 
     /**
-     * Executables that would hand control to a second shell. Invoking one would reinstate every
-     * metacharacter hazard this tool's argv-only design exists to remove, so they are refused by
-     * name rather than left to the rule tables.
+     * Executables that would hand control to an interactive or secondary shell.
      */
     private static final Set<String> SHELL_EXECUTABLES = Set.of(
             "bash", "sh", "zsh", "ksh", "fish", "csh", "tcsh", "dash", "ash", "busybox",
             "cmd", "cmd.exe", "powershell", "powershell.exe", "pwsh", "pwsh.exe",
             "wsl", "wsl.exe", "osascript", "cscript", "cscript.exe", "wscript", "wscript.exe");
 
+    /** File-writing utilities prohibited in read-only diagnostic shell execution. */
+    private static final Set<String> WRITE_COMMANDS = Set.of(
+            "tee", "out-file", "set-content", "add-content");
+
     /** Read-only observation: inspecting state, not changing it. */
     private static final List<Rule> DEFAULT_ALLOW = List.of(
+            // Docker
             rule("docker", "ps"), rule("docker", "logs"), rule("docker", "stats"),
             rule("docker", "inspect"), rule("docker", "images"), rule("docker", "version"),
             rule("docker", "info"), rule("docker", "top"), rule("docker", "port"),
             rule("docker", "compose", "ps"), rule("docker", "compose", "logs"),
             rule("docker", "compose", "config"), rule("docker", "compose", "top"),
+            // Git
             rule("git", "status"), rule("git", "diff"), rule("git", "log"),
             rule("git", "show"), rule("git", "branch"), rule("git", "remote"),
             rule("git", "rev-parse"), rule("git", "describe"), rule("git", "blame"),
+            // Runtime versions
             rule("java", "-version"), rule("java", "--version"),
             rule("mvn", "-v"), rule("mvn", "--version"),
             rule("node", "-v"), rule("node", "--version"),
             rule("npm", "-v"), rule("npm", "--version"),
             rule("gradle", "-v"), rule("gradle", "--version"),
-            rule("python", "--version"), rule("python3", "--version"));
+            rule("python", "--version"), rule("python3", "--version"),
+            // System and network diagnostics
+            rule("netstat"), rule("ss"), rule("ps"), rule("tasklist"), rule("lsof"),
+            // Output filtering and text processing
+            rule("grep"), rule("findstr"), rule("head"), rule("tail"), rule("wc"),
+            rule("cat"), rule("type"), rule("more"), rule("sort"), rule("uniq"),
+            // Basic system information
+            rule("df"), rule("free"), rule("uptime"), rule("whoami"),
+            rule("hostname"), rule("uname"), rule("echo"), rule("ls"), rule("dir"),
+            rule("ping"), rule("tracert"), rule("traceroute"));
 
     /** Changes running state or executes project code. */
     private static final List<Rule> DEFAULT_CONFIRM = List.of(
@@ -117,54 +128,332 @@ public final class CommandPolicy {
         if (command == null || command.isBlank()) {
             return new Verdict(Decision.DENY, "command is required");
         }
-        if (command.indexOf('/') >= 0 || command.indexOf('\\') >= 0) {
-            // A path would let a writable directory supply a binary that merely shares a name with
-            // an allowed one. Bare names resolve through PATH, which the Agent cannot write to.
+        String fullLine = assembleCommandLine(command, args);
+        if (hasFileRedirection(fullLine)) {
             return new Verdict(Decision.DENY,
-                    "command must be a bare executable name resolved from PATH, not a path: " + command);
+                    "file redirection ('>', '>>', '<') is strictly prohibited; shell cannot write to or redirect files");
         }
-        String executable = command.toLowerCase(Locale.ROOT);
-        if (SHELL_EXECUTABLES.contains(executable)) {
+
+        List<String> parts = splitCommandStages(fullLine);
+        if (parts.isEmpty()) {
+            return new Verdict(Decision.DENY, "command is required");
+        }
+
+        Verdict pendingConfirm = null;
+        for (int i = 0; i < parts.size(); i += 2) {
+            String stage = parts.get(i);
+            List<String> tokens = tokenize(stage);
+            if (tokens.isEmpty()) {
+                continue;
+            }
+            String rawExecutable = tokens.get(0);
+            List<String> stageArgs = tokens.subList(1, tokens.size());
+
+            Verdict stageVerdict = decideStage(rawExecutable, stageArgs);
+            if (stageVerdict.denied()) {
+                return stageVerdict;
+            }
+            if (stageVerdict.needsConfirmation() && pendingConfirm == null) {
+                pendingConfirm = stageVerdict;
+            }
+        }
+
+        if (pendingConfirm != null) {
+            return pendingConfirm;
+        }
+        return new Verdict(Decision.ALLOW, "read-only diagnostic command");
+    }
+
+    private Verdict decideStage(String rawExecutable, List<String> stageArgs) {
+        String executable = stripQuotes(rawExecutable);
+        if (executable.indexOf('/') >= 0 || executable.indexOf('\\') >= 0) {
             return new Verdict(Decision.DENY,
-                    executable + " is a shell; this tool never delegates to one. "
-                            + "Pass the target command directly instead.");
+                    "command must be a bare executable name resolved from PATH, not a path: " + executable);
         }
-        // Only for log commands: -f is an ordinary filter flag everywhere else (docker ps -f).
-        if (isLogCommand(command, args) && containsAny(args, FOLLOW_FLAGS)) {
+
+        String name = executable.toLowerCase(Locale.ROOT);
+        if (name.endsWith(".exe")) {
+            name = name.substring(0, name.length() - 4);
+        }
+
+        if (SHELL_EXECUTABLES.contains(name)) {
+            return new Verdict(Decision.DENY,
+                    executable + " is a shell; this tool never delegates to one. Pass the target command directly instead.");
+        }
+
+        if (WRITE_COMMANDS.contains(name)) {
+            return new Verdict(Decision.DENY,
+                    "file writing via '" + executable + "' is strictly prohibited in shell");
+        }
+
+        List<String> strippedArgs = stageArgs.stream().map(CommandPolicy::stripQuotes).toList();
+
+        if (isLogCommand(executable, strippedArgs) && containsAny(strippedArgs, FOLLOW_FLAGS)) {
             return new Verdict(Decision.DENY,
                     "following logs never returns; drop -f/--follow and use --tail instead");
         }
-        // Confirmation is checked first so an operator who appends a broad rule to the confirm list
-        // tightens the matching allow rules rather than losing to them.
-        if (matches(confirm, executable, args)) {
+
+        if (matches(confirm, name, strippedArgs)) {
             return new Verdict(Decision.CONFIRM, "changes running state or executes project code");
         }
-        if (matches(allow, executable, args)) {
+
+        if (matches(allow, name, strippedArgs)) {
             return new Verdict(Decision.ALLOW, "read-only diagnostic command");
         }
-        // Unrecognised commands are put to the operator rather than refused. An allow list can only
-        // ever anticipate the commands its author thought of, and the operator is looking at the
-        // exact argv — which is a better judge of an unanticipated command than the list is.
-        return new Verdict(Decision.CONFIRM,
-                "not on the allow list — approve only if you recognise it");
+
+        return new Verdict(Decision.CONFIRM, "not on the allow list — approve only if you recognise it");
     }
 
     /**
-     * Bounds {@code docker logs}, which is otherwise unbounded: a container that has been up for
-     * weeks will happily stream megabytes into the model's context.
-     *
-     * @return the arguments to run with, tail-limited when the caller did not limit them
+     * Bounds {@code docker logs} and {@code git log}, which are otherwise unbounded: a container
+     * that has been up for weeks or a repository with thousands of commits will stream
+     * megabytes into the model's context.
      */
     public List<String> applyDefaults(String command, List<String> args) {
+        if ("git".equalsIgnoreCase(command) && !args.isEmpty() && "log".equalsIgnoreCase(args.get(0))) {
+            if (!hasGitLogLimit(args)) {
+                List<String> bounded = new ArrayList<>(args);
+                bounded.addAll(1, List.of("-n", "50"));
+                return bounded;
+            }
+            return args;
+        }
+
         int subcommandEnd = subcommandEnd(command, args);
         if (subcommandEnd < 0 || containsAny(args, TAIL_FLAGS)) {
             return args;
         }
         List<String> bounded = new ArrayList<>(args);
-        // Inserted right after the subcommand rather than appended, so it can never be mistaken for
-        // a positional argument (a container name, say).
         bounded.addAll(subcommandEnd, List.of("--tail", String.valueOf(logTailLines)));
         return bounded;
+    }
+
+    /**
+     * Applies default bounds to each command stage in a pipeline.
+     */
+    public String applyDefaults(String commandLine) {
+        if (commandLine == null || commandLine.isBlank()) {
+            return commandLine;
+        }
+        List<String> parts = splitCommandStages(commandLine);
+        if (parts.isEmpty()) {
+            return commandLine;
+        }
+        StringBuilder bounded = new StringBuilder();
+        for (int i = 0; i < parts.size(); i++) {
+            String part = parts.get(i);
+            if (i % 2 != 0) {
+                bounded.append(" ").append(part).append(" ");
+            } else {
+                List<String> tokens = tokenize(part);
+                if (tokens.isEmpty()) {
+                    bounded.append(part);
+                } else {
+                    String executable = stripQuotes(tokens.get(0));
+                    List<String> stageArgs = tokens.subList(1, tokens.size());
+                    List<String> effectiveArgs = applyDefaults(executable, stageArgs);
+                    if (effectiveArgs.equals(stageArgs)) {
+                        bounded.append(part);
+                    } else {
+                        bounded.append(assembleCommandLine(tokens.get(0), effectiveArgs));
+                    }
+                }
+            }
+        }
+        return bounded.toString().trim();
+    }
+
+    public static boolean hasFileRedirection(String line) {
+        if (line == null) {
+            return false;
+        }
+        boolean inDoubleQuote = false;
+        boolean inSingleQuote = false;
+        boolean escapeNext = false;
+        for (int i = 0; i < line.length(); i++) {
+            char c = line.charAt(i);
+            if (escapeNext) {
+                escapeNext = false;
+                continue;
+            }
+            if (c == '\\') {
+                escapeNext = true;
+                continue;
+            }
+            if (c == '"' && !inSingleQuote) {
+                inDoubleQuote = !inDoubleQuote;
+            } else if (c == '\'' && !inDoubleQuote) {
+                inSingleQuote = !inSingleQuote;
+            } else if (!inDoubleQuote && !inSingleQuote) {
+                if (c == '<') {
+                    return true;
+                }
+                if (c == '>') {
+                    if (isDescriptorRedirection(line, i)) {
+                        continue;
+                    }
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private static boolean isDescriptorRedirection(String line, int gtIndex) {
+        if (gtIndex + 2 < line.length()
+                && line.charAt(gtIndex + 1) == '&'
+                && (line.charAt(gtIndex + 2) == '1' || line.charAt(gtIndex + 2) == '2')) {
+            return true;
+        }
+        return false;
+    }
+
+    public static List<String> splitCommandStages(String commandLine) {
+        if (commandLine == null || commandLine.isBlank()) {
+            return List.of();
+        }
+        List<String> stagesAndSeps = new ArrayList<>();
+        StringBuilder current = new StringBuilder();
+        boolean inDoubleQuote = false;
+        boolean inSingleQuote = false;
+        boolean escapeNext = false;
+
+        for (int i = 0; i < commandLine.length(); i++) {
+            char c = commandLine.charAt(i);
+
+            if (escapeNext) {
+                current.append(c);
+                escapeNext = false;
+                continue;
+            }
+            if (c == '\\') {
+                escapeNext = true;
+                current.append(c);
+                continue;
+            }
+            if (c == '"' && !inSingleQuote) {
+                inDoubleQuote = !inDoubleQuote;
+                current.append(c);
+            } else if (c == '\'' && !inDoubleQuote) {
+                inSingleQuote = !inSingleQuote;
+                current.append(c);
+            } else if (!inDoubleQuote && !inSingleQuote) {
+                boolean isOperator = false;
+                if (c == '|' || c == ';') {
+                    isOperator = true;
+                } else if (c == '&') {
+                    if (i > 0 && (commandLine.charAt(i - 1) == '>' || commandLine.charAt(i - 1) == '<')) {
+                        isOperator = false;
+                    } else {
+                        isOperator = true;
+                    }
+                }
+
+                if (isOperator) {
+                    char next = (i + 1 < commandLine.length()) ? commandLine.charAt(i + 1) : '\0';
+                    String op;
+                    if ((c == '|' && next == '|') || (c == '&' && next == '&')) {
+                        op = "" + c + next;
+                        i++;
+                    } else {
+                        op = "" + c;
+                    }
+                    stagesAndSeps.add(current.toString().trim());
+                    stagesAndSeps.add(op);
+                    current.setLength(0);
+                } else {
+                    current.append(c);
+                }
+            } else {
+                current.append(c);
+            }
+        }
+        stagesAndSeps.add(current.toString().trim());
+        return stagesAndSeps;
+    }
+
+    public static List<String> tokenize(String stage) {
+        if (stage == null || stage.isBlank()) {
+            return List.of();
+        }
+        List<String> tokens = new ArrayList<>();
+        StringBuilder current = new StringBuilder();
+        boolean inDoubleQuote = false;
+        boolean inSingleQuote = false;
+        boolean escapeNext = false;
+        for (int i = 0; i < stage.length(); i++) {
+            char c = stage.charAt(i);
+            if (escapeNext) {
+                current.append(c);
+                escapeNext = false;
+            } else if (c == '\\') {
+                escapeNext = true;
+                current.append(c);
+            } else if (c == '"' && !inSingleQuote) {
+                inDoubleQuote = !inDoubleQuote;
+                current.append(c);
+            } else if (c == '\'' && !inDoubleQuote) {
+                inSingleQuote = !inSingleQuote;
+                current.append(c);
+            } else if (Character.isWhitespace(c) && !inDoubleQuote && !inSingleQuote) {
+                if (current.length() > 0) {
+                    tokens.add(current.toString());
+                    current.setLength(0);
+                }
+            } else {
+                current.append(c);
+            }
+        }
+        if (current.length() > 0) {
+            tokens.add(current.toString());
+        }
+        return tokens;
+    }
+
+    public static String stripQuotes(String s) {
+        if (s == null || s.length() < 2) {
+            return s;
+        }
+        if ((s.startsWith("\"") && s.endsWith("\"")) || (s.startsWith("'") && s.endsWith("'"))) {
+            return s.substring(1, s.length() - 1);
+        }
+        return s;
+    }
+
+    public static String assembleCommandLine(String command, List<String> args) {
+        if (command == null || command.isBlank()) {
+            return "";
+        }
+        if (args == null || args.isEmpty()) {
+            return command.trim();
+        }
+        StringBuilder sb = new StringBuilder(command.trim());
+        for (String arg : args) {
+            if (arg == null || arg.isBlank()) {
+                continue;
+            }
+            sb.append(' ');
+            if (arg.equals("|") || arg.equals("2>&1") || arg.equals("1>&2")) {
+                sb.append(arg);
+            } else if ((arg.startsWith("\"") && arg.endsWith("\"")) || (arg.startsWith("'") && arg.endsWith("'"))) {
+                sb.append(arg);
+            } else if (arg.contains(" ") || arg.contains("\t")) {
+                sb.append('"').append(arg.replace("\"", "\\\"")).append('"');
+            } else {
+                sb.append(arg);
+            }
+        }
+        return sb.toString();
+    }
+
+    private static boolean hasGitLogLimit(List<String> args) {
+        for (String arg : args) {
+            if (arg.equalsIgnoreCase("-n") || arg.startsWith("--max-count")
+                    || arg.matches("^-\\d+$")) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** {@code docker logs} ends at 1, {@code docker compose logs} at 2, anything else at -1. */

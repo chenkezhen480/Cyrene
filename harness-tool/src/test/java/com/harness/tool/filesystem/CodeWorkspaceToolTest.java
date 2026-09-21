@@ -5,7 +5,6 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.harness.core.exception.ToolExecutionException;
 import com.harness.core.model.ResultStatus;
 import com.harness.core.model.ToolSpec;
-import com.harness.tool.Tool;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -75,31 +74,24 @@ class CodeWorkspaceToolTest {
         CodeWorkspaceTool readOnly = CodeWorkspaceTool.of(
                 policy, FileSystemWorkspace.readOnly(root), List.of());
         assertThat(actionEnum(readOnly.spec()))
-                .containsExactly("read", "glob", "grep", "tree");
+                .containsExactly("read", "glob", "grep", "tree", "help");
         assertThat(readOnly.writable()).isFalse();
     }
 
-    /**
-     * The one long-term rot risk of hand-writing the merged schema: a parameter added to a sub-tool
-     * that the merged tool never mentions. The model would then be unable to pass it.
-     */
     @Test
-    void mergedSchemaDeclaresEveryParameterTheSubToolsDeclare() {
-        FileSystemAccessPolicy policy = policy();
-        FileSystemWorkspace workspace = FileSystemWorkspace.host(root);
+    void publishesOnlyActionAndInputAndLoadsDelegateSchemaThroughHelp() {
+        ToolSpec spec = tool().spec();
 
-        Set<String> expected = new LinkedHashSet<>();
-        for (Tool subTool : List.of(
-                new ReadTool(policy, workspace),
-                new GlobTool(policy, workspace),
-                new GrepTool(policy, workspace),
-                new TreeTool(policy, workspace),
-                new EditTool(policy, workspace),
-                new WriteTool(policy, workspace))) {
-            expected.addAll(propertiesOf(subTool.spec()));
-        }
+        assertThat(propertiesOf(spec)).containsExactly("action", "input");
+        assertThat(spec.parameters().path("required")).extracting(JsonNode::asText)
+                .containsExactly("action", "input");
 
-        assertThat(propertiesOf(tool().spec())).containsAll(expected);
+        ObjectNode helpInput = ToolArguments.MAPPER.createObjectNode().put("action", "read");
+        ObjectNode help = ToolArguments.MAPPER.createObjectNode().put("action", "help");
+        help.set("input", helpInput);
+        JsonNode json = tool().executeOutcome(help).content().json();
+        assertThat(json.path("action").asText()).isEqualTo("read");
+        assertThat(json.path("inputSchema").path("properties").has("file_path")).isTrue();
     }
 
     /** A narrowed variant must not advertise what it cannot do. */
@@ -107,14 +99,16 @@ class CodeWorkspaceToolTest {
     void descriptionNamesTheAvailableActionsAndNoOthers() {
         assertThat(actionGuide(tool().spec())).contains("edit").contains("write");
 
-        CodeWorkspaceTool readOnly = tool().denying(Set.of("edit", "write"));
+        CodeWorkspaceTool readOnly = tool().denying(Set.of("edit", "write", "patch"));
         ToolSpec narrowed = readOnly.spec();
 
-        assertThat(actionEnum(narrowed)).doesNotContain("edit", "write");
+        assertThat(actionEnum(narrowed)).doesNotContain("edit", "write", "patch");
         // The guide is what the model reads to pick an action; leaving `edit` in it would send the
         // model at an action the enum no longer offers.
-        assertThat(actionGuide(narrowed)).contains("read").doesNotContain("edit").doesNotContain("write");
-        assertThat(narrowed.description()).doesNotContain("edit").doesNotContain("write");
+        assertThat(actionGuide(narrowed)).contains("read").doesNotContain("edit")
+                .doesNotContain("write").doesNotContain("patch");
+        assertThat(narrowed.description()).doesNotContain("edit").doesNotContain("write")
+                .doesNotContain("patch");
     }
 
     @Test
@@ -136,7 +130,18 @@ class CodeWorkspaceToolTest {
                 .put("old_string", "fresh")
                 .put("new_string", "edited"))).isNotBlank();
 
-        assertThat(Files.readString(root.resolve("New.java"))).isEqualTo("edited\n");
+        ObjectNode patchInput = ToolArguments.MAPPER.createObjectNode().put("patch", """
+                *** Update File: New.java
+                @@
+                -edited
+                +patched
+                *** End Patch
+                """);
+        ObjectNode patch = ToolArguments.MAPPER.createObjectNode().put("action", "patch");
+        patch.set("input", patchInput);
+        assertThat(tool().execute(patch)).contains("Patched");
+
+        assertThat(Files.readString(root.resolve("New.java"))).isEqualTo("patched\n");
     }
 
     /**
@@ -245,7 +250,7 @@ class CodeWorkspaceToolTest {
         assertThat(tool().allowing(Set.of("code_workspace")).availableActions())
                 .containsExactlyElementsOf(CodeWorkspaceTool.ACTIONS);
         assertThat(tool().allowing(Set.of("read", "tree")).availableActions())
-                .containsExactly("read", "tree");
+                .containsExactly("read", "tree", "help");
         assertThat(tool().allowing(Set.of("nothing-like-this")).hasActions()).isFalse();
     }
 
@@ -293,21 +298,11 @@ class CodeWorkspaceToolTest {
         assertThat(denied.supports("shell")).isFalse();
     }
 
-    /** A pre-merge action name denotes the whole tool once it reaches the permission store. */
-    @Test
-    void aPreMergeActionNameCollapsesToTheToolThatOwnsIt() {
-        assertThat(CodeWorkspaceTool.ownerOf("edit")).isEqualTo(CodeWorkspaceTool.TOOL_NAME);
-        assertThat(CodeWorkspaceTool.ownerOf("read")).isEqualTo(CodeWorkspaceTool.TOOL_NAME);
-        assertThat(CodeWorkspaceTool.ownerOf("image_generation")).isEqualTo("image_generation");
-        assertThat(CodeWorkspaceTool.ownerOf(CodeWorkspaceTool.TOOL_NAME))
-                .isEqualTo(CodeWorkspaceTool.TOOL_NAME);
-    }
-
     /** One capability tag is ToolSpec's hard limit, so the merged spec declares the stronger one. */
     @Test
     void thePublishedCapabilityFollowsWhetherWritingIsOffered() {
         assertThat(tool().spec().capability().name()).isEqualTo("MUTATION");
-        assertThat(tool().denying(Set.of("edit", "write")).spec().capability().name())
+        assertThat(tool().denying(Set.of("edit", "write", "patch")).spec().capability().name())
                 .isEqualTo("RETRIEVAL");
     }
 }

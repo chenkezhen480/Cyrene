@@ -38,7 +38,17 @@ final class ToolPermissionStub extends ToolPermissionStore {
     }
 
     ToolPermissionService service() {
-        return new ToolPermissionService(this);
+        var registry = new com.harness.tool.ToolRegistry();
+        var policy = com.harness.tool.filesystem.FileSystemAccessPolicy.host(
+                java.nio.file.Path.of(".").toAbsolutePath().toString(), java.util.List.of(),
+                com.harness.tool.filesystem.FileSystemAccessPolicy.Settings.defaults());
+        registry.register(com.harness.tool.filesystem.CodeWorkspaceTool.of(policy,
+                com.harness.tool.filesystem.FileSystemWorkspace.host(policy.searchRoot()), java.util.List.of()));
+        return service(registry);
+    }
+
+    ToolPermissionService service(com.harness.tool.ToolRegistry registry) {
+        return new ToolPermissionService(this, registry);
     }
 
     @Override

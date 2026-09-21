@@ -49,7 +49,7 @@ class SubAgentCompletionContractValidatorTest {
 
         SubAgentCompletionContractValidator.Evaluation evaluation = validator.evaluate(
                 contract, List.of(step), List.of(reportedArtifact),
-                "{\"summary\":\"complete\"}");
+                "{\"summary\":\"complete\"}", new ToolRegistry().snapshot());
 
         assertThat(evaluation.contractValidation().status())
                 .isEqualTo(ContractValidation.Status.SATISFIED);
@@ -77,7 +77,7 @@ class SubAgentCompletionContractValidatorTest {
                 "call-1", "report_tool", "upstream rejected request", 5));
 
         SubAgentCompletionContractValidator.Evaluation evaluation = validator.evaluate(
-                contract, List.of(failedStep), List.of(reportedOnly), "not-json");
+                contract, List.of(failedStep), List.of(reportedOnly), "not-json", new ToolRegistry().snapshot());
 
         assertThat(evaluation.contractValidation().status())
                 .isEqualTo(ContractValidation.Status.FAILED_CONTRACT);
@@ -118,7 +118,7 @@ class SubAgentCompletionContractValidatorTest {
     @Test
     void ordinaryTaskKeepsFreeFormCompletionSemantics() {
         SubAgentCompletionContractValidator.Evaluation evaluation = validator.evaluate(
-                null, List.of(), List.of(), "free-form result");
+                null, List.of(), List.of(), "free-form result", new ToolRegistry().snapshot());
 
         assertThat(evaluation.contractValidation())
                 .isEqualTo(ContractValidation.notDeclared());
@@ -134,6 +134,40 @@ class SubAgentCompletionContractValidatorTest {
                   "additionalProperties":false
                 }
                 """);
+    }
+
+    @Test
+    void groupedContractsRecognizeAliasesAndActionsButHelpCannotSatisfyBusinessWork() throws Exception {
+        ToolRegistry registry = new ToolRegistry();
+        registry.register(new com.harness.tool.ToolGroup("web", "Web access",
+                Map.of("search", tool("web_search"), "read", tool("read_url_content")), List.of()));
+        var catalog = registry.snapshot();
+        for (String required : List.of("web_search", "web.search", "web")) {
+            var contract = new SubAgentCompletionContract(Set.of(required), List.of(), null);
+            validator.validateTaskDefinition(task(List.of("web"), contract), catalog);
+            var search = groupedStep("search");
+            var success = validator.evaluate(contract, List.of(search), List.of(), "done", catalog);
+            assertThat(success.contractValidation().satisfied()).isTrue();
+            assertThat(success.toolExecutionSummary().totalExecutions()).isEqualTo(1);
+            assertThat(success.toolExecutionSummary().tools().get("web.search").successfulCount()).isEqualTo(1);
+            assertThat(validator.evaluate(contract, List.of(groupedStep("help")), List.of(), "done", catalog)
+                    .contractValidation().satisfied()).isFalse();
+        }
+        assertThatThrownBy(() -> validator.validateTaskDefinition(
+                task(List.of("web.search"), new SubAgentCompletionContract(Set.of("web.read"), List.of(), null)), catalog))
+                .hasMessageContaining("not in allowed tools");
+        for (String name : List.of("subagent", "subagent.spawn", "subagent.await", "subagent.help")) {
+            assertThatThrownBy(() -> validator.validateTaskDefinition(task(List.of(name), null), catalog))
+                    .hasMessageContaining("orchestration tool");
+        }
+    }
+
+    private ReActStep groupedStep(String action) {
+        var arguments = objectMapper.createObjectNode().put("action", action);
+        arguments.putObject("input");
+        return new ReActStep(1, null, null,
+                List.of(new com.harness.core.model.ToolCall("call-1", "web", arguments)),
+                List.of(ToolResult.ok("call-1", "web", "ok", 1)), null, null);
     }
 
     private static ReActStep stepWithResult(ToolResult result) {

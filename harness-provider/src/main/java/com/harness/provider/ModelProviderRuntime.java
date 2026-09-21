@@ -42,7 +42,7 @@ public final class ModelProviderRuntime {
                 new EmbeddingDelegate(),
                 new RerankDelegate(),
                 new RealtimeDelegate(),
-                new SmallTaskDelegate());
+                new SmallTaskDelegate(), new RoutingDelegate());
     }
 
     /** Stable providers suitable for injection into long-lived components. */
@@ -198,14 +198,12 @@ public final class ModelProviderRuntime {
     }
 
     private final class RealtimeDelegate implements RealtimeModelProvider {
-        @Override public String startSession(RealtimeEventHandler handler) {
-            return withCurrent(providers -> providers.realtime().startSession(handler));
+        @Override public RealtimeCapabilities capabilities() {
+            return current().realtime().capabilities();
         }
-        @Override public void send(String sessionId, byte[] data) {
-            withCurrentVoid(providers -> providers.realtime().send(sessionId, data));
-        }
-        @Override public void endSession(String sessionId) {
-            withCurrentVoid(providers -> providers.realtime().endSession(sessionId));
+        @Override public RealtimeSession open(
+                RealtimeSessionConfig config, RealtimeEventListener listener) {
+            return withCurrent(providers -> providers.realtime().open(config, listener));
         }
         @Override public boolean isAvailable() { return current().realtime().isAvailable(); }
         @Override public String providerName() { return current().realtime().providerName(); }
@@ -226,6 +224,13 @@ public final class ModelProviderRuntime {
         @Override public String providerName() { return current().smallTask().providerName(); }
         @Override public String modelName() { return current().smallTask().modelName(); }
         @Override public boolean isAvailable() { return current().smallTask().isAvailable(); }
+    }
+
+    private final class RoutingDelegate implements RoutingModelProvider {
+        @Override public Decision route(String query) {
+            return withCurrent(providers -> providers.routing().route(query));
+        }
+        @Override public boolean isAvailable() { return current().routing().isAvailable(); }
     }
 
     private record Generation(ModelProviders providers, ModelConfig configuration) {}

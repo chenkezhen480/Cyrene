@@ -78,7 +78,7 @@
   function upsertSubAgent(message, payload) {
     const toolCall = upsert(message, {
       toolCallId: payload.toolCallId,
-      toolName: 'spawn_subagent',
+      toolName: 'subagent',
       status: 'CREATED',
     });
     const current = toolCall.subAgent?.status;

@@ -5,6 +5,7 @@ import com.harness.core.model.ToolSpec;
 import com.harness.server.api.ApiErrorCode;
 import com.harness.server.api.ApiResponses;
 import com.harness.tool.ToolRegistry;
+import com.harness.tool.ToolGroup;
 import io.javalin.http.Context;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -153,22 +154,21 @@ public final class ToolPermissionHandler {
         }
     }
 
-    /**
-     * One row per registered tool, in registry order. A merged tool gets one row like any other:
-     * the permission store keys on a tool name, and a name is all a tenant can be denied.
-     *
-     * <p>Package-private for the test: this list is the vocabulary that {@code save} accepts and
-     * {@code get} reports, and the two drifting apart is a bug no round trip would surface.</p>
-     */
+    /** The same permission vocabulary is displayed by GET and validated by PUT. */
     List<ToolView> registeredTools() {
         List<ToolView> tools = new ArrayList<>();
-        for (ToolSpec spec : toolRegistry.getAll()) {
-            tools.add(new ToolView(
-                    spec.name(),
-                    spec.description() != null ? spec.description() : "",
-                    spec.capability() != null ? spec.capability().name() : ""));
+        var catalog = toolRegistry.snapshot();
+        for (ToolSpec spec : catalog.getAll()) {
+            tools.add(toolView(spec, null));
+            if (catalog.get(spec.name()) instanceof ToolGroup group) {
+                group.actionSpecs().forEach(action -> tools.add(toolView(action, spec.name())));
+            }
         }
         return List.copyOf(tools);
+    }
+
+    private static ToolView toolView(ToolSpec spec, String groupName) {
+        return new ToolView(spec.name(), spec.description(), spec.capability().name(), groupName);
     }
 
     private static String required(String value, String field) {
@@ -189,7 +189,7 @@ public final class ToolPermissionHandler {
     ) {
     }
 
-    public record ToolView(String name, String description, String capability) {
+    public record ToolView(String name, String description, String capability, String groupName) {
     }
 
     public record ToolPermissionView(

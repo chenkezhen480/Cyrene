@@ -92,7 +92,10 @@ public class ToolRegistry implements ToolCatalog {
 
     @Override
     public boolean contains(String name) {
-        return state.get().tools().containsKey(name);
+        RegistryState current = state.get();
+        return current.tools().containsKey(name)
+                || current.tools().values().stream().anyMatch(tool ->
+                tool instanceof ToolGroup group && group.supports(name));
     }
 
     @Override
@@ -124,9 +127,13 @@ public class ToolRegistry implements ToolCatalog {
 
         RegistryState current = state.get();
         Map<String, Tool> updatedTools = new HashMap<>(current.tools());
-        updatedTools.put("list_api_endpoints", new ListApiEndpointsTool(() -> config));
-        updatedTools.put("get_api_endpoint_detail", new GetApiEndpointDetailTool(() -> config));
-        updatedTools.put("call_discovered_api", new CallDiscoveredApiTool(() -> config));
+        updatedTools.put("project_api", new ToolGroup("project_api",
+                "Access confirmed business APIs. "
+                        + "Help returns an action's parameters. Credentials come from the trusted request.",
+                Map.of("list", new ListApiEndpointsTool(() -> config),
+                        "detail", new GetApiEndpointDetailTool(() -> config),
+                        "call", new CallDiscoveredApiTool(() -> config)),
+                EnvConfig.get().getCommaList(EnvKey.RISK_CONFIRM_TOOLS)));
         updatedTools.put("update_project_api", new UpdateProjectApiTool(this));
 
         configRef.set(config);
@@ -134,7 +141,7 @@ public class ToolRegistry implements ToolCatalog {
 
         int total = config.endpoints() != null ? config.endpoints().size() : 0;
         int callable = ProjectApiPolicy.callableEndpoints(config).size();
-        log.info("[ToolRegistry] Loaded project API config: {} total, {} callable, 4 meta-tools registered",
+        log.info("[ToolRegistry] Loaded project API config: {} total, {} callable, project_api and update_project_api registered",
                 total, callable);
     }
 

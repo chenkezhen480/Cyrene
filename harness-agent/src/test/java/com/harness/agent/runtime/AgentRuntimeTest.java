@@ -33,7 +33,7 @@ class AgentRuntimeTest {
                 mock(EmbeddingModelProvider.class),
                 mock(RerankModelProvider.class),
                 mock(RealtimeModelProvider.class),
-                mock(SmallTaskModelProvider.class));
+                mock(SmallTaskModelProvider.class), com.harness.provider.RoutingModelProvider.DISABLED);
         ReActLoopFactory loopFactory = mock(ReActLoopFactory.class);
         RunTraceFactory traceFactory = mock(RunTraceFactory.class);
         ToolCatalog catalog = mock(ToolCatalog.class);

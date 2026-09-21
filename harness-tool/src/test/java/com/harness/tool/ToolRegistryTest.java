@@ -159,7 +159,7 @@ class ToolRegistryTest {
                     .containsExactly(CodeWorkspaceTool.TOOL_NAME);
             assertThat(((CodeWorkspaceTool) narrowed.get(CodeWorkspaceTool.TOOL_NAME))
                     .availableActions())
-                    .containsExactly("read", "glob", "grep", "tree", "write");
+                    .containsExactly("read", "glob", "grep", "tree", "write", "patch", "help");
         }
 
         // Denying the write actions still leaves a tool worth publishing.
@@ -190,7 +190,7 @@ class ToolRegistryTest {
 
         RunToolCatalog partial = registry.snapshot().allowing(Set.of("code_workspace.read", "tree"));
         assertThat(((CodeWorkspaceTool) partial.get(CodeWorkspaceTool.TOOL_NAME)).availableActions())
-                .containsExactly("read", "tree");
+                .containsExactly("read", "tree", "help");
         assertThat(partial.contains("read")).isTrue();
         assertThat(partial.contains("edit")).isFalse();
 

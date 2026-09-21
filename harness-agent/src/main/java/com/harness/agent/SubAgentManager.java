@@ -344,7 +344,7 @@ public class SubAgentManager {
                 SubAgentCompletionContractValidator.Evaluation evaluation =
                         completionContractValidator.evaluate(
                                 record.task().completionContract(),
-                                result.steps(), result.artifacts(), result.output());
+                                result.steps(), result.artifacts(), result.output(), subAgentToolCatalog);
                 // Persist full ReAct steps and evaluated completion evidence together.
                 String subTraceId = saveSubAgentTrace(
                         trace, record, runContext, result, evaluation, duration);

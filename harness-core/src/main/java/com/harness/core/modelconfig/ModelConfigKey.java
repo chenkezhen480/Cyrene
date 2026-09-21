@@ -66,6 +66,12 @@ public final class ModelConfigKey {
     public static final String REALTIME_PROVIDER = "realtime.provider";
     public static final String REALTIME_API_KEY = "realtime.apiKey";
     public static final String REALTIME_BASE_URL = "realtime.baseUrl";
+    public static final String REALTIME_MODEL = "realtime.model";
+    public static final String ROUTING_PROVIDER = "routing.provider";
+    public static final String ROUTING_API_KEY = "routing.apiKey";
+    public static final String ROUTING_BASE_URL = "routing.baseUrl";
+    public static final String ROUTING_MODEL = "routing.model";
+    public static final String ROUTING_TIMEOUT_SECONDS = "routing.timeoutSeconds";
     public static final String SMALL_TASK_PROVIDER = "smallTask.provider";
     public static final String SMALL_TASK_API_KEY = "smallTask.apiKey";
     public static final String SMALL_TASK_BASE_URL = "smallTask.baseUrl";
@@ -113,6 +119,12 @@ public final class ModelConfigKey {
             d(RERANK_ENABLED, "rerank", "启用结果重排"), d(RERANK_TOP_N, "rerank", "重排结果数量"),
             d(REALTIME_PROVIDER, "realtime", "实时模型服务商"), d(REALTIME_API_KEY, "realtime", "实时模型密钥", true),
             d(REALTIME_BASE_URL, "realtime", "实时模型接口地址"),
+            d(REALTIME_MODEL, "realtime", "实时模型名称"),
+            d(ROUTING_PROVIDER, "routing", "JEV 路由服务商", "select", List.of("jev", "none")),
+            d(ROUTING_API_KEY, "routing", "JEV 路由密钥", true),
+            d(ROUTING_BASE_URL, "routing", "JEV 接口地址"),
+            d(ROUTING_MODEL, "routing", "JEV 模型名称"),
+            d(ROUTING_TIMEOUT_SECONDS, "routing", "JEV 请求超时秒数"),
             d(SMALL_TASK_PROVIDER, "smallTask", "小任务模型服务商"), d(SMALL_TASK_API_KEY, "smallTask", "小任务模型密钥", true),
             d(SMALL_TASK_BASE_URL, "smallTask", "小任务模型接口地址"), d(SMALL_TASK_MODEL, "smallTask", "小任务模型名称"),
             d(SMALL_TASK_MAX_TOKENS, "smallTask", "小任务最大输出 Token"),

@@ -96,6 +96,7 @@ public final class AgentRunPreparer {
                 .gapAnalysis();
         GraphRequestContext graphRequestContext = agentContext.graphRequestContext();
         trace.putMetadata(gapMetadata(gapAnalysis, trace.snapshot().metadata()));
+        trace.recordPreprocess(resolveIntent(gapAnalysis), List.of(), null);
 
         String systemPrompt = promptBuilder.buildSystemPrompt(
                 request.systemPromptOverride(),
@@ -213,9 +214,33 @@ public final class AgentRunPreparer {
         Map<String, String> metadata = new HashMap<>(existing);
         metadata.put("gap_needsKnowledgeBase", String.valueOf(gapAnalysis.needsKnowledgeBase()));
         metadata.put("gap_needsThinking", String.valueOf(gapAnalysis.needsThinking()));
+        metadata.put("gap_thinkingLevel", gapAnalysis.thinkingLevel() == null
+                ? "default" : gapAnalysis.thinkingLevel().configValue());
         metadata.put("gap_needsWebSearch", String.valueOf(gapAnalysis.needsWebSearch()));
         metadata.put("gap_source", String.valueOf(gapAnalysis.source()));
         return metadata;
+    }
+
+    public static String resolveIntent(GapAnalysis gapAnalysis) {
+        if (gapAnalysis == null) {
+            return "chat";
+        }
+        boolean kb = Boolean.TRUE.equals(gapAnalysis.needsKnowledgeBase());
+        boolean web = Boolean.TRUE.equals(gapAnalysis.needsWebSearch());
+        boolean think = Boolean.TRUE.equals(gapAnalysis.needsThinking());
+        if (kb && web) {
+            return "knowledge_and_web_search";
+        }
+        if (kb) {
+            return "knowledge_search";
+        }
+        if (web) {
+            return "web_search";
+        }
+        if (think) {
+            return "reasoning";
+        }
+        return "chat";
     }
 
     private static Set<String> requestUnavailableTools(AgentContext context) {

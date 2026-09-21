@@ -228,6 +228,41 @@ class ReActEngineTerminationTest {
         verify(chatModel, never()).chat(any(ChatRequest.class));
     }
 
+    @Test
+    void cancellationTargetsOnlyTheSelectedGroupedDelegate() {
+        var browser = mock(com.harness.tool.CancellableTool.class);
+        var search = mock(com.harness.tool.CancellableTool.class);
+        when(browser.spec()).thenReturn(new ToolSpec("browser_control", "Browser",
+                MAPPER.createObjectNode().put("type", "object")));
+        when(search.spec()).thenReturn(new ToolSpec("web_search", "Search",
+                MAPPER.createObjectNode().put("type", "object")));
+        var registry = new com.harness.tool.ToolRegistry();
+        registry.register(new com.harness.tool.ToolGroup("web", "Web access",
+                java.util.Map.of("browser", browser, "search", search), List.of()));
+        ChatModel chatModel = mock(ChatModel.class);
+        when(chatModel.chat(any(ChatRequest.class))).thenReturn(ChatResponse.builder().aiMessage(AiMessage.from(
+                ToolExecutionRequest.builder().id("call-1").name("web")
+                        .arguments("{\"action\":\"browser\",\"input\":{\"action\":\"observe\"}}")
+                        .build())).build());
+        var token = new CancellationToken();
+        ToolExecutor executor = mock(ToolExecutor.class);
+        when(executor.executeAuthorized(any(), any(), isNull())).thenAnswer(invocation -> {
+            token.cancel();
+            ToolCall call = invocation.getArgument(0);
+            return ToolResult.fail(call.id(), call.toolName(), "Cancelled", 0);
+        });
+        try {
+            assertThatThrownBy(() -> new ReActEngine(provider(chatModel), registry.snapshot(),
+                    executor, null, null, 2).execute(new ReActRequest(
+                    "system", "browse", List.of(), RunTrace.noop(), null, token, ThinkingLevel.OFF, null)))
+                    .isInstanceOf(CancellationException.class);
+            verify(browser).cancel();
+            verify(search, never()).cancel();
+        } finally {
+            Thread.interrupted();
+        }
+    }
+
     private static ChatModelProvider provider(ChatModel chatModel) {
         ChatModelProvider provider = mock(ChatModelProvider.class);
         when(provider.chatModel()).thenReturn(chatModel);

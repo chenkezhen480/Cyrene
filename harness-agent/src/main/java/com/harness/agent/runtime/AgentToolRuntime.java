@@ -20,6 +20,8 @@ import com.harness.provider.ModelProviders;
 import com.harness.provider.VoiceCapabilities;
 import com.harness.provider.VoiceModelProvider;
 import com.harness.tool.ToolRegistry;
+import com.harness.tool.Tool;
+import com.harness.tool.ToolGroup;
 import com.harness.tool.artifact.ArtifactStorageService;
 import com.harness.tool.builtin.AudioTranscriptionTool;
 import com.harness.tool.builtin.FfmpegTool;
@@ -157,14 +159,21 @@ public final class AgentToolRuntime {
     ) {
         EnvConfig config = EnvConfig.get();
         toolRegistry.register(StructuredOutputTool.chatBlock());
-        if (config.getBool(EnvKey.TOOL_WEB_SEARCH_ENABLED, true)) {
-            toolRegistry.register(new WebSearchTool());
+        Map<String, Tool> webActions = new LinkedHashMap<>();
+        if (WebSearchTool.isEnabled(config)) {
+            webActions.put("search", new WebSearchTool());
         }
         if (config.getBool(EnvKey.TOOL_URL_READER_ENABLED, true)) {
-            toolRegistry.register(new ReadUrlContentTool());
+            webActions.put("read", new ReadUrlContentTool());
         }
         if (config.getBool(EnvKey.TOOL_BROWSER_ENABLED, false)) {
-            toolRegistry.register(new BrowserControlTool());
+            webActions.put("browser", new BrowserControlTool());
+        }
+        if (!webActions.isEmpty()) {
+            toolRegistry.register(new ToolGroup("web",
+                    "Access public web information and authorized pages. "
+                            + "Use help to load an available action's parameters.",
+                    webActions, config.getCommaList(EnvKey.RISK_CONFIRM_TOOLS)));
         }
 
         String ragProvider = config.getString(EnvKey.RAG_PROVIDER, "milvus");

@@ -57,6 +57,7 @@ public final class ModelConfigInitializer {
             m("HARNESS_MODEL_REALTIME_PROVIDER", ModelConfigKey.REALTIME_PROVIDER),
             m("HARNESS_MODEL_REALTIME_API_KEY", ModelConfigKey.REALTIME_API_KEY),
             m("HARNESS_MODEL_REALTIME_BASE_URL", ModelConfigKey.REALTIME_BASE_URL),
+            m("HARNESS_MODEL_REALTIME_MODEL", ModelConfigKey.REALTIME_MODEL),
             m("HARNESS_MODEL_CLASSIFIER_PROVIDER", ModelConfigKey.SMALL_TASK_PROVIDER),
             m("HARNESS_MODEL_CLASSIFIER_API_KEY", ModelConfigKey.SMALL_TASK_API_KEY),
             m("HARNESS_MODEL_CLASSIFIER_BASE_URL", ModelConfigKey.SMALL_TASK_BASE_URL),

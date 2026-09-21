@@ -46,14 +46,7 @@ class ToolPermissionServiceTest {
         assertThat(resolved.toolDenylist()).containsExactly("image_generation");
     }
 
-    /**
-     * Profiles outlive tool names. A row written before the code tools were merged says {@code edit},
-     * which no longer matches a registered tool — leaving it alone would hand that tenant back the
-     * write access it had explicitly been denied.
-     *
-     * <p>It collapses to the tool rather than to one action so the admin page, which manages one
-     * entry per tool, reports the same thing the runtime enforces.</p>
-     */
+    /** Legacy code permissions keep the conservative whole-workspace policy. */
     @Test
     void rewritesPreMergeCodeToolNamesToTheToolThatNowCarriesThem() {
         ToolPermissionService service = ToolPermissionStub.empty()
@@ -156,5 +149,24 @@ class ToolPermissionServiceTest {
 
     private static AgentContext context(Map<String, Object> data) {
         return AgentContext.of(data);
+    }
+
+    @Test
+    void groupedLegacyPermissionsRoundTripAsActionRows() {
+        var registry = new com.harness.tool.ToolRegistry();
+        var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+        com.harness.tool.Tool search = new com.harness.tool.Tool() {
+            public com.harness.core.model.ToolSpec spec() {
+                return new com.harness.core.model.ToolSpec("web_search", "Search", mapper.createObjectNode());
+            }
+            public String execute(com.fasterxml.jackson.databind.JsonNode args) { return "ok"; }
+        };
+        registry.register(new com.harness.tool.ToolGroup("web", "Web access", Map.of("search", search), Set.of()));
+        var service = ToolPermissionStub.empty().profile(TENANT, "DEFAULT", "web_search").service(registry);
+        var disabled = service.resolveDisabledTools(TENANT, "teacher").orElseThrow();
+        assertThat(disabled).containsExactly("web.search");
+        var rows = new ToolPermissionHandler(service, registry, new ApiRequestAuthenticator()).registeredTools();
+        assertThat(rows).extracting(ToolPermissionHandler.ToolView::name).containsAll(disabled);
+        assertThat(registry.snapshot().excluding(disabled).contains("web")).isFalse();
     }
 }

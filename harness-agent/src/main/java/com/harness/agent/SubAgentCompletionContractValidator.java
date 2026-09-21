@@ -8,6 +8,8 @@ import com.harness.core.model.ArtifactStore;
 import com.harness.core.model.ReActStep;
 import com.harness.core.model.ToolResult;
 import com.harness.tool.RunToolCatalog;
+import com.harness.tool.ToolGroup;
+import com.harness.core.model.ToolCall;
 
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -23,7 +25,8 @@ import java.util.Set;
 final class SubAgentCompletionContractValidator {
 
     static final Set<String> ORCHESTRATION_TOOLS = Set.of(
-            "spawn_subagent", "await_subagents", "get_subagents", "cancel_subagents");
+            "spawn_subagent", "await_subagents", "get_subagents", "cancel_subagents",
+            "subagent", "subagent.spawn", "subagent.await", "subagent.get", "subagent.cancel", "subagent.help");
 
     private static final Set<String> SUPPORTED_SCHEMA_KEYWORDS = Set.of(
             "type", "description", "properties", "required",
@@ -62,8 +65,9 @@ final class SubAgentCompletionContractValidator {
         if (contract == null) {
             return;
         }
+        RunToolCatalog allowedCatalog = parentCatalog.allowing(allowedTools);
         for (String toolName : contract.requiredSuccessfulTools()) {
-            if (!allowedTools.contains(toolName)) {
+            if (!allowedCatalog.contains(toolName)) {
                 throw new IllegalArgumentException(
                         "Required successful tool is not in allowed tools: " + toolName);
             }
@@ -90,9 +94,10 @@ final class SubAgentCompletionContractValidator {
             SubAgentCompletionContract contract,
             List<ReActStep> steps,
             List<Artifact> reportedArtifacts,
-            String output
+            String output,
+            RunToolCatalog catalog
     ) {
-        ToolExecutionSummary toolSummary = summarizeTools(steps);
+        ToolExecutionSummary toolSummary = summarizeTools(steps, catalog);
         List<Artifact> verifiedArtifacts = resolveArtifacts(reportedArtifacts);
         if (contract == null) {
             return new Evaluation(
@@ -105,7 +110,7 @@ final class SubAgentCompletionContractValidator {
         List<String> violations = new ArrayList<>();
         for (String requiredTool : contract.requiredSuccessfulTools()) {
             ToolExecutionSummary.ToolExecutionStats stats =
-                    toolSummary.tools().get(requiredTool);
+                    toolSummary.tools().get(catalog.canonicalName(requiredTool));
             if (stats == null || stats.successfulCount() == 0) {
                 String latestError = stats != null ? stats.latestError() : null;
                 violations.add("Required tool did not complete successfully: " + requiredTool
@@ -156,7 +161,7 @@ final class SubAgentCompletionContractValidator {
         return List.copyOf(verified.values());
     }
 
-    private static ToolExecutionSummary summarizeTools(List<ReActStep> steps) {
+    private static ToolExecutionSummary summarizeTools(List<ReActStep> steps, RunToolCatalog catalog) {
         LinkedHashMap<String, MutableToolStats> stats = new LinkedHashMap<>();
         int total = 0;
         if (steps != null) {
@@ -166,14 +171,21 @@ final class SubAgentCompletionContractValidator {
                 }
                 for (ToolResult result : step.toolResults()) {
                     total++;
-                    MutableToolStats toolStats = stats.computeIfAbsent(
-                            result.toolName(), ignored -> new MutableToolStats());
-                    toolStats.attemptCount++;
-                    if (result.success()) {
-                        toolStats.successfulCount++;
+                    if (catalog.get(result.toolName()) instanceof ToolGroup group) {
+                        ToolCall call = step.toolCalls() == null ? null : step.toolCalls().stream()
+                                .filter(value -> value.id().equals(result.toolCallId())
+                                        && value.toolName().equals(result.toolName()))
+                                .findFirst().orElse(null);
+                        if (call != null && call.arguments() != null) {
+                            String action = call.arguments().path("action").asText();
+                            recordOutcome(stats, result.toolName() + "." + action, result);
+                            // Looking up parameters is not evidence of executing a business action.
+                            if (group.delegate(call.arguments()) != null) {
+                                recordOutcome(stats, result.toolName(), result);
+                            }
+                        }
                     } else {
-                        toolStats.failedCount++;
-                        toolStats.latestError = result.error();
+                        recordOutcome(stats, result.toolName(), result);
                     }
                 }
             }
@@ -187,6 +199,18 @@ final class SubAgentCompletionContractValidator {
                         value.failedCount,
                         value.latestError)));
         return new ToolExecutionSummary(total, immutableStats);
+    }
+
+    private static void recordOutcome(Map<String, MutableToolStats> stats,
+                                      String name, ToolResult result) {
+        MutableToolStats value = stats.computeIfAbsent(name, ignored -> new MutableToolStats());
+        value.attemptCount++;
+        if (result.success()) {
+            value.successfulCount++;
+        } else {
+            value.failedCount++;
+            value.latestError = result.error();
+        }
     }
 
     private JsonNode parseStructuredOutput(String output, List<String> violations) {

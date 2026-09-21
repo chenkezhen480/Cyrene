@@ -137,7 +137,7 @@ public final class ReadUrlContentTool implements CancellableTool {
         properties.set("url", MAPPER.createObjectNode()
                 .put("type", "string")
                 .put("description", "The exact single http/https URL supplied by the user "
-                        + "or returned by an earlier web_search in this run"));
+                        + "or returned by an earlier web search action in this run"));
         properties.set("cursor", MAPPER.createObjectNode()
                 .put("type", "string")
                 .put("description", "Pagination cursor returned by the previous call"));
@@ -147,12 +147,12 @@ public final class ReadUrlContentTool implements CancellableTool {
         return new ToolSpec(
                 TOOL_NAME,
                 "Read and extract the main text from one URL supplied by the user or returned "
-                        + "by an earlier web_search in this run. "
+                        + "by an earlier web search action in this run. "
                         + "This is not a crawler: do not invent URLs and do not traverse page links. "
                         + "Use cursor pagination when hasMore is true. "
                         + "If it fails with HTTP 403/404, a timeout, or empty content, the site "
                         + "probably blocks non-browser clients: open the same URL with "
-                        + "browser_control instead of retrying this tool.",
+                        + "web action=browser instead of retrying this action.",
                 MAPPER.createObjectNode()
                         .put("type", "object")
                         .<ObjectNode>set("properties", properties)

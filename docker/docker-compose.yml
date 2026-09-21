@@ -67,6 +67,7 @@ services:
       - HARNESS_MEMORY_REDIS_URL=redis://redis:6379
       - HARNESS_GRAPH_NEO4J_URI=bolt://neo4j:7687
       - HARNESS_GRAPH_SCHEMA_DIR=/app/graph-schemas
+      - HARNESS_SEARCH_SEARXNG_URL=http://searxng:8888
       - HARNESS_TOOL_WEB_SEARCH_SEARXNG_URL=http://searxng:8888
       - HARNESS_TOOL_WEB_SEARCH_ENGINES=${HARNESS_TOOL_WEB_SEARCH_ENGINES:-bing,duckduckgo,brave,google,wikipedia}
       - HARNESS_TOOL_WEB_SEARCH_RESULT_LIMIT=${HARNESS_TOOL_WEB_SEARCH_RESULT_LIMIT:-8}

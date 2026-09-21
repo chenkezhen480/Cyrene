@@ -4,6 +4,7 @@ import com.harness.core.modelconfig.ModelConfig;
 import com.harness.core.modelconfig.ModelConfigKey;
 import com.harness.provider.impl.NoOpChatModelProvider;
 import com.harness.provider.impl.OpenAiChatApiFormat;
+import com.harness.provider.impl.QwenRealtimeModelProvider;
 import org.junit.jupiter.api.Test;
 
 import java.util.Map;
@@ -95,5 +96,21 @@ class ModelProviderFactoryTest {
         ModelConfig none = ModelConfig.of(Map.of(ModelConfigKey.VOICE_PROVIDER, "none"));
         assertThat(ModelProviderFactory.createVoice(none).isTranscribeAvailable())
                 .isFalse();
+    }
+
+    @Test
+    void createsConfiguredQwenRealtimeProvider() {
+        ModelConfig config = ModelConfig.of(Map.of(
+                ModelConfigKey.REALTIME_PROVIDER, "qwen",
+                ModelConfigKey.REALTIME_API_KEY, "unit-test-key",
+                ModelConfigKey.REALTIME_BASE_URL, "wss://example.invalid/api-ws/v1/realtime",
+                ModelConfigKey.REALTIME_MODEL, "qwen-realtime-test"));
+
+        RealtimeModelProvider provider = ModelProviderFactory.createRealtime(config);
+
+        assertThat(provider).isInstanceOf(QwenRealtimeModelProvider.class);
+        assertThat(provider.providerName()).isEqualTo("qwen");
+        assertThat(provider.capabilities().toolCalling()).isTrue();
+        assertThat(provider.capabilities().interruption()).isTrue();
     }
 }

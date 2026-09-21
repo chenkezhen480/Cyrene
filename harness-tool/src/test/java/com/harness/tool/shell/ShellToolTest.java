@@ -3,12 +3,14 @@ package com.harness.tool.shell;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.harness.core.exception.ToolExecutionException;
+import com.harness.core.model.ToolExecutionOutcome;
 import com.harness.core.model.ToolSpec;
 import com.harness.tool.filesystem.FileSystemAccessPolicy;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -48,10 +50,19 @@ class ShellToolTest {
      */
     @Test
     void runsAnAllowedCommandAndCapturesBothStreams() {
-        String output = tool.execute(args("java", "-version"));
+        ToolExecutionOutcome outcome = tool.executeOutcome(args("java", "-version"));
+        String output = outcome.content().text();
 
         assertThat(output).contains("$ java -version").contains("exit: 0");
         assertThat(output).containsIgnoringCase("version");
+        assertThat(outcome.content().json().path("command")).extracting(node -> node.asText())
+                .containsExactly("java", "-version");
+        assertThat(outcome.content().json().path("cwd").asText()).isEqualTo(root.toString());
+        assertThat(outcome.content().json().path("exitCode").asInt()).isZero();
+        assertThat(outcome.content().json().path("timedOut").asBoolean()).isFalse();
+        assertThat(outcome.content().json().path("truncated").asBoolean()).isFalse();
+        assertThat(outcome.content().json().path("stderr").asText())
+                .containsIgnoringCase("version");
     }
 
     /** Structural refusals never reach the operator: reading them carefully would not make them safe. */
@@ -138,5 +149,43 @@ class ShellToolTest {
         assertThat(spec.name()).isEqualTo("shell");
         assertThat(spec.capability().name()).isEqualTo("MUTATION");
         assertThat(spec.requiresConfirmation()).isFalse();
+        assertThat(spec.parameters().get("properties").has("command")).isTrue();
+        assertThat(spec.parameters().get("properties").has("args")).isTrue();
+    }
+
+    @Test
+    void executesPipelineWithPipesNatively() {
+        String filterCmd = File.separatorChar == '\\' ? "findstr" : "grep";
+        ObjectNode input = args("java", "-version", "2>&1", "|", filterCmd, "version");
+        ToolExecutionOutcome outcome = tool.executeOutcome(input);
+        String output = outcome.content().text();
+
+        assertThat(output).containsIgnoringCase("version");
+        assertThat(outcome.content().json().path("exitCode").asInt()).isZero();
+        assertThat(outcome.content().json().path("commandLine").asText())
+                .contains("java -version 2>&1 | " + filterCmd + " version");
+    }
+
+    @Test
+    void refusesFileRedirectionOutright() {
+        assertThatThrownBy(() -> tool.execute(args("echo", "test", ">", "file.txt")))
+                .isInstanceOf(ToolExecutionException.class)
+                .hasMessageContaining("file redirection");
+        assertThatThrownBy(() -> tool.execute(args("docker", "ps", ">>", "file.txt")))
+                .isInstanceOf(ToolExecutionException.class)
+                .hasMessageContaining("file redirection");
+    }
+
+    @Test
+    void refusesWritingCommandsInPipeline() {
+        assertThatThrownBy(() -> tool.execute(args("docker", "ps", "|", "tee", "out.txt")))
+                .isInstanceOf(ToolExecutionException.class)
+                .hasMessageContaining("strictly prohibited");
+    }
+
+    @Test
+    void runsNetstatDiagnosticsWithoutConfirmation() {
+        assertThat(tool.requiresConfirmation(args("netstat", "-ano"))).isFalse();
+        assertThat(tool.requiresConfirmation(args("netstat", "-ano", "|", "findstr", "3306"))).isFalse();
     }
 }

@@ -1,7 +1,7 @@
 package com.harness.server;
 
 import com.harness.core.model.AgentContext;
-import com.harness.tool.filesystem.CodeWorkspaceTool;
+import com.harness.tool.ToolRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -27,14 +27,16 @@ public final class ToolPermissionService {
     private static final Logger log = LoggerFactory.getLogger(ToolPermissionService.class);
 
     private final ToolPermissionStore store;
+    private final ToolRegistry toolRegistry;
     private volatile Boolean tablePresent;
 
-    public ToolPermissionService() {
-        this(new ToolPermissionStore());
+    public ToolPermissionService(ToolRegistry toolRegistry) {
+        this(new ToolPermissionStore(), toolRegistry);
     }
 
-    ToolPermissionService(ToolPermissionStore store) {
+    ToolPermissionService(ToolPermissionStore store, ToolRegistry toolRegistry) {
         this.store = Objects.requireNonNull(store, "store");
+        this.toolRegistry = Objects.requireNonNull(toolRegistry, "toolRegistry");
     }
 
     /**
@@ -122,30 +124,19 @@ public final class ToolPermissionService {
                 : identity.trim();
         Optional<Set<String>> exact = store.findDisabledTools(tenant, scopedIdentity);
         if (exact.isPresent()) {
-            return exact.map(ToolPermissionService::modernize);
+            return exact.map(this::modernize);
         }
         if (!AgentContext.DEFAULT_IDENTITY.equals(scopedIdentity)) {
             return store.findDisabledTools(tenant, AgentContext.DEFAULT_IDENTITY)
-                    .map(ToolPermissionService::modernize);
+                    .map(this::modernize);
         }
         return Optional.empty();
     }
 
-    /**
-     * Rewrite the pre-merge code-tool names in a stored profile to the tool that now carries them.
-     *
-     * <p>Profiles written before the six file tools were merged key on {@code read} / {@code edit} /
-     * {@code write}. Those names match no registered tool, so leaving them alone would silently hand
-     * a tenant that had disabled writes a tool that can write — the opposite of the fail-closed
-     * direction this list exists for. Applied on both lookups so the exact and DEFAULT rows agree.</p>
-     *
-     * <p>They collapse to the whole tool, not to one action: the admin page manages permissions one
-     * name per tool, and a {@code code_workspace.edit} it can neither show nor re-save would leave
-     * the page claiming a tenant is unrestricted while its requests are filtered.</p>
-     */
-    private static Set<String> modernize(Set<String> disabledTools) {
-        return disabledTools.stream()
-                .map(CodeWorkspaceTool::ownerOf)
+    /** Preserve old delegate denials as action permissions, using the currently registered groups. */
+    private Set<String> modernize(Set<String> disabledTools) {
+        var catalog = toolRegistry.snapshot();
+        return disabledTools.stream().map(catalog::permissionName)
                 .collect(Collectors.toUnmodifiableSet());
     }
 }

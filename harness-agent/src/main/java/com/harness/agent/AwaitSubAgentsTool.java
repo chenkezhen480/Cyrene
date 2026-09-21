@@ -325,7 +325,7 @@ public class AwaitSubAgentsTool implements Tool {
                 case "RESUME_SESSION" -> result.put("message",
                         pending.size() + " task(s) still running. Results will be delivered via session resume when complete.");
                 case "RETURN_PENDING" -> result.put("message",
-                        pending.size() + " task(s) still running. Use get_subagents to check status.");
+                        pending.size() + " task(s) still running. Use subagent with action=get to check status.");
                 case "CANCEL" -> result.put("message",
                         pending.size() + " task(s) were cancelled due to timeout.");
             }

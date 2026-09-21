@@ -36,7 +36,7 @@ public class ListApiEndpointsTool implements Tool {
         return new ToolSpec(
                 "list_api_endpoints",
                 "列出已发现的内部接口目录（返回 id、名称、描述、方法、路径）。" +
-                "如需完整参数定义，请用 get_api_endpoint_detail(endpointId) 查询。",
+                "如需完整参数定义，请用 project_api(action=detail, input={endpointId}) 查询。",
                 params,
                 com.harness.core.model.ToolCapability.RETRIEVAL
         );

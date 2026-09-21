@@ -7,18 +7,7 @@ import com.harness.core.env.EnvKey;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-/**
- * Gap 分析式动态路由：根据查询特征决定 thinking/retrieval/rewrite/webSearch 四个参数。
- * <p>
- * 三级判定漏斗：
- * <ol>
- *   <li>显式覆盖 — 客户端在 context 里传了就直接用</li>
- *   <li>规则引擎（Tier 1）— 纯 Java 正则/关键词匹配，&lt;1ms</li>
- *   <li>模型分析（Tier 2）— 调用小任务模型补全路由判断</li>
- * </ol>
- * <p>
- * 每级只填充上一级为 null 的字段。四级全部确定后短路返回。
- */
+/** Explicit request choices take precedence over dedicated JEV routing. */
 public class GapAnalyzer {
 
     private static final Logger log = LoggerFactory.getLogger(GapAnalyzer.class);
@@ -30,19 +19,10 @@ public class GapAnalyzer {
         this.enabled = EnvConfig.get().getBool(EnvKey.GAP_ANALYSIS_ENABLED, true);
         this.ruleEngine = ruleEngine;
         this.modelAnalyzer = modelAnalyzer;
-        log.info("[GapAnalyzer] enabled={}, ruleEngine={}, smallTaskModel={}",
+        log.info("[GapAnalyzer] enabled={}, ruleEngine={}, routingModel={}",
                 enabled, ruleEngine != null, modelAnalyzer != null);
     }
 
-    /**
-     * 分析查询，返回 GapAnalysis。
-     * <p>
-     * 三级漏斗：显式覆盖 → 规则引擎 → 小任务模型分析，每级只填 null 字段。
-     *
-     * @param query   用户查询文本
-     * @param context 请求上下文（含显式覆盖字段）
-     * @return GapAnalysis 四个独立字段
-     */
     public GapAnalysis analyze(String query, AgentContext context) {
         if (!enabled) {
             return GapAnalysis.defaults();
@@ -50,17 +30,21 @@ public class GapAnalyzer {
 
         // Tier 0: 显式覆盖（thinkingLevel 兼容折叠旧 enableThinking，档位映射为布尔判定）
         ThinkingLevel thinkingLevel = context.thinkingLevel();
-        GapAnalysis explicit = GapAnalysis.from(
+        GapAnalysis explicit = new GapAnalysis(
                 context.needsKnowledgeBase(),
                 thinkingLevel == null ? null : thinkingLevel != ThinkingLevel.OFF,
-                context.needsWebSearch()
+                context.needsWebSearch(), "explicit", thinkingLevel
         );
         if (explicit.isComplete()) {
             log.info("[GapAnalyzer] query=\"{}\" → source=explicit, result={}", truncate(query, 50), explicit);
             return explicit;
         }
 
-        // Tier 1: 规则引擎
+        if (modelAnalyzer.isAvailable()) {
+            return GapAnalysis.merge(explicit, modelAnalyzer.infer(query));
+        }
+
+        // Without a configured routing model, retain deterministic rules.
         GapAnalysis ruleResult = ruleEngine.evaluate(query);
         GapAnalysis merged = GapAnalysis.merge(explicit, ruleResult);
         if (merged.isComplete()) {
@@ -68,12 +52,7 @@ public class GapAnalyzer {
             return merged;
         }
 
-        // Tier 2: 小任务模型分析（仅填充仍为 null 的字段）
-        GapAnalysis llmResult = modelAnalyzer.infer(query);
-        GapAnalysis final_ = GapAnalysis.merge(merged, llmResult);
-
-        log.info("[GapAnalyzer] query=\"{}\" → source={}, result={}", truncate(query, 50), final_.source(), final_);
-        return final_;
+        return merged;
     }
 
     private static String truncate(String s, int maxLen) {

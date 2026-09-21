@@ -31,6 +31,7 @@ class ModelConfigurationServiceTest {
         ModelConfig config = ModelConfig.of(Map.of(
                 ModelConfigKey.CHAT_PROVIDER, "openai",
                 ModelConfigKey.CHAT_API_KEY, "secret-chat-key",
+                ModelConfigKey.ROUTING_API_KEY, "secret-routing-key",
                 ModelConfigKey.CHAT_MODEL, "gpt-test"));
         ModelConfigurationService service = service(config, new TestRuntime(config));
 
@@ -39,7 +40,7 @@ class ModelConfigurationServiceTest {
         assertThat(response.sections())
                 .extracting(ModelConfigurationService.ModelConfigurationSection::id)
                 .containsExactly("global", "chat", "vision", "voice", "embedding",
-                        "rerank", "realtime", "smallTask", "imageGeneration",
+                        "rerank", "realtime", "routing", "smallTask", "imageGeneration",
                         "videoGeneration");
         ModelConfigurationService.ModelConfigurationField model = field(
                 response, ModelConfigKey.CHAT_MODEL);
@@ -52,6 +53,8 @@ class ModelConfigurationServiceTest {
         assertThat(apiKey.sensitive()).isTrue();
         assertThat(apiKey.configured()).isTrue();
         assertThat(apiKey.value()).isNull();
+        assertThat(field(response, ModelConfigKey.ROUTING_API_KEY).value()).isNull();
+        assertThat(field(response, ModelConfigKey.ROUTING_API_KEY).configured()).isTrue();
     }
 
     @Test

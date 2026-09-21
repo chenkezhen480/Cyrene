@@ -661,7 +661,9 @@ public class ReActEngine implements ReActLoop {
                     "Tool is unavailable for this agent run: " + toolCall.toolName(),
                     0);
         }
-        if (cancellationToken != null && tool instanceof com.harness.tool.CancellableTool ct) {
+        Tool cancellationTarget = tool instanceof com.harness.tool.ToolGroup group
+                ? group.delegate(toolCall.arguments()) : tool;
+        if (cancellationToken != null && cancellationTarget instanceof com.harness.tool.CancellableTool ct) {
             cancelCallback = ct::cancel;
             cancellationToken.addCancelCallback(cancelCallback);
         }

@@ -76,6 +76,28 @@ class ProjectApiPolicyTest {
                 .hasMessageContaining("cannot confirm endpoints");
     }
 
+    @Test
+    void groupedApiKeepsConfigurationSnapshotAndPolicyChecks() {
+        ToolRegistry registry = new ToolRegistry();
+        registry.loadFromConfig(config(endpoint("old", "GET", AuthMode.USER_PASSTHROUGH, true, false)));
+        RunToolCatalog oldRun = registry.snapshot();
+        registry.loadFromConfig(config(endpoint("new", "GET", AuthMode.USER_PASSTHROUGH, true, false),
+                endpoint("draft", "GET", AuthMode.USER_PASSTHROUGH, false, false)));
+        var list = MAPPER.createObjectNode().put("action", "list");
+        list.putObject("input");
+        assertThat(oldRun.get("project_api").execute(list)).contains("old").doesNotContain("new");
+        assertThat(registry.get("project_api").execute(list)).contains("new").doesNotContain("old", "draft");
+        assertThat(registry.getAll()).extracting(com.harness.core.model.ToolSpec::name)
+                .containsExactly("project_api", "update_project_api");
+        var call = MAPPER.createObjectNode().put("action", "call");
+        call.putObject("input").put("endpointId", "draft");
+        assertThatThrownBy(() -> registry.get("project_api").execute(call))
+                .isInstanceOf(ToolExecutionException.class).hasMessageContaining("has not been confirmed");
+        ToolGroup narrowed = (ToolGroup) registry.snapshot().excluding(java.util.Set.of("call_discovered_api"))
+                .get("project_api");
+        assertThat(narrowed.availableActions()).doesNotContain("call");
+    }
+
     private ProjectApiConfig config(ApiEndpoint... endpoints) {
         return new ProjectApiConfig(
                 "2026-07-27T00:00:00Z",

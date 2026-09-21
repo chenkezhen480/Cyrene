@@ -17,13 +17,8 @@ class ToolPermissionHandlerTest {
     @TempDir
     Path root;
 
-    /**
-     * The permission store keys on one name per tool, and a merged tool is managed as one entry like
-     * any other. Expanding it into its actions would hand the page a vocabulary it cannot save back,
-     * and would let a tenant be denied an action the runtime then has to explain.
-     */
     @Test
-    void managesAMergedToolAsOneEntryLikeAnyOtherTool() {
+    void exposesGroupAndActionPermissionsUsingTheSameSaveVocabulary() {
         ToolRegistry registry = new ToolRegistry();
         registry.register(codeWorkspace());
 
@@ -32,8 +27,10 @@ class ToolPermissionHandlerTest {
                         new ApiRequestAuthenticator()).registeredTools();
 
         assertThat(rows).extracting(ToolPermissionHandler.ToolView::name)
-                .containsExactly(CodeWorkspaceTool.TOOL_NAME);
-        assertThat(rows).noneMatch(row -> row.name().startsWith(CodeWorkspaceTool.TOOL_NAME + "."));
+                .containsExactly("code_workspace", "code_workspace.read", "code_workspace.glob",
+                        "code_workspace.grep", "code_workspace.tree", "code_workspace.edit",
+                        "code_workspace.write", "code_workspace.patch");
+        assertThat(rows).noneMatch(row -> row.name().endsWith(".help"));
         assertThat(rows.get(0).description()).isNotBlank();
     }
 
@@ -49,7 +46,8 @@ class ToolPermissionHandlerTest {
                         new ApiRequestAuthenticator()).registeredTools();
 
         assertThat(rows).extracting(ToolPermissionHandler.ToolView::name)
-                .containsExactly(CodeWorkspaceTool.TOOL_NAME, "read_class_hierarchy");
+                .contains("code_workspace", "code_workspace.read", "read_class_hierarchy")
+                .doesNotHaveDuplicates();
     }
 
     private CodeWorkspaceTool codeWorkspace() {

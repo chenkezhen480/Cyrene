@@ -314,7 +314,7 @@ public class Main {
         // Tenant/identity tool permissions: resolved before a run exists, so a disabled tool
         // is never offered to the model. The detached-resume turn has no request to resolve
         // from and re-applies the tenant's DEFAULT profile instead.
-        ToolPermissionService toolPermissions = new ToolPermissionService();
+        ToolPermissionService toolPermissions = new ToolPermissionService(agent.toolRegistry());
         agent.setToolDenylistResolver((tenantId, identity) ->
                 toolPermissions.resolveDisabledTools(tenantId, identity)
                         .orElse(java.util.Set.of()));
@@ -325,6 +325,18 @@ public class Main {
         StructuredOutputHandler structuredOutputHandler =
                 new StructuredOutputHandler(agent, activeRequests, toolPermissions);
         app.post("/api/structured-output", structuredOutputHandler::handle);
+
+        RealtimeSessionHandler realtimeSessionHandler =
+                new RealtimeSessionHandler(agent, mapper);
+        Runtime.getRuntime().addShutdownHook(new Thread(realtimeSessionHandler::close));
+        app.post("/api/realtime/sessions", realtimeSessionHandler::create);
+        app.ws("/api/realtime/{sessionId}", ws -> {
+            ws.onConnect(realtimeSessionHandler::connect);
+            ws.onMessage(realtimeSessionHandler::message);
+            ws.onBinaryMessage(realtimeSessionHandler::binary);
+            ws.onClose(realtimeSessionHandler::disconnected);
+            ws.onError(realtimeSessionHandler::error);
+        });
 
         ToolPermissionHandler toolPermissionHandler = new ToolPermissionHandler(
                 toolPermissions, agent.toolRegistry(), new ApiRequestAuthenticator());

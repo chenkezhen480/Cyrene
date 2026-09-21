@@ -31,7 +31,7 @@ public class GetApiEndpointDetailTool implements Tool {
         ObjectNode props = mapper.createObjectNode();
         ObjectNode endpointIdProp = mapper.createObjectNode();
         endpointIdProp.put("type", "string");
-        endpointIdProp.put("description", "接口 ID，如 ep_0001。可通过 list_api_endpoints 获取。");
+        endpointIdProp.put("description", "接口 ID，如 ep_0001。可通过 project_api 的 list 动作获取。");
         props.set("endpointId", endpointIdProp);
 
         ObjectNode params = mapper.createObjectNode();
@@ -82,7 +82,7 @@ public class GetApiEndpointDetailTool implements Tool {
         }
         return outcome(
                 "Endpoint '" + endpointId
-                        + "' not found. Call list_api_endpoints() to see available endpoints.",
+                        + "' not found. Call project_api with action=list to see available endpoints.",
                 ResultStatus.EMPTY);
     }
 

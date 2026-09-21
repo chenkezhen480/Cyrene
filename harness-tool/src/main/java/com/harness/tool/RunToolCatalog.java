@@ -1,7 +1,6 @@
 package com.harness.tool;
 
 import com.harness.core.model.ToolSpec;
-import com.harness.tool.filesystem.CodeWorkspaceTool;
 
 import java.util.Collection;
 import java.util.LinkedHashMap;
@@ -66,12 +65,12 @@ public final class RunToolCatalog implements ToolCatalog {
             if (excluded.contains(name)) {
                 continue;
             }
-            if (tool instanceof CodeWorkspaceTool codeWorkspace) {
-                CodeWorkspaceTool narrowed = codeWorkspace.denying(excluded);
+            if (tool instanceof ToolGroup group) {
+                ToolGroup narrowed = group.denying(excluded);
                 if (!narrowed.hasActions()) {
                     continue;
                 }
-                if (narrowed != codeWorkspace) {
+                if (narrowed != group) {
                     narrowedSpecs.put(name, narrowed.spec());
                 }
                 filtered.put(name, narrowed);
@@ -105,12 +104,12 @@ public final class RunToolCatalog implements ToolCatalog {
         for (Map.Entry<String, Tool> entry : tools.entrySet()) {
             String name = entry.getKey();
             Tool tool = entry.getValue();
-            if (tool instanceof CodeWorkspaceTool codeWorkspace) {
-                CodeWorkspaceTool narrowed = codeWorkspace.allowing(allowed);
+            if (tool instanceof ToolGroup group) {
+                ToolGroup narrowed = group.allowing(allowed);
                 if (!narrowed.hasActions()) {
                     continue;
                 }
-                if (narrowed != codeWorkspace) {
+                if (narrowed != group) {
                     narrowedSpecs.put(name, narrowed.spec());
                 }
                 filtered.put(name, narrowed);
@@ -167,8 +166,29 @@ public final class RunToolCatalog implements ToolCatalog {
         }
         // A merged tool answers to its actions too, so a sub-agent contract may require
         // `code_workspace.read` — or its pre-merge spelling `read` — and still mean something.
-        return tools.get(CodeWorkspaceTool.TOOL_NAME) instanceof CodeWorkspaceTool codeWorkspace
-                && codeWorkspace.supports(name);
+        return tools.values().stream().anyMatch(tool -> tool instanceof ToolGroup group
+                && group.supports(name));
+    }
+
+    /** Canonical permission/contract name for a registered tool or one of its actions. */
+    public String canonicalName(String name) {
+        if (tools.containsKey(name)) return name;
+        for (Tool tool : tools.values()) {
+            if (tool instanceof ToolGroup group && group.supports(name)) {
+                return group.canonicalName(name);
+            }
+        }
+        return name;
+    }
+
+    public String permissionName(String name) {
+        if (tools.containsKey(name)) return name;
+        for (Tool tool : tools.values()) {
+            if (tool instanceof ToolGroup group && group.supports(name)) {
+                return group.permissionName(name);
+            }
+        }
+        return name;
     }
 
     @Override

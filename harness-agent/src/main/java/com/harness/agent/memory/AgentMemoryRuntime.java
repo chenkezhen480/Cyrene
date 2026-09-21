@@ -350,7 +350,8 @@ public final class AgentMemoryRuntime {
     ) {
         for (var event : events) {
             Map<String, Object> metadata = new HashMap<>();
-            metadata.put("toolName", "spawn_subagent");
+            metadata.put("toolName", "subagent");
+            metadata.put("toolAction", "spawn");
             metadata.put("taskId", event.taskId());
             metadata.put("status", event.result().status().name());
             if (event.result().error() != null) {

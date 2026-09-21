@@ -20,9 +20,9 @@ public final class EnvKey {
     // ==================== Gap Analysis / 动态路由 ====================
     /**
      * 功能总开关，默认 true。关闭后所有字段回退全局静态配置。
-     * <p>三级判定漏斗：Tier 0 显式覆盖 → Tier 1 规则引擎（&lt;1ms）→ Tier 2 小任务模型分析。
-     * 三个独立字段：needsThinking / needsKnowledgeBase / needsWebSearch。
-     * 判定结果写入 trace metadata（gap_source = explicit/rule/llm/default）。
+     * <p>显式覆盖优先，未指定字段由专用 JEV 路由模型判定；未配置路由模型时使用规则引擎。
+     * 三个独立维度：thinkingLevel / needsKnowledgeBase / needsWebSearch。
+     * 判定结果写入 trace metadata（gap_source = explicit/rule/jev/default）。
      */
     public static final String GAP_ANALYSIS_ENABLED = "HARNESS_GAP_ANALYSIS_ENABLED";
 
@@ -58,9 +58,6 @@ public final class EnvKey {
     /** BM25/全文检索在混合检索中的权重（0.0-1.0），默认 0.3 */
     public static final String RAG_BM25_WEIGHT       = "HARNESS_RAG_BM25_WEIGHT";
 
-    // ==================== RAG (Milvus 专用) ====================
-    /** Milvus 距离度量类型：COSINE | L2 | IP，默认 COSINE */
-    public static final String RAG_MILVUS_METRIC_TYPE = "HARNESS_RAG_MILVUS_METRIC_TYPE";
 
     // ==================== RAG (显式上下文窗口) ====================
     /** readContext 的 before/after 单侧最大 chunk 数，默认 10 */
@@ -90,6 +87,18 @@ public final class EnvKey {
     public static final String MCP_CONFIG_FILE       = "HARNESS_MCP_CONFIG_FILE";
 
     // ==================== Built-in Tools ====================
+    public static final String SEARCH_ENABLED                 = "HARNESS_SEARCH_ENABLED";
+    public static final String SEARCH_STRATEGY                = "HARNESS_SEARCH_STRATEGY";
+    public static final String SEARCH_PROVIDERS               = "HARNESS_SEARCH_PROVIDERS";
+    public static final String SEARCH_SEARXNG_URL             = "HARNESS_SEARCH_SEARXNG_URL";
+    public static final String SEARCH_BRAVE_URL               = "HARNESS_SEARCH_BRAVE_URL";
+    public static final String SEARCH_BRAVE_API_KEY           = "HARNESS_SEARCH_BRAVE_API_KEY";
+    public static final String SEARCH_EXA_URL                 = "HARNESS_SEARCH_EXA_URL";
+    public static final String SEARCH_EXA_API_KEY             = "HARNESS_SEARCH_EXA_API_KEY";
+    public static final String SEARCH_TIMEOUT_SECONDS         = "HARNESS_SEARCH_TIMEOUT_SECONDS";
+    public static final String SEARCH_RESULT_LIMIT            = "HARNESS_SEARCH_RESULT_LIMIT";
+    public static final String SEARCH_BLOCKED_DOMAINS         = "HARNESS_SEARCH_BLOCKED_DOMAINS";
+    /** Legacy web-search keys remain supported for existing deployments. */
     public static final String TOOL_WEB_SEARCH_ENABLED        = "HARNESS_TOOL_WEB_SEARCH_ENABLED";
     /** SearXNG 实例地址，默认 http://localhost:8888 */
     public static final String TOOL_WEB_SEARCH_SEARXNG_URL   = "HARNESS_TOOL_WEB_SEARCH_SEARXNG_URL";
@@ -132,10 +141,6 @@ public final class EnvKey {
             "HARNESS_TOOL_BROWSER_TIMEOUT_SECONDS";
     public static final String TOOL_BROWSER_ALLOW_PRIVATE_NETWORKS =
             "HARNESS_TOOL_BROWSER_ALLOW_PRIVATE_NETWORKS";
-    public static final String TOOL_BROWSER_MAX_SESSIONS     =
-            "HARNESS_TOOL_BROWSER_MAX_SESSIONS";
-    public static final String TOOL_BROWSER_SESSION_TTL_SECONDS =
-            "HARNESS_TOOL_BROWSER_SESSION_TTL_SECONDS";
     public static final String TOOL_FFMPEG_ENABLED       = "HARNESS_TOOL_FFMPEG_ENABLED";
     public static final String TOOL_FFMPEG_PATH          = "HARNESS_TOOL_FFMPEG_PATH";
     /** 工具返回结果数量上限（glob/grep 等），默认 100 */
@@ -144,7 +149,6 @@ public final class EnvKey {
     // ==================== ReAct ====================
     /** ReAct 循环最大迭代次数，默认 10 */
     public static final String REACT_MAX_ITERATIONS      = "HARNESS_REACT_MAX_ITERATIONS";
-    public static final String REACT_STRATEGY            = "HARNESS_REACT_STRATEGY";
     /**
      * 单工具允许的反思次数：每次失败注入一次反思提示，次数用尽后再失败一次即硬停整个 run。
      * 成功一次清零重计。例：3 = 失败 1~3 次各反思一次，第 4 次失败硬停。默认 5。
@@ -184,7 +188,6 @@ public final class EnvKey {
     public static final String RISK_CONFIRM_TOOLS    = "HARNESS_RISK_CONFIRM_TOOLS";
     public static final String RISK_CONFIRMATION_TIMEOUT_SECONDS =
             "HARNESS_RISK_CONFIRMATION_TIMEOUT_SECONDS";
-    public static final String RISK_MAX_FILE_SIZE    = "HARNESS_RISK_MAX_FILE_SIZE_MB";
     public static final String RISK_BLOCKED_DOMAINS  = "HARNESS_RISK_BLOCKED_DOMAINS";
 
     // ==================== Server ====================
@@ -192,6 +195,8 @@ public final class EnvKey {
     public static final String SERVER_HOST           = "HARNESS_SERVER_HOST";
     public static final String SERVER_PORT           = "HARNESS_SERVER_PORT";
     public static final String SERVER_IDLE_TIMEOUT   = "HARNESS_SERVER_IDLE_TIMEOUT";
+    public static final String REALTIME_SESSION_TIMEOUT_SECONDS =
+            "HARNESS_REALTIME_SESSION_TIMEOUT_SECONDS";
     /** SSE 心跳间隔（秒）。仅用于向客户端证明连接存活，与模型/工具的执行业务超时无关，默认 15 */
     public static final String SSE_KEEPALIVE_SECONDS = "HARNESS_SSE_KEEPALIVE_SECONDS";
     /** Jetty 线程池大小，默认 availableProcessors * 2（最少 8） */
@@ -392,7 +397,7 @@ public final class EnvKey {
     public static final String SHELL_CONFIRM           = "HARNESS_SHELL_CONFIRM";
     /** 单次执行超时（秒），默认 60 */
     public static final String SHELL_TIMEOUT_SECONDS   = "HARNESS_SHELL_TIMEOUT_SECONDS";
-    /** 单次返回字节上限（stdout+stderr），默认 262144 */
+    /** 单次返回字节上限（stdout+stderr），默认 32768 (32KB) */
     public static final String SHELL_MAX_OUTPUT_BYTES  = "HARNESS_SHELL_MAX_OUTPUT_BYTES";
     /** docker logs 未指定 --tail 时自动追加的行数，默认 500 */
     public static final String SHELL_LOG_TAIL_LINES    = "HARNESS_SHELL_LOG_TAIL_LINES";

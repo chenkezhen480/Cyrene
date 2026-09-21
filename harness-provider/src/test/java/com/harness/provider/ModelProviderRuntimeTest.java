@@ -49,6 +49,7 @@ class ModelProviderRuntimeTest {
         activeRun.get(5, TimeUnit.SECONDS);
         activation.get(5, TimeUnit.SECONDS);
         assertThat(runtime.delegates().chat().modelName()).isEqualTo("second-model");
+        assertThat(runtime.delegates().routing().route("test").needsWebSearch()).isTrue();
     }
 
     @Test
@@ -89,6 +90,7 @@ class ModelProviderRuntimeTest {
                 mock(EmbeddingModelProvider.class),
                 mock(RerankModelProvider.class),
                 mock(RealtimeModelProvider.class),
-                mock(SmallTaskModelProvider.class));
+                mock(SmallTaskModelProvider.class), query -> new RoutingModelProvider.Decision(
+                        com.harness.core.model.ThinkingLevel.LOW, false, "second-model".equals(chatModelName)));
     }
 }

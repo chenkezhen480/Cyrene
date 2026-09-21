@@ -65,6 +65,24 @@ class FileSystemAccessPolicyTest {
     }
 
     @Test
+    void resolveWritableAllowingMissingParents_resolvesWithoutCreatingDirectories() throws IOException {
+        Path missing = root.resolve("missing1").resolve("missing2").resolve("file.txt");
+        Path resolved = hostPolicy().resolveWritableAllowingMissingParents(TOOL, missing);
+
+        assertThat(resolved).isEqualTo(root.toRealPath().resolve("missing1").resolve("missing2").resolve("file.txt"));
+        assertThat(Files.exists(root.resolve("missing1"))).isFalse();
+    }
+
+    @Test
+    void resolveWritableAllowingMissingParents_rejectsOutsideWritableRoots() {
+        Path missing = outside.resolve("missing").resolve("evil.txt");
+
+        assertThatThrownBy(() -> hostPolicy().resolveWritableAllowingMissingParents(TOOL, missing))
+                .isInstanceOf(ToolExecutionException.class)
+                .hasMessageContaining("outside the writable roots");
+    }
+
+    @Test
     void rejectsParentTraversalWithoutCreatingAnything() throws IOException {
         Path nested = Files.createDirectories(root.resolve("a").resolve("b"));
 

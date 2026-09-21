@@ -30,12 +30,14 @@ test('tracks same-name calls by id and applies duplicate events idempotently', (
 test('tracks sub-agent lifecycle inside its spawn tool and ignores late transitions', () => {
   const message = { toolCalls: [], toolCallsById: new Map() };
 
-  upsert(message, { toolCallId: 'spawn-1', toolName: 'spawn_subagent', status: 'CREATED' });
+  upsert(message, { toolCallId: 'spawn-1', toolName: 'subagent', arguments: { action: 'spawn', input: {} }, status: 'CREATED' });
   upsertSubAgent(message, { toolCallId: 'spawn-1', status: 'PREPARING' });
   upsertSubAgent(message, { toolCallId: 'spawn-1', taskId: 'sub-1', status: 'RUNNING' });
   upsertSubAgent(message, { toolCallId: 'spawn-1', taskId: 'sub-1', status: 'COMPLETED' });
   upsertSubAgent(message, { toolCallId: 'spawn-1', taskId: 'sub-1', status: 'FAILED' });
 
+  assert.equal(message.toolCalls[0].name, 'subagent');
+  assert.equal(message.toolCalls[0].arguments.action, 'spawn');
   assert.deepEqual(message.toolCalls[0].subAgent, {
     taskId: 'sub-1', status: 'COMPLETED', detail: '',
   });

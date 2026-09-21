@@ -7,14 +7,22 @@ package com.harness.input.gap;
  * @param needsKnowledgeBase 是否检索知识库
  * @param needsThinking      是否启用深度思考
  * @param needsWebSearch     是否联网搜索
- * @param source             判定来源：explicit / rule / llm / default
+ * @param source             判定来源：explicit / rule / jev / default
+ * @param thinkingLevel      具体思考档位
  */
 public record GapAnalysis(
         Boolean needsKnowledgeBase,
         Boolean needsThinking,
         Boolean needsWebSearch,
-        String source
+        String source,
+        com.harness.core.model.ThinkingLevel thinkingLevel
 ) {
+    public GapAnalysis(Boolean needsKnowledgeBase, Boolean needsThinking, Boolean needsWebSearch, String source) {
+        this(needsKnowledgeBase, needsThinking, needsWebSearch, source,
+                needsThinking == null ? null : needsThinking
+                        ? com.harness.core.model.ThinkingLevel.MEDIUM
+                        : com.harness.core.model.ThinkingLevel.OFF);
+    }
     /** 全部未指定的默认实例，所有字段回退环境变量 */
     public static GapAnalysis defaults() {
         return new GapAnalysis(null, null, null, "default");
@@ -39,7 +47,7 @@ public record GapAnalysis(
 
     /**
      * 合并两个 GapAnalysis，higher 优先，只用 lower 填充 higher 中为 null 的字段。
-     * source 取 higher 的值。
+     * source 标识补全判断的来源；完全显式指定时保留 higher 的值。
      */
     public static GapAnalysis merge(GapAnalysis higher, GapAnalysis lower) {
         if (higher == null) return lower;
@@ -48,7 +56,8 @@ public record GapAnalysis(
                 higher.needsKnowledgeBase != null ? higher.needsKnowledgeBase : lower.needsKnowledgeBase,
                 higher.needsThinking != null ? higher.needsThinking : lower.needsThinking,
                 higher.needsWebSearch != null ? higher.needsWebSearch : lower.needsWebSearch,
-                higher.source
+                higher.isComplete() ? higher.source : lower.source,
+                higher.thinkingLevel != null ? higher.thinkingLevel : lower.thinkingLevel
         );
     }
 }

@@ -36,12 +36,7 @@ final class RipgrepSearchBackend implements FileSearchBackend {
 
     /** Search hidden files and do not honour gitignore/ignore files. */
     private static final List<String> BASE_FLAGS = List.of(
-            "--hidden", "--no-ignore", "--no-config", "--color", "never",
-            "-g", "!.git/**",
-            "-g", "!target/**",
-            "-g", "!node_modules/**",
-            "-g", "!build/**",
-            "-g", "!dist/**");
+            "--hidden", "--no-ignore", "--no-config", "--color", "never");
 
     /** Long lines are truncated rather than streamed whole, bounding per-event memory. */
     private static final int MAX_COLUMNS = 1000;
@@ -92,13 +87,14 @@ final class RipgrepSearchBackend implements FileSearchBackend {
         command.add("--files");
         command.add("-g");
         command.add(pattern);
+        addSkipGlobs(command);
         command.add("--");
-        command.add(root.toString());
+        command.add(".");
 
         PageCollector collector = new PageCollector(afterRelative, limit);
         // No early exit: a cursor page is the smallest N keys after a point, which is not knowable
         // until every candidate has been seen. The collector keeps this O(limit) in memory.
-        Run run = run(command, "glob", line -> {
+        Run run = run(command, root, "glob", line -> {
             if (!line.isBlank()) {
                 String key = keyOf(line, root);
                 if (key != null) {
@@ -142,17 +138,18 @@ final class RipgrepSearchBackend implements FileSearchBackend {
             command.add("-g");
             command.add(fileGlob);
         }
+        addSkipGlobs(command);
         command.add("-e");
         command.add(pattern);
         command.add("--");
-        command.add(root.toString());
+        command.add(".");
 
         Map<Path, List<Event>> byFile = new LinkedHashMap<>();
         Budget budget = new Budget(maxResults, maxOutputBytes);
         // The JSON stream only repeats `path` when it changes, so the last one seen is the subject
         // of any event that omits it.
         Path[] current = {null};
-        Run run = run(command, "grep", line -> {
+        Run run = run(command, root, "grep", line -> {
             JsonNode event = parse(line);
             if (event == null) {
                 return true;
@@ -193,13 +190,11 @@ final class RipgrepSearchBackend implements FileSearchBackend {
                     continue;
                 }
                 List<String> before = new ArrayList<>();
-                for (int j = i - 1; j >= 0 && before.size() < contextLines
-                        && !events.get(j).match(); j--) {
+                for (int j = i - 1; j >= 0 && before.size() < contextLines; j--) {
                     before.add(0, events.get(j).text());
                 }
                 List<String> after = new ArrayList<>();
-                for (int j = i + 1; j < events.size() && after.size() < contextLines
-                        && !events.get(j).match(); j++) {
+                for (int j = i + 1; j < events.size() && after.size() < contextLines; j++) {
                     after.add(events.get(j).text());
                 }
                 lines.add(new FileSearchBackend.GrepLine(
@@ -231,10 +226,10 @@ final class RipgrepSearchBackend implements FileSearchBackend {
         }
     }
 
-    private Run run(List<String> command, String toolName, Predicate<String> onLine) {
+    private Run run(List<String> command, Path root, String toolName, Predicate<String> onLine) {
         Process process;
         try {
-            process = new ProcessBuilder(command).start();
+            process = new ProcessBuilder(command).directory(root.toFile()).start();
         } catch (IOException e) {
             throw new ToolExecutionException(toolName,
                     "cannot start ripgrep (" + settings.rgPath() + "): " + e.getMessage(), e);
@@ -299,6 +294,14 @@ final class RipgrepSearchBackend implements FileSearchBackend {
     }
 
     // ────────────────────────────────────────────────────────────────── helpers
+
+    /** ripgrep applies the last matching glob, so exclusions must follow the caller's include glob. */
+    private static void addSkipGlobs(List<String> command) {
+        for (String directory : NioSearchBackend.SKIP_DIRS) {
+            command.add("-g");
+            command.add("!" + directory + "/**");
+        }
+    }
 
     private static JsonNode parse(String line) {
         try {

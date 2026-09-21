@@ -7112,6 +7112,7 @@ const ModelConfigPage = {
       embedding: 'modelGroupEmbedding',
       rerank: 'modelGroupRerank',
       realtime: 'modelGroupRealtime',
+      routing: 'modelGroupRouting',
       smallTask: 'modelGroupSmallTask',
       imageGeneration: 'modelGroupImageGeneration',
       videoGeneration: 'modelGroupVideoGeneration',
@@ -7586,11 +7587,11 @@ const ToolPermissionPage = {
     const restricted = ref(false);
 
     function applyView(data) {
-      identity.value = data.identity || 'DEFAULT';
-      profiles.value = data.profiles || [];
-      tenants.value = data.tenants || [];
-      tools.value = data.tools || [];
-      disabled.value = new Set(data.disabledTools || []);
+      identity.value = data.identity;
+      profiles.value = data.profiles;
+      tenants.value = data.tenants;
+      tools.value = data.tools;
+      disabled.value = new Set(data.disabledTools);
       restricted.value = !!data.restricted;
     }
 
@@ -7618,6 +7619,16 @@ const ToolPermissionPage = {
         // The picker is a convenience; an empty list still lets a tenant be typed in.
       }
     }
+
+    function inheritedDenial(tool) {
+      return tool.groupName !== null && disabled.value.has(tool.groupName);
+    }
+
+    function isDisabled(tool) {
+      return disabled.value.has(tool.name) || inheritedDenial(tool);
+    }
+
+    const disabledCount = computed(() => tools.value.filter(isDisabled).length);
 
     function toggleTool(name) {
       const next = new Set(disabled.value);
@@ -7658,13 +7669,13 @@ const ToolPermissionPage = {
     return {
       Icons, t, tenantId, identity, profiles, tenants,
       tools, disabled, loading, saving, error, restricted,
-      load, toggleTool, disableAll, clearAll, save,
+      load, toggleTool, disableAll, clearAll, save, inheritedDenial, isDisabled, disabledCount,
     };
   },
   template: `
     <div>
       <div class="card">
-        <div class="card-header">
+        <div class="card-header" style="flex-wrap: wrap; gap: var(--space-2);">
           <div class="card-title">{{ t('toolPermissions') }}</div>
         </div>
         <div class="card-body">
@@ -7694,9 +7705,9 @@ const ToolPermissionPage = {
       </div>
 
       <div class="card mt-4">
-        <div class="card-header">
+        <div class="card-header" style="flex-wrap: wrap; gap: var(--space-2);">
           <div class="card-title">
-            {{ t('registeredTools') }} ({{ t('disabledCount') }} {{ disabled.size }}/{{ tools.length }})
+            {{ t('registeredTools') }} ({{ t('disabledCount') }} {{ disabledCount }}/{{ tools.length }})
           </div>
           <div style="display: flex; gap: var(--space-2); align-items: center;">
             <span :class="['tag', restricted ? 'tag-gold' : 'tag-dusk']">
@@ -7711,7 +7722,7 @@ const ToolPermissionPage = {
           </div>
         </div>
         <div class="card-body">
-          <table>
+          <div style="overflow-x: auto;"><table>
             <thead>
               <tr>
                 <th style="width: 60px;">{{ t('disabledColumn') }}</th>
@@ -7723,7 +7734,8 @@ const ToolPermissionPage = {
             <tbody>
               <tr v-for="tool in tools" :key="tool.name">
                 <td>
-                  <input type="checkbox" :checked="disabled.has(tool.name)"
+                  <input type="checkbox" :checked="isDisabled(tool)"
+                         :disabled="saving || loading || inheritedDenial(tool)" :aria-label="tool.name"
                          @change="toggleTool(tool.name)" />
                 </td>
                 <td style="font-family: monospace;">{{ tool.name }}</td>
@@ -7731,7 +7743,7 @@ const ToolPermissionPage = {
                 <td class="text-xs text-ash">{{ tool.description }}</td>
               </tr>
             </tbody>
-          </table>
+          </table></div>
           <empty-state v-if="!tools.length"
             :icon="Icons.tool"
             :title="t('loadTenantFirst')"

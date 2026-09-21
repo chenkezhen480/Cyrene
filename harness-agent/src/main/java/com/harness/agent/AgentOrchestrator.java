@@ -18,6 +18,7 @@ import com.harness.agent.runtime.AgentRunCoordinator.AgentRunCommand;
 import com.harness.agent.runtime.AgentToolRuntime;
 import com.harness.agent.runtime.ToolDenylistResolver;
 import com.harness.agent.voice.VoiceConversationService;
+import com.harness.agent.realtime.RealtimeToolBridge;
 import com.harness.provider.*;
 import com.harness.react.*;
 import com.harness.trace.ReplyAuditor;
@@ -69,6 +70,7 @@ import com.harness.tool.ToolExecutor;
 import com.harness.tool.ToolRegistry;
 import com.harness.tool.builtin.WebSearchTool;
 import com.harness.tool.confirmation.ConfirmationManager;
+import com.harness.tool.confirmation.ConfirmationExecutionContext;
 import com.harness.tool.web.AuthorizedUrlContext;
 import com.harness.tool.skill.LoadSkillTool;
 import com.harness.tool.skill.SkillRegistry;
@@ -247,15 +249,18 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
                 runtime.reActLoops(), runtime.traces(), toolExecutor,
                 artifactStore, sessionInbox, resumeDispatcher,
                 runtime.providers().chat());
-        // Register sub-agent tools
-        toolRegistry.register(new SpawnSubAgentTool(subAgentManager));
-        toolRegistry.register(new AwaitSubAgentsTool(subAgentManager));
-        toolRegistry.register(new GetSubAgentsTool(subAgentManager));
-        toolRegistry.register(new CancelSubAgentsTool(subAgentManager));
+        toolRegistry.register(new com.harness.tool.ToolGroup("subagent",
+                "Manage delegated sub-agent tasks. "
+                        + "Use help to load an action's parameters.",
+                Map.of("spawn", new SpawnSubAgentTool(subAgentManager),
+                        "await", new AwaitSubAgentsTool(subAgentManager),
+                        "get", new GetSubAgentsTool(subAgentManager),
+                        "cancel", new CancelSubAgentsTool(subAgentManager)),
+                EnvConfig.get().getCommaList(EnvKey.RISK_CONFIRM_TOOLS)));
 
         // GapAnalyzer (动态路由)
         GapAnalyzer gapAnalyzer = new GapAnalyzer(
-                new GapRuleEngine(), new GapModelAnalyzer(runtime.providers().smallTask()));
+                new GapRuleEngine(), new GapModelAnalyzer(runtime.providers().routing()));
         this.lifecycleHooks = new AgentLifecycleHooks(
                 List.of(new AutoRoutingHook(gapAnalyzer)), List.of());
 
@@ -720,6 +725,61 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
     public EmbeddingModelProvider embeddingModel() { return runtime.providers().embedding(); }
     public RerankModelProvider rerankModel() { return runtime.providers().rerank(); }
     public RealtimeModelProvider realtimeModel() { return runtime.providers().realtime(); }
+
+    /** Open one identity-scoped realtime session over the same catalog and executor as ReAct. */
+    public RealtimeSession openRealtimeSession(
+            String sessionId,
+            String tenantId,
+            String userId,
+            String identity,
+            RealtimeSessionConfig config,
+            CancellationToken cancellationToken,
+            RealtimeEventListener listener
+    ) {
+        if (!realtimeModel().isAvailable()) {
+            throw new IllegalStateException("Realtime model is not configured");
+        }
+        String effectiveIdentity = identity == null || identity.isBlank()
+                ? AgentContext.DEFAULT_IDENTITY : identity.trim();
+        RunToolCatalog catalog = createRunToolCatalog(
+                Set.of(), toolDenylistResolver.resolve(tenantId, effectiveIdentity));
+        RunTrace trace = runtime.startTrace();
+        trace.setSessionId(sessionId);
+        trace.recordInput(userId, "[realtime session]", List.of());
+        trace.recordLlmMeta(realtimeModel().providerName(), "realtime");
+        trace.putMetadata(Map.of(
+                "mode", "realtime",
+                "identity", effectiveIdentity,
+                "tool_catalog_version", String.valueOf(catalog.version()),
+                "authorized_tools", catalog.getAll().stream()
+                        .map(ToolSpec::name)
+                        .collect(java.util.stream.Collectors.joining(","))));
+
+        ConfirmationExecutionContext confirmationContext = new ConfirmationExecutionContext(
+                userId,
+                sessionId,
+                cancellationToken,
+                request -> listener.onEvent(RealtimeEvent.text(
+                        RealtimeEvent.Type.CONFIRMATION_REQUIRED,
+                        sessionId,
+                        request.requestId() + "\n" + request.summary())),
+                (request, decision) -> listener.onEvent(RealtimeEvent.text(
+                        RealtimeEvent.Type.CONFIRMATION_RESOLVED,
+                        sessionId,
+                        request.requestId() + "\n" + decision.name().toLowerCase())),
+                ignored -> { });
+        RealtimeToolBridge bridge = new RealtimeToolBridge(
+                tenantId, userId, sessionId, catalog, toolExecutor,
+                confirmationContext, trace, listener);
+        try {
+            RealtimeSession session = realtimeModel().open(config.withTools(catalog.getAll()), bridge);
+            bridge.attach(session);
+            return session;
+        } catch (RuntimeException exception) {
+            trace.finish();
+            throw exception;
+        }
+    }
     public VoiceModelProvider voiceModel() { return runtime.providers().voice(); }
     public VoiceConversationService voiceConversation() { return voiceConversation; }
     public ReActLoopFactory reActLoopFactory() { return runtime.reActLoops(); }
@@ -880,6 +940,7 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
                         new AgentLifecycleHooks.BeforeLoopContext(
                                 eventMessage.toString(), resumeAgentContext))
                         .gapAnalysis();
+                trace.recordPreprocess(AgentRunPreparer.resolveIntent(gapAnalysis), List.of(), null);
                 String systemPrompt = promptBuilder.buildSystemPrompt(null, sessionId,
                         gapAnalysis.needsKnowledgeBase(), false, null,
                         gapAnalysis.needsWebSearch());
@@ -897,7 +958,7 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
                         trace,
                         null,
                         cancellationToken,
-                        null,
+                        gapAnalysis.thinkingLevel(),
                         null));
                 boolean completesTurn = !subAgentManager.hasDetachedTasks(resumeRunId);
                 ReActResult result = completesTurn

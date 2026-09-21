@@ -8,7 +8,9 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
@@ -213,6 +215,75 @@ public final class FileSystemAccessPolicy {
                     "path is outside the writable roots (" + describe(writableRoots) + "): " + requested);
         }
         return realParent.resolve(name);
+    }
+
+    /**
+     * Resolve a writable path where one or more parent directories may not exist yet.
+     * The nearest existing ancestor is resolved to its real path and verified against the writable roots.
+     * No directories are created by this method.
+     */
+    public Path resolveWritableAllowingMissingParents(String toolName, Path requested) {
+        if (writableRoots.isEmpty()) {
+            throw new ToolExecutionException(toolName, "file writes are disabled in this scope");
+        }
+        Path path = requireAbsolute(toolName, requested);
+        rejectDotComponents(toolName, path);
+
+        Path parent = path.getParent();
+        if (parent == null) {
+            throw new ToolExecutionException(toolName, "path does not name a file: " + requested);
+        }
+        String name = path.getFileName().toString();
+        if (name.equals(".") || name.equals("..")) {
+            throw new ToolExecutionException(toolName, "path does not name a file: " + requested);
+        }
+
+        Path existing = parent;
+        List<String> missingComponents = new ArrayList<>();
+        while (existing != null && !Files.exists(existing, LinkOption.NOFOLLOW_LINKS)) {
+            String comp = existing.getFileName().toString();
+            if (comp.equals(".") || comp.equals("..")) {
+                throw new ToolExecutionException(toolName, "path does not name a file: " + requested);
+            }
+            missingComponents.add(0, comp);
+            existing = existing.getParent();
+        }
+        if (existing == null) {
+            throw new ToolExecutionException(toolName, "cannot resolve path " + requested);
+        }
+        Path realExisting = toReal(toolName, requested, existing);
+        if (!withinAny(realExisting, writableRoots)) {
+            throw new ToolExecutionException(toolName,
+                    "path is outside the writable roots (" + describe(writableRoots) + "): " + requested);
+        }
+        Path resolved = realExisting;
+        for (String comp : missingComponents) {
+            resolved = resolved.resolve(comp);
+        }
+        return resolved.resolve(name);
+    }
+
+    /** Ensure a path's canonical location is strictly within configured writable roots. */
+    public void requireWithinWritableRoots(String toolName, Path path) {
+        Path real = toReal(toolName, path, path);
+        if (!withinAny(real, writableRoots)) {
+            throw new ToolExecutionException(toolName,
+                    "path is outside the writable roots (" + describe(writableRoots) + "): " + path);
+        }
+    }
+
+    /** Check whether a path's canonical location is strictly within configured writable roots. */
+    public boolean isWithinWritableRoots(Path path) {
+        if (path == null) {
+            return false;
+        }
+        try {
+            Path real = path.toRealPath();
+            return withinAny(real, writableRoots);
+        } catch (IOException e) {
+            Path norm = path.toAbsolutePath().normalize();
+            return withinAny(norm, writableRoots);
+        }
     }
 
     /**

@@ -15,7 +15,8 @@ public record ModelProviders(
         EmbeddingModelProvider embedding,
         RerankModelProvider rerank,
         RealtimeModelProvider realtime,
-        SmallTaskModelProvider smallTask
+        SmallTaskModelProvider smallTask,
+        RoutingModelProvider routing
 ) {
 
     public ModelProviders {
@@ -26,5 +27,6 @@ public record ModelProviders(
         Objects.requireNonNull(rerank, "rerank");
         Objects.requireNonNull(realtime, "realtime");
         Objects.requireNonNull(smallTask, "smallTask");
+        Objects.requireNonNull(routing, "routing");
     }
 }

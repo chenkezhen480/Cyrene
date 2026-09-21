@@ -71,7 +71,7 @@ public class SpawnSubAgentTool implements Tool {
                 TOOL_NAME,
                 "Spawn a sub-agent to execute a specific task in parallel. " +
                         "Returns immediately with a task handle. " +
-                        "Use await_subagents to wait for completion and get results.\n\n" +
+                        "Use subagent with action=await to wait for completion and get results.\n\n" +
                         "You MUST provide:\n" +
                         "- persona: specific role/identity for this sub-agent\n" +
                         "- system_prompt: task-specific instructions including methodology, output format, constraints\n" +
@@ -80,8 +80,7 @@ public class SpawnSubAgentTool implements Tool {
                         "The sub-agent has NO access to conversation history — you MUST include relevant history here.\n\n" +
                         "Optionally provide 'tools' to give the sub-agent specific tools. If omitted, the sub-agent has NO tools (text-only analysis).\n\n" +
                         "Optionally provide 'completion_contract' when completion must be verified from successful tool calls, stored artifacts, or structured output.\n\n" +
-                        "Available tool names: web_search, knowledge_search, knowledge_read, query_graph, image_generation, " +
-                        "python_sandbox, load_skill, and any registered MCP tools.",
+                        "Choose only tools available in this run. Group actions may be allowlisted as group.action.",
                 buildParametersSchema(),
                 com.harness.core.model.ToolCapability.ORCHESTRATION
         );
@@ -223,7 +222,7 @@ public class SpawnSubAgentTool implements Tool {
             result.put("task_id", taskId);
             result.put("status", record.status().get().name());
             result.put("accepted", true);
-            result.put("message", "Task submitted. Use await_subagents to wait for completion.");
+            result.put("message", "Task submitted. Use subagent with action=await to wait for completion.");
 
             log.info("[SpawnSubAgent] Task {} accepted, status={}", taskId, record.status().get());
             return ToolExecutionOutcome.succeeded(

@@ -601,12 +601,7 @@ public final class AgentRunCoordinator {
         if (command.thinkingLevel() != null) {
             return command.thinkingLevel();
         }
-        // 请求未指定档位时回退 GapAnalysis 漏斗；布尔判定映射到档位
-        Boolean needsThinking = prepared.gapAnalysis().needsThinking();
-        if (needsThinking == null) {
-            return null;
-        }
-        return needsThinking ? ThinkingLevel.MEDIUM : ThinkingLevel.OFF;
+        return prepared.gapAnalysis().thinkingLevel();
     }
 
     private static void recordReactStats(RunTrace trace, ReActResult result) {

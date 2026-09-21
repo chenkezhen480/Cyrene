@@ -28,7 +28,7 @@ public final class ModelProviderFactory {
                 createEmbedding(config),
                 createRerank(config),
                 createRealtime(config),
-                createSmallTask(config));
+                createSmallTask(config), createRouting(config));
     }
 
     /**
@@ -169,24 +169,26 @@ public final class ModelProviderFactory {
         };
     }
 
-    /**
-     * 6. Realtime Model (optional, reserved)
-     */
+    /** 6. Realtime Model (optional). */
     public static RealtimeModelProvider createRealtime(ModelConfig config) {
         String provider = normalizedProvider(config, ModelConfigKey.REALTIME_PROVIDER);
         if (provider.isBlank() || "none".equals(provider)) {
             return new NoOpRealtimeModelProvider();
         }
-        throw unsupportedProvider("realtime", provider);
+        log.info("Creating realtime model provider: {}", provider);
+        return switch (provider) {
+            case "qwen", "dashscope" -> new QwenRealtimeModelProvider(config);
+            default -> throw unsupportedProvider("realtime", provider);
+        };
     }
 
     /**
-     * 7. Small-task Model (optional, currently used by GapAnalyzer Tier 2)
+     * 7. Small-task Model (optional, independent of pre-loop routing)
      */
     public static SmallTaskModelProvider createSmallTask(ModelConfig config) {
         String provider = normalizedProvider(config, ModelConfigKey.SMALL_TASK_PROVIDER);
         if (provider.isBlank()) {
-            log.info("[Model] Small-task model not configured, Tier 2 disabled");
+            log.info("[Model] Small-task model not configured");
             return new NoOpSmallTaskModelProvider();
         }
         log.info("Creating small-task model provider: {}", provider);
@@ -194,6 +196,14 @@ public final class ModelProviderFactory {
             case "openai", "dashscope" -> new OpenAiSmallTaskModelProvider(config);
             case "none" -> new NoOpSmallTaskModelProvider();
             default -> throw unsupportedProvider("small-task", provider);
+        };
+    }
+
+    public static RoutingModelProvider createRouting(ModelConfig config) {
+        return switch (normalizedProvider(config, ModelConfigKey.ROUTING_PROVIDER)) {
+            case "", "none" -> RoutingModelProvider.DISABLED;
+            case "jev" -> new JevRoutingModelProvider(config);
+            default -> throw unsupportedProvider("routing", config.getString(ModelConfigKey.ROUTING_PROVIDER));
         };
     }
 

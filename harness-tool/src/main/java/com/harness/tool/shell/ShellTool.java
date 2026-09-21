@@ -3,6 +3,7 @@ package com.harness.tool.shell;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.harness.core.env.EnvConfig;
 import com.harness.core.env.EnvKey;
 import com.harness.core.exception.ToolExecutionException;
@@ -29,21 +30,22 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * Run a diagnostic command and return its output.
+ * Run a diagnostic command in the system shell and return its output.
  *
- * <p><b>No shell is involved, ever.</b> The caller supplies the executable and its arguments as
- * separate fields and they are handed to {@link ProcessBuilder} as a list. That is what makes the
- * usual injection surface absent rather than filtered: {@code ;}, {@code |}, {@code >},
- * {@code $(...)} and backticks are not syntax here, they are just characters inside an argument
- * that the target program will reject or ignore. A shell executable is refused by name in
- * {@link CommandPolicy}, so a caller cannot reintroduce one.
+ * <p>Commands execute under the system shell ({@code cmd.exe /c} on Windows, {@code /bin/sh -c} on Linux)
+ * to support native pipelines such as {@code | grep} or {@code | findstr}, allowing the agent to filter
+ * large command output upfront and avoid high token consumption.
  *
- * <p>The consequence is deliberate and worth stating: {@code shell} cannot modify files. There is no
- * redirection and no interpreter, so {@code echo x > /etc/nginx/nginx.conf} has nowhere to go.
- * Changing a file remains the job of {@code edit} / {@code write}, which keep their path policy.
+ * <p>Security and integrity invariants are strictly enforced by {@link CommandPolicy}:
+ * <ul>
+ *   <li>File redirection ({@code >}, {@code >>}, {@code <}) is refused outright.</li>
+ *   <li>File-writing pipeline commands ({@code tee}, {@code out-file}, etc.) are refused outright.</li>
+ *   <li>Subshell interpreters ({@code bash}, {@code sh}, etc.) are refused outright.</li>
+ *   <li>Only read-only diagnostic utilities run immediately; unlisted commands require operator confirmation.</li>
+ * </ul>
  *
- * <p>{@code docker inspect} prints container environment variables, so every byte of output passes
- * through {@link ShellOutputSanitizer} before it reaches a ToolOutput.
+ * <p>Output is capped at {@code maxOutputBytes} (default 32KB) and execution times out after {@code timeoutSeconds}.
+ * Every byte of output passes through {@link ShellOutputSanitizer} to prevent secret leakage.
  */
 public final class ShellTool implements Tool, ArgumentAwareConfirmationTool {
 
@@ -65,7 +67,7 @@ public final class ShellTool implements Tool, ArgumentAwareConfirmationTool {
         this.defaultWorkingDirectory = defaultWorkingDirectory;
         EnvConfig config = EnvConfig.get();
         this.timeoutSeconds = config.getInt(EnvKey.SHELL_TIMEOUT_SECONDS, 60);
-        this.maxOutputBytes = config.getInt(EnvKey.SHELL_MAX_OUTPUT_BYTES, 262_144);
+        this.maxOutputBytes = config.getInt(EnvKey.SHELL_MAX_OUTPUT_BYTES, 32_768);
     }
 
     @Override
@@ -74,14 +76,15 @@ public final class ShellTool implements Tool, ArgumentAwareConfirmationTool {
                 .put("type", "object")
                 .put("additionalProperties", false);
         stringProperty(schema, "command",
-                "Executable name only, resolved from PATH — no path separators, no shell. "
-                        + "Example: 'docker'.");
+                "The shell command to execute. Supports native shell pipelines (e.g. 'netstat -ano | findstr 3306' "
+                        + "on Windows, or 'ps aux | grep java' on Linux). IMPORTANT: Always use pipes like grep/findstr, "
+                        + "or limits like head/tail to filter outputs upfront and minimize tokens. "
+                        + "Redirection to files (> and >>) and destructive commands are strictly forbidden.");
         ObjectNode args = schema.withObject("/properties").putObject("args");
         args.put("type", "array");
         args.put("description",
-                "Arguments, one JSON array element each. Passed directly, never through a shell, "
-                        + "so pipes, redirection and && are not operators here. "
-                        + "Example: [\"logs\", \"redis\"].");
+                "Optional arguments for the command. Can be omitted if the full command line is passed in 'command'. "
+                        + "Example: [\"-ano\", \"|\", \"findstr\", \"3306\"].");
         args.putObject("items").put("type", "string");
         stringProperty(schema, "cwd",
                 "Working directory. Absolute, or relative to the workspace root. "
@@ -89,12 +92,12 @@ public final class ShellTool implements Tool, ArgumentAwareConfirmationTool {
         schema.putArray("required").add("command");
         return new ToolSpec(
                 TOOL_NAME,
-                "Run a diagnostic command (Docker, Git, build tools) and return its stdout and "
-                        + "stderr. There is no shell: pass the executable and arguments separately. "
-                        + "Read-only diagnostics run immediately; anything else — including commands "
-                        + "nobody has listed — asks the operator to approve it first. Shells and "
-                        + "executable paths are refused outright. Output is capped at "
-                        + maxOutputBytes + " bytes and runs time out after " + timeoutSeconds + "s.",
+                "Run a diagnostic shell command (Docker, Git, process/network tools) in the system shell and return stdout and stderr. "
+                        + "Supports native shell pipelines (e.g. '| grep' or '| findstr'). You MUST filter verbose queries upfront using pipelines "
+                        + "(e.g. 'netstat -ano | findstr <port>' or 'ps aux | grep <process>') to avoid massive token consumption and output truncation. "
+                        + "File redirection (>, >>, <) and destructive commands are strictly forbidden. "
+                        + "Read-only diagnostics run immediately; unlisted commands ask the operator to approve first. "
+                        + "Output is capped at " + maxOutputBytes + " bytes and runs time out after " + timeoutSeconds + "s.",
                 schema,
                 ToolCapability.MUTATION);
     }
@@ -106,32 +109,28 @@ public final class ShellTool implements Tool, ArgumentAwareConfirmationTool {
 
     @Override
     public boolean requiresConfirmation(JsonNode arguments) {
-        // Tolerant on purpose: malformed arguments are reported by execute, not here.
         try {
-            CommandPolicy.Verdict verdict = commandPolicy.decide(
-                    text(arguments, "command"), stringArray(arguments, "args"));
+            String command = text(arguments, "command");
+            List<String> args = stringArray(arguments, "args");
+            CommandPolicy.Verdict verdict = commandPolicy.decide(command, args);
             return verdict.needsConfirmation();
         } catch (RuntimeException e) {
             return false;
         }
     }
 
-    /**
-     * The reason travels with the summary on purpose: "a known state-changing command" and "a
-     * command nobody anticipated" call for different levels of attention, and the operator cannot
-     * tell them apart from the command line alone.
-     */
     @Override
     public String confirmationSummary(JsonNode arguments) {
         String command = text(arguments, "command");
         List<String> args = stringArray(arguments, "args");
+        String commandLine = CommandPolicy.assembleCommandLine(command, args);
         String reason;
         try {
             reason = commandPolicy.decide(command, args).reason();
         } catch (RuntimeException e) {
             reason = "could not be evaluated";
         }
-        return "Run: " + render(command, args) + " — " + reason + ".";
+        return "Run: " + commandLine + " — " + reason + ".";
     }
 
     @Override
@@ -141,43 +140,54 @@ public final class ShellTool implements Tool, ArgumentAwareConfirmationTool {
             throw new ToolExecutionException(TOOL_NAME, "Missing required parameter: command");
         }
         List<String> args = stringArray(arguments, "args");
+        String commandLine = CommandPolicy.assembleCommandLine(command, args);
 
-        // Re-checked here, not only in requiresConfirmation: a refusal must hold even if the caller
-        // reached execute by some path that skipped the confirmation step.
         CommandPolicy.Verdict verdict = commandPolicy.decide(command, args);
         if (verdict.denied()) {
             throw new ToolExecutionException(TOOL_NAME, verdict.reason());
         }
-        List<String> effectiveArgs = commandPolicy.applyDefaults(command, args);
+        String effectiveCommandLine = commandPolicy.applyDefaults(commandLine);
 
         Path workingDirectory = resolveWorkingDirectory(arguments);
-        ProcessResult result = run(command, effectiveArgs, workingDirectory);
+        ProcessResult result = run(effectiveCommandLine, workingDirectory);
         String body = result.stdout() + result.stderr();
 
         StringBuilder text = new StringBuilder();
-        text.append("$ ").append(render(command, effectiveArgs)).append('\n');
+        text.append("$ ").append(effectiveCommandLine).append('\n');
         text.append("cwd: ").append(workingDirectory).append('\n');
         text.append("exit: ").append(result.exitCode()).append('\n');
-        if (!effectiveArgs.equals(args)) {
+        if (!effectiveCommandLine.equals(commandLine)) {
             text.append("(arguments were bounded by policy before running)\n");
         }
         if (result.truncated()) {
-            text.append("(output truncated at ").append(maxOutputBytes).append(" bytes)\n");
+            text.append("(output truncated at ").append(maxOutputBytes)
+                    .append(" bytes; use pipes like '| grep' or '| findstr' to query specific targets)\n");
         }
         if (result.timedOut()) {
             text.append("(timed out after ").append(timeoutSeconds).append("s and was killed)\n");
         }
         text.append(body.isBlank() ? "(no output)" : body);
 
-        // The echoed command line is sanitised too, not just the streams. Arguments are where a
-        // credential is most likely to appear — `mysql -p<password>` — and that copy would otherwise
-        // ride out in the header untouched.
-        String sanitized = ShellOutputSanitizer.sanitize(command, effectiveArgs, text.toString());
+        String sanitized = ShellOutputSanitizer.sanitize(command, args, text.toString());
+        String sanitizedStdout = ShellOutputSanitizer.sanitize(command, args, result.stdout());
+        String sanitizedStderr = ShellOutputSanitizer.sanitize(command, args, result.stderr());
 
-        // A non-zero exit is not a tool failure — the command ran and said so — so the status only
-        // distinguishes "produced output" from "said nothing".
+        ObjectNode json = MAPPER.createObjectNode();
+        ArrayNode commandJson = json.putArray("command");
+        commandJson.add(command);
+        for (String arg : args) {
+            commandJson.add(ShellOutputSanitizer.sanitize(command, args, arg));
+        }
+        json.put("commandLine", effectiveCommandLine);
+        json.put("cwd", workingDirectory.toString());
+        json.put("exitCode", result.exitCode());
+        json.put("timedOut", result.timedOut());
+        json.put("truncated", result.truncated());
+        json.put("stdout", sanitizedStdout);
+        json.put("stderr", sanitizedStderr);
+
         return ToolExecutionOutcome.succeeded(
-                ToolOutput.text(sanitized),
+                new ToolOutput(sanitized, List.of(), json),
                 body.isBlank() ? ResultStatus.EMPTY : ResultStatus.AVAILABLE);
     }
 
@@ -198,19 +208,22 @@ public final class ShellTool implements Tool, ArgumentAwareConfirmationTool {
                                  boolean timedOut, boolean truncated) {
     }
 
-    private ProcessResult run(String command, List<String> args, Path workingDirectory) {
-        List<String> argv = new ArrayList<>();
-        argv.add(command);
-        argv.addAll(args);
+    private ProcessResult run(String commandLine, Path workingDirectory) {
+        List<String> launcher;
+        if (WINDOWS) {
+            launcher = List.of("cmd.exe", "/c", commandLine);
+        } else {
+            launcher = List.of("/bin/sh", "-c", commandLine);
+        }
 
-        ProcessBuilder builder = new ProcessBuilder(argv);
+        ProcessBuilder builder = new ProcessBuilder(launcher);
         builder.directory(workingDirectory.toFile());
         Process process;
         try {
             process = builder.start();
         } catch (IOException e) {
             throw new ToolExecutionException(TOOL_NAME,
-                    "cannot start " + command + ": " + e.getMessage() + binaryHint(command), e);
+                    "cannot start " + commandLine + ": " + e.getMessage(), e);
         }
 
         AtomicBoolean timedOut = new AtomicBoolean(false);
@@ -246,46 +259,10 @@ public final class ShellTool implements Tool, ArgumentAwareConfirmationTool {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             process.destroyForcibly();
-            throw new ToolExecutionException(TOOL_NAME, "interrupted while waiting for " + command, e);
+            throw new ToolExecutionException(TOOL_NAME, "interrupted while waiting for " + commandLine, e);
         }
         return new ProcessResult(exitCode, stdout.text(), stderr.text(),
                 timedOut.get(), stdout.truncated() || stderr.truncated());
-    }
-
-    /**
-     * On Windows, {@code mvn} and {@code npm} are {@code .cmd} scripts, which only run under
-     * {@code cmd.exe}. This tool will not invoke one, so the failure needs to say why rather than
-     * surface a bare "cannot run program".
-     */
-    private static String binaryHint(String command) {
-        if (!WINDOWS || command.contains(".")) {
-            return "";
-        }
-        for (String extension : List.of(".cmd", ".bat")) {
-            if (findOnPath(command + extension) != null) {
-                return " ('" + command + "' is a " + extension + " script, which needs cmd.exe; "
-                        + "this tool deliberately does not invoke a second shell. Run it from a "
-                        + "Linux deployment, or use the tool that performs the task directly.)";
-            }
-        }
-        return "";
-    }
-
-    private static String findOnPath(String fileName) {
-        String path = System.getenv("PATH");
-        if (path == null) {
-            return null;
-        }
-        for (String entry : path.split(File.pathSeparator)) {
-            if (entry.isBlank()) {
-                continue;
-            }
-            Path candidate = Path.of(entry).resolve(fileName);
-            if (Files.isRegularFile(candidate)) {
-                return candidate.toString();
-            }
-        }
-        return null;
     }
 
     /** Readers that stop storing past a ceiling instead of letting a runaway command fill the heap. */
@@ -326,14 +303,6 @@ public final class ShellTool implements Tool, ArgumentAwareConfirmationTool {
     }
 
     // ────────────────────────────────────────────────────────────────── arguments
-
-    private static String render(String command, List<String> args) {
-        StringBuilder line = new StringBuilder(command);
-        for (String arg : args) {
-            line.append(' ').append(arg.indexOf(' ') >= 0 ? '"' + arg + '"' : arg);
-        }
-        return line.toString();
-    }
 
     private static String text(JsonNode arguments, String name) {
         JsonNode value = arguments == null ? null : arguments.get(name);

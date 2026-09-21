@@ -37,7 +37,7 @@ public class CallDiscoveredApiTool implements Tool {
 
         ObjectNode endpointIdProp = mapper.createObjectNode();
         endpointIdProp.put("type", "string");
-        endpointIdProp.put("description", "接口 ID，如 ep_0001。可通过 list_api_endpoints 获取。");
+        endpointIdProp.put("description", "接口 ID，如 ep_0001。可通过 project_api 的 list 动作获取。");
         props.set("endpointId", endpointIdProp);
 
         ObjectNode paramsProp = mapper.createObjectNode();
@@ -52,7 +52,7 @@ public class CallDiscoveredApiTool implements Tool {
 
         return new ToolSpec(
                 "call_discovered_api",
-                "调用一个已发现的内部接口。先通过 list_api_endpoints 和 get_api_endpoint_detail 了解接口定义。",
+                "调用一个已发现的内部接口。先通过 project_api 的 list 和 detail 动作了解接口定义。",
                 params,
                 com.harness.core.model.ToolCapability.UNKNOWN
         );
@@ -87,7 +87,7 @@ public class CallDiscoveredApiTool implements Tool {
         if (target == null) {
             return ToolExecutionOutcome.succeeded(
                     ToolOutput.text("Endpoint '" + endpointId
-                            + "' not found. Call list_api_endpoints() to see available endpoints."),
+                            + "' not found. Call project_api with action=list to see available endpoints."),
                     ResultStatus.EMPTY);
         }
         if (!ProjectApiPolicy.isCallable(target)) {
