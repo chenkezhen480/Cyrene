@@ -11,9 +11,6 @@ import dev.langchain4j.model.chat.request.ChatRequestParameters;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
@@ -28,8 +25,6 @@ import java.util.concurrent.TimeoutException;
  * Tool definitions are deliberately absent from this model call.
  */
 public final class FinalResponseGenerator {
-
-    private static final Logger log = LoggerFactory.getLogger(FinalResponseGenerator.class);
 
     static final String FINAL_ANSWER_INSTRUCTION = """
             <final_answer_phase>
