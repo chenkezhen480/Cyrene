@@ -38,71 +38,6 @@ public final class FinalResponseGenerator {
             </final_answer_phase>
             """;
 
-    /** Added only on a retry, after the model already answered this phase with tool syntax. */
-    static final String TOOL_SYNTAX_RETRY_INSTRUCTION = """
-            <tool_syntax_rejected>
-            Your previous attempt emitted tool-call syntax, which cannot be executed here and
-            reached the user as raw markup. Tools are not available in this phase. Write the
-            answer as ordinary prose. If you still need a tool, say what you need in a sentence.
-            </tool_syntax_rejected>
-            """;
-
-    /**
-     * Provider tool-call envelopes that must never reach the user as final prose.
-     *
-     * <p>Deliberately narrow: a false positive would discard a real answer, so only unambiguous
-     * protocol delimiters count. The first entry uses the fullwidth bars DeepSeek emits; the
-     * ASCII variants cover the same syntax produced by other runtimes.</p>
-     */
-    private static final List<String> TOOL_CALL_MARKERS = List.of(
-            "<｜DSML｜",
-            "<|DSML|",
-            "<tool_call",
-            "<tool_calls",
-            "<function_call");
-
-    /** Whether this text begins a tool-call envelope rather than an answer. */
-    static boolean isToolCallMarkup(String text) {
-        if (text == null) {
-            return false;
-        }
-        String candidate = text.stripLeading();
-        for (String marker : TOOL_CALL_MARKERS) {
-            if (candidate.startsWith(marker)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    /**
-     * Whether this text is still too short to tell — a prefix of some marker. Holding only while
-     * this is true keeps the added latency to the first character or two of an answer that opens
-     * with {@code <}, and to nothing at all for ordinary prose.
-     */
-    static boolean couldBecomeToolCallMarkup(String text) {
-        if (text == null) {
-            return false;
-        }
-        String candidate = text.stripLeading();
-        if (candidate.isEmpty()) {
-            return true;
-        }
-        for (String marker : TOOL_CALL_MARKERS) {
-            if (marker.startsWith(candidate)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    /** Thrown internally so a leaked tool call can be retried instead of shown. */
-    static final class ToolCallSyntaxLeakException extends RuntimeException {
-        ToolCallSyntaxLeakException() {
-            super("Final answer contained tool-call syntax while tools were unavailable");
-        }
-    }
-
     public record Result(ChatResponse response, List<ChatMessage> messages) {
         public Result {
             Objects.requireNonNull(response, "response");
@@ -139,24 +74,9 @@ public final class FinalResponseGenerator {
                     "Final answer generation cancelled");
         }
 
-        try {
-            return streamFinalAnswer(
-                    finalMessages(systemPrompt, planningMessages),
-                    requestParameters, listener, cancellationToken);
-        } catch (ToolCallSyntaxLeakException leak) {
-            // The model answered a phase with no tools by emitting tool syntax, so it produced
-            // nothing the user can read. One retry that names the problem beats showing markup,
-            // and nothing was streamed: the leak is caught before the first token is released.
-            log.warn("[FinalResponse] {}; regenerating the final answer once", leak.getMessage());
-            try {
-                return streamFinalAnswer(
-                        finalMessages(systemPrompt, planningMessages,
-                                TOOL_SYNTAX_RETRY_INSTRUCTION),
-                        requestParameters, listener, cancellationToken);
-            } catch (ToolCallSyntaxLeakException again) {
-                throw new RuntimeException(leak.getMessage(), again);
-            }
-        }
+        return streamFinalAnswer(
+                finalMessages(systemPrompt, planningMessages),
+                requestParameters, listener, cancellationToken);
     }
 
     private Result streamFinalAnswer(
@@ -171,11 +91,6 @@ public final class FinalResponseGenerator {
         }
 
         CompletableFuture<ChatResponse> responseFuture = new CompletableFuture<>();
-        // Tokens are withheld until the opening characters prove this is prose and not a tool
-        // envelope. Forwarding unconditionally is what let raw tool syntax reach the user, and a
-        // streamed frame cannot be taken back.
-        StringBuilder held = new StringBuilder();
-        boolean[] released = {false};
         // Tracked before the request starts, not after it returns: the streaming HTTP future is
         // keyed by the calling thread, and this thread then blocks on it for the whole stream, so
         // a cancel arriving mid-stream can only reach that future while the thread is registered.
@@ -186,32 +101,12 @@ public final class FinalResponseGenerator {
             streamingChatModel.chat(requestBuilder.build(), new StreamingChatResponseHandler() {
                 @Override
                 public void onPartialResponse(String text) {
-                    if (text == null || text.isEmpty()) {
-                        return;
-                    }
-                    if (released[0]) {
-                        forward(listener, text);
-                        return;
-                    }
-                    held.append(text);
-                    String buffered = held.toString();
-                    if (isToolCallMarkup(buffered)) {
-                        responseFuture.completeExceptionally(new ToolCallSyntaxLeakException());
-                        return;
-                    }
-                    if (couldBecomeToolCallMarkup(buffered)) {
-                        return;
-                    }
-                    release(listener, held, released);
+                    forward(listener, text);
                 }
 
                 @Override
                 public void onCompleteResponse(ChatResponse response) {
-                    // A short answer can end while still indistinguishable from a marker prefix.
-                    if (!responseFuture.isCompletedExceptionally()) {
-                        release(listener, held, released);
-                        responseFuture.complete(response);
-                    }
+                    responseFuture.complete(response);
                 }
 
                 @Override
@@ -241,15 +136,6 @@ public final class FinalResponseGenerator {
                 cancellationToken.untrackCurrentThread();
             }
         }
-    }
-
-    private static void release(ReActListener listener, StringBuilder held, boolean[] released) {
-        if (released[0]) {
-            return;
-        }
-        released[0] = true;
-        forward(listener, held.toString());
-        held.setLength(0);
     }
 
     private static void forward(ReActListener listener, String text) {
