@@ -181,7 +181,8 @@ public class OpenAiChatModelProvider implements ChatModelProvider {
 
     @Override
     public ChatModel chatModel() {
-        return new RetryingChatModel(createRawChatModel());
+        return OpenAiToolProtocolGuard.blocking(
+                new RetryingChatModel(createRawChatModel()));
     }
 
     ChatModel createRawChatModel() {
@@ -216,8 +217,9 @@ public class OpenAiChatModelProvider implements ChatModelProvider {
 
     @Override
     public StreamingChatModel streamingModel() {
+        StreamingChatModel raw;
         if (apiFormat == OpenAiChatApiFormat.RESPONSES) {
-            return OpenAiResponsesStreamingChatModel.builder()
+            raw = OpenAiResponsesStreamingChatModel.builder()
                     .httpClientBuilder(cancellableHttpClientBuilder())
                     .apiKey(apiKey)
                     .baseUrl(baseUrl)
@@ -226,19 +228,22 @@ public class OpenAiChatModelProvider implements ChatModelProvider {
                     .temperature(temperature)
                     .store(false)
                     .build();
+        } else {
+            OpenAiStreamingChatModel.OpenAiStreamingChatModelBuilder builder =
+                    OpenAiStreamingChatModel.builder()
+                            .httpClientBuilder(cancellableHttpClientBuilder())
+                            .apiKey(apiKey)
+                            .baseUrl(baseUrl)
+                            .modelName(model)
+                            .maxTokens(maxTokens)
+                            .temperature(temperature)
+                            .timeout(Duration.ofSeconds(timeoutSeconds));
+            if (defaultThinkingLevel != null) {
+                applyThinking(builder, defaultThinkingLevel);
+            }
+            raw = builder.build();
         }
-        OpenAiStreamingChatModel.OpenAiStreamingChatModelBuilder builder = OpenAiStreamingChatModel.builder()
-                .httpClientBuilder(cancellableHttpClientBuilder())
-                .apiKey(apiKey)
-                .baseUrl(baseUrl)
-                .modelName(model)
-                .maxTokens(maxTokens)
-                .temperature(temperature)
-                .timeout(Duration.ofSeconds(timeoutSeconds));
-        if (defaultThinkingLevel != null) {
-            applyThinking(builder, defaultThinkingLevel);
-        }
-        return builder.build();
+        return OpenAiToolProtocolGuard.streaming(raw);
     }
 
     private void applyThinking(OpenAiChatModel.OpenAiChatModelBuilder builder, ThinkingLevel level) {
