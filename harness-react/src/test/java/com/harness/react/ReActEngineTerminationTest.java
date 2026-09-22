@@ -181,8 +181,8 @@ class ReActEngineTerminationTest {
         assertThat(executions).hasValue(6);
         assertThat(planningCalls).hasValue(6);
         assertThat(requests).hasSize(6);
-        assertThat(requests).allSatisfy(request ->
-                assertThat(request.parameters().toolSpecifications()).isNotEmpty());
+        assertThat(requests).allSatisfy(chatRequest ->
+                assertThat(chatRequest.parameters().toolSpecifications()).isNotEmpty());
         assertThat(result.output()).isNotBlank();
         assertThat(result.loopStats().outcome()).isEqualTo("tool_failure_limit");
         if (streaming) {
