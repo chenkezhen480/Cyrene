@@ -47,27 +47,6 @@ import java.util.concurrent.TimeoutException;
  */
 public class ReActEngine implements ReActLoop {
 
-    private static final String FINISH_PLANNING_TOOL_NAME = "finish_planning";
-    private static final int MAX_PLANNING_PROTOCOL_RETRIES = 2;
-
-    private static final String TOOL_PLANNING_INSTRUCTION = """
-            <tool_planning_phase>
-            This phase is only for tool planning. Do not compose the user-facing final answer.
-            Every response in this phase must use native tool calling.
-            Call the business tools still required, or call finish_planning when no more tools
-            are needed. finish_planning must be the only tool call in its round.
-            Never write tool-call syntax as text.
-            </tool_planning_phase>
-            """;
-
-    private static final String TOOL_PLANNING_RETRY_INSTRUCTION = """
-            <tool_planning_protocol_error>
-            The previous planning response violated the planning protocol.
-            Respond using native tool calling only: call the required business tool(s), or call
-            finish_planning by itself when planning is complete. Do not write tool calls as text.
-            </tool_planning_protocol_error>
-            """;
-
     private static final String STRUCTURED_OUTPUT_INSTRUCTION = """
             <structured_output_phase>
             Complete any information-gathering tool calls first. Then call structured_output
@@ -88,7 +67,6 @@ public class ReActEngine implements ReActLoop {
     private final AdaptiveReflector adaptiveReflector;
     private final int maxIterations;
     private final long llmTimeoutSeconds;
-    private final FinalResponseGenerator finalResponseGenerator;
 
     /**
      * @param maxIterationsOverride if > 0, overrides the global HARNESS_REACT_MAX_ITERATIONS setting
@@ -96,19 +74,6 @@ public class ReActEngine implements ReActLoop {
     ReActEngine(ChatModelProvider chatModelProvider, ToolCatalog toolCatalog, ToolExecutor toolExecutor,
                 VisionModelProvider visionProvider, VoiceModelProvider voiceProvider,
                 int maxIterationsOverride) {
-        this(
-                chatModelProvider,
-                toolCatalog,
-                toolExecutor,
-                visionProvider,
-                voiceProvider,
-                maxIterationsOverride,
-                defaultFinalResponseGenerator(chatModelProvider));
-    }
-
-    ReActEngine(ChatModelProvider chatModelProvider, ToolCatalog toolCatalog, ToolExecutor toolExecutor,
-                VisionModelProvider visionProvider, VoiceModelProvider voiceProvider,
-                int maxIterationsOverride, FinalResponseGenerator finalResponseGenerator) {
         this.chatModelProvider = chatModelProvider;
         ChatModel rawModel = chatModelProvider.chatModel();
         if (visionProvider != null || voiceProvider != null) {
@@ -130,14 +95,6 @@ public class ReActEngine implements ReActLoop {
         this.maxIterations = maxIterationsOverride > 0 ? maxIterationsOverride : globalMax;
         this.adaptiveReflector = new AdaptiveReflector(cfg.getInt(EnvKey.REACT_REFLECTION_THRESHOLD, 5));
         this.llmTimeoutSeconds = timeoutSeconds(chatModelProvider);
-        this.finalResponseGenerator = java.util.Objects.requireNonNull(
-                finalResponseGenerator, "finalResponseGenerator");
-    }
-
-    private static FinalResponseGenerator defaultFinalResponseGenerator(
-            ChatModelProvider chatModelProvider) {
-        return new FinalResponseGenerator(
-                chatModelProvider, timeoutSeconds(chatModelProvider));
     }
 
     private static int timeoutSeconds(ChatModelProvider provider) {
@@ -178,16 +135,10 @@ public class ReActEngine implements ReActLoop {
         boolean structuredOutput = finalOutputContract instanceof FinalOutputContract.JsonSchema;
 
         List<ToolSpecification> toolSpecs = toToolSpecifications(toolCatalog.getAll());
-        boolean guardedToolPlanning = !structuredOutput && !toolSpecs.isEmpty();
-        List<ToolSpecification> planningToolSpecs = guardedToolPlanning
-                ? withFinishPlanningTool(toolSpecs)
-                : toolSpecs;
         List<ChatMessage> messages = new ArrayList<>();
         messages.add(SystemMessage.from(structuredOutput
                 ? systemPrompt + "\n\n" + STRUCTURED_OUTPUT_INSTRUCTION
-                : guardedToolPlanning
-                        ? systemPrompt + "\n\n" + TOOL_PLANNING_INSTRUCTION
-                        : systemPrompt));
+                : systemPrompt));
         messages.addAll(historyMessages);
         if (dynamicKnowledgeContext != null) {
             messages.add(UserMessage.from(dynamicKnowledgeContext));
@@ -196,15 +147,12 @@ public class ReActEngine implements ReActLoop {
 
         List<ReActStep> allSteps = new ArrayList<>();
         List<Artifact> allArtifacts = new ArrayList<>();
-        ChatRequestParameters finalRequestParameters =
-                buildRequestParameters(thinkingLevel, List.of());
         int totalToolCalls = 0;
         int reflectionChecks = 0;
         long totalInputTokens = 0;
         long totalOutputTokens = 0;
         int llmCalls = 0;
         int toolRetries = 0;
-        int planningProtocolRetries = 0;
 
         // 设置 ThreadLocal，整个 ReAct 循环期间工具都可读取步骤历史
         ReActStep.setCurrentSteps(allSteps);
@@ -218,7 +166,7 @@ public class ReActEngine implements ReActLoop {
                 }
 
                 ChatRequestParameters mergedParams =
-                        buildRequestParameters(thinkingLevel, planningToolSpecs);
+                        buildRequestParameters(thinkingLevel, toolSpecs);
                 ChatRequest.Builder reqBuilder = ChatRequest.builder().messages(messages);
                 if (mergedParams != null) {
                     reqBuilder.parameters(mergedParams);
@@ -251,29 +199,16 @@ public class ReActEngine implements ReActLoop {
                         trace,
                         System.currentTimeMillis() - llmStart,
                         messages,
-                        planningToolSpecs);
+                        toolSpecs);
                 totalInputTokens += observedTokens(usage.inputTokens());
                 totalOutputTokens += observedTokens(usage.outputTokens());
 
-                // A planning phase may end only through an explicit structured control call.
+                // Final answer (no tool calls)
                 if (aiMessage.toolExecutionRequests() == null || aiMessage.toolExecutionRequests().isEmpty()) {
                     if (structuredOutput) {
                         throw new StructuredOutputException(
                                 StructuredOutputException.Code.STRUCTURED_OUTPUT_EMPTY,
                                 "Model did not submit the final response through structured_output");
-                    }
-                    if (guardedToolPlanning) {
-                        planningProtocolRetries++;
-                        if (planningProtocolRetries > MAX_PLANNING_PROTOCOL_RETRIES) {
-                            throw new IllegalStateException(
-                                    "Tool planning protocol failed after "
-                                            + MAX_PLANNING_PROTOCOL_RETRIES + " retries");
-                        }
-                        messages.add(aiMessage);
-                        messages.add(UserMessage.from(TOOL_PLANNING_RETRY_INSTRUCTION));
-                        log.warn("[L3-ReAct] Invalid planning response without native tool calls; retry {}/{}",
-                                planningProtocolRetries, MAX_PLANNING_PROTOCOL_RETRIES);
-                        continue;
                     }
                     String answer = aiMessage.text();
                     long totalMs = System.currentTimeMillis() - loopStart;
@@ -288,38 +223,6 @@ public class ReActEngine implements ReActLoop {
                 List<ToolExecutionRequest> toolReqs = normalizeToolRequests(
                         aiMessage.toolExecutionRequests());
                 validateStructuredOutputRound(toolReqs, structuredOutput);
-                if (guardedToolPlanning && containsFinishPlanning(toolReqs)) {
-                    if (!isFinishPlanningRound(toolReqs)) {
-                        planningProtocolRetries++;
-                        if (planningProtocolRetries > MAX_PLANNING_PROTOCOL_RETRIES) {
-                            throw new IllegalStateException(
-                                    "Tool planning protocol failed after "
-                                            + MAX_PLANNING_PROTOCOL_RETRIES + " retries");
-                        }
-                        messages.add(UserMessage.from(TOOL_PLANNING_RETRY_INSTRUCTION));
-                        log.warn("[L3-ReAct] finish_planning was mixed with other calls; retry {}/{}",
-                                planningProtocolRetries, MAX_PLANNING_PROTOCOL_RETRIES);
-                        continue;
-                    }
-                    planningProtocolRetries = 0;
-                    messages.add(aiMessage);
-                    messages.add(ToolExecutionResultMessage.from(
-                            toolReqs.get(0), "Tool planning completed."));
-                    GeneratedFinalResponse finalResponse = generateBlockingFinalResponse(
-                            systemPrompt, messages, finalRequestParameters,
-                            cancellationToken, trace);
-                    AiMessage finalMessage = finalResponse.response().aiMessage();
-                    llmCalls++;
-                    ModelUsage finalUsage = finalResponse.usage();
-                    totalInputTokens += observedTokens(finalUsage.inputTokens());
-                    totalOutputTokens += observedTokens(finalUsage.outputTokens());
-                    buildFinalStep(i, finalMessage.text(), allSteps, messages, finalMessage, listener);
-                    ReActLoopStats stats = new ReActLoopStats(
-                            "completed", i, totalToolCalls, reflectionChecks,
-                            totalInputTokens, totalOutputTokens, llmCalls, toolRetries);
-                    return new ReActResult(finalMessage.text(), allSteps, allArtifacts, stats);
-                }
-                planningProtocolRetries = 0;
                 if (!toolReqs.equals(aiMessage.toolExecutionRequests())) {
                     aiMessage = AiMessage.from(
                             aiMessage.text() != null ? aiMessage.text() : "", toolReqs);
@@ -361,28 +264,6 @@ public class ReActEngine implements ReActLoop {
                         || outcome.inspectionStatus() == ReActStep.InspectionResult.InspectionStatus.LOOP_DETECTED) {
                     toolRetries++;
                 }
-                if (outcome.action() == RoundAction.GENERATE_FINAL) {
-                    if (structuredOutput) {
-                        throw new StructuredOutputException(
-                                StructuredOutputException.Code.STRUCTURED_OUTPUT_EMPTY,
-                                "Tool failure limit reached before structured_output was submitted");
-                    }
-                    log.warn("[L3-ReAct] Tool failure limit reached; generating tool-free final response");
-                    GeneratedFinalResponse finalResponse = generateBlockingFinalResponse(
-                            systemPrompt, messages, finalRequestParameters,
-                            cancellationToken, trace);
-                    AiMessage finalMessage = finalResponse.response().aiMessage();
-                    llmCalls++;
-                    ModelUsage finalUsage = finalResponse.usage();
-                    totalInputTokens += observedTokens(finalUsage.inputTokens());
-                    totalOutputTokens += observedTokens(finalUsage.outputTokens());
-                    buildFinalStep(
-                            i + 1, finalMessage.text(), allSteps, messages, finalMessage, listener);
-                    ReActLoopStats stats = new ReActLoopStats(
-                            "tool_failure_limit", i, totalToolCalls, reflectionChecks,
-                            totalInputTokens, totalOutputTokens, llmCalls, toolRetries);
-                    return new ReActResult(finalMessage.text(), allSteps, allArtifacts, stats);
-                }
                 if (outcome.action() == RoundAction.RETURN_RESULT) {
                     ReActResult r = outcome.result();
                     if (r.loopStats() == null) {
@@ -400,27 +281,8 @@ public class ReActEngine implements ReActLoop {
                         StructuredOutputException.Code.STRUCTURED_OUTPUT_EMPTY,
                         "Iteration limit reached before structured_output was submitted");
             }
-            if (guardedToolPlanning && planningProtocolRetries > 0) {
-                throw new IllegalStateException(
-                        "Tool planning reached the iteration limit after an invalid planning response");
-            }
-            GeneratedFinalResponse finalResponse = generateBlockingFinalResponse(
-                    systemPrompt, messages, finalRequestParameters,
-                    cancellationToken, trace);
-            AiMessage finalMessage = finalResponse.response().aiMessage();
-            llmCalls++;
-            ModelUsage finalUsage = finalResponse.usage();
-            totalInputTokens += observedTokens(finalUsage.inputTokens());
-            totalOutputTokens += observedTokens(finalUsage.outputTokens());
-            buildFinalStep(
-                    maxIterations + 1, finalMessage.text(), allSteps, messages, finalMessage, listener);
-            long totalMs = System.currentTimeMillis() - loopStart;
-            log.warn("[L3-ReAct] Reached max iterations ({}), generated a tool-free final answer",
-                    maxIterations);
-            log.info("[L3-ReAct] Finished in {}ms, steps={}, artifacts={}", totalMs, allSteps.size(), allArtifacts.size());
-            ReActLoopStats stats = new ReActLoopStats("max_iterations", maxIterations, totalToolCalls, reflectionChecks,
-                    totalInputTokens, totalOutputTokens, llmCalls, toolRetries);
-            return new ReActResult(finalMessage.text(), allSteps, allArtifacts, stats);
+            throw new IllegalStateException(
+                    "ReAct loop reached max iterations before the model produced a final answer");
         } finally {
             ReActStep.clearCurrentSteps();
         }
@@ -460,14 +322,8 @@ public class ReActEngine implements ReActLoop {
                 maxIterations, toolCatalog.size());
 
         List<ToolSpecification> toolSpecs = toToolSpecifications(toolCatalog.getAll());
-        boolean guardedFinalStreaming = !toolSpecs.isEmpty();
-        List<ToolSpecification> planningToolSpecs = guardedFinalStreaming
-                ? withFinishPlanningTool(toolSpecs)
-                : toolSpecs;
         List<ChatMessage> messages = new ArrayList<>();
-        messages.add(SystemMessage.from(guardedFinalStreaming
-                ? systemPrompt + "\n\n" + TOOL_PLANNING_INSTRUCTION
-                : systemPrompt));
+        messages.add(SystemMessage.from(systemPrompt));
         messages.addAll(historyMessages);
         if (dynamicKnowledgeContext != null) {
             messages.add(UserMessage.from(dynamicKnowledgeContext));
@@ -476,15 +332,12 @@ public class ReActEngine implements ReActLoop {
 
         List<ReActStep> allSteps = new ArrayList<>();
         List<Artifact> allArtifacts = new ArrayList<>();
-        ChatRequestParameters finalRequestParameters =
-                buildRequestParameters(thinkingLevel, List.of());
         int totalToolCalls = 0;
         int reflectionChecks = 0;
         long totalInputTokens = 0;
         long totalOutputTokens = 0;
         int llmCalls = 0;
         int toolRetries = 0;
-        int planningProtocolRetries = 0;
 
         // 设置 ThreadLocal，整个 ReAct 循环期间工具都可读取步骤历史
         ReActStep.setCurrentSteps(allSteps);
@@ -498,7 +351,7 @@ public class ReActEngine implements ReActLoop {
                 }
 
                 ChatRequestParameters mergedParams =
-                        buildRequestParameters(thinkingLevel, planningToolSpecs);
+                        buildRequestParameters(thinkingLevel, toolSpecs);
                 ChatRequest.Builder reqBuilder = ChatRequest.builder().messages(messages);
                 if (mergedParams != null) {
                     reqBuilder.parameters(mergedParams);
@@ -518,7 +371,7 @@ public class ReActEngine implements ReActLoop {
                     streamingChatModel.chat(reqBuilder.build(), new StreamingChatResponseHandler() {
                         @Override
                         public void onPartialResponse(String text) {
-                            if (!guardedFinalStreaming && listener != null) {
+                            if (listener != null) {
                                 listener.onToken(text);
                             }
                         }
@@ -562,25 +415,12 @@ public class ReActEngine implements ReActLoop {
                         trace,
                         System.currentTimeMillis() - llmStart,
                         messages,
-                        planningToolSpecs);
+                        toolSpecs);
                 totalInputTokens += observedTokens(usage.inputTokens());
                 totalOutputTokens += observedTokens(usage.outputTokens());
 
-                // A guarded planning phase may end only through finish_planning.
+                // No structured tool call means this assistant message is the final answer.
                 if (aiMessage.toolExecutionRequests() == null || aiMessage.toolExecutionRequests().isEmpty()) {
-                    if (guardedFinalStreaming) {
-                        planningProtocolRetries++;
-                        if (planningProtocolRetries > MAX_PLANNING_PROTOCOL_RETRIES) {
-                            throw new IllegalStateException(
-                                    "Tool planning protocol failed after "
-                                            + MAX_PLANNING_PROTOCOL_RETRIES + " retries");
-                        }
-                        messages.add(aiMessage);
-                        messages.add(UserMessage.from(TOOL_PLANNING_RETRY_INSTRUCTION));
-                        log.warn("[L3-ReAct] Invalid planning response without native tool calls; retry {}/{}",
-                                planningProtocolRetries, MAX_PLANNING_PROTOCOL_RETRIES);
-                        continue;
-                    }
                     String answer = aiMessage.text();
                     long totalMs = System.currentTimeMillis() - loopStart;
                     log.info("[L3-ReAct] Finished in {}ms, steps={}", totalMs, allSteps.size());
@@ -593,42 +433,6 @@ public class ReActEngine implements ReActLoop {
                 // Tool execution round
                 List<ToolExecutionRequest> toolReqs = normalizeToolRequests(
                         aiMessage.toolExecutionRequests());
-                if (guardedFinalStreaming && containsFinishPlanning(toolReqs)) {
-                    if (!isFinishPlanningRound(toolReqs)) {
-                        planningProtocolRetries++;
-                        if (planningProtocolRetries > MAX_PLANNING_PROTOCOL_RETRIES) {
-                            throw new IllegalStateException(
-                                    "Tool planning protocol failed after "
-                                            + MAX_PLANNING_PROTOCOL_RETRIES + " retries");
-                        }
-                        messages.add(UserMessage.from(TOOL_PLANNING_RETRY_INSTRUCTION));
-                        log.warn("[L3-ReAct] finish_planning was mixed with other calls; retry {}/{}",
-                                planningProtocolRetries, MAX_PLANNING_PROTOCOL_RETRIES);
-                        continue;
-                    }
-                    planningProtocolRetries = 0;
-                    messages.add(aiMessage);
-                    messages.add(ToolExecutionResultMessage.from(
-                            toolReqs.get(0), "Tool planning completed."));
-                    GeneratedFinalResponse finalResponse = generateFinalResponse(
-                            systemPrompt,
-                            messages,
-                            finalRequestParameters,
-                            listener,
-                            cancellationToken,
-                            trace);
-                    AiMessage finalMessage = finalResponse.response().aiMessage();
-                    llmCalls++;
-                    ModelUsage finalUsage = finalResponse.usage();
-                    totalInputTokens += observedTokens(finalUsage.inputTokens());
-                    totalOutputTokens += observedTokens(finalUsage.outputTokens());
-                    buildFinalStep(i, finalMessage.text(), allSteps, messages, finalMessage, listener);
-                    ReActLoopStats stats = new ReActLoopStats(
-                            "completed", i, totalToolCalls, reflectionChecks,
-                            totalInputTokens, totalOutputTokens, llmCalls, toolRetries);
-                    return new ReActResult(finalMessage.text(), allSteps, allArtifacts, stats);
-                }
-                planningProtocolRetries = 0;
                 if (!toolReqs.equals(aiMessage.toolExecutionRequests())) {
                     aiMessage = AiMessage.from(
                             aiMessage.text() != null ? aiMessage.text() : "", toolReqs);
@@ -649,59 +453,8 @@ public class ReActEngine implements ReActLoop {
                         || outcome.inspectionStatus() == ReActStep.InspectionResult.InspectionStatus.LOOP_DETECTED) {
                     toolRetries++;
                 }
-                if (outcome.action() == RoundAction.GENERATE_FINAL) {
-                    log.warn("[L3-ReAct] Tool failure limit reached; generating streamed tool-free final response");
-                    GeneratedFinalResponse finalResponse = generateFinalResponse(
-                            systemPrompt,
-                            messages,
-                            finalRequestParameters,
-                            listener,
-                            cancellationToken,
-                            trace);
-                    AiMessage finalMessage = finalResponse.response().aiMessage();
-                    llmCalls++;
-                    ModelUsage finalUsage = finalResponse.usage();
-                    totalInputTokens += observedTokens(finalUsage.inputTokens());
-                    totalOutputTokens += observedTokens(finalUsage.outputTokens());
-                    buildFinalStep(
-                            i + 1, finalMessage.text(), allSteps, messages, finalMessage, listener);
-                    ReActLoopStats stats = new ReActLoopStats(
-                            "tool_failure_limit", i, totalToolCalls, reflectionChecks,
-                            totalInputTokens, totalOutputTokens, llmCalls, toolRetries);
-                    return new ReActResult(finalMessage.text(), allSteps, allArtifacts, stats);
-                }
                 if (outcome.action() == RoundAction.RETURN_RESULT) {
                     ReActResult r = outcome.result();
-                    if (guardedFinalStreaming
-                            && shouldGenerateFinalResponse(outcome.inspectionStatus())) {
-                        GeneratedFinalResponse finalResponse = generateFinalResponse(
-                                systemPrompt,
-                                messages,
-                                finalRequestParameters,
-                                listener,
-                                cancellationToken,
-                                trace);
-                        ChatResponse finalChatResponse = finalResponse.response();
-                        AiMessage finalAiMessage = finalChatResponse.aiMessage();
-                        llmCalls++;
-                        ModelUsage finalUsage = finalResponse.usage();
-                        totalInputTokens += observedTokens(finalUsage.inputTokens());
-                        totalOutputTokens += observedTokens(finalUsage.outputTokens());
-                        buildFinalStep(
-                                i, finalAiMessage.text(), allSteps, messages, finalAiMessage, listener);
-                        String loopOutcome = confirmationOutcome(outcome.inspectionStatus());
-                        ReActLoopStats stats = new ReActLoopStats(
-                                loopOutcome,
-                                i,
-                                totalToolCalls,
-                                reflectionChecks,
-                                totalInputTokens,
-                                totalOutputTokens,
-                                llmCalls,
-                                toolRetries);
-                        return new ReActResult(
-                                finalAiMessage.text(), allSteps, allArtifacts, stats);
-                    }
                     if (r.loopStats() == null) {
                         String loopOutcome = confirmationOutcome(outcome.inspectionStatus());
                         ReActLoopStats stats = new ReActLoopStats(loopOutcome, i, totalToolCalls, reflectionChecks,
@@ -712,31 +465,8 @@ public class ReActEngine implements ReActLoop {
                 }
             }
 
-            if (guardedFinalStreaming && planningProtocolRetries > 0) {
-                throw new IllegalStateException(
-                        "Tool planning reached the iteration limit after an invalid planning response");
-            }
-            GeneratedFinalResponse finalResponse = generateFinalResponse(
-                    systemPrompt,
-                    messages,
-                    finalRequestParameters,
-                    listener,
-                    cancellationToken,
-                    trace);
-            AiMessage finalMessage = finalResponse.response().aiMessage();
-            llmCalls++;
-            ModelUsage finalUsage = finalResponse.usage();
-            totalInputTokens += observedTokens(finalUsage.inputTokens());
-            totalOutputTokens += observedTokens(finalUsage.outputTokens());
-            buildFinalStep(
-                    maxIterations + 1, finalMessage.text(), allSteps, messages, finalMessage, listener);
-            long totalMs = System.currentTimeMillis() - loopStart;
-            log.warn("[L3-ReAct] Streaming: reached max iterations ({}), generated a tool-free final answer",
-                    maxIterations);
-            log.info("[L3-ReAct] Finished in {}ms, steps={}, artifacts={}", totalMs, allSteps.size(), allArtifacts.size());
-            ReActLoopStats stats = new ReActLoopStats("max_iterations", maxIterations, totalToolCalls, reflectionChecks,
-                    totalInputTokens, totalOutputTokens, llmCalls, toolRetries);
-            return new ReActResult(finalMessage.text(), allSteps, allArtifacts, stats);
+            throw new IllegalStateException(
+                    "ReAct loop reached max iterations before the model produced a final answer");
         } finally {
             ReActStep.clearCurrentSteps();
         }
@@ -801,29 +531,6 @@ public class ReActEngine implements ReActLoop {
         }
     }
 
-    private static List<ToolSpecification> withFinishPlanningTool(
-            List<ToolSpecification> toolSpecifications) {
-        List<ToolSpecification> planningTools = new ArrayList<>(toolSpecifications);
-        planningTools.add(ToolSpecification.builder()
-                .name(FINISH_PLANNING_TOOL_NAME)
-                .description("Finish the tool-planning phase when no further tool calls are required.")
-                .parameters(JsonObjectSchema.builder()
-                        .additionalProperties(false)
-                        .build())
-                .build());
-        return List.copyOf(planningTools);
-    }
-
-    private static boolean containsFinishPlanning(List<ToolExecutionRequest> requests) {
-        return requests.stream()
-                .anyMatch(request -> FINISH_PLANNING_TOOL_NAME.equals(request.name()));
-    }
-
-    private static boolean isFinishPlanningRound(List<ToolExecutionRequest> requests) {
-        return requests.size() == 1
-                && FINISH_PLANNING_TOOL_NAME.equals(requests.get(0).name());
-    }
-
     private List<ToolSpecification> toToolSpecifications(List<ToolSpec> specs) {
         return specs.stream().map(s -> {
             JsonObjectSchema params;
@@ -871,61 +578,9 @@ public class ReActEngine implements ReActLoop {
         };
     }
 
-    private static boolean shouldGenerateFinalResponse(
-            ReActStep.InspectionResult.InspectionStatus status) {
-        return status == ReActStep.InspectionResult.InspectionStatus.CONFIRMATION_REJECTED
-                || status == ReActStep.InspectionResult.InspectionStatus.CONFIRMATION_EXPIRED;
-    }
-
-    private record GeneratedFinalResponse(ChatResponse response, ModelUsage usage) {}
-
-    private GeneratedFinalResponse generateFinalResponse(
-            String systemPrompt,
-            List<ChatMessage> messages,
-            ChatRequestParameters requestParameters,
-            ReActListener listener,
-            com.harness.core.model.CancellationToken cancellationToken,
-            RunTrace trace) {
-        long startedAt = System.currentTimeMillis();
-        FinalResponseGenerator.Result generated = finalResponseGenerator.generateStreaming(
-                systemPrompt,
-                messages,
-                requestParameters,
-                listener,
-                cancellationToken);
-        ModelUsage usage = recordModelUsage(
-                generated.response(),
-                trace,
-                System.currentTimeMillis() - startedAt,
-                generated.messages(),
-                List.of());
-        return new GeneratedFinalResponse(generated.response(), usage);
-    }
-
-    private GeneratedFinalResponse generateBlockingFinalResponse(
-            String systemPrompt,
-            List<ChatMessage> messages,
-            ChatRequestParameters requestParameters,
-            com.harness.core.model.CancellationToken cancellationToken,
-            RunTrace trace) {
-        long startedAt = System.currentTimeMillis();
-        FinalResponseGenerator.Result generated = finalResponseGenerator.generateBlocking(
-                systemPrompt,
-                messages,
-                requestParameters,
-                cancellationToken);
-        ModelUsage usage = recordModelUsage(
-                generated.response(),
-                trace,
-                System.currentTimeMillis() - startedAt,
-                generated.messages(),
-                List.of());
-        return new GeneratedFinalResponse(generated.response(), usage);
-    }
-
     // ── Shared helpers to deduplicate execute() / streamExecute() ──────────
 
-    private enum RoundAction { CONTINUE, GENERATE_FINAL, RETURN_RESULT }
+    private enum RoundAction { CONTINUE, RETURN_RESULT }
 
     /** Build and register a final step (final_answer / summary). */
     private ReActStep buildFinalStep(int iteration, String answer, List<ReActStep> allSteps,
@@ -1205,8 +860,8 @@ public class ReActEngine implements ReActLoop {
                 if (listener != null) listener.onStep(step);
                 log.warn("[L3-ReAct] Tool failure hard limit reached at step {}", iteration);
                 return new RoundOutcome(
-                        RoundAction.GENERATE_FINAL,
-                        null,
+                        RoundAction.RETURN_RESULT,
+                        new ReActResult(hardLimitInspection.reason(), allSteps, allArtifacts),
                         false,
                         hardLimitInspection.status());
             }
