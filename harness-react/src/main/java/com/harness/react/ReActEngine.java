@@ -224,8 +224,9 @@ public class ReActEngine implements ReActLoop {
                         aiMessage.toolExecutionRequests());
                 validateStructuredOutputRound(toolReqs, structuredOutput);
                 if (!toolReqs.equals(aiMessage.toolExecutionRequests())) {
-                    aiMessage = AiMessage.from(
-                            aiMessage.text() != null ? aiMessage.text() : "", toolReqs);
+                    aiMessage = aiMessage.toBuilder()
+                            .toolExecutionRequests(toolReqs)
+                            .build();
                 }
                 messages.add(aiMessage);
                 totalToolCalls += toolReqs.size();
@@ -434,8 +435,9 @@ public class ReActEngine implements ReActLoop {
                 List<ToolExecutionRequest> toolReqs = normalizeToolRequests(
                         aiMessage.toolExecutionRequests());
                 if (!toolReqs.equals(aiMessage.toolExecutionRequests())) {
-                    aiMessage = AiMessage.from(
-                            aiMessage.text() != null ? aiMessage.text() : "", toolReqs);
+                    aiMessage = aiMessage.toBuilder()
+                            .toolExecutionRequests(toolReqs)
+                            .build();
                 }
                 messages.add(aiMessage);
                 totalToolCalls += toolReqs.size();
