@@ -5,6 +5,7 @@ import com.harness.core.modelconfig.ModelConfigKey;
 import com.harness.provider.ChatModelProvider;
 import dev.langchain4j.model.anthropic.AnthropicChatModel;
 import dev.langchain4j.model.anthropic.AnthropicStreamingChatModel;
+import dev.langchain4j.http.client.HttpClientBuilder;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.StreamingChatModel;
 
@@ -72,7 +73,7 @@ public final class DeepSeekMessagesChatModelProvider implements ChatModelProvide
                 .build();
     }
 
-    private CancellableHttpClient.Builder cancellableHttpClientBuilder() {
+    private HttpClientBuilder cancellableHttpClientBuilder() {
         Duration timeout = Duration.ofSeconds(timeoutSeconds);
         return new CancellableHttpClient.Builder()
                 .connectTimeout(timeout)
