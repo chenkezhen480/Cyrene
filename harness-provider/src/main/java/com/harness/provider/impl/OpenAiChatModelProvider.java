@@ -65,7 +65,7 @@ public class OpenAiChatModelProvider implements ChatModelProvider {
     private final String apiKey;
     private final String baseUrl;
     private final String model;
-    private final OpenAiChatApiFormat apiFormat;
+    private final ChatApiFormat apiFormat;
     private final int maxTokens;
     private final double temperature;
     private final ThinkingDialect thinkingDialect;
@@ -77,9 +77,12 @@ public class OpenAiChatModelProvider implements ChatModelProvider {
     private final AtomicBoolean responsesThinkingWarningLogged = new AtomicBoolean();
     private final AtomicBoolean clampWarningLogged = new AtomicBoolean();
 
-    public OpenAiChatModelProvider(ModelConfig cfg, OpenAiChatApiFormat apiFormat) {
+    public OpenAiChatModelProvider(ModelConfig cfg, ChatApiFormat apiFormat) {
         Objects.requireNonNull(cfg, "cfg");
         this.apiFormat = Objects.requireNonNull(apiFormat, "apiFormat");
+        if (apiFormat == ChatApiFormat.MESSAGES) {
+            throw new IllegalArgumentException("OpenAiChatModelProvider does not implement messages format");
+        }
         this.apiKey = cfg.requireString(ModelConfigKey.CHAT_API_KEY);
         this.baseUrl = cfg.getString(ModelConfigKey.CHAT_BASE_URL, "https://api.openai.com/v1");
         this.model = cfg.getString(ModelConfigKey.CHAT_MODEL, "gpt-4o");
@@ -95,7 +98,7 @@ public class OpenAiChatModelProvider implements ChatModelProvider {
                         + "thinkingDialect={}, thinkingLevel={}, maxThinkingLevel={}, xhighValue={}, timeout={}s",
                 model, baseUrl, apiFormat.configValue(), maxTokens, temperature,
                 thinkingDialect.configValue, defaultThinkingLevel, maxThinkingLevel, xhighValue, timeoutSeconds);
-        if (apiFormat == OpenAiChatApiFormat.RESPONSES && defaultThinkingLevel != null) {
+        if (apiFormat == ChatApiFormat.RESPONSES && defaultThinkingLevel != null) {
             log.warn("[Model] chat.thinkingLevel is not sent with the Responses API; model defaults apply");
         }
     }
@@ -186,7 +189,7 @@ public class OpenAiChatModelProvider implements ChatModelProvider {
     }
 
     ChatModel createRawChatModel() {
-        if (apiFormat == OpenAiChatApiFormat.RESPONSES) {
+        if (apiFormat == ChatApiFormat.RESPONSES) {
             return OpenAiResponsesChatModel.builder()
                     .httpClientBuilder(cancellableHttpClientBuilder())
                     .apiKey(apiKey)
@@ -218,7 +221,7 @@ public class OpenAiChatModelProvider implements ChatModelProvider {
     @Override
     public StreamingChatModel streamingModel() {
         StreamingChatModel raw;
-        if (apiFormat == OpenAiChatApiFormat.RESPONSES) {
+        if (apiFormat == ChatApiFormat.RESPONSES) {
             raw = OpenAiResponsesStreamingChatModel.builder()
                     .httpClientBuilder(cancellableHttpClientBuilder())
                     .apiKey(apiKey)
@@ -268,7 +271,7 @@ public class OpenAiChatModelProvider implements ChatModelProvider {
             List<ToolSpecification> toolSpecifications
     ) {
         Objects.requireNonNull(toolSpecifications, "toolSpecifications");
-        if (apiFormat == OpenAiChatApiFormat.RESPONSES) {
+        if (apiFormat == ChatApiFormat.RESPONSES) {
             if (thinkingLevel != null
                     && responsesThinkingWarningLogged.compareAndSet(false, true)) {
                 log.warn("[Model] Request-level thinkingLevel is not sent with the Responses API; "
