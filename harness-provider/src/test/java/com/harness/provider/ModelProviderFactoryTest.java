@@ -4,7 +4,6 @@ import com.harness.core.modelconfig.ModelConfig;
 import com.harness.core.modelconfig.ModelConfigKey;
 import com.harness.provider.impl.NoOpChatModelProvider;
 import com.harness.provider.impl.ChatApiFormat;
-import com.harness.provider.impl.DeepSeekMessagesChatModelProvider;
 import com.harness.provider.impl.QwenRealtimeModelProvider;
 import org.junit.jupiter.api.Test;
 
