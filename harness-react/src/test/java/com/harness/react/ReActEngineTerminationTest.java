@@ -82,29 +82,22 @@ class ReActEngineTerminationTest {
     }
 
     @Test
-    void maxIterationsGeneratesToolFreeFinalAnswerAndNormalizesMissingCallId() {
+    void maxIterationsFailsClosedAndNormalizesMissingCallId() {
         ToolExecutionRequest toolRequest = ToolExecutionRequest.builder()
                 .id("")
                 .name("test_tool")
                 .arguments("{}")
                 .build();
-        List<ChatRequest> requests = new ArrayList<>();
-        AtomicInteger responseIndex = new AtomicInteger();
+        AtomicInteger requests = new AtomicInteger();
         ChatModel chatModel = new ChatModel() {
             @Override
             public ChatResponse doChat(ChatRequest request) {
-                requests.add(request);
-                return responseIndex.getAndIncrement() == 0
-                        ? ChatResponse.builder()
-                                .aiMessage(AiMessage.from("planning", List.of(toolRequest)))
-                                .build()
-                        : ChatResponse.builder()
-                                .aiMessage(AiMessage.from("final answer after limit"))
-                                .build();
+                requests.incrementAndGet();
+                return ChatResponse.builder()
+                        .aiMessage(AiMessage.from("planning", List.of(toolRequest)))
+                        .build();
             }
         };
-        ChatModelProvider provider = provider(chatModel);
-        ToolCatalog catalog = catalog();
         ToolExecutor executor = mock(ToolExecutor.class);
         AtomicReference<String> executedCallId = new AtomicReference<>();
         when(executor.executeAuthorized(any(), any(), isNull()))
@@ -116,37 +109,22 @@ class ReActEngineTerminationTest {
                             com.harness.core.model.ResultStatus.AVAILABLE);
                 });
 
-        ReActResult result = new ReActEngine(
-                provider, catalog, executor, null, null, 1)
-                .execute(new ReActRequest(
-                        "system", "use the tool", List.of(), RunTrace.noop(),
-                        null, null, ThinkingLevel.OFF, null));
+        ReActEngine engine = new ReActEngine(
+                provider(chatModel), catalog(), executor, null, null, 1);
 
-        assertThat(result.output()).isEqualTo("final answer after limit");
-        assertThat(result.output()).isNotEqualTo("raw tool output");
-        assertThat(result.loopStats().outcome()).isEqualTo("max_iterations");
-        assertThat(requests).hasSize(2);
-        assertThat(requests.get(1).parameters().toolSpecifications()).isEmpty();
+        assertThatThrownBy(() -> engine.execute(new ReActRequest(
+                "system", "use the tool", List.of(), RunTrace.noop(),
+                null, null, ThinkingLevel.OFF, null)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("max iterations");
+
+        assertThat(requests).hasValue(1);
         assertThat(executedCallId.get()).isNotBlank();
-
-        AiMessage normalizedPlanningMessage = requests.get(1).messages().stream()
-                .filter(AiMessage.class::isInstance)
-                .map(AiMessage.class::cast)
-                .findFirst()
-                .orElseThrow();
-        ToolExecutionResultMessage toolResultMessage = requests.get(1).messages().stream()
-                .filter(ToolExecutionResultMessage.class::isInstance)
-                .map(ToolExecutionResultMessage.class::cast)
-                .findFirst()
-                .orElseThrow();
-        assertThat(normalizedPlanningMessage.toolExecutionRequests().get(0).id())
-                .isEqualTo(executedCallId.get());
-        assertThat(toolResultMessage.id()).isEqualTo(executedCallId.get());
     }
 
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
-    void sixthConsecutiveToolFailureStopsPlanningAndGeneratesFinalAnswer(boolean streaming) {
+    void sixthConsecutiveToolFailureStopsLoopWithoutSecondFinalCall(boolean streaming) {
         List<ChatRequest> requests = new ArrayList<>();
         AtomicInteger planningCalls = new AtomicInteger();
         ChatModel chatModel = new ChatModel() {
@@ -202,11 +180,16 @@ class ReActEngineTerminationTest {
 
         assertThat(executions).hasValue(6);
         assertThat(planningCalls).hasValue(6);
-        assertThat(requests).hasSize(7);
-        assertThat(requests.getLast().parameters().toolSpecifications()).isEmpty();
-        assertThat(result.output()).isEqualTo("final answer after hard limit");
+        assertThat(requests).hasSize(6);
+        assertThat(requests).allSatisfy(request ->
+                assertThat(request.parameters().toolSpecifications()).isNotEmpty());
+        assertThat(result.output()).isNotBlank();
         assertThat(result.loopStats().outcome()).isEqualTo("tool_failure_limit");
-        if (streaming) assertThat(tokens).containsExactly("final answer after hard limit");
+        if (streaming) {
+            assertThat(tokens).containsExactly(
+                    "planning", "planning", "planning",
+                    "planning", "planning", "planning");
+        }
         assertThat(result.steps().get(5).inspection().status())
                 .isEqualTo(com.harness.core.model.ReActStep.InspectionResult.InspectionStatus.LOOP_DETECTED);
     }
