@@ -400,9 +400,9 @@ public class ReActEngine implements ReActLoop {
                         StructuredOutputException.Code.STRUCTURED_OUTPUT_EMPTY,
                         "Iteration limit reached before structured_output was submitted");
             }
-            if (guardedToolPlanning) {
+            if (guardedToolPlanning && planningProtocolRetries > 0) {
                 throw new IllegalStateException(
-                        "Tool planning reached the iteration limit without finish_planning");
+                        "Tool planning reached the iteration limit after an invalid planning response");
             }
             GeneratedFinalResponse finalResponse = generateBlockingFinalResponse(
                     systemPrompt, messages, finalRequestParameters,
@@ -712,9 +712,9 @@ public class ReActEngine implements ReActLoop {
                 }
             }
 
-            if (guardedFinalStreaming) {
+            if (guardedFinalStreaming && planningProtocolRetries > 0) {
                 throw new IllegalStateException(
-                        "Tool planning reached the iteration limit without finish_planning");
+                        "Tool planning reached the iteration limit after an invalid planning response");
             }
             GeneratedFinalResponse finalResponse = generateFinalResponse(
                     systemPrompt,
