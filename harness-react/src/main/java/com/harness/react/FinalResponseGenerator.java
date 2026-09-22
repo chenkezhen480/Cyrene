@@ -29,7 +29,7 @@ public final class FinalResponseGenerator {
     static final String FINAL_ANSWER_INSTRUCTION = """
             <final_answer_phase>
             Tool use is now disabled. Produce the complete user-facing final answer now.
-            Do not mention READY_FOR_FINAL or the phase transition.
+            Return only the user-facing answer.
             </final_answer_phase>
             """;
 
