@@ -51,6 +51,17 @@ class ReActEngineStreamingBaselineTest {
                 .name("test_tool")
                 .arguments("{\"sequence\":2}")
                 .build();
+        ToolExecutionRequest finishPlanning = ToolExecutionRequest.builder()
+                .id("finish-1")
+                .name("finish_planning")
+                .arguments("{}")
+                .build();
+        String malformedToolMarkup = """
+                <｜｜DSML｜｜ calls>
+                <｜｜DSML｜｜ invoke name="knowledge_read">
+                </｜｜DSML｜｜ invoke>
+                </｜｜DSML｜｜ calls>
+                """;
         StreamingChatModel streamingModel = scriptedStreamingModel(
                 new ScriptedResponse(
                         "I will call test_tool now.",
@@ -60,9 +71,14 @@ class ReActEngineStreamingBaselineTest {
                                         List.of(firstToolRequest, secondToolRequest)))
                                 .build()),
                 new ScriptedResponse(
-                        "READY_FOR_FINAL",
+                        malformedToolMarkup,
                         ChatResponse.builder()
-                                .aiMessage(AiMessage.from("READY_FOR_FINAL"))
+                                .aiMessage(AiMessage.from(malformedToolMarkup))
+                                .build()),
+                new ScriptedResponse(
+                        "",
+                        ChatResponse.builder()
+                                .aiMessage(AiMessage.from("", List.of(finishPlanning)))
                                 .build()),
                 new ScriptedResponse(
                         "The final answer.",
@@ -143,7 +159,7 @@ class ReActEngineStreamingBaselineTest {
                 toolEvents.add("OUTPUT:" + toolCallId + ":" + output.text());
             }
         };
-        ReActEngine engine = new ReActEngine(provider, catalog, executor, null, null, 3);
+        ReActEngine engine = new ReActEngine(provider, catalog, executor, null, null, 4);
         ReActRequest request = new ReActRequest(
                 "system",
                 "use the tool",
