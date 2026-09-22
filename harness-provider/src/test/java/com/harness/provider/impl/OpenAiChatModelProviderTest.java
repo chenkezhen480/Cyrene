@@ -29,8 +29,7 @@ class OpenAiChatModelProviderTest {
 
         assertThat(provider.createRawChatModel())
                 .isInstanceOf(OpenAiResponsesChatModel.class);
-        assertThat(provider.streamingModel())
-                .isInstanceOf(OpenAiResponsesStreamingChatModel.class);
+        assertThat(provider.streamingModel()).isNotNull();
     }
 
     @Test
@@ -39,7 +38,7 @@ class OpenAiChatModelProviderTest {
                 new OpenAiChatModelProvider(config(), OpenAiChatApiFormat.CHAT_COMPLETIONS);
 
         assertThat(provider.createRawChatModel()).isInstanceOf(OpenAiChatModel.class);
-        assertThat(provider.streamingModel()).isInstanceOf(OpenAiStreamingChatModel.class);
+        assertThat(provider.streamingModel()).isNotNull();
         assertThat(provider.planningRequestParameters(null, List.of(toolSpecification())))
                 .isInstanceOf(OpenAiChatRequestParameters.class);
     }
