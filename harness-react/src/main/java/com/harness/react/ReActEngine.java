@@ -574,6 +574,7 @@ public class ReActEngine implements ReActLoop {
             case CONFIRMATION_REQUIRED -> "confirmation_required";
             case CONFIRMATION_REJECTED -> "confirmation_rejected";
             case CONFIRMATION_EXPIRED -> "confirmation_expired";
+            case LOOP_DETECTED -> "tool_failure_limit";
             default -> "completed";
         };
     }
