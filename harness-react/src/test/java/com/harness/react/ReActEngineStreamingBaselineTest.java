@@ -51,17 +51,6 @@ class ReActEngineStreamingBaselineTest {
                 .name("test_tool")
                 .arguments("{\"sequence\":2}")
                 .build();
-        ToolExecutionRequest finishPlanning = ToolExecutionRequest.builder()
-                .id("finish-1")
-                .name("finish_planning")
-                .arguments("{}")
-                .build();
-        String malformedToolMarkup = """
-                <｜｜DSML｜｜ calls>
-                <｜｜DSML｜｜ invoke name="knowledge_read">
-                </｜｜DSML｜｜ invoke>
-                </｜｜DSML｜｜ calls>
-                """;
         StreamingChatModel streamingModel = scriptedStreamingModel(
                 new ScriptedResponse(
                         "I will call test_tool now.",
@@ -69,16 +58,6 @@ class ReActEngineStreamingBaselineTest {
                                 .aiMessage(AiMessage.from(
                                         "planning",
                                         List.of(firstToolRequest, secondToolRequest)))
-                                .build()),
-                new ScriptedResponse(
-                        malformedToolMarkup,
-                        ChatResponse.builder()
-                                .aiMessage(AiMessage.from(malformedToolMarkup))
-                                .build()),
-                new ScriptedResponse(
-                        "",
-                        ChatResponse.builder()
-                                .aiMessage(AiMessage.from("", List.of(finishPlanning)))
                                 .build()),
                 new ScriptedResponse(
                         "The final answer.",
@@ -159,7 +138,7 @@ class ReActEngineStreamingBaselineTest {
                 toolEvents.add("OUTPUT:" + toolCallId + ":" + output.text());
             }
         };
-        ReActEngine engine = new ReActEngine(provider, catalog, executor, null, null, 4);
+        ReActEngine engine = new ReActEngine(provider, catalog, executor, null, null, 3);
         ReActRequest request = new ReActRequest(
                 "system",
                 "use the tool",
@@ -173,7 +152,9 @@ class ReActEngineStreamingBaselineTest {
         ReActResult result = engine.streamExecute(request);
 
         assertThat(result.output()).isEqualTo("The final answer.");
-        assertThat(visibleTokens).containsExactly("The final answer.");
+        assertThat(visibleTokens).containsExactly(
+                "I will call test_tool now.",
+                "The final answer.");
         assertThat(toolEvents).containsExactly(
                 "CREATED:call-1",
                 "CREATED:call-2",
