@@ -40,7 +40,7 @@ class ReActEngineStreamingBaselineTest {
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     @Test
-    void streamExecute_withVisibleTools_streamsOnlyFinalAnswerAndKeepsCallIds() {
+    void streamExecute_withVisibleTools_streamsNarrationAndFinalAnswerAndKeepsCallIds() {
         ToolExecutionRequest firstToolRequest = ToolExecutionRequest.builder()
                 .id("call-1")
                 .name("test_tool")
