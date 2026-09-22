@@ -55,20 +55,12 @@ public final class DefaultReActLoopFactory implements ReActLoopFactory {
             ToolExecutor toolExecutor,
             int maxIterations
     ) {
-        FinalResponseGenerator finalResponseGenerator = new FinalResponseGenerator(
-                providers.chat(),
-                positiveTimeout(providers.chat().timeoutSeconds()));
         return new ReActEngine(
                 providers.chat(),
                 toolCatalog,
                 toolExecutor,
                 providers.vision(),
                 providers.voice(),
-                maxIterations,
-                finalResponseGenerator);
-    }
-
-    private static int positiveTimeout(int configured) {
-        return configured > 0 ? configured : 300;
+                maxIterations);
     }
 }
