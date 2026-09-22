@@ -3,7 +3,8 @@ package com.harness.provider;
 import com.harness.core.modelconfig.ModelConfig;
 import com.harness.core.modelconfig.ModelConfigKey;
 import com.harness.provider.impl.NoOpChatModelProvider;
-import com.harness.provider.impl.OpenAiChatApiFormat;
+import com.harness.provider.impl.ChatApiFormat;
+import com.harness.provider.impl.DeepSeekMessagesChatModelProvider;
 import com.harness.provider.impl.QwenRealtimeModelProvider;
 import org.junit.jupiter.api.Test;
 
@@ -40,17 +41,49 @@ class ModelProviderFactoryTest {
     @Test
     void validateChatApiFormat_allowsResponsesForOpenAiCompatibleProviders() {
         assertThat(ModelProviderFactory.validateChatApiFormat("openai", "responses"))
-                .isEqualTo(OpenAiChatApiFormat.RESPONSES);
+                .isEqualTo(ChatApiFormat.RESPONSES);
         assertThat(ModelProviderFactory.validateChatApiFormat("dashscope", " RESPONSES "))
-                .isEqualTo(OpenAiChatApiFormat.RESPONSES);
+                .isEqualTo(ChatApiFormat.RESPONSES);
+        assertThat(ModelProviderFactory.validateChatApiFormat("deepseek", "responses"))
+                .isEqualTo(ChatApiFormat.RESPONSES);
+    }
+
+    @Test
+    void deepSeekDefaultsToMessagesAndAllowsExplicitOpenAiFormats() {
+        assertThat(ModelProviderFactory.defaultChatApiFormat("deepseek"))
+                .isEqualTo(ChatApiFormat.MESSAGES);
+        assertThat(ModelProviderFactory.validateChatApiFormat("deepseek", "messages"))
+                .isEqualTo(ChatApiFormat.MESSAGES);
+        assertThat(ModelProviderFactory.validateChatApiFormat("deepseek", "chat_completions"))
+                .isEqualTo(ChatApiFormat.CHAT_COMPLETIONS);
+    }
+
+    @Test
+    void messagesFormatIsRejectedForUnrelatedProviders() {
+        assertThatThrownBy(() -> ModelProviderFactory.validateChatApiFormat("openai", "messages"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("provider=deepseek");
+    }
+
+    @Test
+    void createsDeepSeekMessagesProviderByDefault() {
+        ModelConfig config = ModelConfig.of(Map.of(
+                ModelConfigKey.CHAT_PROVIDER, "deepseek",
+                ModelConfigKey.CHAT_API_KEY, "unit-test-key",
+                ModelConfigKey.CHAT_MODEL, "deepseek-flash"));
+
+        ChatModelProvider provider = ModelProviderFactory.createChat(config);
+
+        assertThat(provider.providerName()).isEqualTo("deepseek");
+        assertThat(provider.modelName()).isEqualTo("deepseek-flash");
     }
 
     @Test
     void validateChatApiFormat_keepsChatCompletionsAvailableForOtherProviders() {
         assertThat(ModelProviderFactory.validateChatApiFormat("anthropic", "chat_completions"))
-                .isEqualTo(OpenAiChatApiFormat.CHAT_COMPLETIONS);
+                .isEqualTo(ChatApiFormat.CHAT_COMPLETIONS);
         assertThat(ModelProviderFactory.validateChatApiFormat("ollama", "chat_completions"))
-                .isEqualTo(OpenAiChatApiFormat.CHAT_COMPLETIONS);
+                .isEqualTo(ChatApiFormat.CHAT_COMPLETIONS);
     }
 
     @Test
@@ -66,7 +99,7 @@ class ModelProviderFactoryTest {
         assertThatThrownBy(() -> ModelProviderFactory.validateChatApiFormat("openai", "response"))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining(ModelConfigKey.CHAT_API_FORMAT)
-                .hasMessageContaining("chat_completions, responses");
+                .hasMessageContaining("chat_completions, responses, messages");
     }
 
     @Test
