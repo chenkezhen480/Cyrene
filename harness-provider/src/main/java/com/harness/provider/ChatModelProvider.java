@@ -35,6 +35,9 @@ public interface ChatModelProvider {
 
     default int timeoutSeconds() { return 300; }
 
+    /** Whether this provider uses Chat Completions finish reasons as a completion contract. */
+    default boolean requiresChatCompletionFinishReason() { return false; }
+
     default Set<ModalCapability> modalCapabilities() {
         return ModalCapabilityRegistry.getCapabilities(modelName());
     }

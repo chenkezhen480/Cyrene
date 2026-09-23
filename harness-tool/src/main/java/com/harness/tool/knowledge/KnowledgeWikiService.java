@@ -42,6 +42,31 @@ public final class KnowledgeWikiService {
 
     public WikiCard update(String conceptId, String expectedRevisionId, String title, String summary,
             String editor, Predicate<KnowledgeHead> authorized) {
+        return update(conceptId, expectedRevisionId, title, summary, editor, authorized, null, null);
+    }
+
+    public VectorStore.Document editChunk(String collection, String chunkId, String expectedContent,
+            String content, String editor) {
+        if (content == null || content.isBlank()
+                || content.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > 65_535)
+            throw new IllegalArgumentException("Chunk content must contain 1..65535 UTF-8 bytes");
+        var chunk = vectorStore.getById(collection, chunkId);
+        if (chunk == null) throw new IllegalArgumentException("Knowledge chunk does not exist");
+        if (!Objects.equals(expectedContent, chunk.content()))
+            throw new IllegalStateException("Chunk has changed; reload it before saving");
+        String conceptId = Objects.toString(chunk.metadata().get("document_id"), "");
+        String revisionId = Objects.toString(chunk.metadata().get("revision_id"), "");
+        Predicate<KnowledgeHead> scope = head -> head.concept().conceptType() == KnowledgeConceptType.SOURCE_DOCUMENT
+                && Objects.equals(collection, head.concept().namespaceKey())
+                && head.concept().tenantId() == null;
+        var card = get(conceptId, scope);
+        var updated = update(conceptId, revisionId, card.title(), card.summary(), editor, scope, chunk, content);
+        return vectorStore.readDocumentWindow(collection, conceptId, updated.revisionId(), chunk.chunkIndex(), 0, 0)
+                .stream().findFirst().orElseThrow(() -> new IllegalStateException("Updated chunk is unavailable"));
+    }
+
+    private WikiCard update(String conceptId, String expectedRevisionId, String title, String summary,
+            String editor, Predicate<KnowledgeHead> authorized, VectorStore.Document editedChunk, String content) {
         String safeTitle = required(title, "title", 512);
         String safeSummary = required(summary, "summary", 2048);
         AtomicReference<WikiCard> result = new AtomicReference<>();
@@ -54,7 +79,7 @@ public final class KnowledgeWikiService {
                     throw new IllegalStateException("Wiki has changed; reload it before saving");
                 var snapshot = repository.findSnapshot(head.currentVersion());
                 var previous = snapshot.revision();
-                if (safeTitle.equals(previous.title())
+                if (editedChunk == null && safeTitle.equals(previous.title())
                         && safeSummary.equals(previous.description())) {
                     result.set(card(head, previous));
                     return;
@@ -67,7 +92,8 @@ public final class KnowledgeWikiService {
                 metadata.put("wikiEditedAt", now.toString());
                 metadata.put("wikiEditId", UUID.randomUUID().toString());
                 String hash = KnowledgeIdentity.sha256(
-                        safeTitle + '\0' + safeSummary + '\0' + previous.body());
+                        safeTitle + '\0' + safeSummary + '\0' + previous.body()
+                                + (editedChunk == null ? "" : editedChunk.id() + '\0' + content));
                 var revision = new KnowledgeRevision(KnowledgeIdentity.revisionId(conceptId, version, hash),
                         conceptId, version, safeTitle, safeSummary, previous.body(),
                         "cyrene-wiki-editor/" + required(editor, "editor", 128), now, hash, metadata, now);
@@ -75,6 +101,11 @@ public final class KnowledgeWikiService {
                     copiedRevision.set(revision.id());
                     copiedCollection.set(current.namespaceKey());
                     vectorStore.copyDocumentRevision(current.namespaceKey(), conceptId, previous.id(), revision.id());
+                    if (editedChunk != null) {
+                        var copied = vectorStore.readDocumentWindow(current.namespaceKey(), conceptId, revision.id(),
+                                editedChunk.chunkIndex(), 0, 0).stream().findFirst().orElseThrow();
+                        vectorStore.updateContent(current.namespaceKey(), copied.id(), content);
+                    }
                 }
                 var concept = new KnowledgeConcept(conceptId, current.tenantId(), current.userId(), current.namespaceType(),
                         current.namespaceKey(), current.conceptType(), current.logicalKey(), current.status(),

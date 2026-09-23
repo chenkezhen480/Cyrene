@@ -240,11 +240,18 @@ public final class AgentRunCoordinator {
                     command.cancellationToken(),
                     thinkingLevel,
                     confirmationContext));
+            String streamedOutput = result.output();
             boolean completesTurn = !subAgentManager.hasDetachedTasks(runId);
             if (completesTurn) {
                 result = lifecycleHooks.beforeFinal(
                         new AgentLifecycleHooks.BeforeFinalContext(
                                 prepared.sessionId(), result)).result();
+            }
+            if (!java.util.Objects.equals(streamedOutput, result.output())) {
+                if (text.length() > 0) listener.onTokenRollback(text.length());
+                if (result.output() != null && !result.output().isEmpty()) {
+                    listener.onToken(result.output());
+                }
             }
             result.steps().forEach(trace::addStep);
             recordReactStats(trace, result);
@@ -395,6 +402,12 @@ public final class AgentRunCoordinator {
             }
 
             @Override
+            public void onTokenRollback(int characters) {
+                text.setLength(text.length() - characters);
+                callback.onEvent(StreamEvent.tokenRollback(characters));
+            }
+
+            @Override
             public void onToolCallCreated(
                     String toolCallId, String toolName, String arguments) {
                 callback.onEvent(StreamEvent.toolCallCreated(
@@ -536,7 +549,9 @@ public final class AgentRunCoordinator {
         // Both sets only ever remove tools; excluding() is a no-op for a null or empty set,
         // which is what "nothing disabled for this tenant + identity" resolves to.
         RunToolCatalog catalog =
-                toolRegistry.snapshot().excluding(unavailableTools).excluding(disabledTools);
+                toolRegistry.snapshot().excluding(unavailableTools).excluding(disabledTools)
+                        .excluding(memoryRuntime.knowledgeReady() ? Set.of()
+                                : Set.of("knowledge_search", "knowledge_read"));
         if (catalog.get(FileReadTool.TOOL_NAME) instanceof FileReadTool fileTool) {
             catalog = catalog.replacing(fileTool.forSession(sessionId));
         }

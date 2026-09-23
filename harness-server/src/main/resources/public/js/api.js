@@ -196,6 +196,14 @@ const CyreneAPI = (() => {
     return request('GET', `/api/knowledge/${encodeURIComponent(collection)}?${params}`);
   }
 
+  function getKnowledgeChunk(collection, id) {
+    return request('GET', `/api/knowledge/${encodeURIComponent(collection)}/${encodeURIComponent(id)}`);
+  }
+
+  function updateKnowledgeChunk(collection, id, draft) {
+    return request('PUT', `/api/knowledge/${encodeURIComponent(collection)}/${encodeURIComponent(id)}`, draft);
+  }
+
   function listWiki(userId, { type = 'SOURCE_DOCUMENT', collection = '', limit = 20, cursor = '' } = {}) {
     const params = new URLSearchParams({ userId, type, limit: String(limit) });
     if (collection) params.set('collection', collection);
@@ -408,6 +416,10 @@ const CyreneAPI = (() => {
     return request('POST', '/api/project-discovery/reload');
   }
 
+  function getKnowledgeStatus() {
+    return request('GET', '/api/knowledge-status');
+  }
+
   // ── Health ──
   function health() {
     return request('GET', '/api/health');
@@ -418,9 +430,9 @@ const CyreneAPI = (() => {
     login,
     chat, cancelChat, approveConfirmation, rejectConfirmation, uploadFile,
     getToolPermissions, saveToolPermissions,
-    getModelConfiguration, updateModelConfiguration,
+    getModelConfiguration, updateModelConfiguration, getKnowledgeStatus,
     createSession, listSessions, getSession, getMessages, getSessionStats, closeSession,
-    listCollections, uploadKnowledge, listKnowledge, listWiki, getWiki, updateWiki, deleteWiki, exportWiki, exportAllWiki,
+    listCollections, uploadKnowledge, listKnowledge, getKnowledgeChunk, updateKnowledgeChunk, listWiki, getWiki, updateWiki, deleteWiki, exportWiki, exportAllWiki,
     getGraphStatus, listGraphSchemas, getGraphSchema,
     listGraphSchemaConfigs, getGraphSchemaConfig, createGraphSchemaConfig, updateGraphSchemaConfig,
     enableGraphSchemaConfig, disableGraphSchemaConfig, deleteGraphSchemaConfig,

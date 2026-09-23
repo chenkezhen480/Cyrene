@@ -124,16 +124,17 @@ class KnowledgeManagementHandlerTest {
     }
 
     @Test
-    void updateDocumentRejectsSingleChunkMutation() {
-        VectorStore vectorStore = mock(VectorStore.class);
+    void updateDocumentPublishesChunkEditThroughVersionedService() {
+        VectorStore vectors = mock(VectorStore.class);
+        var service = mock(com.harness.tool.knowledge.KnowledgeWikiService.class);
         Context context = mock(Context.class);
-        when(context.status(405)).thenReturn(context);
-        when(context.json(any())).thenReturn(context);
-
-        new KnowledgeManagementHandler(vectorStore).updateDocument(context);
-
-        verify(context).status(405);
-        verify(vectorStore, never()).upsert(any(), any());
+        when(context.pathParam("collection")).thenReturn("manuals");
+        when(context.pathParam("documentId")).thenReturn("chunk-1");
+        when(context.bodyAsClass(KnowledgeManagementHandler.ChunkEdit.class))
+                .thenReturn(new KnowledgeManagementHandler.ChunkEdit("old", "new"));
+        new KnowledgeManagementHandler(vectors, null, service).updateDocument(context);
+        verify(service).editChunk("manuals", "chunk-1", "old", "new", "management");
+        verify(vectors, never()).upsert(any(), any());
     }
 
     @Test

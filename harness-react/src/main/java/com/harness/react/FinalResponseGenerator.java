@@ -10,6 +10,7 @@ import dev.langchain4j.model.chat.request.ChatRequest;
 import dev.langchain4j.model.chat.request.ChatRequestParameters;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
+import dev.langchain4j.model.output.FinishReason;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -33,8 +34,9 @@ public final class FinalResponseGenerator {
 
     static final String FINAL_ANSWER_INSTRUCTION = """
             <final_answer_phase>
-            Tool use is now disabled. Produce the complete user-facing final answer now.
-            Do not mention READY_FOR_FINAL or the phase transition.
+            The execution budget has ended or execution requires user action.
+            Summarize only the evidence already obtained and clearly state what remains unresolved.
+            No further tools can be executed in this call.
             </final_answer_phase>
             """;
 
@@ -42,7 +44,7 @@ public final class FinalResponseGenerator {
     static final String TOOL_SYNTAX_RETRY_INSTRUCTION = """
             <tool_syntax_rejected>
             Your previous attempt emitted tool-call syntax, which cannot be executed here and
-            reached the user as raw markup. Tools are not available in this phase. Write the
+            was rejected as a protocol error. Tools are not available in this phase. Write the
             answer as ordinary prose. If you still need a tool, say what you need in a sentence.
             </tool_syntax_rejected>
             """;
@@ -55,41 +57,22 @@ public final class FinalResponseGenerator {
      * ASCII variants cover the same syntax produced by other runtimes.</p>
      */
     private static final List<String> TOOL_CALL_MARKERS = List.of(
+            "<｜｜DSML｜｜",
+            "<||DSML||",
             "<｜DSML｜",
             "<|DSML|",
             "<tool_call",
             "<tool_calls",
             "<function_call");
 
-    /** Whether this text begins a tool-call envelope rather than an answer. */
+    /** Whether this text contains a provider tool-call envelope. */
     static boolean isToolCallMarkup(String text) {
         if (text == null) {
             return false;
         }
         String candidate = text.stripLeading();
         for (String marker : TOOL_CALL_MARKERS) {
-            if (candidate.startsWith(marker)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    /**
-     * Whether this text is still too short to tell — a prefix of some marker. Holding only while
-     * this is true keeps the added latency to the first character or two of an answer that opens
-     * with {@code <}, and to nothing at all for ordinary prose.
-     */
-    static boolean couldBecomeToolCallMarkup(String text) {
-        if (text == null) {
-            return false;
-        }
-        String candidate = text.stripLeading();
-        if (candidate.isEmpty()) {
-            return true;
-        }
-        for (String marker : TOOL_CALL_MARKERS) {
-            if (marker.startsWith(candidate)) {
+            if (candidate.contains(marker)) {
                 return true;
             }
         }
@@ -113,11 +96,13 @@ public final class FinalResponseGenerator {
     private final ChatModel chatModel;
     private final StreamingChatModel streamingChatModel;
     private final long timeoutSeconds;
+    private final boolean strictChatCompletionFinishReason;
 
     public FinalResponseGenerator(ChatModelProvider chatModelProvider, long timeoutSeconds) {
         Objects.requireNonNull(chatModelProvider, "chatModelProvider");
         this.chatModel = Objects.requireNonNull(chatModelProvider.chatModel(), "chatModel");
         this.streamingChatModel = chatModelProvider.streamingModel();
+        this.strictChatCompletionFinishReason = chatModelProvider.requiresChatCompletionFinishReason();
         if (timeoutSeconds <= 0) {
             throw new IllegalArgumentException("timeoutSeconds must be positive");
         }
@@ -171,11 +156,8 @@ public final class FinalResponseGenerator {
         }
 
         CompletableFuture<ChatResponse> responseFuture = new CompletableFuture<>();
-        // Tokens are withheld until the opening characters prove this is prose and not a tool
-        // envelope. Forwarding unconditionally is what let raw tool syntax reach the user, and a
-        // streamed frame cannot be taken back.
-        StringBuilder held = new StringBuilder();
-        boolean[] released = {false};
+        // A provider can emit protocol markup after ordinary prose. Validate the complete
+        // message before publishing any text; SSE frames cannot be retracted.
         // Tracked before the request starts, not after it returns: the streaming HTTP future is
         // keyed by the calling thread, and this thread then blocks on it for the whole stream, so
         // a cancel arriving mid-stream can only reach that future while the thread is registered.
@@ -186,31 +168,16 @@ public final class FinalResponseGenerator {
             streamingChatModel.chat(requestBuilder.build(), new StreamingChatResponseHandler() {
                 @Override
                 public void onPartialResponse(String text) {
-                    if (text == null || text.isEmpty()) {
-                        return;
-                    }
-                    if (released[0]) {
-                        forward(listener, text);
-                        return;
-                    }
-                    held.append(text);
-                    String buffered = held.toString();
-                    if (isToolCallMarkup(buffered)) {
-                        responseFuture.completeExceptionally(new ToolCallSyntaxLeakException());
-                        return;
-                    }
-                    if (couldBecomeToolCallMarkup(buffered)) {
-                        return;
-                    }
-                    release(listener, held, released);
+                    // Publish only the validated complete answer below.
                 }
 
                 @Override
                 public void onCompleteResponse(ChatResponse response) {
-                    // A short answer can end while still indistinguishable from a marker prefix.
-                    if (!responseFuture.isCompletedExceptionally()) {
-                        release(listener, held, released);
+                    try {
+                        requireCompletedAnswer(response);
                         responseFuture.complete(response);
+                    } catch (RuntimeException failure) {
+                        responseFuture.completeExceptionally(failure);
                     }
                 }
 
@@ -220,9 +187,9 @@ public final class FinalResponseGenerator {
                 }
             });
 
-            return new Result(
-                    responseFuture.get(timeoutSeconds, TimeUnit.SECONDS),
-                    finalMessages);
+            ChatResponse response = responseFuture.get(timeoutSeconds, TimeUnit.SECONDS);
+            forward(listener, response.aiMessage().text());
+            return new Result(response, finalMessages);
         } catch (TimeoutException e) {
             throw new RuntimeException(
                     "Final answer streaming call timed out after " + timeoutSeconds + "s", e);
@@ -243,13 +210,23 @@ public final class FinalResponseGenerator {
         }
     }
 
-    private static void release(ReActListener listener, StringBuilder held, boolean[] released) {
-        if (released[0]) {
-            return;
+    static void requireAnswer(ChatResponse response) {
+        if (response == null || response.aiMessage() == null) {
+            throw new IllegalStateException("Provider returned no assistant message");
         }
-        released[0] = true;
-        forward(listener, held.toString());
-        held.setLength(0);
+        if (response.aiMessage().hasToolExecutionRequests() || isToolCallMarkup(response.aiMessage().text())) {
+            throw new ToolCallSyntaxLeakException();
+        }
+    }
+
+    private void requireCompletedAnswer(ChatResponse response) {
+        requireAnswer(response);
+        FinishReason reason = response.finishReason();
+        if (reason != FinishReason.STOP
+                && (strictChatCompletionFinishReason || reason != null)) {
+            throw new IllegalStateException(
+                    "Final answer did not complete normally: finish_reason=" + reason);
+        }
     }
 
     private static void forward(ReActListener listener, String text) {
@@ -282,6 +259,7 @@ public final class FinalResponseGenerator {
         }
         try {
             ChatResponse response = chatModel.chat(request);
+            requireCompletedAnswer(response);
             return new Result(response, finalMessages);
         } finally {
             if (cancellationToken != null) {

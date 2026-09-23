@@ -136,6 +136,24 @@ test('streamed final text is not duplicated by done or overwritten by later even
   assert.deepEqual(state.toasts, []);
 });
 
+test('tool round text is rolled back before final tokens are shown', async () => {
+  const state = await runChat('event: token\ndata: {"text":"temporary plan"}\n\n'
+    + 'event: token_rollback\ndata: {"characters":14}\n\n'
+    + 'event: token\ndata: {"text":"final "}\n\n'
+    + 'event: token\ndata: {"text":"answer"}\n\n'
+    + 'event: done\ndata: {"output":"final answer"}\n\n');
+  assert.equal(state.messages.value[1].content, 'final answer');
+});
+
+test('rollback removes text that has already reached the screen', () => {
+  const helpers = runInNewContext(appendText + '\n({ appendAssistantText, rollbackAssistantText });');
+  const message = { content: [{ type: 'ARTIFACT' }, { type: 'TEXT', text: 'temporary plan' }] };
+  helpers.rollbackAssistantText(message, 14);
+  assert.equal(message.content.length, 1);
+  helpers.appendAssistantText(message, 'final answer');
+  assert.equal(message.content[1].text, 'final answer');
+});
+
 test('frames carrying another run id are dropped instead of rendered', async () => {
   const state = await runChat('event: start\ndata: {"sessionId":"s1","runId":"run-B"}\n\n'
     + 'event: token\ndata: {"runId":"run-A","text":"stale image result "}\n\n'

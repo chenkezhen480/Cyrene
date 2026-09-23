@@ -125,7 +125,8 @@ public class Main {
                 new MysqlKnowledgeIngestJobStore(agent.knowledgeRepository()),
                 agent.knowledgeRepository(),
                 agent.wikiIdentityResolver());
-        KnowledgeIngestWorker ingestWorker = new KnowledgeIngestWorker(ingestService);
+        KnowledgeIngestWorker ingestWorker = new KnowledgeIngestWorker(
+                ingestService, agent.knowledgeVectorRuntime()::isReady);
         ingestWorker.start();
         Runtime.getRuntime().addShutdownHook(new Thread(ingestWorker::close));
         TraceStore traceStore = agent.traceStore();
@@ -183,6 +184,17 @@ public class Main {
         app.get("/api/model-config", modelConfigurationHandler::get);
         app.put("/api/model-config", modelConfigurationHandler::update);
 
+        app.get("/api/knowledge-status", ctx -> ctx.json(agent.knowledgeVectorRuntime().status()));
+        io.javalin.http.Handler requireKnowledge = ctx -> {
+            if (!agent.knowledgeVectorRuntime().isReady()) {
+                ApiResponses.error(ctx, 503, ApiErrorCode.KNOWLEDGE_NOT_READY,
+                        agent.knowledgeVectorRuntime().status().message());
+                ctx.skipRemainingHandlers();
+            }
+        };
+        app.before("/api/knowledge", requireKnowledge);
+        app.before("/api/knowledge/*", requireKnowledge);
+
         // Auth token endpoint
         if ("jwt".equals(authMode)) {
             AuthHandler authHandler = new AuthHandler();
@@ -198,10 +210,12 @@ public class Main {
         app.post("/api/files/upload", fileUploadHandler::handle);
 
         // Knowledge base management endpoints
+        var knowledgeWikiService = new com.harness.tool.knowledge.KnowledgeWikiService(
+                agent.knowledgeRepository(), agent.vectorStore());
         KnowledgeManagementHandler knowledgeMgmtHandler = new KnowledgeManagementHandler(
                 agent.vectorStore(),
                 new KnowledgeDocumentLifecycleService(
-                        agent.knowledgeRepository(), agent.vectorStore()));
+                        agent.knowledgeRepository(), agent.vectorStore()), knowledgeWikiService);
         app.get("/api/knowledge/{collection}", knowledgeMgmtHandler::listDocuments);
         // List all knowledge collections
         app.get("/api/knowledge", knowledgeMgmtHandler::listCollections);
@@ -211,7 +225,7 @@ public class Main {
         app.delete("/api/knowledge/{collection}/{documentId}", knowledgeMgmtHandler::deleteDocument);
 
         KnowledgeWikiHandler wikiHandler = new KnowledgeWikiHandler(
-                new com.harness.tool.knowledge.KnowledgeWikiService(agent.knowledgeRepository(), agent.vectorStore()),
+                knowledgeWikiService,
                 agent.graphSpaceAccessService(),
                 agent.knowledgeGraphStore());
         app.get("/api/wiki", wikiHandler::list);

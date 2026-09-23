@@ -14,6 +14,7 @@ public record StreamEvent(
     public enum Type {
         START,
         TOKEN,
+        TOKEN_ROLLBACK,
         STEP,
         TOOL_CALL_CREATED,
         TOOL_CALL_START,
@@ -50,6 +51,10 @@ public record StreamEvent(
 
     public static StreamEvent token(String text) {
         return new StreamEvent(Type.TOKEN, text, Map.of());
+    }
+
+    public static StreamEvent tokenRollback(int characters) {
+        return new StreamEvent(Type.TOKEN_ROLLBACK, "", Map.of("characters", characters));
     }
 
     public static StreamEvent step(ReActStep step) {

@@ -111,6 +111,7 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
 
     private final AgentRuntime runtime;
     private final ModelProviderRuntime modelProviderRuntime;
+    private final com.harness.tool.knowledge.index.KnowledgeVectorRuntime knowledgeVectorRuntime;
     private final AgentToolRuntime toolRuntime;
     private final AgentPromptBuilder promptBuilder;
     private final DocumentConversionService documentConversionService;
@@ -198,7 +199,18 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
         this.graphSpaceAccessService = GraphSpaceAccessServiceFactory.create(knowledgeGraphStore);
 
         // Context enrichment and retrieval.
-        this.contextBuilder = new ContextBuilder(modelProviders.rerank(), modelProviders.embedding());
+        this.knowledgeVectorRuntime = new com.harness.tool.knowledge.index.KnowledgeVectorRuntime(
+                modelProviders.embedding());
+        if (modelProviders.embedding().isAvailable()) {
+            try {
+                knowledgeVectorRuntime.prepare(modelProviders.embedding(), false).run();
+            } catch (RuntimeException failure) {
+                log.error("Knowledge initialization failed; configure and retry in the Web console: {}",
+                        failure.getMessage(), failure);
+            }
+        }
+        this.contextBuilder = new ContextBuilder(knowledgeVectorRuntime.documents(),
+                new com.harness.tool.rerank.Reranker(modelProviders.rerank()));
 
         // Artifact subsystem
         String artifactDirStr = EnvConfig.get().getString(EnvKey.ARTIFACT_DIR, "./artifacts");
@@ -218,7 +230,7 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
                 graphSpaceAccessService,
                 artifactStore,
                 artifactStorageService,
-                initialModelConfig);
+                initialModelConfig, contextBuilder);
         this.toolRegistry = toolRuntime.tools();
         this.skillRegistry = toolRuntime.skills();
         // Reads the provider through the runtime delegate, so a model.conf hot-swap applies
@@ -266,7 +278,7 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
 
         this.memoryRuntime = new AgentMemoryRuntime(
                 runtime.providers().chat(), runtime.providers().embedding(),
-                skillRegistry, toolRegistry, contextBuilder.vectorStore());
+                skillRegistry, toolRegistry, contextBuilder.vectorStore(), knowledgeVectorRuntime);
         registerUnifiedKnowledgeTools();
         this.runPreparer = new AgentRunPreparer(
                 runtime,
@@ -490,7 +502,8 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
         ModelConfig currentConfiguration = modelProviderRuntime.currentConfiguration();
         EmbeddingIdentity currentEmbedding = embeddingIdentity(currentConfiguration);
         EmbeddingIdentity candidateEmbedding = embeddingIdentity(candidateConfiguration);
-        if (!currentEmbedding.equals(candidateEmbedding)) {
+        boolean embeddingChanged = !currentEmbedding.equals(candidateEmbedding);
+        if (embeddingChanged && knowledgeVectorRuntime.isReady()) {
             throw new IllegalArgumentException(
                     "Embedding provider, base URL, model, or dimension cannot be hot-switched; "
                             + "re-index existing knowledge data before changing embedding identity");
@@ -503,7 +516,12 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
                         currentConfiguration,
                         candidateConfiguration,
                         candidateProviders.voice());
-        return () -> modelProviderRuntime.activate(
+        Runnable enableKnowledge = candidateProviders.embedding().isAvailable()
+                && !knowledgeVectorRuntime.isReady()
+                ? knowledgeVectorRuntime.prepare(candidateProviders.embedding(), embeddingChanged)
+                : () -> {};
+        return () -> {
+            modelProviderRuntime.activate(
                 candidateProviders, candidateConfiguration, () -> {
             toolRuntime.applyModelTools(candidateTools);
             log.info("Model configuration activated: chat={}, vision={}, voice={}, "
@@ -514,7 +532,13 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
                     candidateProviders.embedding().modelName(),
                     candidateProviders.rerank().modelName(),
                     candidateProviders.smallTask().modelName());
-        });
+            });
+            enableKnowledge.run();
+        };
+    }
+
+    public com.harness.tool.knowledge.index.KnowledgeVectorRuntime knowledgeVectorRuntime() {
+        return knowledgeVectorRuntime;
     }
 
     private static ModelConfig loadModelConfiguration() {
@@ -676,7 +700,9 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
             Set<String> unavailableTools,
             Set<String> disabledTools
     ) {
-        return toolRegistry.snapshot().excluding(unavailableTools).excluding(disabledTools);
+        RunToolCatalog catalog = toolRegistry.snapshot().excluding(unavailableTools).excluding(disabledTools);
+        return knowledgeVectorRuntime.isReady() ? catalog
+                : catalog.excluding(Set.of(KnowledgeSearchTool.TOOL_NAME, KnowledgeReadTool.TOOL_NAME));
     }
 
     private ReActLoop createRequestReActLoop(RunToolCatalog runToolCatalog) {

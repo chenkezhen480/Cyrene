@@ -80,7 +80,8 @@ public final class AgentToolRuntime {
             GraphSpaceAccessService graphSpaceAccessService,
             ArtifactStore artifactStore,
             ArtifactStorageService artifactStorageService,
-            ModelConfig modelConfig
+            ModelConfig modelConfig,
+            com.harness.agent.context.ContextBuilder contextBuilder
     ) {
         this.toolRegistry = new ToolRegistry();
         this.skillRegistry = new SkillRegistry();
@@ -89,6 +90,10 @@ public final class AgentToolRuntime {
                 artifactStorageService, "artifactStorageService");
         this.voiceProvider = java.util.Objects.requireNonNull(
                 providers.voice(), "voiceProvider");
+        if (contextBuilder.vectorStore() != null) {
+            this.knowledgeAccessService = new KnowledgeAccessService(contextBuilder,
+                    EnvConfig.get().getInt(EnvKey.RAG_CONTEXT_WINDOW_MAX, 10));
+        }
         registerBuiltins(
                 providers,
                 graphSettings,
@@ -174,16 +179,6 @@ public final class AgentToolRuntime {
                     "Access public web information and authorized pages. "
                             + "Use help to load an available action's parameters.",
                     webActions, config.getCommaList(EnvKey.RISK_CONFIRM_TOOLS)));
-        }
-
-        String ragProvider = config.getString(EnvKey.RAG_PROVIDER, "milvus");
-        if (!"none".equalsIgnoreCase(ragProvider) && providers.embedding().isAvailable()) {
-            knowledgeAccessService = new KnowledgeAccessService(
-                    providers.rerank(), providers.embedding());
-            log.info("Document knowledge executor initialized for unified knowledge tools");
-        } else {
-            log.info("Document knowledge executor disabled (ragProvider={}, embedding={})",
-                    ragProvider, providers.embedding().isAvailable());
         }
 
         if (!"none".equals(knowledgeGraphStore.providerName())) {

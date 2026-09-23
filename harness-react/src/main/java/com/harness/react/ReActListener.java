@@ -29,6 +29,9 @@ public interface ReActListener {
      */
     default void onToken(String token) {}
 
+    /** Retract provisional text from a round that completed as a tool call. */
+    default void onTokenRollback(int characters) {}
+
     /**
      * Called when a tool call is created (LLM returned the tool call, before execution).
      * Default is no-op for backward compatibility.

@@ -51,12 +51,8 @@ public final class EnvKey {
     public static final String RAG_COLLECTION        = "HARNESS_RAG_COLLECTION";
     /** Milvus 数据库名，默认 default */
     public static final String RAG_DATABASE          = "HARNESS_RAG_DATABASE";
-    /** 检索返回最大文档数，默认 5 */
-    public static final String RAG_TOP_K             = "HARNESS_RAG_TOP_K";
-    /** 最低相似度阈值，默认 0.7 */
+    /** 最低相似度阈值，默认 0.5 */
     public static final String RAG_SCORE_THRESHOLD   = "HARNESS_RAG_SCORE_THRESHOLD";
-    /** BM25/全文检索在混合检索中的权重（0.0-1.0），默认 0.3 */
-    public static final String RAG_BM25_WEIGHT       = "HARNESS_RAG_BM25_WEIGHT";
 
 
     // ==================== RAG (显式上下文窗口) ====================
@@ -271,16 +267,8 @@ public final class EnvKey {
 
     public static final String MEMORY_OKF_EXPORT_ENABLED =
             "HARNESS_MEMORY_OKF_EXPORT_ENABLED";
-    public static final String KNOWLEDGE_CATALOG_RETRIEVAL_LANE_TOP_K =
-            "HARNESS_KNOWLEDGE_CATALOG_RETRIEVAL_LANE_TOP_K";
-    public static final String KNOWLEDGE_CATALOG_RETRIEVAL_FUSED_TOP_K =
-            "HARNESS_KNOWLEDGE_CATALOG_RETRIEVAL_FUSED_TOP_K";
-    public static final String KNOWLEDGE_CATALOG_RETRIEVAL_DENSE_THRESHOLD =
-            "HARNESS_KNOWLEDGE_CATALOG_RETRIEVAL_DENSE_THRESHOLD";
     public static final String KNOWLEDGE_CATALOG_RETRIEVAL_SPARSE_THRESHOLD =
             "HARNESS_KNOWLEDGE_CATALOG_RETRIEVAL_SPARSE_THRESHOLD";
-    public static final String KNOWLEDGE_CATALOG_RETRIEVAL_RRF_K =
-            "HARNESS_KNOWLEDGE_CATALOG_RETRIEVAL_RRF_K";
     /** 索引 Outbox 每次领取的任务上限，默认 100。 */
     public static final String MEMORY_INDEX_OUTBOX_BATCH_SIZE =
             "HARNESS_MEMORY_INDEX_OUTBOX_BATCH_SIZE";

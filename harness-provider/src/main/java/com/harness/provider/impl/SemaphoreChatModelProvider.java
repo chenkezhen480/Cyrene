@@ -77,6 +77,11 @@ public class SemaphoreChatModelProvider implements ChatModelProvider {
     public int timeoutSeconds() { return delegate.timeoutSeconds(); }
 
     @Override
+    public boolean requiresChatCompletionFinishReason() {
+        return delegate.requiresChatCompletionFinishReason();
+    }
+
+    @Override
     public java.util.Set<com.harness.provider.ModalCapability> modalCapabilities() {
         return modalCapabilities;
     }

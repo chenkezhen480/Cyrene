@@ -18,10 +18,17 @@ public final class KnowledgeIngestWorker implements AutoCloseable {
 
     private final KnowledgeIngestService ingestService;
     private final int batchSize;
+    private final java.util.function.BooleanSupplier ready;
     private final ScheduledExecutorService executor;
     private final AtomicBoolean draining = new AtomicBoolean();
 
     public KnowledgeIngestWorker(KnowledgeIngestService ingestService) {
+        this(ingestService, () -> true);
+    }
+
+    public KnowledgeIngestWorker(KnowledgeIngestService ingestService,
+                                 java.util.function.BooleanSupplier ready) {
+        this.ready = Objects.requireNonNull(ready, "ready");
         this.ingestService = Objects.requireNonNull(ingestService, "ingestService");
         this.batchSize = EnvConfig.get().getInt(EnvKey.KNOWLEDGE_COMPILER_BATCH_SIZE, 100);
         if (batchSize < 1 || batchSize > 1000) {
@@ -48,11 +55,12 @@ public final class KnowledgeIngestWorker implements AutoCloseable {
     }
 
     private void drainSafely() {
-        if (!draining.compareAndSet(false, true)) {
+        if (!ready.getAsBoolean() || !draining.compareAndSet(false, true)) {
             return;
         }
         try {
             for (int processed = 0; processed < batchSize; processed++) {
+                if (!ready.getAsBoolean()) return;
                 try {
                     if (!ingestService.processNext()) {
                         return;

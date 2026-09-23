@@ -3,8 +3,7 @@ package com.harness.agent.knowledge;
 import com.harness.agent.KnowledgeGraphTool;
 import com.harness.agent.context.KnowledgeAccessService;
 import com.harness.agent.graph.GraphSpaceReference;
-import com.harness.core.env.EnvConfig;
-import com.harness.core.env.EnvKey;
+import com.harness.core.knowledge.KnowledgeSearchOptions;
 import com.harness.core.knowledge.KnowledgeConcept;
 import com.harness.core.knowledge.KnowledgeConceptType;
 import com.harness.core.knowledge.KnowledgeHandle;
@@ -43,13 +42,6 @@ public final class KnowledgeDiscoveryRouter {
 
     private static final Logger log = LoggerFactory.getLogger(KnowledgeDiscoveryRouter.class);
 
-    public static final int LANE_TOP_K = 20;
-    public static final int FUSED_TOP_K = 20;
-    public static final double DENSE_THRESHOLD = 0.70;
-    public static final double SPARSE_THRESHOLD = 0.10;
-    public static final int RRF_K = 60;
-
-    /** Extra episode rows read so expired ones cannot shrink a recent-recall answer. */
     private static final int STALE_OVERFETCH = 20;
     private static final int MAX_RECENT_SCAN = 200;
 
@@ -65,7 +57,6 @@ public final class KnowledgeDiscoveryRouter {
     private final KnowledgeAccessService documentExecutor;
     private final KnowledgeGraphTool graphExecutor;
     private final Clock clock;
-    private final Settings settings;
 
     public KnowledgeDiscoveryRouter(
             KnowledgeRepository repository,
@@ -75,38 +66,25 @@ public final class KnowledgeDiscoveryRouter {
             KnowledgeGraphTool graphExecutor,
             Clock clock
     ) {
-        this(repository, projectionStore, embeddingProvider,
-                documentExecutor, graphExecutor, clock, Settings.fromEnvironment());
-    }
-
-    KnowledgeDiscoveryRouter(
-            KnowledgeRepository repository,
-            KnowledgeProjectionStore projectionStore,
-            EmbeddingModelProvider embeddingProvider,
-            KnowledgeAccessService documentExecutor,
-            KnowledgeGraphTool graphExecutor,
-            Clock clock,
-            Settings settings
-    ) {
         this.repository = Objects.requireNonNull(repository, "repository");
         this.projectionStore = Objects.requireNonNull(projectionStore, "projectionStore");
         this.embeddingProvider = Objects.requireNonNull(embeddingProvider, "embeddingProvider");
         this.documentExecutor = Objects.requireNonNull(documentExecutor, "documentExecutor");
         this.graphExecutor = graphExecutor;
         this.clock = Objects.requireNonNull(clock, "clock");
-        this.settings = Objects.requireNonNull(settings, "settings");
     }
 
-    public List<DiscoveredKnowledge> search(
-            String query,
-            Set<KnowledgeConceptType> requestedTypes,
-            int limit,
-            KnowledgeToolRuntimeContext context
-    ) {
+    public List<DiscoveredKnowledge> search(String query, Set<KnowledgeConceptType> requestedTypes,
+            int limit, KnowledgeToolRuntimeContext context) {
+        return search(query, requestedTypes, KnowledgeSearchOptions.defaults(limit), context);
+    }
+
+    public boolean rerankAvailable() { return documentExecutor.rerankAvailable(); }
+
+    public List<DiscoveredKnowledge> search(String query, Set<KnowledgeConceptType> requestedTypes,
+            KnowledgeSearchOptions options, KnowledgeToolRuntimeContext context) {
+        Objects.requireNonNull(options, "options");
         String normalizedQuery = requireQuery(query);
-        if (limit < 1 || limit > 20) {
-            throw new IllegalArgumentException("limit must be between 1 and 20");
-        }
         Objects.requireNonNull(context, "context");
         Set<KnowledgeConceptType> types = searchableTypes(requestedTypes);
         if (types.isEmpty()) {
@@ -117,12 +95,13 @@ public final class KnowledgeDiscoveryRouter {
                     context, "hybrid", normalizedQuery, types, null, 0, 0);
             return List.of();
         }
-        float[] embedding = requireEmbedding(normalizedQuery);
+        float[] embedding = options.bm25Weight() == 1 ? new float[0] : requireEmbedding(normalizedQuery);
         KnowledgeProjectionSearchOutcome outcome = projectionStore.searchHybrid(
                 new KnowledgeProjectionSearch(
-                        normalizedQuery, embedding, context.tenantId(), context.userId(), types,
-                        settings.laneTopK(), settings.fusedTopK(),
-                        settings.denseThreshold(), settings.sparseThreshold(), settings.rrfK()));
+                        normalizedQuery, embedding, context.tenantId(), context.userId(), null, null, false, types,
+                        options.candidateTopK(), options.candidateTopK(),
+                        options.denseThreshold(), options.sparseThreshold(), KnowledgeSearchOptions.RRF_K,
+                        options.bm25Weight()));
         List<KnowledgeProjectionHit> hits = outcome.hits();
         Map<String, KnowledgeHead> heads = new LinkedHashMap<>(repository.findAuthorityByIds(hits.stream()
                 .map(hit -> hit.projection().conceptId()).distinct().toList()));
@@ -145,7 +124,7 @@ public final class KnowledgeDiscoveryRouter {
                         readableGraphSchemas, readableGraphSpaces))
                 .toList();
         List<DiscoveredKnowledge> results =
-                routeWiki(normalizedQuery, current, heads, context, limit);
+                routeWiki(normalizedQuery, current, heads, context, options);
         recordSearchDiagnostics(context, "hybrid", normalizedQuery, types,
                 outcome.diagnostics(), current.size(), results.size());
         return results;
@@ -388,17 +367,17 @@ public final class KnowledgeDiscoveryRouter {
             List<KnowledgeProjectionHit> hits,
             Map<String, KnowledgeHead> heads,
             KnowledgeToolRuntimeContext context,
-            int limit
+            KnowledgeSearchOptions options
     ) {
         List<KnowledgeProjectionHit> documents = hits.stream()
                 .filter(hit -> hit.projection().conceptType()
                         == KnowledgeConceptType.SOURCE_DOCUMENT)
                 .toList();
         Map<String, DiscoveredKnowledge> documentResults =
-                routeDocuments(query, documents, heads, context, limit);
+                routeDocuments(query, documents, heads, context, options);
         List<DiscoveredKnowledge> results = new ArrayList<>();
         for (KnowledgeProjectionHit hit : hits) {
-            if (results.size() >= limit) break;
+            if (results.size() >= options.limit()) break;
             if (hit.projection().conceptType() == KnowledgeConceptType.SOURCE_DOCUMENT) {
                 results.add(documentResults.getOrDefault(
                         hit.projection().conceptId(), documentConceptResult(
@@ -418,7 +397,7 @@ public final class KnowledgeDiscoveryRouter {
             List<KnowledgeProjectionHit> catalogHits,
             Map<String, KnowledgeHead> heads,
             KnowledgeToolRuntimeContext context,
-            int limit
+            KnowledgeSearchOptions options
     ) {
         Map<String, Set<String>> documentsByCollection = new LinkedHashMap<>();
         for (KnowledgeProjectionHit hit : catalogHits) {
@@ -430,12 +409,11 @@ public final class KnowledgeDiscoveryRouter {
         }
         Map<String, DiscoveredKnowledge> results = new LinkedHashMap<>();
         for (Map.Entry<String, Set<String>> entry : documentsByCollection.entrySet()) {
-            int searchLimit = Math.min(documentExecutor.maxSearchLimit(),
-                    Math.max(limit, entry.getValue().size()));
             Map<String, String> documentRevisions = new LinkedHashMap<>();
             entry.getValue().forEach(id -> documentRevisions.put(id, heads.get(id).concept().currentRevisionId()));
-            for (RagRetriever.RagDocument document : documentExecutor.searchDocumentRevisions(
-                    query, entry.getKey(), searchLimit, documentRevisions).documents()) {
+            var documentResult = documentExecutor.searchDocumentRevisions(
+                    query, entry.getKey(), options, documentRevisions);
+            for (RagRetriever.RagDocument document : documentResult.documents()) {
                 String documentId = metadataText(document.metadata(), "document_id");
                 String revisionId = metadataText(document.metadata(), "revision_id");
                 KnowledgeHead head = heads.get(documentId);
@@ -451,7 +429,7 @@ public final class KnowledgeDiscoveryRouter {
                 results.putIfAbsent(documentId, new DiscoveredKnowledge(
                         KnowledgeConceptType.SOURCE_DOCUMENT, documentId, revisionId,
                         KnowledgeRouteTarget.DOCUMENT, handle, head.currentRevision().title(),
-                        summarize(document.content()), "documentRerankScore", document.score(),
+                        summarize(document.content()), documentResult.metadata().get("scoreType"), document.score(),
                         List.of(Map.of(
                                 "documentId", documentId,
                                 "revisionId", revisionId,
@@ -667,36 +645,4 @@ public final class KnowledgeDiscoveryRouter {
         return normalized.length() <= 400 ? normalized : normalized.substring(0, 400) + "…";
     }
 
-    public record Settings(
-            int laneTopK,
-            int fusedTopK,
-            double denseThreshold,
-            double sparseThreshold,
-            int rrfK
-    ) {
-        public Settings {
-            if (laneTopK < 1 || laneTopK > 100
-                    || fusedTopK < 1 || fusedTopK > laneTopK
-                    || denseThreshold < -1 || denseThreshold > 1
-                    || sparseThreshold < 0 || rrfK < 1 || rrfK > 1000) {
-                throw new IllegalArgumentException("invalid Wiki retrieval settings");
-            }
-        }
-
-        public static Settings fromEnvironment() {
-            EnvConfig config = EnvConfig.get();
-            return new Settings(
-                    config.getInt(
-                            EnvKey.KNOWLEDGE_CATALOG_RETRIEVAL_LANE_TOP_K, LANE_TOP_K),
-                    config.getInt(
-                            EnvKey.KNOWLEDGE_CATALOG_RETRIEVAL_FUSED_TOP_K, FUSED_TOP_K),
-                    config.getDouble(
-                            EnvKey.KNOWLEDGE_CATALOG_RETRIEVAL_DENSE_THRESHOLD,
-                            DENSE_THRESHOLD),
-                    config.getDouble(
-                            EnvKey.KNOWLEDGE_CATALOG_RETRIEVAL_SPARSE_THRESHOLD,
-                            SPARSE_THRESHOLD),
-                    config.getInt(EnvKey.KNOWLEDGE_CATALOG_RETRIEVAL_RRF_K, RRF_K));
-        }
-    }
 }

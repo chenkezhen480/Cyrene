@@ -5,6 +5,7 @@ import com.harness.core.modelconfig.ModelConfig;
 import com.harness.core.modelconfig.ModelConfigKey;
 import dev.langchain4j.agent.tool.ToolSpecification;
 import dev.langchain4j.model.chat.request.ChatRequestParameters;
+import dev.langchain4j.model.chat.request.ToolChoice;
 import dev.langchain4j.model.chat.request.json.JsonObjectSchema;
 import dev.langchain4j.model.openai.OpenAiChatModel;
 import dev.langchain4j.model.openai.OpenAiChatRequestParameters;
@@ -42,6 +43,9 @@ class OpenAiChatModelProviderTest {
         assertThat(provider.streamingModel()).isInstanceOf(OpenAiStreamingChatModel.class);
         assertThat(provider.planningRequestParameters(null, List.of(toolSpecification())))
                 .isInstanceOf(OpenAiChatRequestParameters.class);
+        assertThat(provider.planningRequestParameters(null, List.of(toolSpecification())).toolChoice())
+                .isEqualTo(ToolChoice.AUTO);
+        assertThat(provider.requiresChatCompletionFinishReason()).isTrue();
     }
 
     @Test
@@ -60,6 +64,7 @@ class OpenAiChatModelProviderTest {
         assertThat(responsesParameters.previousResponseId()).isNull();
         assertThat(responsesParameters.promptCacheKey()).isNull();
         assertThat(responsesParameters.store()).isFalse();
+        assertThat(provider.requiresChatCompletionFinishReason()).isFalse();
     }
 
     @Test

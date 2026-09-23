@@ -65,8 +65,7 @@ class KnowledgeDiscoveryRouterTest {
         router = new KnowledgeDiscoveryRouter(
                 repository, projectionStore, embeddingProvider,
                 documentExecutor, graphExecutor,
-                Clock.fixed(NOW, ZoneOffset.UTC),
-                new KnowledgeDiscoveryRouter.Settings(20, 20, 0.70, 0.10, 60));
+                Clock.fixed(NOW, ZoneOffset.UTC));
     }
 
     @Test
@@ -242,15 +241,14 @@ class KnowledgeDiscoveryRouterTest {
         when(projectionStore.findMemory(
                 KnowledgeConceptType.OPERATION_PLAYBOOK, "playbook", "playbook-revision"))
                 .thenReturn(java.util.Optional.of(playbook));
-        when(documentExecutor.maxSearchLimit()).thenReturn(20);
-        when(documentExecutor.searchDocumentRevisions("query", "collection-a", 10, Map.of("document", "document-revision")))
+        when(documentExecutor.searchDocumentRevisions("query", "collection-a", com.harness.core.knowledge.KnowledgeSearchOptions.defaults(10), Map.of("document", "document-revision")))
                 .thenReturn(new ContextBuilder.ContextResult(List.of(
                         new RagRetriever.RagDocument(
                                 "chunk-2", "matching source text", "source.md", 0.91,
                                 Map.of(
                                         "document_id", "document",
                                         "revision_id", "document-revision"),
-                                2)), Map.of()));
+                                2)), Map.of("scoreType", "weightedRrfScore")));
 
         List<DiscoveredKnowledge> routed = router.search(
                 "query", Set.of(), 10, context());
@@ -259,7 +257,7 @@ class KnowledgeDiscoveryRouterTest {
                 .containsExactly("playbook", "document");
         assertThat(routed.get(1).handle().chunkIndex()).isEqualTo(2);
 
-        when(documentExecutor.searchDocumentRevisions("query", "collection-a", 10, Map.of("document", "document-revision")))
+        when(documentExecutor.searchDocumentRevisions("query", "collection-a", com.harness.core.knowledge.KnowledgeSearchOptions.defaults(10), Map.of("document", "document-revision")))
                 .thenReturn(new ContextBuilder.ContextResult(List.of(), Map.of()));
         List<DiscoveredKnowledge> fallback = router.search(
                 "query", Set.of(), 10, context());

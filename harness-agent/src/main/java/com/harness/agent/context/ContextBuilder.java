@@ -1,8 +1,7 @@
 package com.harness.agent.context;
 
-import com.harness.provider.EmbeddingModelProvider;
-import com.harness.provider.RerankModelProvider;
 import com.harness.core.env.EnvConfig;
+import com.harness.core.knowledge.KnowledgeSearchOptions;
 import com.harness.core.env.EnvKey;
 import com.harness.tool.rag.*;
 import com.harness.tool.rerank.Reranker;
@@ -22,25 +21,28 @@ public class ContextBuilder {
     private final VectorStore vectorStore;
     private final Reranker reranker;
 
-    public ContextBuilder(RerankModelProvider rerankModelProvider,
-                          EmbeddingModelProvider embeddingModelProvider) {
-        this(VectorStoreFactory.create(embeddingModelProvider), new Reranker(rerankModelProvider));
-    }
-
-    ContextBuilder(VectorStore vectorStore, Reranker reranker) {
+    public ContextBuilder(VectorStore vectorStore, Reranker reranker) {
         this.vectorStore = vectorStore;
         this.reranker = Objects.requireNonNull(reranker, "reranker");
     }
 
     public ContextResult searchDocumentRevisions(String query, String collection, int limit,
-                                                   Map<String, String> documentRevisions) {
-        validateSearchScope(collection, limit);
-        if (vectorStore == null) throw new IllegalStateException("Knowledge provider is disabled");
-        var result = vectorStore.searchDocumentRevisions(collection, query, limit, documentRevisions);
-        var documents = result.documents().stream().map(RagRetriever.RagDocument::from).toList();
-        var reranked = reranker.rerank(query, documents);
-        return new ContextResult(reranked.documents(), Map.of("collection", collection));
+            Map<String, String> documentRevisions) {
+        return searchDocumentRevisions(query, collection, KnowledgeSearchOptions.defaults(limit), documentRevisions);
     }
+
+    public ContextResult searchDocumentRevisions(String query, String collection, KnowledgeSearchOptions options,
+            Map<String, String> documentRevisions) {
+        if (collection == null || collection.isBlank()) throw new IllegalArgumentException("collection is required");
+        if (vectorStore == null) throw new IllegalStateException("Knowledge provider is disabled");
+        var documents = vectorStore.searchDocumentRevisions(collection, query, options, documentRevisions)
+                .documents().stream().map(RagRetriever.RagDocument::from).toList();
+        boolean ranked = options.rerank() && reranker.isAvailable();
+        return new ContextResult(ranked ? reranker.rerank(query, documents, options.candidateTopK()).documents() : documents,
+                Map.of("collection", collection, "scoreType", ranked ? "documentRerankScore" : "weightedRrfScore"));
+    }
+
+    public boolean rerankAvailable() { return reranker.isAvailable(); }
 
     public List<RagRetriever.RagDocument> readContext(
             String collection,
@@ -66,20 +68,6 @@ public class ContextBuilder {
 
     public String defaultCollection() {
         return EnvConfig.get().getString(EnvKey.RAG_COLLECTION, "default");
-    }
-
-    public int maxSearchLimit() {
-        return EnvConfig.get().getInt(EnvKey.RAG_TOP_K, 5);
-    }
-
-    private void validateSearchScope(String collection, int limit) {
-        if (collection == null || collection.isBlank()) {
-            throw new IllegalArgumentException("knowledge collection is required");
-        }
-        if (limit < 1 || limit > maxSearchLimit()) {
-            throw new IllegalArgumentException(
-                    "knowledge search limit must be between 1 and " + maxSearchLimit());
-        }
     }
 
     public record ContextResult(

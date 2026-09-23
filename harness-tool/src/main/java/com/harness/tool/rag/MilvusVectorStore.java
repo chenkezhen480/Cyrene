@@ -35,12 +35,10 @@ public class MilvusVectorStore implements VectorStore {
     private static final ObjectMapper JSON_MAPPER = new ObjectMapper();
     private static final TypeReference<Map<String, Object>> METADATA_TYPE = new TypeReference<>() {};
 
-    private final MilvusClientV2 client;
+    private final java.util.function.Supplier<MilvusClientV2> client;
     private final String collectionName;
     private final String logicalCollection;
-    private final int topK;
     private final double scoreThreshold;
-    private final double bm25Weight;
     private final EmbeddingModelProvider embeddingProvider;
 
     public MilvusVectorStore() {
@@ -48,15 +46,18 @@ public class MilvusVectorStore implements VectorStore {
     }
 
     public MilvusVectorStore(EmbeddingModelProvider embeddingProvider) {
+        this(embeddingProvider, MilvusConnectionPool::getClient);
+    }
+
+    public MilvusVectorStore(EmbeddingModelProvider embeddingProvider,
+                             java.util.function.Supplier<MilvusClientV2> client) {
         EnvConfig cfg = EnvConfig.get();
         this.collectionName = cfg.getString(EnvKey.RAG_COLLECTION, "knowledge_documents"); // 物理集合名 = env 变量
         this.logicalCollection = this.collectionName;
-        this.topK = cfg.getInt(EnvKey.RAG_TOP_K, 5);
-        this.scoreThreshold = cfg.getDouble(EnvKey.RAG_SCORE_THRESHOLD, 0.7);
-        this.bm25Weight = cfg.getDouble(EnvKey.RAG_BM25_WEIGHT, 0.3);
+        this.scoreThreshold = cfg.getDouble(EnvKey.RAG_SCORE_THRESHOLD, 0.5);
         this.embeddingProvider = embeddingProvider;
-        log.info("[Milvus] collection='{}', topK={}, scoreThreshold={}, bm25Weight={}", collectionName, topK, scoreThreshold, bm25Weight);
-        this.client = MilvusConnectionPool.getClient();
+        log.info("[Milvus] collection='{}', scoreThreshold={}", collectionName, scoreThreshold);
+        this.client = Objects.requireNonNull(client, "client");
     }
 
     MilvusVectorStore(
@@ -65,12 +66,10 @@ public class MilvusVectorStore implements VectorStore {
             String logicalCollection,
             EmbeddingModelProvider embeddingProvider
     ) {
-        this.client = Objects.requireNonNull(client, "client");
+        this.client = () -> client;
         this.collectionName = Objects.requireNonNull(collectionName, "collectionName");
         this.logicalCollection = Objects.requireNonNull(logicalCollection, "logicalCollection");
-        this.topK = 5;
-        this.scoreThreshold = 0.7;
-        this.bm25Weight = 0.3;
+        this.scoreThreshold = 0.5;
         this.embeddingProvider = embeddingProvider;
     }
 
@@ -112,7 +111,7 @@ public class MilvusVectorStore implements VectorStore {
             rows.add(row);
         }
 
-        client.upsert(UpsertReq.builder()
+        client.get().upsert(UpsertReq.builder()
                 .collectionName(collectionName)
                 .data(rows)
                 .build());
@@ -125,7 +124,8 @@ public class MilvusVectorStore implements VectorStore {
             if (document.id() == null || document.id().isBlank()) {
                 continue;
             }
-            QueryResp response = client.query(QueryReq.builder()
+            QueryResp response = client.get().query(QueryReq.builder()
+                    .consistencyLevel(io.milvus.v2.common.ConsistencyLevel.STRONG)
                     .collectionName(collectionName)
                     .filter("id == {idValue}")
                     .filterTemplateValues(Map.of("idValue", document.id()))
@@ -147,7 +147,7 @@ public class MilvusVectorStore implements VectorStore {
 
     @Override
     public void delete(String collection) {
-        client.delete(DeleteReq.builder()
+        client.get().delete(DeleteReq.builder()
                 .collectionName(collectionName)
                 .filter("collection == {collectionValue}")
                 .filterTemplateValues(Map.of(
@@ -160,7 +160,7 @@ public class MilvusVectorStore implements VectorStore {
     @Override
     public boolean deleteById(String collection, String id) {
         try {
-            long deleted = client.delete(DeleteReq.builder()
+            long deleted = client.get().delete(DeleteReq.builder()
                     .collectionName(collectionName)
                     .filter("collection == {collectionValue} and id == {idValue}")
                     .filterTemplateValues(Map.of(
@@ -185,7 +185,7 @@ public class MilvusVectorStore implements VectorStore {
             String revisionId
     ) {
         try {
-            return client.delete(DeleteReq.builder()
+            return client.get().delete(DeleteReq.builder()
                     .collectionName(collectionName)
                     .filter("collection == {collectionValue}"
                             + " and metadata[\"document_id\"] == {documentValue}"
@@ -206,7 +206,7 @@ public class MilvusVectorStore implements VectorStore {
         QueryIterator iterator = null;
         long copied = 0;
         try {
-            iterator = client.queryIterator(QueryIteratorReq.builder().collectionName(collectionName)
+            iterator = client.get().queryIterator(QueryIteratorReq.builder().collectionName(collectionName)
                     .consistencyLevel(io.milvus.v2.common.ConsistencyLevel.STRONG)
                     .expr(equalsExpression("collection", requireCollection(collection))
                             + " and metadata[\"document_id\"] == " + stringLiteral(requireId(documentId))
@@ -229,7 +229,7 @@ public class MilvusVectorStore implements VectorStore {
                             com.harness.core.knowledge.KnowledgeIdentity.sha256(row.get("content").getAsString())));
                     rows.add(row);
                 }
-                client.upsert(UpsertReq.builder().collectionName(collectionName).data(rows).build());
+                client.get().upsert(UpsertReq.builder().collectionName(collectionName).data(rows).build());
                 copied += rows.size();
             }
             if (copied == 0) throw new IllegalStateException("Source Document has no chunks to preserve");
@@ -244,7 +244,8 @@ public class MilvusVectorStore implements VectorStore {
     @Override
     public Document getById(String collection, String id) {
         try {
-            QueryResp resp = client.query(QueryReq.builder()
+            QueryResp resp = client.get().query(QueryReq.builder()
+                    .consistencyLevel(io.milvus.v2.common.ConsistencyLevel.STRONG)
                     .collectionName(collectionName)
                     .filter("collection == {collectionValue} and id == {idValue}")
                     .filterTemplateValues(Map.of(
@@ -271,6 +272,25 @@ public class MilvusVectorStore implements VectorStore {
     }
 
     @Override
+    public Document updateContent(String collection, String id, String content) {
+        if (content == null || content.isBlank()
+                || content.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > 65_535) {
+            throw new IllegalArgumentException("Chunk content must contain 1..65535 UTF-8 bytes");
+        }
+        Document previous = getById(collection, id);
+        if (previous == null) throw new IllegalArgumentException("Knowledge chunk does not exist");
+        if (embeddingProvider == null || !embeddingProvider.isAvailable()) {
+            throw new IllegalStateException("Embedding provider is unavailable");
+        }
+        Map<String, Object> metadata = new LinkedHashMap<>(previous.metadata());
+        metadata.put("content_hash", com.harness.core.knowledge.KnowledgeIdentity.sha256(content));
+        Document updated = new Document(id, content, previous.source(), previous.score(), metadata,
+                embeddingProvider.embed(content).vector(), previous.chunkIndex());
+        upsert(collection, List.of(updated));
+        return new Document(id, content, previous.source(), previous.score(), metadata, null, previous.chunkIndex());
+    }
+
+    @Override
     public PageResponse<KnowledgeChunkSummary> listKnowledgeChunks(
             String collection,
             String fileName,
@@ -285,7 +305,10 @@ public class MilvusVectorStore implements VectorStore {
         List<String> filterClauses = new ArrayList<>();
         filterClauses.add(equalsExpression("collection", collection));
         if (!normalizedFileName.isBlank()) {
-            filterClauses.add(equalsExpression("source", normalizedFileName));
+            String pattern = "%" + normalizedFileName.replace("\\", "\\\\")
+                    .replace("%", "\\%").replace("_", "\\_") + "%";
+            filterClauses.add("(source like " + stringLiteral(pattern)
+                    + " or content like " + stringLiteral(pattern) + ")");
         }
         if (lastId != null) {
             filterClauses.add("id > " + stringLiteral(lastId));
@@ -295,7 +318,7 @@ public class MilvusVectorStore implements VectorStore {
         try {
             // Milvus Query does not guarantee row order. QueryIterator advances by the
             // primary key and is therefore the stable keyset source for management pages.
-            iterator = client.queryIterator(QueryIteratorReq.builder()
+            iterator = client.get().queryIterator(QueryIteratorReq.builder()
                     .collectionName(collectionName)
                     .expr(String.join(" and ", filterClauses))
                     .outputFields(List.of("id", "source", "chunk_index", "metadata"))
@@ -336,7 +359,7 @@ public class MilvusVectorStore implements VectorStore {
         String lastCollection = KnowledgeChunkCursorCodec.decodeLastCollection(cursor);
         QueryIterator iterator = null;
         try {
-            iterator = client.queryIterator(QueryIteratorReq.builder()
+            iterator = client.get().queryIterator(QueryIteratorReq.builder()
                     .collectionName(collectionName)
                     .expr(lastCollection == null
                             ? "id != \"\""
@@ -395,7 +418,7 @@ public class MilvusVectorStore implements VectorStore {
                     .collect(java.util.stream.Collectors.joining(" or ")) + ")";
         }
         try {
-            SearchResp resp = client.search(SearchReq.builder()
+            SearchResp resp = client.get().search(SearchReq.builder()
                     .collectionName(collectionName)
                     .annsField("embedding")
                     .data(List.of(new FloatVec(toFloatList(embedding))))
@@ -414,7 +437,7 @@ public class MilvusVectorStore implements VectorStore {
     public List<Document> searchKeyword(String collection, String query, int topK) {
         if (query == null || query.isBlank()) return List.of();
         try {
-            SearchResp resp = client.search(SearchReq.builder()
+            SearchResp resp = client.get().search(SearchReq.builder()
                     .collectionName(collectionName)
                     .annsField("sparse_content")
                     .data(List.of(new EmbeddedText(query)))
@@ -451,7 +474,7 @@ public class MilvusVectorStore implements VectorStore {
                     .metricType(IndexParam.MetricType.BM25)
                     .build();
 
-            SearchResp resp = client.hybridSearch(HybridSearchReq.builder()
+            SearchResp resp = client.get().hybridSearch(HybridSearchReq.builder()
                     .collectionName(collectionName)
                     .searchRequests(List.of(denseReq, sparseReq))
                     .ranker(new io.milvus.v2.service.vector.request.ranker.RRFRanker(60))
@@ -487,16 +510,50 @@ public class MilvusVectorStore implements VectorStore {
     }
 
     @Override
-    public SearchResult searchDocumentRevisions(String collection, String query, int topK,
-                                                 Map<String, String> documentRevisions) {
+    public SearchResult searchDocumentRevisions(String collection, String query,
+            com.harness.core.knowledge.KnowledgeSearchOptions options,
+            Map<String, String> documentRevisions) {
         if (documentRevisions == null || documentRevisions.isEmpty() || documentRevisions.size() > 1000) {
             throw new IllegalArgumentException("A bounded authorized document revision scope is required");
         }
-        if (embeddingProvider == null || !embeddingProvider.isAvailable()) {
-            throw new IllegalStateException("Document retrieval embedding provider is unavailable");
+        if (query == null || query.isBlank()) throw new IllegalArgumentException("query is required");
+        java.util.Objects.requireNonNull(options, "options");
+        String filter = collectionFilter(collection) + " and (" + documentRevisions.entrySet().stream()
+                .map(entry -> "(metadata[\"document_id\"] == " + stringLiteral(entry.getKey())
+                        + " and metadata[\"revision_id\"] == " + stringLiteral(entry.getValue()) + ")")
+                .collect(java.util.stream.Collectors.joining(" or ")) + ")";
+        try {
+            SearchResult dense = SearchResult.empty();
+            SearchResult sparse = SearchResult.empty();
+            if (options.bm25Weight() < 1) {
+                if (embeddingProvider == null || !embeddingProvider.isAvailable()) {
+                    throw new IllegalStateException("Document retrieval embedding provider is unavailable");
+                }
+                dense = extractSearchResult(client.get().search(SearchReq.builder()
+                        .collectionName(collectionName).annsField("embedding")
+                        .data(List.of(new FloatVec(toFloatList(embeddingProvider.embed(query).vector()))))
+                        .topK(options.candidateTopK()).filter(filter).metricType(IndexParam.MetricType.COSINE)
+                        .outputFields(List.of("content", "source", "chunk_index", "metadata")).build()),
+                        options.denseThreshold());
+            }
+            if (options.bm25Weight() > 0) {
+                sparse = extractSearchResult(client.get().search(SearchReq.builder()
+                        .collectionName(collectionName).annsField("sparse_content")
+                        .data(List.of(new EmbeddedText(query)))
+                        .topK(options.candidateTopK()).filter(filter).metricType(IndexParam.MetricType.BM25)
+                        .outputFields(List.of("content", "source", "chunk_index", "metadata")).build()),
+                        options.sparseThreshold());
+            }
+            var documents = com.harness.tool.knowledge.index.ReciprocalRankFusion.rank(
+                    dense.documents(), sparse.documents(), Document::id,
+                    1 - options.bm25Weight(), options.bm25Weight(),
+                    com.harness.core.knowledge.KnowledgeSearchOptions.RRF_K, options.candidateTopK())
+                    .stream().map(hit -> new Document(hit.item().id(), hit.item().content(), hit.item().source(),
+                            hit.score(), hit.item().metadata(), null, hit.item().chunkIndex())).toList();
+            return SearchResult.fromAccepted(documents);
+        } catch (Exception exception) {
+            throw new IllegalStateException("Milvus document retrieval failed", exception);
         }
-        return searchVectorWithEvidence(collection, embeddingProvider.embed(query).vector(), topK,
-                Map.copyOf(documentRevisions));
     }
 
     // ==================== 4. Explicit document context ====================
@@ -520,7 +577,8 @@ public class MilvusVectorStore implements VectorStore {
                 + " and chunk_index >= " + startIndex
                 + " and chunk_index <= " + endIndex;
         try {
-            QueryResp resp = client.query(QueryReq.builder()
+            QueryResp resp = client.get().query(QueryReq.builder()
+                    .consistencyLevel(io.milvus.v2.common.ConsistencyLevel.STRONG)
                     .collectionName(collectionName)
                     .filter(filter)
                     .outputFields(List.of("id", "content", "source", "chunk_index", "metadata"))
@@ -561,6 +619,10 @@ public class MilvusVectorStore implements VectorStore {
     }
 
     private SearchResult extractSearchResult(SearchResp resp) {
+        return extractSearchResult(resp, scoreThreshold);
+    }
+
+    private SearchResult extractSearchResult(SearchResp resp, double threshold) {
         List<Document> docs = new ArrayList<>();
         if (resp.getSearchResults() == null || resp.getSearchResults().isEmpty()) {
             return SearchResult.empty();
@@ -573,7 +635,7 @@ public class MilvusVectorStore implements VectorStore {
             if (score != null) {
                 bestObservedScore = Math.max(bestObservedScore, score);
             }
-            if (score != null && score < scoreThreshold) continue;
+            if (score != null && score < threshold) continue;
 
             Map<String, Object> entity = result.getEntity();
             docs.add(new Document(

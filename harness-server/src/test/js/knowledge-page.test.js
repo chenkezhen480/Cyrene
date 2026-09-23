@@ -80,3 +80,58 @@ test('global Wiki drawer preserves drafts on cancelled close and exports without
   assert.equal(state.wikiExporting.value, false);
   assert.equal(state.wikiTypes.filter(x => x.value.startsWith('GRAPH_')).length, 1);
 });
+
+
+test('pending and failed knowledge setup avoid queries; ready status enables them', async () => {
+  let status = { state: 'pending', message: 'configure embedding' };
+  const calls = [];
+  const emptyPage = { items: [], pageInfo: { limit: 20, nextCursor: '', hasMore: false } };
+  const state = runInNewContext(page + contract + '\nKnowledgePage.setup();', {
+    EmptyState: {},
+    CyreneAPI: {
+      async getKnowledgeStatus() { return status; },
+      async listCollections() { calls.push('collections'); return emptyPage; },
+      async listWiki() { calls.push('wiki'); return emptyPage; },
+    },
+    ref: value => ({ value }), computed: getter => ({ get value() { return getter(); } }),
+    inject: key => key === 't' ? value => value : key === 'userId' ? { value: 'alice' } : {},
+    watch() {}, onMounted() {}, onUnmounted() {}, showToast() {}, clearTimeout, setTimeout,
+  });
+  await state.loadKnowledgeStatus();
+  assert.equal(state.knowledgeStatus.value.state, 'pending');
+  assert.deepEqual(calls, []);
+  status = { state: 'failed', message: 'dimension mismatch' };
+  await state.loadKnowledgeStatus();
+  assert.equal(state.knowledgeStatus.value.message, 'dimension mismatch');
+  assert.deepEqual(calls, []);
+  status = { state: 'ready', message: '' };
+  await state.loadKnowledgeStatus();
+  assert.deepEqual(calls.sort(), ['collections', 'wiki']);
+  assert.equal(state.statusError.value, '');
+});
+
+
+test('chunk editor reads Milvus API content and sends original content with edits', async () => {
+  const saved = [];
+  const empty = { items: [], pageInfo: { limit: 50, nextCursor: '', hasMore: false } };
+  const state = runInNewContext(page + contract + '\nKnowledgePage.setup();', {
+    EmptyState: {}, CyreneAPI: {
+      async getKnowledgeChunk(collection, id) { assert.equal(collection, 'manuals'); return { id, content: 'old', chunkIndex: 2 }; },
+      async updateKnowledgeChunk(collection, id, draft) { saved.push([collection, id, draft]); return { id: 'new-id', content: draft.content, chunkIndex: 2 }; },
+      async listKnowledge() { return empty; }, async listWiki() { return empty; },
+    },
+    ref: value => ({ value }), computed: getter => ({ get value() { return getter(); } }),
+    inject: key => key === 't' ? value => value : key === 'userId' ? { value: 'alice' } : {},
+    watch() {}, onMounted() {}, onUnmounted() {}, showToast() {}, clearTimeout, setTimeout,
+    window: { confirm: () => true },
+  });
+  state.chunkDrawer.value = { showModal() {}, close() {} };
+  state.selectedCollection.value = 'manuals';
+  await state.openChunk({ id: 'chunk-1' });
+  state.chunkContent.value = 'edited';
+  await state.saveChunk();
+  assert.equal(saved[0][2].expectedContent, 'old');
+  assert.equal(saved[0][2].content, 'edited');
+  assert.equal(state.selectedChunk.value.id, 'new-id');
+  assert.equal(state.chunkError.value, '');
+});

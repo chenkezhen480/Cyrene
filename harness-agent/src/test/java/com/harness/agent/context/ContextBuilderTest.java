@@ -17,7 +17,7 @@ class ContextBuilderTest {
     void searchDocumentRevisionsDelegatesToVectorStoreAndReranks() {
         VectorStore vectorStore = mock(VectorStore.class);
         when(vectorStore.searchDocumentRevisions(
-                "tenant-manuals", "upload limit", 5, Map.of("upload-guide", "rev-1")))
+                "tenant-manuals", "upload limit", com.harness.core.knowledge.KnowledgeSearchOptions.defaults(5), Map.of("upload-guide", "rev-1")))
                 .thenReturn(new VectorStore.SearchResult(
                         List.of(new VectorStore.Document(
                                 "answer-chunk",

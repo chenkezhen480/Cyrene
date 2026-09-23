@@ -54,6 +54,19 @@ function appendAssistantText(message, text) {
   }
 }
 
+function rollbackAssistantText(message, characters) {
+  if (characters === 0) return;
+  if (!Array.isArray(message.content)) {
+    message.content = message.content.slice(0, -characters);
+    return;
+  }
+  const lastBlock = message.content[message.content.length - 1];
+  if (lastBlock?.type === 'TEXT') {
+    lastBlock.text = lastBlock.text.slice(0, -characters);
+    if (!lastBlock.text) message.content.pop();
+  }
+}
+
 function appendStructuredData(message, data) {
   if (!Array.isArray(message.content)) {
     const existingText = message.content;
@@ -1119,6 +1132,14 @@ const ChatPage = {
                       receivedText = true;
                     }
                     break;
+                  case 'token_rollback':
+                    if (Number.isInteger(parsed.characters) && parsed.characters >= 0) {
+                      const fromPending = Math.min(parsed.characters, pendingText.length);
+                      pendingText = pendingText.slice(0, pendingText.length - fromPending);
+                      rollbackAssistantText(messages.value[msgIdx], parsed.characters - fromPending);
+                      receivedText = false;
+                    }
+                    break;
                   case 'tool_call_created':
                   case 'tool_call_start':
                   case 'tool_call_done':
@@ -1551,6 +1572,18 @@ const KnowledgePage = {
     const Icons = inject('Icons');
     const t = inject('t');
     const userId = inject('userId');
+    const knowledgeStatus = ref(null);
+    const statusError = ref('');
+    const statusLoading = ref(false);
+    async function loadKnowledgeStatus() {
+      statusLoading.value = true;
+      statusError.value = '';
+      try {
+        knowledgeStatus.value = requireKnowledgeStatus(await CyreneAPI.getKnowledgeStatus(), t);
+        if (knowledgeStatus.value.state === 'ready') await Promise.all([loadCollections(), loadWiki()]);
+      } catch (e) { statusError.value = e.message; }
+      finally { statusLoading.value = false; }
+    }
     const collections = ref([]);
     const collectionPageInfo = ref({ limit: 50, nextCursor: '', hasMore: false });
     const loadingCollections = ref(false);
@@ -1561,6 +1594,48 @@ const KnowledgePage = {
     const fileNameFilter = ref('');
     const loadingDocuments = ref(false);
     const loadingMore = ref(false);
+    const chunkDrawer = ref(null);
+    const selectedChunk = ref(null);
+    const chunkContent = ref('');
+    const chunkCollection = ref('');
+    const chunkBusy = ref(false);
+    const chunkError = ref('');
+    function requireChunk(chunk) {
+      if (!chunk || typeof chunk.id !== 'string' || typeof chunk.content !== 'string'
+          || !Number.isInteger(chunk.chunkIndex)) throw new Error(t('invalidKnowledgeListResponse'));
+      return chunk;
+    }
+    async function openChunk(document) {
+      if (chunkBusy.value) return;
+      chunkBusy.value = true;
+      chunkError.value = '';
+      selectedChunk.value = null;
+      chunkCollection.value = selectedCollection.value;
+      chunkDrawer.value.showModal();
+      try {
+        selectedChunk.value = requireChunk(await CyreneAPI.getKnowledgeChunk(chunkCollection.value, document.id));
+        chunkContent.value = selectedChunk.value.content;
+      } catch (e) { chunkError.value = e.message; }
+      finally { chunkBusy.value = false; }
+    }
+    function closeChunk() {
+      if (chunkBusy.value) return;
+      if (selectedChunk.value && chunkContent.value !== selectedChunk.value.content
+          && !window.confirm(t('wikiDiscardChanges'))) return;
+      chunkDrawer.value.close();
+    }
+    async function saveChunk() {
+      if (!selectedChunk.value || chunkBusy.value || !chunkContent.value.trim()) return;
+      chunkBusy.value = true;
+      chunkError.value = '';
+      try {
+        selectedChunk.value = requireChunk(await CyreneAPI.updateKnowledgeChunk(chunkCollection.value,
+          selectedChunk.value.id, { expectedContent: selectedChunk.value.content, content: chunkContent.value }));
+        chunkContent.value = selectedChunk.value.content;
+        await Promise.all([loadDocuments(), loadWiki()]);
+      } catch (e) { chunkError.value = e.message; }
+      finally { chunkBusy.value = false; }
+    }
     const documentListError = ref('');
     const uploading = ref(false);
     const uploadCollection = ref('');
@@ -1823,21 +1898,33 @@ const KnowledgePage = {
       documentQueryVersion++;
       searchTimer = setTimeout(() => loadDocuments(), 300);
     });
-    watch(userId, () => { selectedWiki.value = null; wikiCards.value = []; loadWiki(); });
-    onMounted(() => { loadCollections(); loadWiki(); });
+    watch(userId, () => { selectedWiki.value = null; wikiCards.value = []; if (knowledgeStatus.value?.state === 'ready') loadWiki(); });
+    onMounted(loadKnowledgeStatus);
     onUnmounted(() => { clearTimeout(searchTimer); documentQueryVersion++; wikiQueryVersion++; });
 
-    return { Icons, t, collections, collectionPageInfo, loadingCollections, selectedCollection, collectionInput,
+    return { Icons, t, knowledgeStatus, statusError, statusLoading, loadKnowledgeStatus, collections, collectionPageInfo, loadingCollections, selectedCollection, collectionInput,
       documents, pageInfo, fileNameFilter, loadingDocuments, loadingMore, documentListError,
       uploading, uploadCollection, fileInput, selectedFiles, uploadQueue, uploadedCount,
       wikiType, wikiTypes, wikiCards, wikiPageInfo, wikiLoading, wikiError, selectedWiki, editingWiki,
       wikiDrawer, wikiExportError, wikiSaving, wikiDeleting, wikiExporting, draftTitle, draftSummary, wikiDirty, wikiPreview,
+      chunkDrawer, selectedChunk, chunkContent, chunkBusy, chunkError, openChunk, closeChunk, saveChunk,
       loadCollections, loadDocuments, applyCollection, uploadFiles, openWiki, openDocumentWiki,
       loadWiki, changeWikiType, saveWiki, deleteWiki, downloadWiki, openWikiDrawer, closeWikiDrawer, handleWikiBackdrop,
       wikiCardFollowsEntity };
   },
   template: `
     <div class="knowledge-workspace">
+      <section v-if="knowledgeStatus?.state !== 'ready' || statusError" class="card card-gold" role="status">
+        <div class="card-body">
+          <strong>{{ knowledgeStatus ? t('knowledgeState_' + knowledgeStatus.state) : t('loading') }}</strong>
+          <p v-if="knowledgeStatus?.state === 'pending'" class="text-sm">{{ t('knowledgeSetupHint') }}</p>
+          <p v-if="knowledgeStatus?.state === 'failed'" class="knowledge-list-error" role="alert">{{ knowledgeStatus.message }}</p>
+          <p v-if="statusError" class="knowledge-list-error" role="alert">{{ statusError }}</p>
+          <a class="btn btn-primary btn-sm" href="#model-config">{{ t('modelConfiguration') }}</a>
+          <button class="btn btn-ghost btn-sm" @click="loadKnowledgeStatus" :disabled="statusLoading">{{ t('refresh') }}</button>
+        </div>
+      </section>
+      <template v-if="knowledgeStatus?.state === 'ready'">
       <div class="knowledge-page-toolbar">
         <button class="btn btn-ghost" @click="downloadWiki(true)" :disabled="wikiExporting || wikiSaving || wikiDeleting || wikiDirty" :title="wikiDirty ? t('wikiSaveBeforeExport') : t('exportAllWikiHint')">{{ wikiExporting ? t('exportingWiki') : t('exportAllWikiMd') }}</button>
         <button class="btn btn-primary" @click="openWikiDrawer" aria-haspopup="dialog" aria-controls="knowledgeWikiDrawer">LLM Wiki</button>
@@ -1899,9 +1986,10 @@ const KnowledgePage = {
             <div v-if="loadingDocuments" class="knowledge-list-state text-ash">{{ t('loadingChunks') }}</div>
             <div v-else-if="documentListError" class="knowledge-list-state knowledge-list-error" role="alert">{{ documentListError }}</div>
             <div v-else-if="documents.length" class="knowledge-table mt-4">
-              <table><thead><tr><th>{{ t('chunksSource') }}</th><th>{{ t('chunksCount') }}</th><th>Wiki</th></tr></thead>
+              <table><thead><tr><th>{{ t('chunksSource') }}</th><th>{{ t('chunksCount') }}</th><th>{{ t('editChunk') }}</th><th>Wiki</th></tr></thead>
                 <tbody><tr v-for="doc in documents" :key="doc.id">
                   <td class="text-sm">{{ doc.fileName }}</td><td class="text-xs text-ash">#{{ doc.chunkIndex }}</td>
+                  <td><button class="btn btn-ghost btn-sm" @click="openChunk(doc)" :disabled="chunkBusy">{{ t('edit') }}</button></td>
                   <td><button class="btn btn-ghost btn-sm" @click="openDocumentWiki(doc)" :disabled="!doc.documentId || wikiSaving">{{ t('view') }}</button></td>
                 </tr></tbody>
               </table>
@@ -1912,6 +2000,20 @@ const KnowledgePage = {
           </div>
         </section>
       </div>
+      <dialog ref="chunkDrawer" class="knowledge-wiki-drawer" aria-labelledby="chunkEditorTitle" @cancel.prevent="closeChunk">
+        <section class="card">
+          <div class="card-header"><h2 id="chunkEditorTitle" class="card-title">{{ t('editChunk') }}</h2>
+            <button class="btn btn-ghost" @click="closeChunk" :disabled="chunkBusy">{{ t('cancel') }}</button></div>
+          <div class="card-body">
+            <p v-if="chunkError" role="alert" class="knowledge-list-error">{{ chunkError }}</p>
+            <p v-if="chunkBusy" role="status">{{ t('loading') }}</p>
+            <textarea v-if="selectedChunk" class="input" style="width:100%;min-height:50vh;resize:vertical"
+              v-model="chunkContent" :aria-label="t('editChunk')" :disabled="chunkBusy"></textarea>
+            <button class="btn btn-primary mt-4" @click="saveChunk"
+              :disabled="chunkBusy || !selectedChunk || !chunkContent.trim() || chunkContent === selectedChunk.content">{{ t('save') }}</button>
+          </div>
+        </section>
+      </dialog>
       <dialog id="knowledgeWikiDrawer" ref="wikiDrawer" class="knowledge-wiki-drawer" aria-labelledby="knowledgeWikiTitle" @cancel.prevent="closeWikiDrawer" @click="handleWikiBackdrop">
       <section class="card knowledge-wiki-card">
         <div class="card-header">
@@ -1963,9 +2065,16 @@ const KnowledgePage = {
         </div>
       </section>
       </dialog>
+      </template>
     </div>
   `
 };
+
+function requireKnowledgeStatus(data, t) {
+  if (!data || !['pending', 'ready', 'failed', 'disabled'].includes(data.state)
+      || typeof data.message !== 'string') throw new Error(t('invalidKnowledgeStatus'));
+  return data;
+}
 
 function requirePageResponse(page, itemValidator, errorMessage) {
   const pageInfo = page?.pageInfo;
@@ -7093,6 +7202,7 @@ const ModelConfigPage = {
     const Icons = inject('Icons');
     const t = inject('t');
     const sections = ref([]);
+    const knowledgeStatus = ref(null);
     const activeSectionId = ref('chat');
     const configurationPath = ref('');
     const runtimeSynchronized = ref(false);
@@ -7178,6 +7288,7 @@ const ModelConfigPage = {
       try {
         const data = await CyreneAPI.getModelConfiguration();
         applyConfiguration(data);
+        knowledgeStatus.value = requireKnowledgeStatus(await CyreneAPI.getKnowledgeStatus(), t);
       } catch (e) {
         error.value = e.message;
       } finally {
@@ -7207,6 +7318,7 @@ const ModelConfigPage = {
         });
         const data = await CyreneAPI.updateModelConfiguration(values, Array.from(removals));
         applyConfiguration(data);
+        knowledgeStatus.value = requireKnowledgeStatus(await CyreneAPI.getKnowledgeStatus(), t);
         showToast(t('modelConfigSaved'), 'success');
       } catch (e) {
         error.value = e.message;
@@ -7262,7 +7374,7 @@ const ModelConfigPage = {
       0
     ));
     const hasChanges = computed(() => {
-      if (!runtimeSynchronized.value) return true;
+      if (!runtimeSynchronized.value || knowledgeStatus.value?.state === 'failed') return true;
       if (clearKeys.value.length > 0) return true;
       return sections.value.some(section => section.fields.some(field => {
         if (field.sensitive) return Boolean(credentialValues[field.key]?.trim());
@@ -7280,6 +7392,7 @@ const ModelConfigPage = {
       activeSectionId,
       configurationPath,
       runtimeSynchronized,
+      knowledgeStatus,
       loading,
       saving,
       error,
@@ -7327,9 +7440,14 @@ const ModelConfigPage = {
           </span>
           <span class="model-config-security-note">{{ t('modelConfigSecurityHint') }}</span>
         </div>
+        <div v-if="knowledgeStatus" class="text-sm" role="status">
+          {{ t('knowledgeState_' + knowledgeStatus.state) }}
+          <p v-if="knowledgeStatus.state === 'pending'">{{ t('knowledgeSetupHint') }}</p>
+          <p v-if="knowledgeStatus.state === 'failed'">{{ knowledgeStatus.message }}</p>
+        </div>
         <div v-if="error" class="model-config-inline-error">
           <span>{{ error }}</span>
-          <button class="btn btn-ghost btn-sm" @click="loadConfiguration">{{ t('retry') }}</button>
+          <button class="btn btn-ghost btn-sm" @click="hasChanges && sections.length ? saveConfiguration() : loadConfiguration()" :disabled="saving">{{ t('retry') }}</button>
         </div>
       </div>
 

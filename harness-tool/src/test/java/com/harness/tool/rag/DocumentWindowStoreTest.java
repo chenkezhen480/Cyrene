@@ -20,6 +20,41 @@ import static org.mockito.Mockito.when;
 class DocumentWindowStoreTest {
 
     @Test
+    void keywordOnlyRetrievalUsesMilvusWithoutEmbeddingAndKeepsRevisionScope() {
+        MilvusClientV2 client = mock(MilvusClientV2.class);
+        var request = org.mockito.ArgumentCaptor.forClass(io.milvus.v2.service.vector.request.SearchReq.class);
+        when(client.search(any())).thenReturn(SearchResp.builder().searchResults(List.of(List.of(
+                SearchResp.SearchResult.builder().id("chunk-1").score(0.3f)
+                        .entity(Map.of("content", "keyword match", "source", "manual", "chunk_index", 0)).build()))).build());
+        var store = new MilvusVectorStore(client, "documents", "manuals", null);
+        var options = new com.harness.core.knowledge.KnowledgeSearchOptions(5, 30, 1, 0.5, 0.1, false);
+        var result = store.searchDocumentRevisions("manuals", "term", options, Map.of("doc-1", "rev-1"));
+        assertThat(result.documents()).hasSize(1);
+        verify(client).search(request.capture());
+        assertThat(request.getValue().getAnnsField()).isEqualTo("sparse_content");
+        assertThat(request.getValue().getTopK()).isEqualTo(30);
+        assertThat(request.getValue().getFilter()).contains("manuals", "doc-1", "rev-1");
+        var fused = com.harness.tool.knowledge.index.ReciprocalRankFusion.rank(
+                List.of("dense"), List.of("keyword"), value -> value, 0.2, 0.8, 60, 2);
+        assertThat(fused.getFirst().item()).isEqualTo("keyword");
+    }
+
+    @Test
+    void managementSearchMatchesFilenameOrContentInMilvusWithBoundedCursor() {
+        MilvusClientV2 client = mock(MilvusClientV2.class);
+        var iterator = mock(io.milvus.orm.iterator.QueryIterator.class);
+        when(iterator.next()).thenReturn(List.of());
+        when(client.queryIterator(any())).thenReturn(iterator);
+        var store = new MilvusVectorStore(client, "documents", "manuals", null);
+        store.listKnowledgeChunks("manuals", "cache", 10, null);
+        var request = org.mockito.ArgumentCaptor.forClass(io.milvus.v2.service.vector.request.QueryIteratorReq.class);
+        verify(client).queryIterator(request.capture());
+        assertThat(request.getValue().getExpr()).contains("source like \"%cache%\"", "content like \"%cache%\"");
+        assertThat(request.getValue().getLimit()).isEqualTo(11);
+        verify(iterator).close();
+    }
+
+    @Test
     void milvusUsesTheSameWindowBoundsAndSortsReturnedChunks() {
         MilvusClientV2 client = mock(MilvusClientV2.class);
         QueryResp response = QueryResp.builder()

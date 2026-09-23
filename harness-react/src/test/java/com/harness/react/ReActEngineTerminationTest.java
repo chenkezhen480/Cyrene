@@ -190,9 +190,13 @@ class ReActEngineTerminationTest {
             }
         });
         List<String> tokens = new ArrayList<>();
+        StringBuilder visibleText = new StringBuilder();
         ReActListener listener = new ReActListener() {
             @Override public void onStep(com.harness.core.model.ReActStep step) {}
-            @Override public void onToken(String token) { tokens.add(token); }
+            @Override public void onToken(String token) { tokens.add(token); visibleText.append(token); }
+            @Override public void onTokenRollback(int characters) {
+                visibleText.setLength(visibleText.length() - characters);
+            }
         };
         ReActEngine engine = new ReActEngine(provider, catalog(), executor, null, null, 10);
         ReActRequest request = new ReActRequest(
@@ -206,7 +210,10 @@ class ReActEngineTerminationTest {
         assertThat(requests.getLast().parameters().toolSpecifications()).isEmpty();
         assertThat(result.output()).isEqualTo("final answer after hard limit");
         assertThat(result.loopStats().outcome()).isEqualTo("tool_failure_limit");
-        if (streaming) assertThat(tokens).containsExactly("final answer after hard limit");
+        if (streaming) {
+            assertThat(tokens).hasSize(7);
+            assertThat(visibleText.toString()).isEqualTo("final answer after hard limit");
+        }
         assertThat(result.steps().get(5).inspection().status())
                 .isEqualTo(com.harness.core.model.ReActStep.InspectionResult.InspectionStatus.LOOP_DETECTED);
     }

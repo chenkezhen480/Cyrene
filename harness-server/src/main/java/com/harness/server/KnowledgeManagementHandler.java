@@ -27,6 +27,7 @@ public class KnowledgeManagementHandler {
     private static final int MAX_FILE_NAME_LENGTH = 512;
 
     private final VectorStore vectorStore;
+    private final com.harness.tool.knowledge.KnowledgeWikiService wikiService;
     private final KnowledgeDocumentLifecycleService lifecycleService;
 
     public KnowledgeManagementHandler(VectorStore vectorStore) {
@@ -37,6 +38,12 @@ public class KnowledgeManagementHandler {
             VectorStore vectorStore,
             KnowledgeDocumentLifecycleService lifecycleService
     ) {
+        this(vectorStore, lifecycleService, null);
+    }
+
+    public KnowledgeManagementHandler(VectorStore vectorStore, KnowledgeDocumentLifecycleService lifecycleService,
+            com.harness.tool.knowledge.KnowledgeWikiService wikiService) {
+        this.wikiService = wikiService;
         this.vectorStore = Objects.requireNonNull(vectorStore, "vectorStore");
         this.lifecycleService = lifecycleService;
     }
@@ -126,8 +133,19 @@ public class KnowledgeManagementHandler {
      * PUT /api/knowledge/{collection}/{documentId} — update a document's content.
      */
     public void updateDocument(Context ctx) {
-        ApiResponses.error(ctx, 405, ApiErrorCode.INVALID_REQUEST,
-                "Chunk editing is disabled; upload a complete Source Document Revision");
+        try {
+            if (wikiService == null) throw new IllegalStateException("Chunk editor is unavailable");
+            ChunkEdit edit = ctx.bodyAsClass(ChunkEdit.class);
+            ctx.json(wikiService.editChunk(ctx.pathParam("collection"), ctx.pathParam("documentId"),
+                    edit.expectedContent(), edit.content(), "management"));
+        } catch (IllegalArgumentException e) {
+            ApiResponses.error(ctx, 400, ApiErrorCode.INVALID_REQUEST, e.getMessage());
+        } catch (IllegalStateException e) {
+            ApiResponses.error(ctx, 409, ApiErrorCode.INVALID_REQUEST, e.getMessage());
+        } catch (Exception e) {
+            log.error("Failed to edit knowledge chunk", e);
+            ApiResponses.error(ctx, 500, ApiErrorCode.INTERNAL_ERROR, e.getMessage());
+        }
     }
 
     /**
@@ -149,6 +167,8 @@ public class KnowledgeManagementHandler {
             ApiResponses.error(ctx, 500, ApiErrorCode.INTERNAL_ERROR, e.getMessage());
         }
     }
+
+    public record ChunkEdit(String expectedContent, String content) {}
 
     private static int parseLimit(String value) {
         if (value == null || value.isBlank()) {

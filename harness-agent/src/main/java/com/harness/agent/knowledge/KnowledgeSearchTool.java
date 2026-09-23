@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.harness.core.exception.ToolExecutionException;
 import com.harness.core.knowledge.KnowledgeConceptType;
+import com.harness.core.knowledge.KnowledgeSearchOptions;
 import com.harness.core.knowledge.KnowledgeHandleCodec;
 import com.harness.core.model.ResultStatus;
 import com.harness.core.model.ToolExecutionOutcome;
@@ -75,6 +76,14 @@ public final class KnowledgeSearchTool implements Tool {
         properties.set("knowledgeTypes", types);
         properties.set("limit", objectMapper.createObjectNode()
                 .put("type", "integer").put("minimum", 1).put("maximum", 20));
+        properties.set("candidateTopK", objectMapper.createObjectNode().put("type", "integer")
+                .put("minimum", 1).put("maximum", 100).put("default", 20)
+                .put("description", "Candidates per retrieval lane; must be at least limit."));
+        properties.set("bm25Weight", objectMapper.createObjectNode().put("type", "number")
+                .put("minimum", 0).put("maximum", 1).put("default", 0.5)
+                .put("description", "Weighted RRF: 0 = vector only, 1 = keyword only; vector weight is 1 minus this."));
+        properties.set("rerank", objectMapper.createObjectNode().put("type", "boolean").put("default", true)
+                .put("description", "Rerank document candidates when a reranker is configured."));
         properties.set("recent", objectMapper.createObjectNode()
                 .put("type", "boolean")
                 .put("description", "Set true only for a question about the history itself that names "
@@ -102,7 +111,7 @@ public final class KnowledgeSearchTool implements Tool {
                         + "copy of \"that Redis thing\" matches nothing. "
                         + "A question with no subject at all (\"what did I ask before?\") cannot be matched "
                         + "semantically — use recent=true for those. "
-                        + "Scores retain route-specific semantics. Use knowledge_read for source details. "
+                        + "Choose weights and candidateTopK per search; adjust them and retry when evidence is insufficient. Scores retain route-specific semantics. Use knowledge_read for source details. "
                         + "Graph hits are capability/Schema cards, not graph facts: "
                         + "use graphRouteHint.recommendedTool (query_graph) with the discovered graphId/schemaId to query Neo4j.",
                 schema,
@@ -120,12 +129,23 @@ public final class KnowledgeSearchTool implements Tool {
             String query = requiredText(arguments, "query");
             int limit = integer(arguments, "limit", 10);
             boolean recent = bool(arguments, "recent");
+            if (recent) {
+                for (String field : List.of("candidateTopK", "bm25Weight", "denseThreshold", "sparseThreshold", "rerank")) {
+                    if (arguments.has(field)) throw new IllegalArgumentException(field + " does not apply to recent=true");
+                }
+            }
+            if (arguments.has("denseThreshold") || arguments.has("sparseThreshold")) {
+                throw new IllegalArgumentException("Retrieval thresholds are configured by the server");
+            }
+            KnowledgeSearchOptions options = KnowledgeSearchOptions.configured(limit,
+                    integer(arguments, "candidateTopK", 20), number(arguments, "bm25Weight", 0.5),
+                    !arguments.has("rerank") || bool(arguments, "rerank"));
             Set<KnowledgeConceptType> requestedTypes = requestedTypes(arguments, recent);
             KnowledgeToolRuntimeContext context =
                     KnowledgeToolRuntimeContext.requireCurrent(TOOL_NAME);
             List<DiscoveredKnowledge> discovered = recent
                     ? router.recentEpisodes(limit, context)
-                    : router.search(query, requestedTypes, limit, context);
+                    : router.search(query, requestedTypes, options, context);
             List<Hit> hits = discovered.stream()
                     .map(hit -> new Hit(
                             hit.knowledgeKind(),
@@ -143,7 +163,9 @@ public final class KnowledgeSearchTool implements Tool {
                     .toList();
             Map<String, Object> meta = recent
                     ? Map.of("scorePolicy", "recency-order")
-                    : Map.of("scorePolicy", "route-specific");
+                    : Map.of("scorePolicy", "route-specific", "retrieval", options, "fusion", "weightedRrf",
+                            "rrfK", KnowledgeSearchOptions.RRF_K, "documentRerankAvailable", router.rerankAvailable(),
+                            "returnedCount", hits.size());
             ToolEnvelope<SearchData> envelope = hits.isEmpty()
                     ? ToolEnvelope.empty(new SearchData(hits), null, meta)
                     : ToolEnvelope.success(new SearchData(hits), null, meta);
@@ -185,6 +207,15 @@ public final class KnowledgeSearchTool implements Tool {
                             + "[USER_EPISODE]");
         }
         return Set.copyOf(types);
+    }
+
+    private static double number(JsonNode arguments, String field, double defaultValue) {
+        JsonNode value = arguments.get(field);
+        if (value == null) return defaultValue;
+        if (!value.isNumber() || !Double.isFinite(value.doubleValue())) {
+            throw new IllegalArgumentException(field + " must be a finite number");
+        }
+        return value.doubleValue();
     }
 
     private static boolean bool(JsonNode arguments, String field) {

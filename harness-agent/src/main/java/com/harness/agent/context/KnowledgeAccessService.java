@@ -1,11 +1,8 @@
 package com.harness.agent.context;
 
-import com.harness.core.env.EnvConfig;
-import com.harness.core.env.EnvKey;
 import com.harness.core.exception.ToolExecutionException;
+import com.harness.core.knowledge.KnowledgeSearchOptions;
 import com.harness.core.model.KnowledgeRequestContext;
-import com.harness.provider.EmbeddingModelProvider;
-import com.harness.provider.RerankModelProvider;
 import com.harness.tool.rag.RagRetriever;
 
 import java.util.List;
@@ -18,15 +15,6 @@ public final class KnowledgeAccessService {
     private final ContextBuilder contextBuilder;
     private final int contextWindowMax;
 
-    public KnowledgeAccessService(
-            RerankModelProvider rerankModelProvider,
-            EmbeddingModelProvider embeddingModelProvider
-    ) {
-        this(
-                new ContextBuilder(rerankModelProvider, embeddingModelProvider),
-                EnvConfig.get().getInt(EnvKey.RAG_CONTEXT_WINDOW_MAX, 10));
-    }
-
     public KnowledgeAccessService(ContextBuilder contextBuilder, int contextWindowMax) {
         this.contextBuilder = java.util.Objects.requireNonNull(contextBuilder, "contextBuilder");
         if (contextWindowMax < 0) {
@@ -36,12 +24,12 @@ public final class KnowledgeAccessService {
     }
 
     public ContextBuilder.ContextResult searchDocumentRevisions(String query, String collection,
-            int limit, java.util.Map<String, String> documentRevisions) {
+            KnowledgeSearchOptions options, java.util.Map<String, String> documentRevisions) {
         if (!effectiveCollection(collection).equals(collection)) {
             throw new SecurityException("Collection exceeds the trusted knowledge scope");
         }
         documentRevisions.keySet().forEach(documentId -> requireAuthorizedDocument("knowledge_search", documentId));
-        return contextBuilder.searchDocumentRevisions(query, collection, limit, documentRevisions);
+        return contextBuilder.searchDocumentRevisions(query, collection, options, documentRevisions);
     }
 
     public List<RagRetriever.RagDocument> readContext(
@@ -56,9 +44,7 @@ public final class KnowledgeAccessService {
                 collection, documentId, revisionId, anchorChunkIndex, before, after);
     }
 
-    public int maxSearchLimit() {
-        return contextBuilder.maxSearchLimit();
-    }
+    public boolean rerankAvailable() { return contextBuilder.rerankAvailable(); }
 
     public int contextWindowMax() {
         return contextWindowMax;

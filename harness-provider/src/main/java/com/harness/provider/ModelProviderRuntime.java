@@ -105,6 +105,9 @@ public final class ModelProviderRuntime {
         @Override public String modelName() { return current().chat().modelName(); }
         @Override public int contextWindow() { return current().chat().contextWindow(); }
         @Override public int timeoutSeconds() { return current().chat().timeoutSeconds(); }
+        @Override public boolean requiresChatCompletionFinishReason() {
+            return current().chat().requiresChatCompletionFinishReason();
+        }
         @Override public java.util.Set<ModalCapability> modalCapabilities() {
             return current().chat().modalCapabilities();
         }

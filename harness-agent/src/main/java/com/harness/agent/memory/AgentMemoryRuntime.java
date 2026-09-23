@@ -28,7 +28,6 @@ import com.harness.tool.knowledge.authority.MysqlKnowledgeIndexOutboxStore;
 import com.harness.tool.knowledge.index.KnowledgeIndexProjector;
 import com.harness.tool.knowledge.index.KnowledgeProjectionMapper;
 import com.harness.tool.knowledge.index.KnowledgeProjectionStore;
-import com.harness.tool.knowledge.index.KnowledgeProjectionStoreFactory;
 import com.harness.tool.knowledge.index.KnowledgeReindexService;
 import com.harness.tool.skill.SkillRegistry;
 import dev.langchain4j.data.message.ChatMessage;
@@ -73,6 +72,7 @@ public final class AgentMemoryRuntime {
     }
 
     private final boolean enabled;
+    private final com.harness.tool.knowledge.index.KnowledgeVectorRuntime vectorRuntime;
     private final ChatModelProvider chatModel;
     private final SessionStore sessionStore;
     private final MessageStore messageStore;
@@ -92,9 +92,11 @@ public final class AgentMemoryRuntime {
             EmbeddingModelProvider embeddingModel,
             SkillRegistry skillRegistry,
             ToolRegistry toolRegistry,
-            com.harness.tool.rag.VectorStore vectorStore
+            com.harness.tool.rag.VectorStore vectorStore,
+            com.harness.tool.knowledge.index.KnowledgeVectorRuntime vectorRuntime
     ) {
         this.enabled = MemoryStoreFactory.isEnabled();
+        this.vectorRuntime = vectorRuntime;
         this.chatModel = chatModel;
         if (enabled) {
             this.sessionStore = MemoryStoreFactory.createSessionStore();
@@ -106,24 +108,23 @@ public final class AgentMemoryRuntime {
             this.cleanupScheduler = new SessionCleanupScheduler(messageCache, skillRegistry);
             ObjectMapper objectMapper = new ObjectMapper();
             Clock clock = Clock.systemUTC();
-            var projectionRuntime = KnowledgeProjectionStoreFactory.create(embeddingModel);
-            this.knowledgeProjectionStore = projectionRuntime.store();
+            this.knowledgeProjectionStore = vectorRuntime.projections();
             this.knowledgeRepository = new MysqlKnowledgeRepository(
                     com.harness.core.env.MysqlConnectionPool::getConnection, objectMapper,
                     knowledgeProjectionStore, vectorStore);
-            if (projectionRuntime.enabled()) {
+            if (vectorRuntime.enabled()) {
                 KnowledgeIndexProjector projector = new KnowledgeIndexProjector(
                         knowledgeRepository,
-                        projectionRuntime.store(),
+                        knowledgeProjectionStore,
                         new KnowledgeProjectionMapper(embeddingModel));
                 this.indexOutboxWorker = new KnowledgeIndexOutboxWorker(
                         new MysqlKnowledgeIndexOutboxStore(),
                         projector,
                         clock,
-                        KnowledgeIndexOutboxSettings.fromEnvironment());
+                        KnowledgeIndexOutboxSettings.fromEnvironment(), vectorRuntime::isReady);
                 this.knowledgeReindexService = new KnowledgeReindexService(
                         knowledgeRepository,
-                        projectionRuntime.store(),
+                        knowledgeProjectionStore,
                         new KnowledgeProjectionMapper(embeddingModel));
             } else {
                 this.indexOutboxWorker = null;
@@ -159,6 +160,10 @@ public final class AgentMemoryRuntime {
 
     public boolean enabled() {
         return enabled;
+    }
+
+    public boolean knowledgeReady() {
+        return vectorRuntime.isReady();
     }
 
     public MemoryContext resolve(

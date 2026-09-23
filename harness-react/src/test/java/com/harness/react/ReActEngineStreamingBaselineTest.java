@@ -20,6 +20,7 @@ import dev.langchain4j.model.chat.StreamingChatModel;
 import dev.langchain4j.model.chat.request.ChatRequest;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
+import dev.langchain4j.model.output.FinishReason;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
@@ -57,22 +58,26 @@ class ReActEngineStreamingBaselineTest {
                         ChatResponse.builder()
                                 .aiMessage(AiMessage.from(
                                         "planning",
-                                        List.of(firstToolRequest, secondToolRequest)))
+                                        List.of(firstToolRequest)))
+                                .finishReason(FinishReason.TOOL_EXECUTION)
                                 .build()),
                 new ScriptedResponse(
-                        "READY_FOR_FINAL",
+                        "Need another chunk",
                         ChatResponse.builder()
-                                .aiMessage(AiMessage.from("READY_FOR_FINAL"))
+                                .aiMessage(AiMessage.from("Need another chunk", List.of(secondToolRequest)))
+                                .finishReason(FinishReason.TOOL_EXECUTION)
                                 .build()),
                 new ScriptedResponse(
                         "The final answer.",
                         ChatResponse.builder()
                                 .aiMessage(AiMessage.from("The final answer."))
+                                .finishReason(FinishReason.STOP)
                                 .build()));
 
         ChatModelProvider provider = mock(ChatModelProvider.class);
         when(provider.chatModel()).thenReturn(mock(ChatModel.class));
         when(provider.streamingModel()).thenReturn(streamingModel);
+        when(provider.requiresChatCompletionFinishReason()).thenReturn(true);
         when(provider.planningRequestParameters(nullable(ThinkingLevel.class), anyList()))
                 .thenCallRealMethod();
         when(provider.modelUsage(any(), anyLong())).thenAnswer(invocation ->
@@ -104,6 +109,8 @@ class ReActEngineStreamingBaselineTest {
                 });
 
         List<String> visibleTokens = new ArrayList<>();
+        StringBuilder visibleText = new StringBuilder();
+        List<Integer> rollbacks = new ArrayList<>();
         List<String> toolEvents = new ArrayList<>();
         ReActListener listener = new ReActListener() {
             @Override
@@ -113,6 +120,13 @@ class ReActEngineStreamingBaselineTest {
             @Override
             public void onToken(String token) {
                 visibleTokens.add(token);
+                visibleText.append(token);
+            }
+
+            @Override
+            public void onTokenRollback(int characters) {
+                rollbacks.add(characters);
+                visibleText.setLength(visibleText.length() - characters);
             }
 
             @Override
@@ -157,13 +171,19 @@ class ReActEngineStreamingBaselineTest {
         ReActResult result = engine.streamExecute(request);
 
         assertThat(result.output()).isEqualTo("The final answer.");
-        assertThat(visibleTokens).containsExactly("The final answer.");
+        assertThat(result.loopStats().llmCalls()).isEqualTo(3);
+        assertThat(String.join("", visibleTokens)).isEqualTo(
+                "I will call test_tool now.Need another chunkThe final answer.");
+        assertThat(visibleTokens.size()).isGreaterThan(3);
+        assertThat(rollbacks).containsExactly(
+                "I will call test_tool now.".length(), "Need another chunk".length());
+        assertThat(visibleText.toString()).isEqualTo("The final answer.");
         assertThat(toolEvents).containsExactly(
                 "CREATED:call-1",
-                "CREATED:call-2",
                 "RUNNING:call-1",
                 "OUTPUT:call-1:tool result",
                 "SUCCEEDED:call-1",
+                "CREATED:call-2",
                 "RUNNING:call-2",
                 "OUTPUT:call-2:tool result",
                 "SUCCEEDED:call-2");
@@ -174,8 +194,12 @@ class ReActEngineStreamingBaselineTest {
         return new StreamingChatModel() {
             @Override
             public void doChat(ChatRequest request, StreamingChatResponseHandler handler) {
+                assertThat(request.parameters().toolSpecifications()).hasSize(1);
+                assertThat(request.messages().getFirst().toString()).doesNotContain("READY_FOR_FINAL", "tool_planning_phase");
                 ScriptedResponse response = responses[nextResponse.getAndIncrement()];
-                handler.onPartialResponse(response.partialText());
+                for (String token : response.partialText().split("(?<= )")) {
+                    handler.onPartialResponse(token);
+                }
                 handler.onCompleteResponse(response.response());
             }
         };

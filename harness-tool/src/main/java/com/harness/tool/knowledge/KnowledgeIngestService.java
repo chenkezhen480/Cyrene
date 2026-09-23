@@ -505,7 +505,7 @@ public final class KnowledgeIngestService {
     private static JsonNode wikiCard(String text) {
         try {
             JsonNode card = MAPPER.readTree(text);
-            if (card == null || !card.isObject() || card.size() != 2
+            if (card == null || !card.isObject()
                     || !validCardText(card.get("title"), 512) || !validCardText(card.get("summary"), 2048)) {
                 throw new IllegalStateException("Document model returned an invalid Wiki title or summary");
             }

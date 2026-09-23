@@ -45,6 +45,8 @@ public interface VectorStore {
      */
     Document getById(String collection, String id);
 
+    Document updateContent(String collection, String id, String content);
+
     /**
      * Cursor-paginated management projection. Implementations must use a stable
      * primary-key order, fetch limit + 1 rows, and bind cursors to the query scope.
@@ -94,7 +96,7 @@ public interface VectorStore {
         return SearchResult.fromAccepted(searchText(collection, query, topK));
     }
 
-    SearchResult searchDocumentRevisions(String collection, String query, int topK,
+    SearchResult searchDocumentRevisions(String collection, String query, com.harness.core.knowledge.KnowledgeSearchOptions options,
                                          Map<String, String> documentRevisions);
 
     // ==================== 4. 显式文档上下文 ====================

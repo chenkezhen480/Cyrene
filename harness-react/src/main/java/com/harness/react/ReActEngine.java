@@ -22,6 +22,7 @@ import dev.langchain4j.model.chat.request.ChatRequest;
 import dev.langchain4j.model.chat.request.ChatRequestParameters;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
+import dev.langchain4j.model.output.FinishReason;
 import dev.langchain4j.model.chat.request.json.JsonObjectSchema;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.agent.tool.ToolSpecification;
@@ -46,14 +47,6 @@ import java.util.concurrent.TimeoutException;
  * Uses FallbackChatModel for transparent multimodal degradation.
  */
 public class ReActEngine implements ReActLoop {
-
-    private static final String TOOL_PLANNING_INSTRUCTION = """
-            <tool_planning_phase>
-            This request requires a separately streamed final answer. While tools are available,
-            do not compose the user-facing final answer. Call the tools still required, or respond
-            with only READY_FOR_FINAL when no more tools are needed.
-            </tool_planning_phase>
-            """;
 
     private static final String STRUCTURED_OUTPUT_INSTRUCTION = """
             <structured_output_phase>
@@ -224,7 +217,12 @@ public class ReActEngine implements ReActLoop {
                     throw new CancellationException("Request cancelled");
                 }
 
+                validateFinishReason(response);
                 AiMessage aiMessage = response.aiMessage();
+                if (!aiMessage.hasToolExecutionRequests() && FinalResponseGenerator.isToolCallMarkup(aiMessage.text())) {
+                    throw new IllegalStateException("Provider returned tool-call markup as assistant content; "
+                            + "configure a tool-capable API endpoint that returns structured tool_calls");
+                }
                 llmCalls++;
                 ModelUsage usage = recordModelUsage(
                         response,
@@ -391,11 +389,8 @@ public class ReActEngine implements ReActLoop {
                 maxIterations, toolCatalog.size());
 
         List<ToolSpecification> toolSpecs = toToolSpecifications(toolCatalog.getAll());
-        boolean guardedFinalStreaming = !toolSpecs.isEmpty();
         List<ChatMessage> messages = new ArrayList<>();
-        messages.add(SystemMessage.from(guardedFinalStreaming
-                ? systemPrompt + "\n\n" + TOOL_PLANNING_INSTRUCTION
-                : systemPrompt));
+        messages.add(SystemMessage.from(systemPrompt));
         messages.addAll(historyMessages);
         if (dynamicKnowledgeContext != null) {
             messages.add(UserMessage.from(dynamicKnowledgeContext));
@@ -434,6 +429,7 @@ public class ReActEngine implements ReActLoop {
                 // Streaming LLM call
                 long llmStart = System.currentTimeMillis();
                 CompletableFuture<ChatResponse> responseFuture = new CompletableFuture<>();
+                StringBuilder streamedText = new StringBuilder();
 
                 // Tracked before the request starts, not after it returns. The streaming HTTP future
                 // is keyed by the calling thread, and this thread then blocks on it for the whole
@@ -445,8 +441,9 @@ public class ReActEngine implements ReActLoop {
                     streamingChatModel.chat(reqBuilder.build(), new StreamingChatResponseHandler() {
                         @Override
                         public void onPartialResponse(String text) {
-                            if (!guardedFinalStreaming && listener != null) {
-                                listener.onToken(text);
+                            if (text != null && !text.isEmpty()) {
+                                streamedText.append(text);
+                                if (listener != null) listener.onToken(text);
                             }
                         }
 
@@ -482,7 +479,12 @@ public class ReActEngine implements ReActLoop {
                     throw new CancellationException("Request cancelled");
                 }
 
+                validateFinishReason(response);
                 AiMessage aiMessage = response.aiMessage();
+                if (!aiMessage.hasToolExecutionRequests() && FinalResponseGenerator.isToolCallMarkup(aiMessage.text())) {
+                    throw new IllegalStateException("Provider returned tool-call markup as assistant content; "
+                            + "configure a tool-capable API endpoint that returns structured tool_calls");
+                }
                 llmCalls++;
                 ModelUsage usage = recordModelUsage(
                         response,
@@ -495,22 +497,16 @@ public class ReActEngine implements ReActLoop {
 
                 // Final answer (no tool calls)
                 if (aiMessage.toolExecutionRequests() == null || aiMessage.toolExecutionRequests().isEmpty()) {
-                    if (guardedFinalStreaming) {
-                        GeneratedFinalResponse finalResponse = generateFinalResponse(
-                                systemPrompt,
-                                messages,
-                                finalRequestParameters,
-                                listener,
-                                cancellationToken,
-                                trace);
-                        response = finalResponse.response();
-                        aiMessage = response.aiMessage();
-                        llmCalls++;
-                        ModelUsage finalUsage = finalResponse.usage();
-                        totalInputTokens += observedTokens(finalUsage.inputTokens());
-                        totalOutputTokens += observedTokens(finalUsage.outputTokens());
+                    FinalResponseGenerator.requireAnswer(response);
+                    String answer = aiMessage.text() != null ? aiMessage.text() : "";
+                    if (listener != null && !streamedText.toString().equals(answer)) {
+                        if (!answer.startsWith(streamedText.toString())) {
+                            listener.onTokenRollback(streamedText.length());
+                            listener.onToken(answer);
+                        } else {
+                            listener.onToken(answer.substring(streamedText.length()));
+                        }
                     }
-                    String answer = aiMessage.text();
                     long totalMs = System.currentTimeMillis() - loopStart;
                     log.info("[L3-ReAct] Finished in {}ms, steps={}", totalMs, allSteps.size());
                     buildFinalStep(i, answer, allSteps, messages, aiMessage, listener);
@@ -520,6 +516,9 @@ public class ReActEngine implements ReActLoop {
                 }
 
                 // Tool execution round
+                if (listener != null && !streamedText.isEmpty()) {
+                    listener.onTokenRollback(streamedText.length());
+                }
                 List<ToolExecutionRequest> toolReqs = normalizeToolRequests(
                         aiMessage.toolExecutionRequests());
                 if (!toolReqs.equals(aiMessage.toolExecutionRequests())) {
@@ -565,8 +564,7 @@ public class ReActEngine implements ReActLoop {
                 }
                 if (outcome.action() == RoundAction.RETURN_RESULT) {
                     ReActResult r = outcome.result();
-                    if (guardedFinalStreaming
-                            && shouldGenerateFinalResponse(outcome.inspectionStatus())) {
+                    if (shouldGenerateFinalResponse(outcome.inspectionStatus())) {
                         GeneratedFinalResponse finalResponse = generateFinalResponse(
                                 systemPrompt,
                                 messages,
@@ -722,6 +720,23 @@ public class ReActEngine implements ReActLoop {
     ) {
         return chatModelProvider.planningRequestParameters(
                 thinkingLevel, toolSpecifications);
+    }
+
+    private void validateFinishReason(ChatResponse response) {
+        if (response == null || response.aiMessage() == null) {
+            throw new IllegalStateException("Provider returned no assistant message");
+        }
+        FinishReason reason = response.finishReason();
+        boolean hasTools = response.aiMessage().hasToolExecutionRequests();
+        if (reason == null && !chatModelProvider.requiresChatCompletionFinishReason()) {
+            return;
+        }
+        if (reason == FinishReason.STOP && !hasTools
+                || reason == FinishReason.TOOL_EXECUTION && hasTools) {
+            return;
+        }
+        throw new IllegalStateException("Chat completion finish_reason " + reason
+                + " conflicts with tool_calls=" + hasTools + " or did not complete normally");
     }
 
     private String truncate(String s) {

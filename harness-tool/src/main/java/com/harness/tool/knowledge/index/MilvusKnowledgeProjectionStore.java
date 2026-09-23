@@ -34,11 +34,17 @@ public final class MilvusKnowledgeProjectionStore implements KnowledgeProjection
     private static final Logger log = LoggerFactory.getLogger(
             MilvusKnowledgeProjectionStore.class);
 
-    private final MilvusClientV2 client;
+    private final java.util.function.Supplier<MilvusClientV2> client;
     private KnowledgeProjectionCollections collections;
 
     public MilvusKnowledgeProjectionStore(MilvusClientV2 client) {
+        this(() -> java.util.Objects.requireNonNull(client, "client"), null);
+    }
+
+    public MilvusKnowledgeProjectionStore(java.util.function.Supplier<MilvusClientV2> client,
+                                          KnowledgeProjectionCollections collections) {
         this.client = java.util.Objects.requireNonNull(client, "client");
+        this.collections = collections;
     }
 
     @Override
@@ -47,7 +53,7 @@ public final class MilvusKnowledgeProjectionStore implements KnowledgeProjection
             int embeddingDimension
     ) {
         this.collections = java.util.Objects.requireNonNull(collections, "collections");
-        new MilvusKnowledgeProjectionInitializer(client)
+        new MilvusKnowledgeProjectionInitializer(client.get())
                 .initialize(collections, embeddingDimension);
     }
 
@@ -68,7 +74,7 @@ public final class MilvusKnowledgeProjectionStore implements KnowledgeProjection
             List<JsonObject> rows = entry.getValue().stream()
                     .map(MilvusKnowledgeProjectionStore::row)
                     .toList();
-            client.upsert(UpsertReq.builder()
+            client.get().upsert(UpsertReq.builder()
                     .collectionName(entry.getKey())
                     .data(rows)
                     .build());
@@ -80,7 +86,7 @@ public final class MilvusKnowledgeProjectionStore implements KnowledgeProjection
     @Override
     public void upsertCatalog(List<KnowledgeProjection> projections) {
         if (projections.isEmpty()) return;
-        client.upsert(UpsertReq.builder()
+        client.get().upsert(UpsertReq.builder()
                 .collectionName(requireCollections().catalogCollection())
                 .data(projections.stream().map(value -> row(value, true)).toList()).build());
     }
@@ -93,7 +99,7 @@ public final class MilvusKnowledgeProjectionStore implements KnowledgeProjection
             throw new IllegalArgumentException("Only memory blocks can be read here");
         }
         try {
-            var response = client.query(io.milvus.v2.service.vector.request.QueryReq.builder()
+            var response = client.get().query(io.milvus.v2.service.vector.request.QueryReq.builder()
                     .consistencyLevel(io.milvus.v2.common.ConsistencyLevel.STRONG)
                     .collectionName(collectionFor(type))
                     .filter("concept_id == {conceptId} and revision_id == {revisionId}")
@@ -109,7 +115,7 @@ public final class MilvusKnowledgeProjectionStore implements KnowledgeProjection
 
     @Override
     public java.util.Optional<com.harness.tool.knowledge.authority.KnowledgeRevisionSnapshot> findRevisionSnapshot(String revisionId) {
-        var response = client.query(io.milvus.v2.service.vector.request.QueryReq.builder()
+        var response = client.get().query(io.milvus.v2.service.vector.request.QueryReq.builder()
                     .consistencyLevel(io.milvus.v2.common.ConsistencyLevel.STRONG)
                 .collectionName(requireCollections().catalogCollection())
                 .filter("revision_id == {revision}").filterTemplateValues(Map.of("revision", revisionId))
@@ -134,7 +140,7 @@ public final class MilvusKnowledgeProjectionStore implements KnowledgeProjection
         try {
             var fields = new ArrayList<>(outputFields(Set.of()));
             fields.addAll(List.of("embedding", "revision_data"));
-            iterator = client.queryIterator(QueryIteratorReq.builder()
+            iterator = client.get().queryIterator(QueryIteratorReq.builder()
                     .consistencyLevel(io.milvus.v2.common.ConsistencyLevel.STRONG)
                     .collectionName(requireCollections().catalogCollection())
                     .expr("concept_id == " + literal(conceptId)
@@ -156,7 +162,7 @@ public final class MilvusKnowledgeProjectionStore implements KnowledgeProjection
                     data.addProperty("current", revisionId != null && revisionId.equals(row.get("revision_id").getAsString()));
                     updates.add(row);
                 }
-                client.upsert(UpsertReq.builder().collectionName(requireCollections().catalogCollection()).data(updates).build());
+                client.get().upsert(UpsertReq.builder().collectionName(requireCollections().catalogCollection()).data(updates).build());
             }
         } catch (Exception e) { throw new IllegalStateException("Cannot activate Wiki version", e); }
         finally { if (iterator != null) iterator.close(); }
@@ -166,7 +172,7 @@ public final class MilvusKnowledgeProjectionStore implements KnowledgeProjection
     public void deleteRevision(String revisionId) {
         String requiredRevisionId = required(revisionId, "revisionId");
         for (String collection : requireCollections().projectionCollections()) {
-            client.delete(DeleteReq.builder()
+            client.get().delete(DeleteReq.builder()
                     .collectionName(collection)
                     .filter("revision_id == {revisionId}")
                     .filterTemplateValues(Map.of("revisionId", requiredRevisionId))
@@ -178,7 +184,7 @@ public final class MilvusKnowledgeProjectionStore implements KnowledgeProjection
     public void deleteConcept(String conceptId) {
         String requiredConceptId = required(conceptId, "conceptId");
         for (String collection : requireCollections().projectionCollections()) {
-            client.delete(DeleteReq.builder()
+            client.get().delete(DeleteReq.builder()
                     .collectionName(collection)
                     .filter("concept_id == {conceptId}")
                     .filterTemplateValues(Map.of("conceptId", requiredConceptId))
@@ -215,7 +221,7 @@ public final class MilvusKnowledgeProjectionStore implements KnowledgeProjection
     ) {
         QueryIterator iterator = null;
         try {
-            iterator = client.queryIterator(QueryIteratorReq.builder()
+            iterator = client.get().queryIterator(QueryIteratorReq.builder()
                     .consistencyLevel(io.milvus.v2.common.ConsistencyLevel.STRONG)
                     .collectionName(collection)
                     .expr(after == null
@@ -280,7 +286,7 @@ public final class MilvusKnowledgeProjectionStore implements KnowledgeProjection
         try {
             String filter = searchFilter(search);
             List<String> outFields = outputFields(search.conceptTypes());
-            SearchResp denseResponse = client.search(SearchReq.builder()
+            SearchResp denseResponse = search.bm25Weight() == 1 ? null : client.get().search(SearchReq.builder()
                     .collectionName(collection)
                     .annsField("embedding")
                     .data(List.of(new FloatVec(floatList(search.embedding()))))
@@ -289,7 +295,7 @@ public final class MilvusKnowledgeProjectionStore implements KnowledgeProjection
                     .metricType(IndexParam.MetricType.COSINE)
                     .outputFields(outFields)
                     .build());
-            SearchResp sparseResponse = client.search(SearchReq.builder()
+            SearchResp sparseResponse = search.bm25Weight() == 0 ? null : client.get().search(SearchReq.builder()
                     .collectionName(collection)
                     .annsField("sparse_content")
                     .data(List.of(new EmbeddedText(search.query())))
@@ -318,8 +324,10 @@ public final class MilvusKnowledgeProjectionStore implements KnowledgeProjection
                     keptSparseCount++;
                 }
             }
-            List<KnowledgeProjectionHit> fused = ReciprocalRankFusion.fuse(
-                    keptDense, keptSparse, search.rrfK(), search.fusedTopK());
+            List<KnowledgeProjectionHit> fused = ReciprocalRankFusion.rank(
+                    keptDense, keptSparse, KnowledgeProjection::revisionId,
+                    1 - search.bm25Weight(), search.bm25Weight(), search.rrfK(), search.fusedTopK())
+                    .stream().map(hit -> new KnowledgeProjectionHit(hit.item(), hit.score())).toList();
             return new LaneSearch(fused, new KnowledgeRetrievalDiagnostics(
                     List.of(collection),
                     denseRows.size(), bestScore(denseRows), search.denseThreshold(), keptDenseCount,
@@ -610,7 +618,7 @@ public final class MilvusKnowledgeProjectionStore implements KnowledgeProjection
                         search.query(), search.embedding(), search.tenantId(), search.userId(),
                         search.namespaceType(), search.namespaceKey(), search.exactTenant(),
                         entry.getValue(), search.laneTopK(), search.fusedTopK(),
-                        search.denseThreshold(), search.sparseThreshold(), search.rrfK())))
+                        search.denseThreshold(), search.sparseThreshold(), search.rrfK(), search.bm25Weight())))
                 .toList();
     }
 

@@ -91,6 +91,25 @@ class KnowledgeIndexOutboxWorkerTest {
                 .isEqualTo(Duration.ofHours(1));
     }
 
+    @Test
+    void pendingConfigurationDoesNotClaimTasks() throws InterruptedException {
+        KnowledgeIndexOutboxStore store = mock(KnowledgeIndexOutboxStore.class);
+        KnowledgeIndexProjector projector = mock(KnowledgeIndexProjector.class);
+        var checked = new java.util.concurrent.CountDownLatch(1);
+        KnowledgeIndexOutboxWorker worker = new KnowledgeIndexOutboxWorker(store, projector,
+                Clock.fixed(NOW, ZoneOffset.UTC),
+                new KnowledgeIndexOutboxSettings(10, 1, Duration.ofSeconds(5), Duration.ofMinutes(30), 5),
+                () -> { checked.countDown(); return false; });
+        try {
+            worker.start();
+            assertThat(checked.await(2, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+        } finally {
+            worker.stop();
+        }
+        verify(store, never()).claimNext(org.mockito.ArgumentMatchers.any());
+        org.mockito.Mockito.verifyNoInteractions(projector);
+    }
+
     private static KnowledgeIndexOutboxWorker worker(
             KnowledgeIndexOutboxStore store,
             KnowledgeIndexProjector projector,

@@ -28,6 +28,7 @@ public final class KnowledgeIndexOutboxWorker {
     private final KnowledgeIndexProjector projector;
     private final Clock clock;
     private final KnowledgeIndexOutboxSettings settings;
+    private final java.util.function.BooleanSupplier ready;
     private final AtomicBoolean running = new AtomicBoolean(false);
     private final AtomicInteger activeDrains = new AtomicInteger();
     private ScheduledExecutorService executor;
@@ -38,6 +39,17 @@ public final class KnowledgeIndexOutboxWorker {
             Clock clock,
             KnowledgeIndexOutboxSettings settings
     ) {
+        this(outboxStore, projector, clock, settings, () -> true);
+    }
+
+    public KnowledgeIndexOutboxWorker(
+            KnowledgeIndexOutboxStore outboxStore,
+            KnowledgeIndexProjector projector,
+            Clock clock,
+            KnowledgeIndexOutboxSettings settings,
+            java.util.function.BooleanSupplier ready
+    ) {
+        this.ready = java.util.Objects.requireNonNull(ready, "ready");
         this.outboxStore = java.util.Objects.requireNonNull(outboxStore, "outboxStore");
         this.projector = java.util.Objects.requireNonNull(projector, "projector");
         this.clock = java.util.Objects.requireNonNull(clock, "clock");
@@ -88,7 +100,7 @@ public final class KnowledgeIndexOutboxWorker {
 
     public void signal() {
         ScheduledExecutorService current = executor;
-        if (!running.get() || current == null) {
+        if (!running.get() || current == null || !ready.getAsBoolean()) {
             return;
         }
         while (true) {
@@ -127,7 +139,7 @@ public final class KnowledgeIndexOutboxWorker {
         boolean reachedLimit = false;
         try {
             int processed = 0;
-            while (running.get() && processed < settings.batchSize()) {
+            while (running.get() && ready.getAsBoolean() && processed < settings.batchSize()) {
                 Optional<KnowledgeIndexTask> claimed;
                 try {
                     claimed = outboxStore.claimNext(clock.instant());

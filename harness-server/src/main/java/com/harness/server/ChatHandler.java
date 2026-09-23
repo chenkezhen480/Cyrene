@@ -207,10 +207,9 @@ public class ChatHandler {
                                             }
                                             case TOKEN -> {
                                                 sse.emit("token", Map.of("text", event.data()));
-                                                if (speech != null) {
-                                                    speech.accept(event.data());
-                                                }
                                             }
+                                            case TOKEN_ROLLBACK -> sse.emit(
+                                                    "token_rollback", event.metadata());
                                             case TOOL_CALL_CREATED -> sse.emit(
                                                     "tool_call_created", toolEventPayload(event, true));
                                             case TOOL_CALL_START -> sse.emit(
@@ -251,6 +250,9 @@ public class ChatHandler {
                                                 // merged recording is out: the client stops reading at
                                                 // `done` and would drop anything sent after it.
                                                 if (speech != null) {
+                                                    // Text tokens are provisional until the model's final
+                                                    // finish_reason; never synthesize a tool-planning round.
+                                                    speech.accept((String) donePayload.get("output"));
                                                     speech.complete((String) donePayload.get("output"));
                                                 }
                                                 sse.emit("done", donePayload);

@@ -39,29 +39,33 @@ public class MilvusCollectionInitializer {
 
     /**
      * 确保 collection 存在且 schema 正确。
-     * 不存在则创建（含 BM25 function + 双索引），已存在则跳过。
+     * 不存在则创建，已存在则校验维度并补齐缺失索引。
      */
     public static void ensureCollection(int embedDim) {
+        ensureCollection(MilvusConnectionPool.getClient(),
+                EnvConfig.get().getString(EnvKey.RAG_COLLECTION, "knowledge_documents"), embedDim);
+    }
+
+    public static void ensureCollection(MilvusClientV2 client, String collectionName, int embedDim) {
         if (embedDim <= 0) {
             throw new IllegalArgumentException("embedDim must be positive");
         }
-        MilvusClientV2 client = MilvusConnectionPool.getClient();
-        EnvConfig cfg = EnvConfig.get();
-        String collectionName = cfg.getString(EnvKey.RAG_COLLECTION, "knowledge_documents"); // 与 MilvusVectorStore 保持一致
 
         try {
             boolean exists = client.hasCollection(
                     HasCollectionReq.builder().collectionName(collectionName).build());
             if (!exists) {
                 createCollection(client, collectionName, embedDim);
+            } else {
+                validateDimension(client, collectionName, embedDim);
             }
-            ensureScalarIndexes(client, collectionName);
+            ensureIndexes(client, collectionName, indexes());
             client.loadCollection(LoadCollectionReq.builder()
                     .collectionName(collectionName).build());
             log.info("[Milvus] Collection '{}' ready", collectionName);
         } catch (Exception e) {
             log.error("[Milvus] Failed to ensure collection '{}': {}", collectionName, e.getMessage(), e);
-            throw new RuntimeException("Milvus collection init failed: " + e.getMessage(), e);
+            throw new IllegalStateException("Milvus collection init failed: " + e.getMessage(), e);
         }
     }
 
@@ -103,6 +107,9 @@ public class MilvusCollectionInitializer {
                 .collectionSchema(schema)
                 .build());
 
+    }
+
+    private static List<IndexParam> indexes() {
         // 向量索引 (HNSW + COSINE) + BM25 sparse 索引
         IndexParam vectorIndex = IndexParam.builder()
                 .fieldName("embedding")
@@ -130,46 +137,28 @@ public class MilvusCollectionInitializer {
                 .indexName("idx_document_chunk_index")
                 .indexType(IndexParam.IndexType.INVERTED)
                 .build();
-        client.createIndex(CreateIndexReq.builder()
-                .collectionName(collectionName)
-                .indexParams(List.of(
-                        vectorIndex, sparseIndex, collectionIndex, sourceIndex, chunkIndex))
-                .build());
-
-        log.info("[Milvus] Collection '{}' created: HNSW(dim={}) + BM25 sparse", collectionName, embedDim);
+        return List.of(vectorIndex, sparseIndex, collectionIndex, sourceIndex, chunkIndex);
     }
 
-    private static void ensureScalarIndexes(
-            MilvusClientV2 client,
-            String collectionName
-    ) {
-        ensureScalarIndex(client, collectionName, "collection", "idx_document_collection");
-        ensureScalarIndex(client, collectionName, "source", "idx_document_source");
-        ensureScalarIndex(client, collectionName, "chunk_index", "idx_document_chunk_index");
-    }
-
-    private static void ensureScalarIndex(
-            MilvusClientV2 client,
-            String collectionName,
-            String fieldName,
-            String indexName
-    ) {
-        List<String> existing = client.listIndexes(ListIndexesReq.builder()
-                .collectionName(collectionName)
-                .fieldName(fieldName)
-                .build());
-        if (existing != null && !existing.isEmpty()) {
-            return;
+    public static void validateDimension(MilvusClientV2 client, String collection, int dimension) {
+        var schema = client.describeCollection(io.milvus.v2.service.collection.request.DescribeCollectionReq
+                .builder().collectionName(collection).build()).getCollectionSchema();
+        var embedding = schema.getField("embedding");
+        if (embedding == null || !Integer.valueOf(dimension).equals(embedding.getDimension())) {
+            throw new IllegalStateException("Milvus collection '" + collection
+                    + "' embedding dimension mismatch: configured=" + dimension
+                    + ", stored=" + (embedding == null ? "missing" : embedding.getDimension()));
         }
-        client.createIndex(CreateIndexReq.builder()
-                .collectionName(collectionName)
-                .indexParams(List.of(IndexParam.builder()
-                        .fieldName(fieldName)
-                        .indexName(indexName)
-                        .indexType(IndexParam.IndexType.INVERTED)
-                        .build()))
-                .build());
-        log.info("[Milvus] Added scalar index '{}' on {}.{}",
-                indexName, collectionName, fieldName);
+    }
+
+    public static void ensureIndexes(MilvusClientV2 client, String collection, List<IndexParam> indexes) {
+        for (IndexParam index : indexes) {
+            List<String> existing = client.listIndexes(ListIndexesReq.builder()
+                    .collectionName(collection).fieldName(index.getFieldName()).build());
+            if (existing.isEmpty()) {
+                client.createIndex(CreateIndexReq.builder().collectionName(collection)
+                        .indexParams(List.of(index)).build());
+            }
+        }
     }
 }

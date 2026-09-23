@@ -66,7 +66,7 @@ class KnowledgeIngestServiceTest {
         documentSummarizer = mock(DocumentSummarizer.class);
         when(documentSummarizer.summarize(anyString(), anyString(), eq(2048)))
                 .thenReturn(new DocumentSummarizer.Summary(
-                        "{\"title\":\"Semantic report\",\"summary\":\"Explains student organization, class membership and teaching responsibilities.\"}",
+                        "{\"title\":\"Semantic report\",\"summary\":\"Explains student organization, class membership and teaching responsibilities.\",\"_note\":\"discovery only\"}",
                         "primary-model", 1, 1));
         artifactRepository = mock(KnowledgeArtifactRepository.class);
         ingestJobStore = mock(KnowledgeIngestJobStore.class);

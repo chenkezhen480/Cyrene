@@ -34,24 +34,28 @@ public class Reranker {
      * Rerank documents. Uses RerankModelProvider if available, otherwise sorts by original score.
      * Returns both the reranked documents and the top relevance score.
      */
-    public RerankResult rerank(String query, List<RagRetriever.RagDocument> documents) {
+    public boolean isAvailable() {
+        return rerankModelProvider != null && rerankModelProvider.isAvailable();
+    }
+
+    public RerankResult rerank(String query, List<RagRetriever.RagDocument> documents, int topN) {
         if (documents == null || documents.isEmpty()) {
             return new RerankResult(Collections.emptyList(), 0.0);
         }
-        int topN = rerankModelProvider != null
-                ? rerankModelProvider.defaultTopN()
-                : 3;
-        if (topN <= 0) {
-            throw new IllegalStateException("rerank.topN in model.conf must be positive");
-        }
+        if (topN < 1) throw new IllegalArgumentException("rerank topN must be positive");
 
-        if (rerankModelProvider != null && rerankModelProvider.isAvailable()) {
+        if (isAvailable()) {
             log.debug("Using RerankModelProvider: {}", rerankModelProvider.providerName());
             List<String> docTexts = documents.stream().map(RagRetriever.RagDocument::content).toList();
             List<RerankModelProvider.RankedResult> ranked = rerankModelProvider.rerank(query, docTexts, topN);
             List<RagRetriever.RagDocument> reranked = ranked.stream()
                     .filter(r -> r.index() >= 0 && r.index() < documents.size())
-                    .map(r -> documents.get(r.index()))
+                    .limit(topN)
+                    .map(r -> {
+                        var document = documents.get(r.index());
+                        return new RagRetriever.RagDocument(document.id(), document.content(), document.source(),
+                                r.score(), document.metadata(), document.chunkIndex());
+                    })
                     .toList();
             double topScore = ranked.isEmpty() ? 0.0 : ranked.get(0).score();
             return new RerankResult(reranked, topScore);

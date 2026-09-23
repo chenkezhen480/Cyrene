@@ -9,7 +9,7 @@ import io.milvus.v2.service.collection.request.CreateCollectionReq;
 import io.milvus.v2.service.collection.request.DescribeCollectionReq;
 import io.milvus.v2.service.collection.request.HasCollectionReq;
 import io.milvus.v2.service.collection.request.LoadCollectionReq;
-import io.milvus.v2.service.index.request.CreateIndexReq;
+import com.harness.tool.rag.MilvusCollectionInitializer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -62,6 +62,7 @@ public final class MilvusKnowledgeProjectionInitializer {
             } else {
                 validateCollection(collection, embeddingDimension, kind);
             }
+            MilvusCollectionInitializer.ensureIndexes(client, collection, indexes(kind));
             client.loadCollection(LoadCollectionReq.builder()
                     .collectionName(collection)
                     .build());
@@ -70,7 +71,7 @@ public final class MilvusKnowledgeProjectionInitializer {
         } catch (Exception e) {
             throw new IllegalStateException(
                     "Failed to initialize Milvus Knowledge projection collection '"
-                            + collection + "'", e);
+                            + collection + "': " + e.getMessage(), e);
         }
     }
 
@@ -93,10 +94,6 @@ public final class MilvusKnowledgeProjectionInitializer {
                 .description("cyrene-knowledge-" + kind.name().toLowerCase())
                 .collectionSchema(schema)
                 .build());
-        client.createIndex(CreateIndexReq.builder()
-                .collectionName(collection)
-                .indexParams(indexes(kind))
-                .build());
         log.info("[Milvus] Created Knowledge projection '{}' ({})", collection, kind);
     }
 
@@ -115,12 +112,18 @@ public final class MilvusKnowledgeProjectionInitializer {
                     "Existing Milvus Knowledge projection schema does not match"
                             + ": expected=" + expectedFields + ", actual=" + actualFields);
         }
-        var embedding = response.getCollectionSchema().getField("embedding");
-        if (embedding == null || !Integer.valueOf(embeddingDimension).equals(
-                embedding.getDimension())) {
-            throw new IllegalStateException(
-                    "Existing Milvus collection embedding dimension does not match: "
-                            + collection);
+        MilvusCollectionInitializer.validateDimension(client, collection, embeddingDimension);
+        for (var field : response.getCollectionSchema().getFieldSchemaList()) {
+            int required = switch (field.getName()) {
+                case "title" -> 2048;
+                case "description" -> 8192;
+                default -> 0;
+            };
+            if (required > 0 && field.getMaxLength() != null && field.getMaxLength() < required) {
+                client.alterCollectionField(io.milvus.v2.service.collection.request.AlterCollectionFieldReq.builder()
+                        .collectionName(collection).fieldName(field.getName())
+                        .property("max_length", Integer.toString(required)).build());
+            }
         }
     }
 
@@ -138,8 +141,8 @@ public final class MilvusKnowledgeProjectionInitializer {
             schema.addField(varchar("user_id", 128, true, false));
         }
         schema.addField(varchar("concept_type", 64, false, false));
-        schema.addField(varchar("title", 512, false, false));
-        schema.addField(varchar("description", 2048, true, false));
+        schema.addField(varchar("title", 2048, false, false));
+        schema.addField(varchar("description", 8192, true, false));
         schema.addField(AddFieldReq.builder()
                 .fieldName("content")
                 .dataType(DataType.VarChar)

@@ -36,6 +36,26 @@ class KnowledgeWikiServiceTest {
     }
 
     @Test
+    void chunkEditReembedsCopiedRevisionBeforePublishingAndCompensatesFailure() {
+        setup(KnowledgeConceptType.SOURCE_DOCUMENT);
+        var chunk = new VectorStore.Document("chunk-1", "old", "manual.md", 0,
+                Map.of("document_id", "doc-1", "revision_id", "rev-1"), null, 0);
+        var copy = new VectorStore.Document("chunk-copy", "old", "manual.md", 0, chunk.metadata(), null, 0);
+        when(vectors.getById("manuals", "chunk-1")).thenReturn(chunk);
+        when(vectors.readDocumentWindow(eq("manuals"), eq("doc-1"), anyString(), eq(0), eq(0), eq(0)))
+                .thenReturn(List.of(copy));
+        service.editChunk("manuals", "chunk-1", "old", "new", "alice");
+        var ordered = inOrder(vectors, repository);
+        ordered.verify(vectors).copyDocumentRevision(eq("manuals"), eq("doc-1"), eq("rev-1"), anyString());
+        ordered.verify(vectors).updateContent("manuals", "chunk-copy", "new");
+        ordered.verify(repository).commitChanges(any());
+        doThrow(new IllegalStateException("embedding unavailable")).when(vectors).updateContent(anyString(), anyString(), anyString());
+        assertThatThrownBy(() -> service.editChunk("manuals", "chunk-1", "old", "new", "alice"))
+                .hasMessage("embedding unavailable");
+        verify(vectors).deleteDocumentRevision(eq("manuals"), eq("doc-1"), anyString());
+    }
+
+    @Test
     void listUsesAuthorityPaginationAndOmitsSourceBodies() {
         var head = setup(KnowledgeConceptType.SOURCE_DOCUMENT);
         var info = new PageInfo(1, "2026-09-14T00:00:00Z|doc-1", true);

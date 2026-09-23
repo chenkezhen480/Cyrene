@@ -9,6 +9,7 @@ import dev.langchain4j.model.chat.StreamingChatModel;
 import dev.langchain4j.model.chat.request.ChatRequest;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
+import dev.langchain4j.model.output.FinishReason;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
@@ -25,7 +26,7 @@ class FinalResponseGeneratorTest {
 
     /** The exact markup from the reported leak, split the way the provider streamed it. */
     private static final List<String> DEEPSEEK_LEAK = List.of(
-            "<", "｜", "DSML", "｜", " tool_calls", ">\n",
+            "先查一下。", "<", "｜｜", "DSML", "｜｜", " calls", ">\n",
             "｜ <", "｜ invoke", " name=\"knowledge_search\"", ">\n",
             "query: 上一次会话 用户聊了什么", "\n</", "｜ tool_calls", "｜>");
 
@@ -40,19 +41,6 @@ class FinalResponseGeneratorTest {
         assertThat(FinalResponseGenerator.isToolCallMarkup("<div>HTML 开头是合法正文")).isFalse();
         assertThat(FinalResponseGenerator.isToolCallMarkup("<tool_")).isFalse();
         assertThat(FinalResponseGenerator.isToolCallMarkup(null)).isFalse();
-    }
-
-    @Test
-    void holdsOnlyWhileTheOpeningCharactersCouldStillBecomeAMarker() {
-        assertThat(FinalResponseGenerator.couldBecomeToolCallMarkup("")).isTrue();
-        assertThat(FinalResponseGenerator.couldBecomeToolCallMarkup("  ")).isTrue();
-        assertThat(FinalResponseGenerator.couldBecomeToolCallMarkup("<")).isTrue();
-        assertThat(FinalResponseGenerator.couldBecomeToolCallMarkup("<｜DSML")).isTrue();
-
-        // Anything that has already diverged must be released immediately: the guard may not
-        // add latency to an ordinary answer.
-        assertThat(FinalResponseGenerator.couldBecomeToolCallMarkup("上")).isFalse();
-        assertThat(FinalResponseGenerator.couldBecomeToolCallMarkup("<div>")).isFalse();
     }
 
     @Test
@@ -111,6 +99,29 @@ class FinalResponseGeneratorTest {
                 "system", planningMessages(), null, tokenListener(new ArrayList<>()), null))
                 .isInstanceOf(RuntimeException.class)
                 .hasMessageContaining("tool-call syntax");
+    }
+
+    @Test
+    void truncatedChatCompletionIsNotPublishedAsACompletedAnswer() {
+        StreamingChatModel model = mock(StreamingChatModel.class);
+        doAnswer(invocation -> {
+            StreamingChatResponseHandler handler = invocation.getArgument(1);
+            handler.onPartialResponse("unfinished");
+            handler.onCompleteResponse(ChatResponse.builder()
+                    .aiMessage(AiMessage.from("unfinished"))
+                    .finishReason(FinishReason.LENGTH)
+                    .build());
+            return null;
+        }).when(model).chat(any(ChatRequest.class), any(StreamingChatResponseHandler.class));
+        ChatModelProvider provider = provider(model);
+        when(provider.requiresChatCompletionFinishReason()).thenReturn(true);
+        List<String> streamed = new ArrayList<>();
+
+        assertThatThrownBy(() -> new FinalResponseGenerator(provider, 30).generateStreaming(
+                "system", planningMessages(), null, tokenListener(streamed), null))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("finish_reason=LENGTH");
+        assertThat(streamed).isEmpty();
     }
 
     /** finalMessages replaces index 0, so the caller always supplies the loop's own history. */

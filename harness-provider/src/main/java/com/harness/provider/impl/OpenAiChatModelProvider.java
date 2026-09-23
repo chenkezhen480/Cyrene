@@ -241,6 +241,11 @@ public class OpenAiChatModelProvider implements ChatModelProvider {
         return builder.build();
     }
 
+    @Override
+    public boolean requiresChatCompletionFinishReason() {
+        return apiFormat == OpenAiChatApiFormat.CHAT_COMPLETIONS;
+    }
+
     private void applyThinking(OpenAiChatModel.OpenAiChatModelBuilder builder, ThinkingLevel level) {
         if (thinkingDialect == ThinkingDialect.QWEN) {
             builder.customParameters(qwenThinkingParams(level));
@@ -293,6 +298,7 @@ public class OpenAiChatModelProvider implements ChatModelProvider {
         }
         if (!toolSpecifications.isEmpty()) {
             builder.toolSpecifications(toolSpecifications);
+            builder.toolChoice(dev.langchain4j.model.chat.request.ToolChoice.AUTO);
         }
         return builder.build();
     }
