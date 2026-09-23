@@ -67,6 +67,7 @@ public class ReActEngine implements ReActLoop {
     private final Inspector inspector;
     private final AdaptiveReflector adaptiveReflector;
     private final int maxIterations;
+    private final int maxToolCallsPerRound;
     private final long llmTimeoutSeconds;
     private final FinalResponseGenerator finalResponseGenerator;
 
@@ -108,6 +109,10 @@ public class ReActEngine implements ReActLoop {
         EnvConfig cfg = EnvConfig.get();
         int globalMax = cfg.getInt(EnvKey.REACT_MAX_ITERATIONS, 10);
         this.maxIterations = maxIterationsOverride > 0 ? maxIterationsOverride : globalMax;
+        this.maxToolCallsPerRound = cfg.getInt(EnvKey.REACT_MAX_TOOL_CALLS_PER_ROUND, 10);
+        if (maxToolCallsPerRound <= 0) {
+            throw new IllegalArgumentException(EnvKey.REACT_MAX_TOOL_CALLS_PER_ROUND + " must be positive");
+        }
         this.adaptiveReflector = new AdaptiveReflector(cfg.getInt(EnvKey.REACT_REFLECTION_THRESHOLD, 5));
         this.llmTimeoutSeconds = timeoutSeconds(chatModelProvider);
         this.finalResponseGenerator = java.util.Objects.requireNonNull(
@@ -906,14 +911,20 @@ public class ReActEngine implements ReActLoop {
             }
 
             // Interactive execution emits this only after approval, immediately before tool.execute().
-            if (listener != null && confirmationContext == null) {
+            if (listener != null && confirmationContext == null && callIndex < maxToolCallsPerRound) {
                 listener.onToolCallStart(tc.id(), tc.toolName(), plannedCall.arguments());
             }
 
             toolCalls.add(tc);
 
-            log.debug("[L3-ReAct] Executing tool: {}", tc.toolName());
-            ToolResult result = executeWithRetry(tc, listener, cancellationToken, confirmationContext);
+            if (callIndex < maxToolCallsPerRound) {
+                log.debug("[L3-ReAct] Executing tool: {}", tc.toolName());
+            }
+            ToolResult result = callIndex < maxToolCallsPerRound
+                    ? executeWithRetry(tc, listener, cancellationToken, confirmationContext)
+                    : ToolResult.fail(tc.id(), tc.toolName(),
+                            "Per-round tool call limit " + maxToolCallsPerRound
+                                    + " exceeded; retry in a later round", 0);
             toolResults.add(result);
 
             if (result.success() && result.content() != null) {

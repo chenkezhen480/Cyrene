@@ -1,6 +1,8 @@
 package com.harness.react;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.harness.core.env.EnvConfig;
+import com.harness.core.env.EnvKey;
 import com.harness.core.model.CancellationToken;
 import com.harness.core.model.ModelUsage;
 import com.harness.core.model.ThinkingLevel;
@@ -142,6 +144,58 @@ class ReActEngineTerminationTest {
         assertThat(normalizedPlanningMessage.toolExecutionRequests().get(0).id())
                 .isEqualTo(executedCallId.get());
         assertThat(toolResultMessage.id()).isEqualTo(executedCallId.get());
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void capsExecutedToolsPerRoundAndReturnsResultsForEveryRequest(boolean streaming) {
+        EnvConfig.init(java.util.Map.of(EnvKey.REACT_MAX_TOOL_CALLS_PER_ROUND, "2"));
+        try {
+            List<ChatRequest> requests = new ArrayList<>();
+            ChatModel chatModel = new ChatModel() {
+                @Override
+                public ChatResponse doChat(ChatRequest request) {
+                    requests.add(request);
+                    if (requests.size() > 1) {
+                        return ChatResponse.builder().aiMessage(AiMessage.from("done")).build();
+                    }
+                    List<ToolExecutionRequest> calls = java.util.stream.IntStream.rangeClosed(1, 3)
+                            .mapToObj(index -> ToolExecutionRequest.builder()
+                                    .id("call-" + index).name("test_tool").arguments("{}").build())
+                            .toList();
+                    return ChatResponse.builder().aiMessage(AiMessage.from("planning", calls)).build();
+                }
+            };
+            ChatModelProvider provider = provider(chatModel);
+            when(provider.streamingModel()).thenReturn(new StreamingChatModel() {
+                @Override
+                public void doChat(ChatRequest request, StreamingChatResponseHandler handler) {
+                    handler.onCompleteResponse(chatModel.chat(request));
+                }
+            });
+            ToolExecutor executor = mock(ToolExecutor.class);
+            AtomicInteger executions = new AtomicInteger();
+            when(executor.executeAuthorized(any(), any(), isNull())).thenAnswer(invocation -> {
+                ToolCall call = invocation.getArgument(0);
+                executions.incrementAndGet();
+                return ToolResult.ok(call.id(), call.toolName(), "ok", 1,
+                        com.harness.core.model.ResultStatus.AVAILABLE);
+            });
+
+            ReActEngine engine = new ReActEngine(provider, catalog(), executor, null, null, 3);
+            ReActRequest request = new ReActRequest("system", "use tools", List.of(),
+                    RunTrace.noop(), null, null, ThinkingLevel.OFF, null);
+            ReActResult result = streaming ? engine.streamExecute(request) : engine.execute(request);
+
+            assertThat(result.output()).isEqualTo("done");
+            assertThat(executions).hasValue(2);
+            assertThat(result.steps().getFirst().toolResults()).hasSize(3);
+            assertThat(result.steps().getFirst().toolResults().get(2).error()).contains("limit 2");
+            assertThat(requests.get(1).messages().stream()
+                    .filter(ToolExecutionResultMessage.class::isInstance)).hasSize(3);
+        } finally {
+            EnvConfig.init(java.util.Map.of());
+        }
     }
 
     @ParameterizedTest

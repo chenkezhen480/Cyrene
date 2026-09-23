@@ -146,6 +146,8 @@ public final class EnvKey {
     // ==================== ReAct ====================
     /** ReAct 循环最大迭代次数，默认 10 */
     public static final String REACT_MAX_ITERATIONS      = "HARNESS_REACT_MAX_ITERATIONS";
+    /** 单轮 ReAct 最多执行的工具调用数，默认 10 */
+    public static final String REACT_MAX_TOOL_CALLS_PER_ROUND = "HARNESS_REACT_MAX_TOOL_CALLS_PER_ROUND";
     /**
      * 单工具允许的反思次数：每次失败注入一次反思提示，次数用尽后再失败一次即硬停整个 run。
      * 成功一次清零重计。例：3 = 失败 1~3 次各反思一次，第 4 次失败硬停。默认 5。
