@@ -650,19 +650,25 @@ public final class Neo4jKnowledgeGraphStore implements KnowledgeGraphStore {
             org.neo4j.driver.TransactionContext transaction,
             org.neo4j.driver.Value queryParameters
     ) {
+        // The page index includes nodeId; its existence predicate anchors expansion in this space.
         String cypher = """
-                UNWIND $rows AS row
+                MATCH (existingSource:HarnessGraphNode {graphId: $graphId, schemaId: $schemaId})
+                      -[existing]->
+                      (existingTarget:HarnessGraphNode {graphId: $graphId, schemaId: $schemaId})
+                USING INDEX existingSource:HarnessGraphNode(graphId, schemaId, nodeId)
+                WHERE existingSource.nodeId IS NOT NULL
+                  AND existing.graphId = $graphId
+                  AND existing.schemaId = $schemaId
+                  AND existing.storageKey IN [row IN $rows | row.storageKey]
+                WITH existing, existingSource, existingTarget,
+                     head([row IN $rows WHERE row.storageKey = existing.storageKey]) AS row
                 MATCH (source:HarnessGraphNode {storageKey: row.sourceStorageKey})
                 WHERE any(label IN labels(source) WHERE label IN $sourceLabels)
                 MATCH (target:HarnessGraphNode {storageKey: row.targetStorageKey})
                 WHERE any(label IN labels(target) WHERE label IN $targetLabels)
-                OPTIONAL MATCH (existingSource:HarnessGraphNode)-[existing]->(existingTarget:HarnessGraphNode)
-                WHERE existing.storageKey = row.storageKey
                   AND (type(existing) <> $relationType
                        OR existingSource <> source
                        OR existingTarget <> target)
-                WITH existing
-                WHERE existing IS NOT NULL
                 DELETE existing
                 """;
         transaction.run(cypher, queryParameters).consume();
