@@ -22,6 +22,7 @@ import dev.langchain4j.model.chat.request.ChatRequest;
 import dev.langchain4j.model.chat.request.ChatRequestParameters;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
+import dev.langchain4j.model.output.FinishReason;
 import dev.langchain4j.model.chat.request.json.JsonObjectSchema;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.agent.tool.ToolSpecification;
@@ -203,12 +204,12 @@ public class ReActEngine implements ReActLoop {
                 totalInputTokens += observedTokens(usage.inputTokens());
                 totalOutputTokens += observedTokens(usage.outputTokens());
 
-                // Final answer (no tool calls)
-                if (aiMessage.toolExecutionRequests() == null || aiMessage.toolExecutionRequests().isEmpty()) {
+                ModelTurnDisposition disposition = classifyModelTurn(response);
+                if (disposition == ModelTurnDisposition.FINAL_ANSWER) {
                     if (structuredOutput) {
                         throw new StructuredOutputException(
                                 StructuredOutputException.Code.STRUCTURED_OUTPUT_EMPTY,
-                                "Model did not submit the final response through structured_output");
+                                "Model stopped normally without submitting structured_output");
                     }
                     String answer = aiMessage.text();
                     long totalMs = System.currentTimeMillis() - loopStart;
@@ -420,8 +421,8 @@ public class ReActEngine implements ReActLoop {
                 totalInputTokens += observedTokens(usage.inputTokens());
                 totalOutputTokens += observedTokens(usage.outputTokens());
 
-                // No structured tool call means this assistant message is the final answer.
-                if (aiMessage.toolExecutionRequests() == null || aiMessage.toolExecutionRequests().isEmpty()) {
+                ModelTurnDisposition disposition = classifyModelTurn(response);
+                if (disposition == ModelTurnDisposition.FINAL_ANSWER) {
                     String answer = aiMessage.text();
                     long totalMs = System.currentTimeMillis() - loopStart;
                     log.info("[L3-ReAct] Finished in {}ms, steps={}", totalMs, allSteps.size());
@@ -578,6 +579,52 @@ public class ReActEngine implements ReActLoop {
             case CONFIRMATION_EXPIRED -> "confirmation_expired";
             case LOOP_DETECTED -> "tool_failure_limit";
             default -> "completed";
+        };
+    }
+
+    private enum ModelTurnDisposition { TOOL_EXECUTION, FINAL_ANSWER }
+
+    /**
+     * Decides the next ReAct transition from the normalized protocol result, not from
+     * the presence/absence of text in an arbitrary stream chunk.
+     */
+    private static ModelTurnDisposition classifyModelTurn(ChatResponse response) {
+        if (response == null || response.aiMessage() == null) {
+            throw new IllegalStateException("Model protocol error: completed response is missing aiMessage");
+        }
+
+        AiMessage message = response.aiMessage();
+        boolean hasToolCalls = message.toolExecutionRequests() != null
+                && !message.toolExecutionRequests().isEmpty();
+        FinishReason finishReason = response.metadata() != null
+                ? response.metadata().finishReason()
+                : null;
+
+        if (finishReason == null) {
+            throw new IllegalStateException(
+                    "Model protocol error: completed response is missing finish reason");
+        }
+
+        if (hasToolCalls) {
+            if (finishReason != FinishReason.TOOL_EXECUTION) {
+                throw new IllegalStateException(
+                        "Model protocol error: structured tool calls conflict with finish reason "
+                                + finishReason);
+            }
+            return ModelTurnDisposition.TOOL_EXECUTION;
+        }
+
+        return switch (finishReason) {
+            case STOP -> ModelTurnDisposition.FINAL_ANSWER;
+            case TOOL_EXECUTION -> throw new IllegalStateException(
+                    "Model protocol error: finish reason indicates tool execution "
+                            + "but no structured tool calls were returned");
+            case LENGTH -> throw new IllegalStateException(
+                    "Model response was truncated because the output token limit was reached");
+            case CONTENT_FILTER -> throw new IllegalStateException(
+                    "Model response was terminated by content filtering");
+            case OTHER -> throw new IllegalStateException(
+                    "Model protocol error: unsupported finish reason OTHER");
         };
     }
 
