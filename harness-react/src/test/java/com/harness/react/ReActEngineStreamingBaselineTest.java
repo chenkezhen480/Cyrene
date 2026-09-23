@@ -19,6 +19,8 @@ import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.StreamingChatModel;
 import dev.langchain4j.model.chat.request.ChatRequest;
 import dev.langchain4j.model.chat.response.ChatResponse;
+import dev.langchain4j.model.chat.response.ChatResponseMetadata;
+import dev.langchain4j.model.output.FinishReason;
 import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
 import org.junit.jupiter.api.Test;
 
@@ -58,11 +60,17 @@ class ReActEngineStreamingBaselineTest {
                                 .aiMessage(AiMessage.from(
                                         "planning",
                                         List.of(firstToolRequest, secondToolRequest)))
+                                .metadata(ChatResponseMetadata.builder()
+                                        .finishReason(FinishReason.TOOL_EXECUTION)
+                                        .build())
                                 .build()),
                 new ScriptedResponse(
                         "The final answer.",
                         ChatResponse.builder()
                                 .aiMessage(AiMessage.from("The final answer."))
+                                .metadata(ChatResponseMetadata.builder()
+                                        .finishReason(FinishReason.STOP)
+                                        .build())
                                 .build()));
 
         ChatModelProvider provider = mock(ChatModelProvider.class);
