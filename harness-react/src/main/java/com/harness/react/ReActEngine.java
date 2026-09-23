@@ -205,6 +205,8 @@ public class ReActEngine implements ReActLoop {
                 totalOutputTokens += observedTokens(usage.outputTokens());
 
                 ModelTurnDisposition disposition = classifyModelTurn(response);
+                notifyModelResponseCompleted(listener, response);
+                notifyModelResponseCompleted(listener, response);
                 if (disposition == ModelTurnDisposition.FINAL_ANSWER) {
                     if (structuredOutput) {
                         throw new StructuredOutputException(
@@ -583,6 +585,21 @@ public class ReActEngine implements ReActLoop {
     }
 
     private enum ModelTurnDisposition { TOOL_EXECUTION, FINAL_ANSWER }
+
+    private static void notifyModelResponseCompleted(
+            ReActListener listener,
+            ChatResponse response
+    ) {
+        if (listener == null) {
+            return;
+        }
+        FinishReason finishReason = response.metadata().finishReason();
+        AiMessage message = response.aiMessage();
+        boolean hasToolCalls = message.toolExecutionRequests() != null
+                && !message.toolExecutionRequests().isEmpty();
+        listener.afterModelResponse(finishReason, hasToolCalls);
+    }
+
 
     /**
      * Decides the next ReAct transition from the normalized protocol result, not from
