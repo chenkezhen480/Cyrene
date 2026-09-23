@@ -20,6 +20,8 @@ import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.StreamingChatModel;
 import dev.langchain4j.model.chat.request.ChatRequest;
 import dev.langchain4j.model.chat.response.ChatResponse;
+import dev.langchain4j.model.chat.response.ChatResponseMetadata;
+import dev.langchain4j.model.output.FinishReason;
 import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -54,7 +56,10 @@ class ReActEngineTerminationTest {
             @Override
             public ChatResponse doChat(ChatRequest request) {
                 captured.set(request);
-                return ChatResponse.builder().aiMessage(AiMessage.from("answer")).build();
+                return ChatResponse.builder()
+                        .aiMessage(AiMessage.from("answer"))
+                        .metadata(ChatResponseMetadata.builder().finishReason(FinishReason.STOP).build())
+                        .build();
             }
         };
 
@@ -95,6 +100,9 @@ class ReActEngineTerminationTest {
                 requests.incrementAndGet();
                 return ChatResponse.builder()
                         .aiMessage(AiMessage.from("planning", List.of(toolRequest)))
+                        .metadata(ChatResponseMetadata.builder()
+                                .finishReason(FinishReason.TOOL_EXECUTION)
+                                .build())
                         .build();
             }
         };
@@ -135,6 +143,9 @@ class ReActEngineTerminationTest {
                         || request.parameters().toolSpecifications().isEmpty()) {
                     return ChatResponse.builder()
                             .aiMessage(AiMessage.from("final answer after hard limit"))
+                            .metadata(ChatResponseMetadata.builder()
+                                    .finishReason(FinishReason.STOP)
+                                    .build())
                             .build();
                 }
                 int callNumber = planningCalls.incrementAndGet();
@@ -145,6 +156,9 @@ class ReActEngineTerminationTest {
                         .build();
                 return ChatResponse.builder()
                         .aiMessage(AiMessage.from("planning", List.of(toolRequest)))
+                        .metadata(ChatResponseMetadata.builder()
+                                .finishReason(FinishReason.TOOL_EXECUTION)
+                                .build())
                         .build();
             }
         };
@@ -226,7 +240,11 @@ class ReActEngineTerminationTest {
         when(chatModel.chat(any(ChatRequest.class))).thenReturn(ChatResponse.builder().aiMessage(AiMessage.from(
                 ToolExecutionRequest.builder().id("call-1").name("web")
                         .arguments("{\"action\":\"browser\",\"input\":{\"action\":\"observe\"}}")
-                        .build())).build());
+                        .build()))
+                .metadata(ChatResponseMetadata.builder()
+                        .finishReason(FinishReason.TOOL_EXECUTION)
+                        .build())
+                .build());
         var token = new CancellationToken();
         ToolExecutor executor = mock(ToolExecutor.class);
         when(executor.executeAuthorized(any(), any(), isNull())).thenAnswer(invocation -> {
