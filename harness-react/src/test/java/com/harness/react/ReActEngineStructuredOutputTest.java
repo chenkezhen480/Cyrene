@@ -22,6 +22,8 @@ import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.request.ChatRequest;
 import dev.langchain4j.model.chat.response.ChatResponse;
+import dev.langchain4j.model.chat.response.ChatResponseMetadata;
+import dev.langchain4j.model.output.FinishReason;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
@@ -56,6 +58,9 @@ class ReActEngineStructuredOutputTest {
         List<ChatResponse> responses = List.of(
                 ChatResponse.builder()
                         .aiMessage(AiMessage.from("planning", List.of(toolRequest)))
+                        .metadata(ChatResponseMetadata.builder()
+                                .finishReason(FinishReason.TOOL_EXECUTION)
+                                .build())
                         .build(),
                 ChatResponse.builder()
                         .aiMessage(AiMessage.from("", List.of(
@@ -64,6 +69,9 @@ class ReActEngineStructuredOutputTest {
                                         .name(StructuredOutputTool.TOOL_NAME)
                                         .arguments("{\"eligible\":true,\"reason\":\"qualified\"}")
                                         .build())))
+                        .metadata(ChatResponseMetadata.builder()
+                                .finishReason(FinishReason.TOOL_EXECUTION)
+                                .build())
                         .build());
         ChatModel chatModel = new ChatModel() {
             @Override
@@ -163,9 +171,15 @@ class ReActEngineStructuredOutputTest {
         List<ChatResponse> responses = List.of(
                 ChatResponse.builder()
                         .aiMessage(AiMessage.from("", List.of(structuredRequest)))
+                        .metadata(ChatResponseMetadata.builder()
+                                .finishReason(FinishReason.TOOL_EXECUTION)
+                                .build())
                         .build(),
                 ChatResponse.builder()
                         .aiMessage(AiMessage.from("已整理为结构化结果。"))
+                        .metadata(ChatResponseMetadata.builder()
+                                .finishReason(FinishReason.STOP)
+                                .build())
                         .build());
         ChatModel chatModel = new ChatModel() {
             @Override
@@ -251,6 +265,9 @@ class ReActEngineStructuredOutputTest {
                                         .name(StructuredOutputTool.TOOL_NAME)
                                         .arguments("{\"eligible\":true}")
                                         .build())))
+                        .metadata(ChatResponseMetadata.builder()
+                                .finishReason(FinishReason.TOOL_EXECUTION)
+                                .build())
                         .build();
             }
         };
