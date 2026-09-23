@@ -19,6 +19,8 @@ import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.StreamingChatModel;
 import dev.langchain4j.model.chat.request.ChatRequest;
 import dev.langchain4j.model.chat.response.ChatResponse;
+import dev.langchain4j.model.chat.response.ChatResponseMetadata;
+import dev.langchain4j.model.output.FinishReason;
 import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
 import org.junit.jupiter.api.Test;
 
@@ -40,7 +42,7 @@ class ReActEngineStreamingBaselineTest {
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     @Test
-    void streamExecute_withVisibleTools_streamsOnlyFinalAnswerAndKeepsCallIds() {
+    void streamExecute_withVisibleTools_streamsNarrationAndFinalAnswerAndKeepsCallIds() {
         ToolExecutionRequest firstToolRequest = ToolExecutionRequest.builder()
                 .id("call-1")
                 .name("test_tool")
@@ -58,16 +60,17 @@ class ReActEngineStreamingBaselineTest {
                                 .aiMessage(AiMessage.from(
                                         "planning",
                                         List.of(firstToolRequest, secondToolRequest)))
-                                .build()),
-                new ScriptedResponse(
-                        "READY_FOR_FINAL",
-                        ChatResponse.builder()
-                                .aiMessage(AiMessage.from("READY_FOR_FINAL"))
+                                .metadata(ChatResponseMetadata.builder()
+                                        .finishReason(FinishReason.TOOL_EXECUTION)
+                                        .build())
                                 .build()),
                 new ScriptedResponse(
                         "The final answer.",
                         ChatResponse.builder()
                                 .aiMessage(AiMessage.from("The final answer."))
+                                .metadata(ChatResponseMetadata.builder()
+                                        .finishReason(FinishReason.STOP)
+                                        .build())
                                 .build()));
 
         ChatModelProvider provider = mock(ChatModelProvider.class);
@@ -105,6 +108,7 @@ class ReActEngineStreamingBaselineTest {
 
         List<String> visibleTokens = new ArrayList<>();
         List<String> toolEvents = new ArrayList<>();
+        List<String> responseHooks = new ArrayList<>();
         ReActListener listener = new ReActListener() {
             @Override
             public void onStep(com.harness.core.model.ReActStep step) {
@@ -113,6 +117,11 @@ class ReActEngineStreamingBaselineTest {
             @Override
             public void onToken(String token) {
                 visibleTokens.add(token);
+            }
+
+            @Override
+            public void afterModelResponse(FinishReason finishReason, boolean hasToolCalls) {
+                responseHooks.add(finishReason.name() + ":" + hasToolCalls);
             }
 
             @Override
@@ -157,7 +166,12 @@ class ReActEngineStreamingBaselineTest {
         ReActResult result = engine.streamExecute(request);
 
         assertThat(result.output()).isEqualTo("The final answer.");
-        assertThat(visibleTokens).containsExactly("The final answer.");
+        assertThat(visibleTokens).containsExactly(
+                "I will call test_tool now.",
+                "The final answer.");
+        assertThat(responseHooks).containsExactly(
+                "TOOL_EXECUTION:true",
+                "STOP:false");
         assertThat(toolEvents).containsExactly(
                 "CREATED:call-1",
                 "CREATED:call-2",

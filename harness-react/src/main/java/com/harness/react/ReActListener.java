@@ -8,6 +8,8 @@ import com.harness.core.model.ToolOutput;
 import com.harness.tool.confirmation.ConfirmationDecision;
 import com.harness.tool.confirmation.ConfirmationRequest;
 
+import dev.langchain4j.model.output.FinishReason;
+
 import java.util.List;
 
 /**
@@ -28,6 +30,16 @@ public interface ReActListener {
      * Default is no-op for backward compatibility.
      */
     default void onToken(String token) {}
+
+    /**
+     * Called after one complete model response has been normalized and validated.
+     * Streaming text may already have been delivered through {@link #onToken(String)}.
+     * This hook is a lifecycle boundary only: it does not gate or replay text output.
+     *
+     * @param finishReason normalized reason why this model turn ended
+     * @param hasToolCalls whether this completed turn contains structured tool calls
+     */
+    default void afterModelResponse(FinishReason finishReason, boolean hasToolCalls) {}
 
     /**
      * Called when a tool call is created (LLM returned the tool call, before execution).

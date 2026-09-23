@@ -54,7 +54,7 @@ class OpenAiResponsesProtocolTest {
                     ModelConfigKey.CHAT_TIMEOUT_SECONDS, "2"
             ));
             OpenAiChatModelProvider provider =
-                    new OpenAiChatModelProvider(config, OpenAiChatApiFormat.RESPONSES);
+                    new OpenAiChatModelProvider(config, ChatApiFormat.RESPONSES);
             ChatModel model = provider.createRawChatModel();
 
             ToolExecutionRequest toolCall = ToolExecutionRequest.builder()

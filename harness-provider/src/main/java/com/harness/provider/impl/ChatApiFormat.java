@@ -4,14 +4,15 @@ import java.util.Arrays;
 import java.util.Locale;
 import java.util.stream.Collectors;
 
-/** Supported upstream protocols for OpenAI-compatible chat providers. */
-public enum OpenAiChatApiFormat {
+/** Wire protocol used by the configured chat endpoint. */
+public enum ChatApiFormat {
     CHAT_COMPLETIONS("chat_completions"),
-    RESPONSES("responses");
+    RESPONSES("responses"),
+    MESSAGES("messages");
 
     private final String configValue;
 
-    OpenAiChatApiFormat(String configValue) {
+    ChatApiFormat(String configValue) {
         this.configValue = configValue;
     }
 
@@ -19,7 +20,7 @@ public enum OpenAiChatApiFormat {
         return configValue;
     }
 
-    public static OpenAiChatApiFormat parse(String value) {
+    public static ChatApiFormat parse(String value) {
         String normalized = value == null ? "" : value.trim().toLowerCase(Locale.ROOT);
         return Arrays.stream(values())
                 .filter(format -> format.configValue.equals(normalized))
@@ -31,7 +32,7 @@ public enum OpenAiChatApiFormat {
 
     private static String allowedValues() {
         return Arrays.stream(values())
-                .map(OpenAiChatApiFormat::configValue)
+                .map(ChatApiFormat::configValue)
                 .collect(Collectors.joining(", "));
     }
 }

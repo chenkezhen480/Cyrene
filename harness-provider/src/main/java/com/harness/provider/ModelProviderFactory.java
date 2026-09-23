@@ -44,14 +44,17 @@ public final class ModelProviderFactory {
             log.info("[Model] Chat model not configured; Agent execution is disabled until configured");
             return new NoOpChatModelProvider();
         }
-        OpenAiChatApiFormat apiFormat = validateChatApiFormat(
+        ChatApiFormat apiFormat = validateChatApiFormat(
                 provider,
                 config.getString(
                         ModelConfigKey.CHAT_API_FORMAT,
-                        OpenAiChatApiFormat.CHAT_COMPLETIONS.configValue()));
+                        defaultChatApiFormat(provider).configValue()));
         log.info("Creating chat model provider: {}", provider);
         ChatModelProvider chatProvider = switch (provider) {
             case "openai", "dashscope" -> new OpenAiChatModelProvider(config, apiFormat);
+            case "deepseek" -> apiFormat == ChatApiFormat.MESSAGES
+                    ? new DeepSeekMessagesChatModelProvider(config)
+                    : new OpenAiChatModelProvider(config, apiFormat);
             case "anthropic", "claude" -> new AnthropicChatModelProvider(config);
             case "ollama" -> new OllamaChatModelProvider(config);
             default -> throw new IllegalStateException("Unknown chat model provider: " + provider);
@@ -78,18 +81,31 @@ public final class ModelProviderFactory {
                         config.getCommaList(ModelConfigKey.CHAT_CAPABILITIES)));
     }
 
-    static OpenAiChatApiFormat validateChatApiFormat(
+    static ChatApiFormat validateChatApiFormat(
             String provider,
             String configuredFormat
     ) {
-        OpenAiChatApiFormat apiFormat = OpenAiChatApiFormat.parse(configuredFormat);
-        boolean openAiCompatible = "openai".equals(provider) || "dashscope".equals(provider);
-        if (apiFormat == OpenAiChatApiFormat.RESPONSES && !openAiCompatible) {
+        ChatApiFormat apiFormat = ChatApiFormat.parse(configuredFormat);
+        boolean openAiCompatible = "openai".equals(provider)
+                || "dashscope".equals(provider)
+                || "deepseek".equals(provider);
+        if (apiFormat == ChatApiFormat.RESPONSES && !openAiCompatible) {
             throw new IllegalStateException(
                     ModelConfigKey.CHAT_API_FORMAT + "=responses requires an OpenAI-compatible "
                             + "chat provider, but " + ModelConfigKey.CHAT_PROVIDER + "=" + provider);
         }
+        if (apiFormat == ChatApiFormat.MESSAGES && !"deepseek".equals(provider)) {
+            throw new IllegalStateException(
+                    ModelConfigKey.CHAT_API_FORMAT + "=messages is currently supported for "
+                            + ModelConfigKey.CHAT_PROVIDER + "=deepseek");
+        }
         return apiFormat;
+    }
+
+    static ChatApiFormat defaultChatApiFormat(String provider) {
+        return "deepseek".equals(provider)
+                ? ChatApiFormat.MESSAGES
+                : ChatApiFormat.CHAT_COMPLETIONS;
     }
 
     /**

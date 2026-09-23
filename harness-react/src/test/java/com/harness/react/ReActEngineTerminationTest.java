@@ -20,6 +20,8 @@ import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.StreamingChatModel;
 import dev.langchain4j.model.chat.request.ChatRequest;
 import dev.langchain4j.model.chat.response.ChatResponse;
+import dev.langchain4j.model.chat.response.ChatResponseMetadata;
+import dev.langchain4j.model.output.FinishReason;
 import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -54,7 +56,10 @@ class ReActEngineTerminationTest {
             @Override
             public ChatResponse doChat(ChatRequest request) {
                 captured.set(request);
-                return ChatResponse.builder().aiMessage(AiMessage.from("answer")).build();
+                return ChatResponse.builder()
+                        .aiMessage(AiMessage.from("answer"))
+                        .metadata(ChatResponseMetadata.builder().finishReason(FinishReason.STOP).build())
+                        .build();
             }
         };
 
@@ -82,29 +87,25 @@ class ReActEngineTerminationTest {
     }
 
     @Test
-    void maxIterationsGeneratesToolFreeFinalAnswerAndNormalizesMissingCallId() {
+    void maxIterationsFailsClosedAndNormalizesMissingCallId() {
         ToolExecutionRequest toolRequest = ToolExecutionRequest.builder()
                 .id("")
                 .name("test_tool")
                 .arguments("{}")
                 .build();
-        List<ChatRequest> requests = new ArrayList<>();
-        AtomicInteger responseIndex = new AtomicInteger();
+        AtomicInteger requests = new AtomicInteger();
         ChatModel chatModel = new ChatModel() {
             @Override
             public ChatResponse doChat(ChatRequest request) {
-                requests.add(request);
-                return responseIndex.getAndIncrement() == 0
-                        ? ChatResponse.builder()
-                                .aiMessage(AiMessage.from("planning", List.of(toolRequest)))
-                                .build()
-                        : ChatResponse.builder()
-                                .aiMessage(AiMessage.from("final answer after limit"))
-                                .build();
+                requests.incrementAndGet();
+                return ChatResponse.builder()
+                        .aiMessage(AiMessage.from("planning", List.of(toolRequest)))
+                        .metadata(ChatResponseMetadata.builder()
+                                .finishReason(FinishReason.TOOL_EXECUTION)
+                                .build())
+                        .build();
             }
         };
-        ChatModelProvider provider = provider(chatModel);
-        ToolCatalog catalog = catalog();
         ToolExecutor executor = mock(ToolExecutor.class);
         AtomicReference<String> executedCallId = new AtomicReference<>();
         when(executor.executeAuthorized(any(), any(), isNull()))
@@ -116,37 +117,22 @@ class ReActEngineTerminationTest {
                             com.harness.core.model.ResultStatus.AVAILABLE);
                 });
 
-        ReActResult result = new ReActEngine(
-                provider, catalog, executor, null, null, 1)
-                .execute(new ReActRequest(
-                        "system", "use the tool", List.of(), RunTrace.noop(),
-                        null, null, ThinkingLevel.OFF, null));
+        ReActEngine engine = new ReActEngine(
+                provider(chatModel), catalog(), executor, null, null, 1);
 
-        assertThat(result.output()).isEqualTo("final answer after limit");
-        assertThat(result.output()).isNotEqualTo("raw tool output");
-        assertThat(result.loopStats().outcome()).isEqualTo("max_iterations");
-        assertThat(requests).hasSize(2);
-        assertThat(requests.get(1).parameters().toolSpecifications()).isEmpty();
+        assertThatThrownBy(() -> engine.execute(new ReActRequest(
+                "system", "use the tool", List.of(), RunTrace.noop(),
+                null, null, ThinkingLevel.OFF, null)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("max iterations");
+
+        assertThat(requests).hasValue(1);
         assertThat(executedCallId.get()).isNotBlank();
-
-        AiMessage normalizedPlanningMessage = requests.get(1).messages().stream()
-                .filter(AiMessage.class::isInstance)
-                .map(AiMessage.class::cast)
-                .findFirst()
-                .orElseThrow();
-        ToolExecutionResultMessage toolResultMessage = requests.get(1).messages().stream()
-                .filter(ToolExecutionResultMessage.class::isInstance)
-                .map(ToolExecutionResultMessage.class::cast)
-                .findFirst()
-                .orElseThrow();
-        assertThat(normalizedPlanningMessage.toolExecutionRequests().get(0).id())
-                .isEqualTo(executedCallId.get());
-        assertThat(toolResultMessage.id()).isEqualTo(executedCallId.get());
     }
 
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
-    void sixthConsecutiveToolFailureStopsPlanningAndGeneratesFinalAnswer(boolean streaming) {
+    void sixthConsecutiveToolFailureStopsLoopWithoutSecondFinalCall(boolean streaming) {
         List<ChatRequest> requests = new ArrayList<>();
         AtomicInteger planningCalls = new AtomicInteger();
         ChatModel chatModel = new ChatModel() {
@@ -157,6 +143,9 @@ class ReActEngineTerminationTest {
                         || request.parameters().toolSpecifications().isEmpty()) {
                     return ChatResponse.builder()
                             .aiMessage(AiMessage.from("final answer after hard limit"))
+                            .metadata(ChatResponseMetadata.builder()
+                                    .finishReason(FinishReason.STOP)
+                                    .build())
                             .build();
                 }
                 int callNumber = planningCalls.incrementAndGet();
@@ -167,6 +156,9 @@ class ReActEngineTerminationTest {
                         .build();
                 return ChatResponse.builder()
                         .aiMessage(AiMessage.from("planning", List.of(toolRequest)))
+                        .metadata(ChatResponseMetadata.builder()
+                                .finishReason(FinishReason.TOOL_EXECUTION)
+                                .build())
                         .build();
             }
         };
@@ -202,11 +194,16 @@ class ReActEngineTerminationTest {
 
         assertThat(executions).hasValue(6);
         assertThat(planningCalls).hasValue(6);
-        assertThat(requests).hasSize(7);
-        assertThat(requests.getLast().parameters().toolSpecifications()).isEmpty();
-        assertThat(result.output()).isEqualTo("final answer after hard limit");
+        assertThat(requests).hasSize(6);
+        assertThat(requests).allSatisfy(chatRequest ->
+                assertThat(chatRequest.parameters().toolSpecifications()).isNotEmpty());
+        assertThat(result.output()).isNotBlank();
         assertThat(result.loopStats().outcome()).isEqualTo("tool_failure_limit");
-        if (streaming) assertThat(tokens).containsExactly("final answer after hard limit");
+        if (streaming) {
+            assertThat(tokens).containsExactly(
+                    "planning", "planning", "planning",
+                    "planning", "planning", "planning");
+        }
         assertThat(result.steps().get(5).inspection().status())
                 .isEqualTo(com.harness.core.model.ReActStep.InspectionResult.InspectionStatus.LOOP_DETECTED);
     }
@@ -243,7 +240,11 @@ class ReActEngineTerminationTest {
         when(chatModel.chat(any(ChatRequest.class))).thenReturn(ChatResponse.builder().aiMessage(AiMessage.from(
                 ToolExecutionRequest.builder().id("call-1").name("web")
                         .arguments("{\"action\":\"browser\",\"input\":{\"action\":\"observe\"}}")
-                        .build())).build());
+                        .build()))
+                .metadata(ChatResponseMetadata.builder()
+                        .finishReason(FinishReason.TOOL_EXECUTION)
+                        .build())
+                .build());
         var token = new CancellationToken();
         ToolExecutor executor = mock(ToolExecutor.class);
         when(executor.executeAuthorized(any(), any(), isNull())).thenAnswer(invocation -> {
