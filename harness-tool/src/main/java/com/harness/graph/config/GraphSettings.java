@@ -15,6 +15,7 @@ public record GraphSettings(
         String neo4jDatabase,
         Duration connectTimeout,
         Duration queryTimeout,
+        Duration writeTimeout,
         int maxConnectionPoolSize,
         int defaultLimit,
         int maxLimit,
@@ -32,6 +33,7 @@ public record GraphSettings(
         }
         requirePositive(connectTimeout, "connectTimeout");
         requirePositive(queryTimeout, "queryTimeout");
+        requirePositive(writeTimeout, "writeTimeout");
         requirePositive(maxConnectionPoolSize, "maxConnectionPoolSize");
         requirePositive(defaultLimit, "defaultLimit");
         requirePositive(maxLimit, "maxLimit");
@@ -68,6 +70,7 @@ public record GraphSettings(
                 config.getString(EnvKey.GRAPH_NEO4J_DATABASE, "neo4j"),
                 Duration.ofSeconds(config.getInt(EnvKey.GRAPH_CONNECT_TIMEOUT_SECONDS, 10)),
                 Duration.ofSeconds(config.getInt(EnvKey.GRAPH_QUERY_TIMEOUT_SECONDS, 15)),
+                Duration.ofSeconds(config.getInt(EnvKey.GRAPH_WRITE_TIMEOUT_SECONDS, 120)),
                 config.getInt(EnvKey.GRAPH_MAX_CONNECTION_POOL_SIZE, 20),
                 config.getInt(EnvKey.GRAPH_QUERY_DEFAULT_LIMIT, 50),
                 config.getInt(EnvKey.GRAPH_QUERY_MAX_LIMIT, 200),

@@ -3,6 +3,7 @@ package com.harness.tool.knowledge.index;
 import com.harness.core.model.PageResponse;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * Searchable knowledge representation layer (Milvus), including bodies and historical versions.
@@ -22,6 +23,8 @@ public interface KnowledgeProjectionStore {
             String conceptId, String revisionId);
 
     java.util.Optional<com.harness.tool.knowledge.authority.KnowledgeRevisionSnapshot> findRevisionSnapshot(String revisionId);
+
+    Map<String, com.harness.tool.knowledge.authority.KnowledgeRevisionSnapshot> findMetadataSnapshots(List<String> revisionIds);
 
     void activateRevision(String conceptId, String revisionId);
 

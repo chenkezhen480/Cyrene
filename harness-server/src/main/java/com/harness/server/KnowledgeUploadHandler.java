@@ -5,7 +5,6 @@ import com.harness.core.model.AgentTrace;
 import com.harness.core.model.RiskLevel;
 import com.harness.tool.knowledge.IngestResult;
 import com.harness.tool.knowledge.KnowledgeIngestService;
-import com.harness.tool.knowledge.KnowledgeIngestPendingException;
 import com.harness.input.document.DocumentConversionException;
 import com.harness.server.api.ApiErrorCode;
 import com.harness.server.api.ApiResponses;
@@ -108,15 +107,6 @@ public class KnowledgeUploadHandler {
             response.put("ingestDurationMs", result.ingestDurationMs());
             ctx.json(response);
 
-        } catch (KnowledgeIngestPendingException e) {
-            Map<String, Object> response = new LinkedHashMap<>();
-            response.put("status", "pending");
-            response.put("jobId", e.jobId());
-            response.put("documentId", e.documentId());
-            response.put("sourceArtifactId", e.sourceArtifactId());
-            response.put("collection", e.collection());
-            response.put("message", e.getMessage());
-            ctx.status(202).json(response);
         } catch (DocumentConversionException e) {
             int workerStatus = e.statusCode();
             int status = workerStatus == 400 || workerStatus == 413

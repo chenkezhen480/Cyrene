@@ -35,6 +35,22 @@ import static org.mockito.Mockito.*;
 class KnowledgeWikiHandlerTest {
 
     @Test
+    void listDefaultsToFiveCards() {
+        EnvConfig.init(Map.of(EnvKey.AUTH_MODE, "none"));
+        var service = mock(KnowledgeWikiService.class);
+        var context = mock(Context.class);
+        when(context.queryParam("userId")).thenReturn("alice");
+        when(service.page(any(), any(), any(), any(), any(), anyInt(), any()))
+                .thenReturn(new PageResponse<>(List.of(), new PageInfo(5, "", false)));
+
+        new KnowledgeWikiHandler(service, mock(GraphSpaceAccessService.class),
+                mock(KnowledgeGraphStore.class)).list(context);
+
+        verify(service).page(any(), any(), eq(KnowledgeConceptType.SOURCE_DOCUMENT),
+                any(), any(), eq(5), any());
+    }
+
+    @Test
     void malformedJsonReturnsExplicitBadRequest() {
         EnvConfig.init(Map.of(EnvKey.AUTH_MODE, "none"));
         var service = mock(KnowledgeWikiService.class);

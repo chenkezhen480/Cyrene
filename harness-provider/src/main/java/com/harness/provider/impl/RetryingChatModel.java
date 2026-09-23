@@ -31,7 +31,7 @@ public class RetryingChatModel implements ChatModel {
             try {
                 return delegate.chat(request);
             } catch (RuntimeException e) {
-                if (!isRetryable(e) || attempt == MAX_RETRIES) {
+                if (!ChatRetryContext.retriesEnabled() || !isRetryable(e) || attempt == MAX_RETRIES) {
                     throw e;
                 }
                 long delay = BASE_DELAY_MS * (1L << (attempt - 1));

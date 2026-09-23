@@ -8,6 +8,7 @@ import dev.langchain4j.model.chat.request.ChatRequest;
 import dev.langchain4j.model.chat.response.ChatResponse;
 
 import java.util.List;
+import java.util.concurrent.Semaphore;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
@@ -101,5 +102,16 @@ class RetryingChatModelTest {
 
         assertThat(result.aiMessage().text()).isEqualTo("ok");
         verify(delegate, times(2)).chat(any(ChatRequest.class));
+    }
+
+    @Test
+    void noRetryContextStopsBothProviderRetryWrappers() {
+        when(delegate.chat(any(ChatRequest.class)))
+                .thenThrow(new RuntimeException("429 rate limit exceeded"));
+        ChatModel model = new SemaphoreChatModel(new RetryingChatModel(delegate), new Semaphore(1));
+
+        assertThatThrownBy(() -> ChatRetryContext.withoutRetry(() -> model.chat(sampleRequest())))
+                .hasMessageContaining("429");
+        verify(delegate, times(1)).chat(any(ChatRequest.class));
     }
 }

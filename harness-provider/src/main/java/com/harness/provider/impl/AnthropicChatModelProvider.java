@@ -36,6 +36,7 @@ public class AnthropicChatModelProvider implements ChatModelProvider {
                 .maxTokens(maxTokens)
                 .temperature(temperature)
                 .timeout(Duration.ofSeconds(timeoutSeconds))
+                .maxRetries(0)
                 .logRequests(true)
                 .logResponses(true)
                 .build());

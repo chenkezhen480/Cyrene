@@ -32,6 +32,8 @@ public interface KnowledgeRepository {
 
     KnowledgeRevisionSnapshot findMetadataSnapshot(String revisionId);
 
+    Map<String, KnowledgeRevisionSnapshot> findMetadataSnapshots(List<String> revisionIds);
+
     Optional<KnowledgeHead> findById(String conceptId);
 
     Map<String, KnowledgeHead> findByIds(List<String> conceptIds);

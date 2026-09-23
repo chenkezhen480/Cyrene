@@ -7,6 +7,7 @@ import com.harness.core.model.ThinkingLevel;
 import com.harness.core.text.TextTokenEstimator;
 import com.harness.input.multimodal.TextChunker;
 import com.harness.provider.ChatModelProvider;
+import com.harness.provider.impl.ChatRetryContext;
 import dev.langchain4j.data.message.SystemMessage;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.chat.ChatModel;
@@ -50,6 +51,14 @@ public final class DocumentSummarizer {
     }
 
     public Summary summarize(String markdown, String task, int maxOutputTokens) {
+        return summarize(markdown, task, maxOutputTokens, true);
+    }
+
+    public Summary summarizeWithoutRetry(String markdown, String task, int maxOutputTokens) {
+        return summarize(markdown, task, maxOutputTokens, false);
+    }
+
+    private Summary summarize(String markdown, String task, int maxOutputTokens, boolean retry) {
         if (markdown == null || markdown.isBlank() || task == null || task.isBlank()
                 || maxOutputTokens < 1) {
             throw new IllegalArgumentException("Document, task and output token budget are required");
@@ -78,7 +87,7 @@ public final class DocumentSummarizer {
         ChatRequestParameters parameters = provider.planningRequestParameters(ThinkingLevel.OFF, List.of());
         AtomicInteger calls = new AtomicInteger();
         if (tokenEstimator.estimate(markdown) <= contentBudget) {
-            return new Summary(generate(model, parameters, finalTask, markdown, inputBudget, maxOutputTokens, calls),
+            return new Summary(generate(model, parameters, finalTask, markdown, inputBudget, maxOutputTokens, calls, retry),
                     modelName, 1, calls.get());
         }
 
@@ -91,7 +100,7 @@ public final class DocumentSummarizer {
                 List<Future<String>> futures = new ArrayList<>();
                 for (String block : blocks) {
                     futures.add(executor.submit(() -> generate(model, parameters, partialTask, block,
-                            inputBudget, intermediateOutputTokens, calls)));
+                            inputBudget, intermediateOutputTokens, calls, retry)));
                 }
                 List<String> summaries = new ArrayList<>();
                 for (Future<String> future : futures) {
@@ -99,7 +108,7 @@ public final class DocumentSummarizer {
                 }
                 String merged = String.join("\n\n", summaries);
                 if (tokenEstimator.estimate(merged) <= contentBudget) {
-                    return new Summary(generate(model, parameters, finalTask, merged, inputBudget, maxOutputTokens, calls),
+                    return new Summary(generate(model, parameters, finalTask, merged, inputBudget, maxOutputTokens, calls, retry),
                             modelName, inputBlocks, calls.get());
                 }
                 if (tokenEstimator.estimate(merged) >= tokenEstimator.estimate(String.join("\n\n", blocks))) {
@@ -137,17 +146,19 @@ public final class DocumentSummarizer {
     }
 
     private String generate(ChatModel model, ChatRequestParameters baseParameters, String task, String content,
-                            int inputBudget, int outputBudget, AtomicInteger calls) {
+                            int inputBudget, int outputBudget, AtomicInteger calls, boolean retry) {
         if ((long) tokenEstimator.estimate(task) + tokenEstimator.estimate(content) + 16 > inputBudget) {
             throw new AgentException("Document summary request exceeds the model input budget");
         }
         try {
             calls.incrementAndGet();
             ChatRequestParameters limits = ChatRequestParameters.builder().maxOutputTokens(outputBudget).build();
-            ChatResponse response = model.chat(ChatRequest.builder()
+            ChatRequest request = ChatRequest.builder()
                     .messages(SystemMessage.from(task), UserMessage.from(content))
                     .parameters(baseParameters == null ? limits : baseParameters.overrideWith(limits))
-                    .build());
+                    .build();
+            ChatResponse response = retry ? model.chat(request)
+                    : ChatRetryContext.withoutRetry(() -> model.chat(request));
             if (response == null || response.aiMessage() == null || response.aiMessage().hasToolExecutionRequests()
                     || response.finishReason() == FinishReason.LENGTH
                     || response.aiMessage().text() == null || response.aiMessage().text().isBlank()) {

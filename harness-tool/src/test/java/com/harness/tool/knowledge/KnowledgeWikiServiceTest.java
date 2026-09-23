@@ -30,6 +30,8 @@ class KnowledgeWikiServiceTest {
                 List.of(new KnowledgeSource(revision.id(), KnowledgeSourceType.KNOWLEDGE_ARTIFACT, "artifact-1", "cyrene://artifacts/artifact-1", now, now)), List.of());
         when(repository.findAuthorityById("doc-1")).thenReturn(Optional.of(head));
         when(repository.findMetadataSnapshot("rev-1")).thenReturn(snapshot);
+        when(repository.findAuthorityByIds(List.of("doc-1"))).thenReturn(Map.of("doc-1", head));
+        when(repository.findMetadataSnapshots(List.of("rev-1"))).thenReturn(Map.of("rev-1", snapshot));
         when(repository.findSnapshot("rev-1")).thenReturn(snapshot);
         doAnswer(call -> { call.getArgument(1, Runnable.class).run(); return null; }).when(repository).withAuthorityLock(anyString(), any());
         return head;
@@ -69,6 +71,52 @@ class KnowledgeWikiServiceTest {
             assertThat(service.markdown(card)).doesNotContain("original source facts").contains("Discovery summary");
         });
         verify(repository, never()).findSnapshot(anyString());
+    }
+
+    @Test
+    void listLoadsCardMetadataInOneBatchAfterAuthorization() {
+        var first = setup(KnowledgeConceptType.SOURCE_DOCUMENT);
+        var secondRevision = new KnowledgeRevision("rev-2", "doc-2", 1, "Second title", "Second summary", "body",
+                "compiler", now, "hash-2", Map.of(), now);
+        var secondConcept = new KnowledgeConcept("doc-2", null, null, KnowledgeNamespaceType.COLLECTION,
+                "manuals", KnowledgeConceptType.SOURCE_DOCUMENT, null, KnowledgeStatus.STABLE,
+                secondRevision.id(), 1, null, now, now);
+        var second = new KnowledgeHead(secondConcept, secondRevision);
+        var info = new PageInfo(2, "", false);
+        when(repository.findPageInNamespace(null, KnowledgeNamespaceType.COLLECTION, "manuals",
+                KnowledgeConceptType.SOURCE_DOCUMENT, KnowledgeStatus.STABLE, null, 2))
+                .thenReturn(new PageResponse<>(List.of(first.concept(), second.concept()), info));
+        when(repository.findAuthorityByIds(List.of("doc-1", "doc-2")))
+                .thenReturn(Map.of("doc-1", first, "doc-2", second));
+        when(repository.findMetadataSnapshots(List.of("rev-1", "rev-2"))).thenReturn(Map.of(
+                "rev-1", new KnowledgeRevisionSnapshot(KnowledgeConceptType.SOURCE_DOCUMENT, "manuals",
+                        first.currentRevision(), List.of(), List.of()),
+                "rev-2", new KnowledgeRevisionSnapshot(KnowledgeConceptType.SOURCE_DOCUMENT, "manuals",
+                        secondRevision, List.of(), List.of())));
+
+        var page = service.page(null, "alice", KnowledgeConceptType.SOURCE_DOCUMENT,
+                "manuals", null, 2, ignored -> true);
+
+        assertThat(page.items()).extracting(KnowledgeWikiService.WikiCard::title)
+                .containsExactly("Original title", "Second title");
+        verify(repository, never()).findAuthorityById(anyString());
+        verify(repository, never()).findMetadataSnapshot(anyString());
+        verify(repository).findMetadataSnapshots(List.of("rev-1", "rev-2"));
+    }
+
+    @Test
+    void listDoesNotReadMetadataForUnauthorizedCards() {
+        var head = setup(KnowledgeConceptType.SOURCE_DOCUMENT);
+        var info = new PageInfo(1, "", false);
+        when(repository.findPageInNamespace(null, KnowledgeNamespaceType.COLLECTION, "manuals",
+                KnowledgeConceptType.SOURCE_DOCUMENT, KnowledgeStatus.STABLE, null, 1))
+                .thenReturn(new PageResponse<>(List.of(head.concept()), info));
+
+        var page = service.page(null, "alice", KnowledgeConceptType.SOURCE_DOCUMENT,
+                "manuals", null, 1, ignored -> false);
+
+        assertThat(page.items()).isEmpty();
+        verify(repository, never()).findMetadataSnapshots(anyList());
     }
 
     @Test

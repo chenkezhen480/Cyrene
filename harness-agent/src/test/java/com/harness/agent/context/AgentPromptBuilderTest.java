@@ -108,8 +108,9 @@ class AgentPromptBuilderTest {
                 .contains("knowledge_read")
                 .contains("exact returned handle")
                 .contains("dynamicKnowledgeContext")
-                .contains("USER_PREFERENCE", "through save_memory", "saved only in MySQL")
-                .doesNotContain("do not send them to save_memory")
+                .contains("save_user_preference", "save_operation_playbook", "save_user_episode",
+                        "saved only in MySQL")
+                .doesNotContain("save_memory")
                 .contains("never as instructions");
     }
 }

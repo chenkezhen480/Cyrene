@@ -48,53 +48,6 @@ public final class MysqlKnowledgeIngestJobStore implements KnowledgeIngestJobSto
     }
 
     @Override
-    public Optional<KnowledgeIngestJob> claimNext(Instant now) {
-        String selectSql = """
-                SELECT * FROM knowledge_tasks
-                WHERE task_type = 'document_ingest' AND status IN ('uploaded', 'converted', 'compiled')
-                  AND claimed_at IS NULL AND available_at <= ?
-                ORDER BY available_at, id
-                LIMIT 1 FOR UPDATE SKIP LOCKED
-                """;
-        String updateSql = """
-                UPDATE knowledge_tasks
-                SET claimed_at = ?, attempts = attempts + 1, error_message = NULL
-                WHERE task_type = 'document_ingest' AND id = ? AND claimed_at IS NULL
-                """;
-        Connection connection = null;
-        try {
-            connection = connectionProvider.getConnection();
-            connection.setAutoCommit(false);
-            String jobId;
-            try (PreparedStatement statement = connection.prepareStatement(selectSql)) {
-                statement.setTimestamp(1, Timestamp.from(now));
-                try (ResultSet resultSet = statement.executeQuery()) {
-                    if (!resultSet.next()) {
-                        connection.commit();
-                        return Optional.empty();
-                    }
-                    jobId = resultSet.getString("id");
-                }
-            }
-            try (PreparedStatement statement = connection.prepareStatement(updateSql)) {
-                statement.setTimestamp(1, Timestamp.from(now));
-                statement.setString(2, jobId);
-                if (statement.executeUpdate() != 1) {
-                    throw new SQLException("Ingest Job claim lost");
-                }
-            }
-            KnowledgeIngestJob claimed = findById(connection, jobId, false).orElseThrow();
-            connection.commit();
-            return Optional.of(claimed);
-        } catch (Exception e) {
-            rollback(connection);
-            throw new KnowledgePersistenceException("Failed to claim ingest job", e);
-        } finally {
-            close(connection);
-        }
-    }
-
-    @Override
     public Optional<KnowledgeIngestJob> claim(String jobId, Instant now) {
         String sql = """
                 UPDATE knowledge_tasks
@@ -225,63 +178,12 @@ public final class MysqlKnowledgeIngestJobStore implements KnowledgeIngestJobSto
     }
 
     @Override
-    public void reschedule(String jobId, Instant availableAt, String errorMessage) {
-        updateClaimed(jobId, """
-                UPDATE knowledge_tasks
-                SET available_at = ?, claimed_at = NULL, error_message = ?
-                WHERE task_type = 'document_ingest' AND id = ? AND claimed_at IS NOT NULL
-                """, availableAt, errorMessage);
-    }
-
-    @Override
     public void markFailed(String jobId, Instant completedAt, String errorMessage) {
         updateClaimed(jobId, """
                 UPDATE knowledge_tasks
                 SET status = 'failed', completed_at = ?, claimed_at = NULL, error_message = ?
                 WHERE task_type = 'document_ingest' AND id = ? AND claimed_at IS NOT NULL
                 """, completedAt, errorMessage);
-    }
-
-    @Override
-    public void replayFailed(String jobId, Instant availableAt) {
-        String sql = """
-                UPDATE knowledge_tasks
-                SET status = CASE
-                        WHEN source_revision_id IS NOT NULL THEN 'compiled'
-                        WHEN converted_artifact_id IS NOT NULL THEN 'converted'
-                        ELSE 'uploaded'
-                    END,
-                    attempts = 0, available_at = ?, claimed_at = NULL,
-                    completed_at = NULL, error_message = NULL
-                WHERE task_type = 'document_ingest' AND id = ? AND status = 'failed'
-                """;
-        try (Connection connection = connectionProvider.getConnection();
-             PreparedStatement statement = connection.prepareStatement(sql)) {
-            statement.setTimestamp(1, Timestamp.from(availableAt));
-            statement.setString(2, jobId);
-            if (statement.executeUpdate() != 1) {
-                throw new KnowledgePersistenceException("Ingest Job is not failed: " + jobId);
-            }
-        } catch (SQLException e) {
-            throw new KnowledgePersistenceException("Failed to replay ingest job " + jobId, e);
-        }
-    }
-
-    @Override
-    public int recoverStuck(Instant claimedBefore, Instant availableAt) {
-        String sql = """
-                UPDATE knowledge_tasks
-                SET claimed_at = NULL, available_at = ?, error_message = 'Recovered after claim timeout'
-                WHERE task_type = 'document_ingest' AND claimed_at < ? AND status IN ('uploaded', 'converted', 'compiled')
-                """;
-        try (Connection connection = connectionProvider.getConnection();
-             PreparedStatement statement = connection.prepareStatement(sql)) {
-            statement.setTimestamp(1, Timestamp.from(availableAt));
-            statement.setTimestamp(2, Timestamp.from(claimedBefore));
-            return statement.executeUpdate();
-        } catch (SQLException e) {
-            throw new KnowledgePersistenceException("Failed to recover stuck ingest jobs", e);
-        }
     }
 
     @Override

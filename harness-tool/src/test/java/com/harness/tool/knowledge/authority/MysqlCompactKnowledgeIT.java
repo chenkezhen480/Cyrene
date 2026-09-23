@@ -118,6 +118,21 @@ class MysqlCompactKnowledgeIT {
                         KnowledgeConceptType.USER_PREFERENCE, KnowledgeStatus.STABLE, null, 10)
                         .items()).singleElement()
                         .satisfies(preference -> assertThat(preference.eventTime()).isNull());
+
+                String preferenceId = KnowledgeIdentity.preferenceConceptId("tenant1", "user1", "response.verbosity");
+                var preferenceRevision = new KnowledgeRevision("prefrev2", preferenceId, 1,
+                        "Response verbosity", "Use concise answers", "Use concise answers",
+                        "test", now, "preference-hash", Map.of(), now);
+                var preferenceConcept = new KnowledgeConcept(preferenceId, "tenant1", "user1",
+                        KnowledgeNamespaceType.USER_MEMORY, null, KnowledgeConceptType.USER_PREFERENCE,
+                        "response.verbosity", KnowledgeStatus.STABLE, preferenceRevision.id(), 1, null, now, now);
+                repository.commitChanges(List.of(new KnowledgeRevisionChange(preferenceConcept, 0,
+                        preferenceRevision, List.of(), List.of(), List.of(), List.of())));
+                assertThat(repository.findById(preferenceId).orElseThrow().concept())
+                        .satisfies(saved -> {
+                            assertThat(saved.currentRevisionId()).isEqualTo(preferenceRevision.id());
+                            assertThat(saved.eventTime()).isNull();
+                        });
             } finally {
                 ddl.execute("DROP DATABASE " + database);
             }

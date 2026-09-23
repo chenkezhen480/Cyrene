@@ -115,23 +115,42 @@ public final class MilvusKnowledgeProjectionStore implements KnowledgeProjection
 
     @Override
     public java.util.Optional<com.harness.tool.knowledge.authority.KnowledgeRevisionSnapshot> findRevisionSnapshot(String revisionId) {
-        var response = client.get().query(io.milvus.v2.service.vector.request.QueryReq.builder()
-                    .consistencyLevel(io.milvus.v2.common.ConsistencyLevel.STRONG)
-                .collectionName(requireCollections().catalogCollection())
-                .filter("revision_id == {revision}").filterTemplateValues(Map.of("revision", revisionId))
-                .outputFields(List.of("revision_data")).limit(1L).build());
-        if (response.getQueryResults().isEmpty()) return java.util.Optional.empty();
-        Object raw = response.getQueryResults().getFirst().getEntity().get("revision_data");
-        if (raw == null || raw instanceof JsonNull) throw new IllegalStateException("Wiki version metadata is missing");
-        var mapper = new com.fasterxml.jackson.databind.ObjectMapper().findAndRegisterModules();
-        var snapshot = com.harness.tool.knowledge.authority.KnowledgeRevisionSnapshot.fromJson(mapper,
-                raw instanceof String value ? value : new com.google.gson.Gson().toJson(raw));
+        var stored = findMetadataSnapshots(List.of(revisionId)).get(revisionId);
+        if (stored == null) return java.util.Optional.empty();
+        var snapshot = stored;
         if (snapshot.conceptType() == KnowledgeConceptType.USER_EPISODE
                 || snapshot.conceptType() == KnowledgeConceptType.OPERATION_PLAYBOOK) {
             snapshot = snapshot.withBody(findMemory(snapshot.conceptType(), snapshot.revision().conceptId(), revisionId)
                     .orElseThrow(() -> new IllegalStateException("Memory version is missing")).content());
         }
         return java.util.Optional.of(snapshot);
+    }
+
+    @Override
+    public Map<String, com.harness.tool.knowledge.authority.KnowledgeRevisionSnapshot> findMetadataSnapshots(List<String> revisionIds) {
+        if (revisionIds == null || revisionIds.size() > 100
+                || revisionIds.stream().anyMatch(id -> id == null || id.isBlank()))
+            throw new IllegalArgumentException("At most 100 nonblank revision IDs are required");
+        if (revisionIds.isEmpty()) return Map.of();
+        var response = client.get().query(io.milvus.v2.service.vector.request.QueryReq.builder()
+                .consistencyLevel(io.milvus.v2.common.ConsistencyLevel.STRONG)
+                .collectionName(requireCollections().catalogCollection())
+                .filter("revision_id in [" + revisionIds.stream().map(MilvusKnowledgeProjectionStore::literal)
+                        .collect(java.util.stream.Collectors.joining(", ")) + "]")
+                .outputFields(List.of("revision_id", "revision_data"))
+                .limit((long) revisionIds.size()).build());
+        var mapper = new com.fasterxml.jackson.databind.ObjectMapper().findAndRegisterModules();
+        Map<String, com.harness.tool.knowledge.authority.KnowledgeRevisionSnapshot> snapshots = new LinkedHashMap<>();
+        for (var result : response.getQueryResults()) {
+            Object raw = result.getEntity().get("revision_data");
+            if (raw == null || raw instanceof JsonNull) throw new IllegalStateException("Wiki version metadata is missing");
+            var snapshot = com.harness.tool.knowledge.authority.KnowledgeRevisionSnapshot.fromJson(mapper,
+                    raw instanceof String value ? value : new com.google.gson.Gson().toJson(raw));
+            String id = String.valueOf(result.getEntity().get("revision_id"));
+            if (!id.equals(snapshot.revision().id())) throw new IllegalStateException("Wiki version metadata differs from its ID");
+            snapshots.put(id, snapshot);
+        }
+        return Map.copyOf(snapshots);
     }
 
     @Override

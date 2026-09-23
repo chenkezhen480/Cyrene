@@ -44,7 +44,7 @@ public class SemaphoreChatModel implements ChatModel {
                 try {
                     return delegate.chat(request);
                 } catch (RuntimeException e) {
-                    if (is429(e)) {
+                    if (ChatRetryContext.retriesEnabled() && is429(e)) {
                         long elapsed = System.currentTimeMillis() - retryStart;
                         if (elapsed >= MAX_RETRY_DURATION_MS) {
                             log.error("[Semaphore] 429 retry exhausted after {}ms, giving up", elapsed);

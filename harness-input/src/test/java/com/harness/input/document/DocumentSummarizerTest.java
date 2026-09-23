@@ -5,6 +5,8 @@ import com.harness.core.env.EnvKey;
 import com.harness.core.exception.AgentException;
 import com.harness.core.text.UnicodeAwareTextTokenEstimator;
 import com.harness.provider.ChatModelProvider;
+import com.harness.provider.impl.RetryingChatModel;
+import com.harness.provider.impl.SemaphoreChatModel;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.SystemMessage;
 import dev.langchain4j.data.message.UserMessage;
@@ -18,6 +20,7 @@ import org.junit.jupiter.api.Test;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.Semaphore;
 import java.util.function.Function;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -34,8 +37,9 @@ class DocumentSummarizerTest {
             return response.apply(request);
         }
     };
+    private ChatModel activeModel = model;
     private final ChatModelProvider provider = new ChatModelProvider() {
-        @Override public ChatModel chatModel() { return model; }
+        @Override public ChatModel chatModel() { return activeModel; }
         @Override public String providerName() { return "test"; }
         @Override public String modelName() { return "primary-model"; }
         @Override public int contextWindow() { return contextWindow; }
@@ -83,6 +87,16 @@ class DocumentSummarizerTest {
         assertThat(requests.subList(0, 3).stream()
                 .map(request -> ((UserMessage) request.messages().getLast()).singleText().replace("\n", ""))
                 .reduce("", String::concat)).isEqualTo("资料数据".repeat(3000));
+    }
+
+    @Test
+    void ingestSummaryDoesNotRetryFailedModelCall() {
+        activeModel = new SemaphoreChatModel(new RetryingChatModel(model), new Semaphore(1));
+        response = request -> { throw new RuntimeException("429 rate limit exceeded"); };
+
+        assertThatThrownBy(() -> summarizer.summarizeWithoutRetry("body", "task", 256))
+                .isInstanceOf(AgentException.class).hasMessageContaining("429");
+        assertThat(requests).hasSize(1);
     }
 
     @Test

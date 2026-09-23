@@ -15,7 +15,6 @@ import com.harness.graph.build.GraphMutationCommitter;
 import com.harness.agent.graph.LlmGraphDataConverter;
 import com.harness.graph.build.GraphDataConverterRegistry;
 import com.harness.tool.knowledge.KnowledgeIngestService;
-import com.harness.tool.knowledge.KnowledgeIngestWorker;
 import com.harness.tool.knowledge.KnowledgeDocumentLifecycleService;
 import com.harness.tool.knowledge.PersistentGraphSchemaWikiCompiler;
 import com.harness.tool.knowledge.PersistentGraphSpaceWikiCompiler;
@@ -125,10 +124,6 @@ public class Main {
                 new MysqlKnowledgeIngestJobStore(agent.knowledgeRepository()),
                 agent.knowledgeRepository(),
                 agent.wikiIdentityResolver());
-        KnowledgeIngestWorker ingestWorker = new KnowledgeIngestWorker(
-                ingestService, agent.knowledgeVectorRuntime()::isReady);
-        ingestWorker.start();
-        Runtime.getRuntime().addShutdownHook(new Thread(ingestWorker::close));
         TraceStore traceStore = agent.traceStore();
 
         // Shared cancellation token registry for in-flight chat requests

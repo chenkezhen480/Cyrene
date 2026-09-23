@@ -337,11 +337,18 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
                             runtime.providers().embedding().tokenEstimator()),
                     objectMapper);
         }
-        toolRegistry.register(new com.harness.agent.memory.SaveMemoryTool(
+        var preferenceKeys = com.harness.core.knowledge.PreferenceKeyRegistry.standard();
+        var memorySaveService = new com.harness.agent.memory.MemorySaveService(
                 memoryRuntime.knowledgeRepository(), objectMapper, Clock.systemUTC(),
                 memoryRuntime::signalKnowledgeIndex,
-                com.harness.core.knowledge.PreferenceKeyRegistry.standard(),
-                wikiIdentityResolver));
+                preferenceKeys, wikiIdentityResolver);
+        for (var type : java.util.List.of(
+                com.harness.core.knowledge.KnowledgeConceptType.OPERATION_PLAYBOOK,
+                com.harness.core.knowledge.KnowledgeConceptType.USER_PREFERENCE,
+                com.harness.core.knowledge.KnowledgeConceptType.USER_EPISODE)) {
+            toolRegistry.register(new com.harness.agent.memory.SaveMemoryTool(
+                    type, memorySaveService, objectMapper, preferenceKeys));
+        }
         if ("none".equalsIgnoreCase(ragProvider)) {
             log.info("Knowledge search tools disabled (ragProvider=none); "
                     + "memory capture and MySQL preference injection remain enabled");

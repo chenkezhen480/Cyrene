@@ -68,6 +68,7 @@ public final class Neo4jKnowledgeGraphStore implements KnowledgeGraphStore {
     private final SessionConfig readSessionConfig;
     private final SessionConfig writeSessionConfig;
     private final TransactionConfig queryTransactionConfig;
+    private final TransactionConfig writeTransactionConfig;
 
     public Neo4jKnowledgeGraphStore(
             Driver driver,
@@ -90,6 +91,9 @@ public final class Neo4jKnowledgeGraphStore implements KnowledgeGraphStore {
                 .build();
         this.queryTransactionConfig = TransactionConfig.builder()
                 .withTimeout(settings.queryTimeout())
+                .build();
+        this.writeTransactionConfig = TransactionConfig.builder()
+                .withTimeout(settings.writeTimeout())
                 .build();
         initializeConstraints();
     }
@@ -165,7 +169,7 @@ public final class Neo4jKnowledgeGraphStore implements KnowledgeGraphStore {
                         result
                 );
                 return result;
-            }, queryTransactionConfig);
+            }, writeTransactionConfig);
         } catch (Neo4jException | GraphStoreException e) {
             throw new GraphStoreException("Knowledge graph mutation failed: " + e.getMessage(), e);
         }
@@ -339,7 +343,7 @@ public final class Neo4jKnowledgeGraphStore implements KnowledgeGraphStore {
             int relationCount = counts.get("relationCount").asInt();
 
             // Deleted in committed batches rather than one transaction. A whole space can be
-            // arbitrarily large, and a single transaction that must finish inside the query timeout
+            // arbitrarily large, and a single transaction that must finish inside the write timeout
             // fails on size and on any stall; each batch here gets its own budget, and an
             // interrupted deletion is completed by calling this again.
             // The iteration bound is derived from the counted size, not left open: if a batch ever
@@ -358,7 +362,7 @@ public final class Neo4jKnowledgeGraphStore implements KnowledgeGraphStore {
                         "graphId", graphSpaceKey.graphId(),
                         "schemaId", graphSpaceKey.schemaId(),
                         "batchSize", DELETE_BATCH_SIZE
-                )).single().get("deleted").asInt(), queryTransactionConfig);
+                )).single().get("deleted").asInt(), writeTransactionConfig);
                 if (deleted == 0) {
                     break;
                 }
@@ -375,7 +379,7 @@ public final class Neo4jKnowledgeGraphStore implements KnowledgeGraphStore {
                         "schemaId", graphSpaceKey.schemaId()
                 )).consume();
                 return null;
-            }, queryTransactionConfig);
+            }, writeTransactionConfig);
             return new GraphDeleteResult(nodeCount, relationCount);
         } catch (Neo4jException | GraphStoreException e) {
             throw new GraphStoreException("Failed to delete graph space: " + e.getMessage(), e);
@@ -411,7 +415,7 @@ public final class Neo4jKnowledgeGraphStore implements KnowledgeGraphStore {
                 case NODE -> deleteNode(transaction, request);
                 case RELATION -> deleteRelation(transaction, request);
                 case SOURCE -> deleteBySource(transaction, request);
-            }, queryTransactionConfig);
+            }, writeTransactionConfig);
         } catch (Neo4jException | GraphStoreException e) {
             throw new GraphStoreException("Knowledge graph delete failed: " + e.getMessage(), e);
         }
@@ -462,7 +466,7 @@ public final class Neo4jKnowledgeGraphStore implements KnowledgeGraphStore {
             session.executeWrite(transaction -> {
                 statements.forEach(statement -> transaction.run(statement).consume());
                 return null;
-            }, queryTransactionConfig);
+            }, writeTransactionConfig);
         } catch (Neo4jException e) {
             throw new GraphStoreException("Failed to initialize Neo4j constraints: " + e.getMessage(), e);
         }

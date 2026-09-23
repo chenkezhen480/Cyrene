@@ -65,6 +65,7 @@ class KnowledgeGraphToolTest {
                 "",
                 Duration.ofSeconds(1),
                 Duration.ofSeconds(1),
+                Duration.ofSeconds(120),
                 1,
                 10,
                 20,

@@ -6,6 +6,8 @@ import com.harness.core.text.UnicodeAwareTextTokenEstimator;
 import com.harness.input.document.DocumentSummarizer;
 import com.harness.provider.ChatModelProvider;
 import com.harness.provider.EmbeddingModelProvider;
+import com.harness.provider.impl.RetryingChatModel;
+import com.harness.provider.impl.SemaphoreChatModel;
 import com.harness.tool.knowledge.authority.KnowledgeHead;
 import com.harness.tool.knowledge.authority.KnowledgeRepository;
 import com.harness.tool.knowledge.index.*;
@@ -21,8 +23,10 @@ import org.mockito.ArgumentCaptor;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.Semaphore;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
@@ -112,6 +116,26 @@ class WikiIdentityResolverTest {
                 new WikiIdentityResolver.Draft("Guide", "Guide", "body"),
                 WikiIdentityResolver.RevisionMode.AUTHORITATIVE_SNAPSHOT)).isEmpty();
         verifyNoInteractions(chatModel);
+    }
+
+    @Test
+    void documentIdentityModelFailureDoesNotRetry() {
+        KnowledgeHead existing = head("doc-1", null, "Guide", "Old guide", "old body",
+                "tenant-a", null, KnowledgeConceptType.SOURCE_DOCUMENT,
+                KnowledgeNamespaceType.COLLECTION, "docs");
+        candidate(existing);
+        when(chatProvider.chatModel()).thenReturn(
+                new SemaphoreChatModel(new RetryingChatModel(chatModel), new Semaphore(1)));
+        when(chatModel.chat(any(ChatRequest.class)))
+                .thenThrow(new RuntimeException("429 rate limit exceeded"));
+
+        assertThatThrownBy(() -> resolver.resolveWithoutRetry(
+                KnowledgeConceptType.SOURCE_DOCUMENT, "tenant-a", null,
+                KnowledgeNamespaceType.COLLECTION, "docs", "guide.pdf",
+                new WikiIdentityResolver.Draft("Guide v2", "Updated guide", "complete new body"),
+                WikiIdentityResolver.RevisionMode.AUTHORITATIVE_SNAPSHOT))
+                .isInstanceOf(WikiIdentityResolver.ModelDecisionException.class);
+        verify(chatModel).chat(any(ChatRequest.class));
     }
 
     private void candidate(KnowledgeHead head) {

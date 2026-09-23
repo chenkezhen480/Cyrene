@@ -28,10 +28,21 @@ public final class KnowledgeWikiService {
         var page = type == KnowledgeConceptType.SOURCE_DOCUMENT && collection != null && !collection.isBlank()
                 ? repository.findPageInNamespace(tenant, namespace, collection.trim(), type, KnowledgeStatus.STABLE, cursor, limit)
                 : repository.findPage(tenant, owner, namespace, type, KnowledgeStatus.STABLE, cursor, limit);
-        var cards = new ArrayList<WikiCard>();
+        if (page.items().isEmpty()) return new PageResponse<>(List.of(), page.pageInfo());
+        var heads = repository.findAuthorityByIds(page.items().stream().map(KnowledgeConcept::id).toList());
+        var visible = new ArrayList<KnowledgeHead>();
         for (var concept : page.items()) {
-            var head = repository.findAuthorityById(concept.id()).orElseThrow();
-            if (authorized.test(head)) cards.add(card(head));
+            var head = heads.get(concept.id());
+            if (head == null) throw new KnowledgePersistenceException("Wiki authority is missing: " + concept.id());
+            if (authorized.test(head)) visible.add(head);
+        }
+        if (visible.isEmpty()) return new PageResponse<>(List.of(), page.pageInfo());
+        var snapshots = repository.findMetadataSnapshots(visible.stream().map(KnowledgeHead::currentVersion).toList());
+        var cards = new ArrayList<WikiCard>(visible.size());
+        for (var head : visible) {
+            var snapshot = snapshots.get(head.currentVersion());
+            if (snapshot == null) throw new KnowledgePersistenceException("Wiki version is unavailable: " + head.currentVersion());
+            cards.add(card(head, snapshot.revision()));
         }
         return new PageResponse<>(cards, page.pageInfo());
     }

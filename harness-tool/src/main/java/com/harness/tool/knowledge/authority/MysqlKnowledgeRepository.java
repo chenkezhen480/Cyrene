@@ -290,6 +290,35 @@ public final class MysqlKnowledgeRepository implements KnowledgeRepository {
         return rawSnapshot(revisionId).orElseThrow(() -> new KnowledgePersistenceException("Wiki version is unavailable: " + revisionId));
     }
 
+    @Override
+    public Map<String, KnowledgeRevisionSnapshot> findMetadataSnapshots(List<String> revisionIds) {
+        if (revisionIds == null || revisionIds.size() > 100
+                || revisionIds.stream().anyMatch(id -> id == null || id.isBlank()))
+            throw new IllegalArgumentException("At most 100 nonblank revision IDs are required");
+        if (revisionIds.isEmpty()) return Map.of();
+        String placeholders = String.join(",", java.util.Collections.nCopies(revisionIds.size(), "?"));
+        String sql = "SELECT current_revision_id AS revision_id, snapshot AS data FROM user_preferences"
+                + " WHERE current_revision_id IN (" + placeholders + ") UNION ALL "
+                + "SELECT revision_id, payload AS data FROM knowledge_tasks WHERE task_type = 'vector_index'"
+                + " AND payload IS NOT NULL AND revision_id IN (" + placeholders + ")";
+        Map<String, KnowledgeRevisionSnapshot> snapshots = new LinkedHashMap<>();
+        try (var scope = readConnection(); var statement = scope.connection().prepareStatement(sql)) {
+            for (int i = 0; i < revisionIds.size(); i++) {
+                statement.setString(i + 1, revisionIds.get(i));
+                statement.setString(i + 1 + revisionIds.size(), revisionIds.get(i));
+            }
+            try (var rows = statement.executeQuery()) {
+                while (rows.next()) snapshots.putIfAbsent(rows.getString("revision_id"),
+                        KnowledgeRevisionSnapshot.fromJson(objectMapper, rows.getString("data")));
+            }
+        } catch (SQLException e) { throw new KnowledgePersistenceException("Cannot read pending Wiki versions", e); }
+        if (projectionStore != null) {
+            var missing = revisionIds.stream().filter(id -> !snapshots.containsKey(id)).toList();
+            snapshots.putAll(projectionStore.findMetadataSnapshots(missing));
+        }
+        return Map.copyOf(snapshots);
+    }
+
     private Optional<KnowledgeRevisionSnapshot> snapshot(String revisionId) {
         return restoreDocumentBody(rawSnapshot(revisionId));
     }
@@ -733,21 +762,26 @@ public final class MysqlKnowledgeRepository implements KnowledgeRepository {
             Connection connection,
             KnowledgeRevisionChange change
     ) throws SQLException {
+        boolean preference = change.concept().conceptType() == KnowledgeConceptType.USER_PREFERENCE;
         String sql = """
                 UPDATE %s
                 SET %s = ?, version = version + 1, status = ?,
-                    stale_after = ?, event_time = ?, updated_at = ?
+                    stale_after = ?, %supdated_at = ?
                 WHERE id = ? AND version = ?
                 """.formatted(tableFor(change.concept().conceptType()),
-                        change.concept().conceptType() == KnowledgeConceptType.USER_PREFERENCE ? "current_revision_id" : "current_version");
+                        preference ? "current_revision_id" : "current_version",
+                        preference ? "" : "event_time = ?, ");
         try (PreparedStatement statement = connection.prepareStatement(sql)) {
             statement.setString(1, change.revision().id());
             statement.setString(2, change.concept().status().storageValue());
             MysqlKnowledgeArtifactRepository.setInstant(statement, 3, change.concept().staleAfter());
-            MysqlKnowledgeArtifactRepository.setInstant(statement, 4, change.concept().eventTime());
-            statement.setTimestamp(5, Timestamp.from(change.concept().updatedAt()));
-            statement.setString(6, change.concept().id());
-            statement.setLong(7, change.expectedConceptVersion());
+            int parameter = 4;
+            if (!preference) {
+                MysqlKnowledgeArtifactRepository.setInstant(statement, parameter++, change.concept().eventTime());
+            }
+            statement.setTimestamp(parameter++, Timestamp.from(change.concept().updatedAt()));
+            statement.setString(parameter++, change.concept().id());
+            statement.setLong(parameter, change.expectedConceptVersion());
             if (statement.executeUpdate() != 1) {
                 throw new KnowledgePersistenceException(
                         "Knowledge Concept optimistic lock conflict: " + change.concept().id());

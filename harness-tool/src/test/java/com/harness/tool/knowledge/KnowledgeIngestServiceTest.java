@@ -57,14 +57,13 @@ class KnowledgeIngestServiceTest {
                 EnvKey.KNOWLEDGE_MAX_FILE_SIZE_MB, "10",
                 EnvKey.KNOWLEDGE_CHUNK_SIZE, "1024",
                 EnvKey.KNOWLEDGE_SOURCE_REVISION_MAX_CHUNKS, "100",
-                EnvKey.KNOWLEDGE_INGEST_MAX_ATTEMPTS, "5",
                 EnvKey.RAG_COLLECTION, "documents",
                 EnvKey.KNOWLEDGE_CATALOG_COLLECTION, "catalog"));
         embeddingProvider = mock(EmbeddingModelProvider.class);
         vectorStore = mock(VectorStore.class);
         conversionService = mock(DocumentConversionService.class);
         documentSummarizer = mock(DocumentSummarizer.class);
-        when(documentSummarizer.summarize(anyString(), anyString(), eq(2048)))
+        when(documentSummarizer.summarizeWithoutRetry(anyString(), anyString(), eq(2048)))
                 .thenReturn(new DocumentSummarizer.Summary(
                         "{\"title\":\"Semantic report\",\"summary\":\"Explains student organization, class membership and teaching responsibilities.\",\"_note\":\"discovery only\"}",
                         "primary-model", 1, 1));
@@ -72,7 +71,7 @@ class KnowledgeIngestServiceTest {
         ingestJobStore = mock(KnowledgeIngestJobStore.class);
         knowledgeRepository = mock(KnowledgeRepository.class);
         identityResolver = mock(WikiIdentityResolver.class);
-        when(identityResolver.resolve(any(), any(), any(), any(), any(), any(), any(), any()))
+        when(identityResolver.resolveWithoutRetry(any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(Optional.empty());
         jobState = new AtomicReference<>();
         artifacts = new ConcurrentHashMap<>();
@@ -128,7 +127,7 @@ class KnowledgeIngestServiceTest {
         assertThat(head.currentRevision().description()).contains("class membership");
         assertThat(head.currentRevision().metadata()).containsEntry("summaryModel", "primary-model")
                 .containsEntry("summaryCalls", 1);
-        verify(documentSummarizer).summarize(eq("# Report\n\nCanonical Markdown."),
+        verify(documentSummarizer).summarizeWithoutRetry(eq("# Report\n\nCanonical Markdown."),
                 contains("semantic Wiki discovery card"), eq(2048));
         var compilation = ArgumentCaptor.forClass(KnowledgeRevisionChange.class);
         verify(ingestJobStore).commitCompilation(
@@ -169,7 +168,7 @@ class KnowledgeIngestServiceTest {
                 .thenReturn(converted("# Guide\n\nFirst complete snapshot.", first.length));
         IngestResult initial = service.ingest(first, "guide-v1.md", "text/markdown", "documents");
         KnowledgeHead previous = heads.get(initial.documentId());
-        when(identityResolver.resolve(eq(com.harness.core.knowledge.KnowledgeConceptType.SOURCE_DOCUMENT),
+        when(identityResolver.resolveWithoutRetry(eq(com.harness.core.knowledge.KnowledgeConceptType.SOURCE_DOCUMENT),
                 isNull(), isNull(), eq(com.harness.core.knowledge.KnowledgeNamespaceType.COLLECTION),
                 eq("documents"), eq("guide-v2.md"), any(),
                 eq(WikiIdentityResolver.RevisionMode.AUTHORITATIVE_SNAPSHOT)))
@@ -192,27 +191,20 @@ class KnowledgeIngestServiceTest {
     }
 
     @Test
-    void transientFailureReturnsDurablePendingReceiptInsteadOfOpaqueFailure() {
+    void parserFailureEndsJobWithoutBackgroundRetry() {
         byte[] bytes = "source".getBytes(java.nio.charset.StandardCharsets.UTF_8);
         when(conversionService.convert(bytes, "report.pdf", "application/pdf"))
                 .thenThrow(new DocumentConversionException("parser unavailable"));
 
-        KnowledgeIngestPendingException pending = catchThrowableOfType(
-                () -> service.ingest(
-                        bytes, "report.pdf", "application/pdf", "documents"),
-                KnowledgeIngestPendingException.class);
-
-        assertThat(pending.jobId()).isEqualTo(jobState.get().id());
-        assertThat(pending.documentId()).isEqualTo(jobState.get().sourceConceptId());
-        assertThat(pending.sourceArtifactId()).isEqualTo(jobState.get().artifactId());
-        assertThat(pending.collection()).isEqualTo("documents");
-        verify(ingestJobStore).reschedule(
-                eq(jobState.get().id()), any(), eq("parser unavailable"));
-        verify(ingestJobStore, never()).markFailed(anyString(), any(), anyString());
+        assertThatThrownBy(() -> service.ingest(
+                bytes, "report.pdf", "application/pdf", "documents"))
+                .isInstanceOf(DocumentConversionException.class)
+                .hasMessage("parser unavailable");
+        verify(ingestJobStore).markFailed(eq(jobState.get().id()), any(), eq("parser unavailable"));
     }
 
     @Test
-    void nonRetryableConversionFailureBecomesTerminalAndKeepsClientError() {
+    void invalidConversionFailureBecomesTerminalAndKeepsClientError() {
         byte[] bytes = "source".getBytes(java.nio.charset.StandardCharsets.UTF_8);
         when(conversionService.convert(bytes, "report.bin", "application/octet-stream"))
                 .thenThrow(new DocumentConversionException(
@@ -225,22 +217,35 @@ class KnowledgeIngestServiceTest {
 
         verify(ingestJobStore).markFailed(
                 eq(jobState.get().id()), any(), eq("unsupported document"));
-        verify(ingestJobStore, never()).reschedule(anyString(), any(), anyString());
     }
 
     @Test
-    void summaryFailureKeepsConvertedArtifactPendingWithoutCommittingOrIndexing() {
+    void visionModelFailureStopsAutomaticRetry() {
+        byte[] bytes = "source".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        when(conversionService.convert(bytes, "image.png", "image/png"))
+                .thenThrow(new DocumentConversionException(
+                        "vision unavailable", 502, "VISION_REQUEST_FAILED"));
+
+        assertThatThrownBy(() -> service.ingest(bytes, "image.png", "image/png", "documents"))
+                .isInstanceOf(DocumentConversionException.class)
+                .hasMessage("vision unavailable");
+        verify(ingestJobStore).markFailed(eq(jobState.get().id()), any(), eq("vision unavailable"));
+    }
+
+    @Test
+    void summaryFailureStopsAutomaticRetryWithoutCommittingOrIndexing() {
         byte[] bytes = "source".getBytes(java.nio.charset.StandardCharsets.UTF_8);
         when(conversionService.convert(bytes, "report.pdf", "application/pdf"))
                 .thenReturn(converted("# Report\n\nSource facts.", bytes.length));
-        when(documentSummarizer.summarize(anyString(), anyString(), eq(2048)))
+        when(documentSummarizer.summarizeWithoutRetry(anyString(), anyString(), eq(2048)))
                 .thenThrow(new IllegalStateException("model unavailable"));
-        KnowledgeIngestPendingException pending = catchThrowableOfType(() -> service.ingest(
-                bytes, "report.pdf", "application/pdf", "documents"), KnowledgeIngestPendingException.class);
-        assertThat(pending.documentId()).isEqualTo(jobState.get().sourceConceptId());
-        assertThat(jobState.get().status()).isEqualTo(KnowledgeIngestJob.Status.CONVERTED);
+        assertThatThrownBy(() -> service.ingest(bytes, "report.pdf", "application/pdf", "documents"))
+                .isInstanceOf(RuntimeException.class)
+                .hasMessageContaining("Document Wiki generation failed: model unavailable");
         assertThat(jobState.get().convertedArtifactId()).isNotBlank();
-        verify(ingestJobStore).reschedule(eq(jobState.get().id()), any(), eq("model unavailable"));
+        verify(ingestJobStore).markFailed(eq(jobState.get().id()), any(),
+                contains("Document Wiki generation failed: model unavailable"));
+        verify(documentSummarizer).summarizeWithoutRetry(anyString(), anyString(), eq(2048));
         verify(ingestJobStore, never()).commitCompilation(anyString(), anyString(), any());
         verify(vectorStore, never()).upsert(anyString(), anyList());
     }
@@ -250,13 +255,32 @@ class KnowledgeIngestServiceTest {
         byte[] bytes = "source".getBytes(java.nio.charset.StandardCharsets.UTF_8);
         when(conversionService.convert(bytes, "report.pdf", "application/pdf"))
                 .thenReturn(converted("# Report\n\nSource facts.", bytes.length));
-        when(documentSummarizer.summarize(anyString(), anyString(), eq(2048)))
+        when(documentSummarizer.summarizeWithoutRetry(anyString(), anyString(), eq(2048)))
                 .thenReturn(new DocumentSummarizer.Summary(
                         "{\"title\":\"report\",\"summary\":\"\"}", "primary-model", 1, 1));
         assertThatThrownBy(() -> service.ingest(bytes, "report.pdf", "application/pdf", "documents"))
-                .isInstanceOf(KnowledgeIngestPendingException.class)
+                .isInstanceOf(RuntimeException.class)
                 .hasCauseInstanceOf(IllegalStateException.class);
         assertThat(heads).isEmpty();
+        verify(ingestJobStore).markFailed(eq(jobState.get().id()), any(),
+                contains("Document Wiki generation failed"));
+        verify(ingestJobStore, never()).commitCompilation(anyString(), anyString(), any());
+    }
+
+    @Test
+    void identityModelFailureStopsAutomaticRetry() {
+        byte[] bytes = "source".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        when(conversionService.convert(bytes, "report.pdf", "application/pdf"))
+                .thenReturn(converted("# Report\n\nSource facts.", bytes.length));
+        when(identityResolver.resolveWithoutRetry(any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenThrow(new WikiIdentityResolver.ModelDecisionException(
+                        "Wiki identity decision failed: model unavailable",
+                        new IllegalStateException("model unavailable")));
+
+        assertThatThrownBy(() -> service.ingest(bytes, "report.pdf", "application/pdf", "documents"))
+                .isInstanceOf(WikiIdentityResolver.ModelDecisionException.class);
+        verify(ingestJobStore).markFailed(eq(jobState.get().id()), any(),
+                contains("Wiki identity decision failed"));
         verify(ingestJobStore, never()).commitCompilation(anyString(), anyString(), any());
     }
 

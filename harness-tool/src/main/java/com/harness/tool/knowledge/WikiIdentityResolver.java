@@ -79,6 +79,35 @@ public final class WikiIdentityResolver {
             Draft draft,
             RevisionMode revisionMode
     ) {
+        return resolve(type, tenantId, userId, namespaceType, namespaceKey, identityKey,
+                draft, revisionMode, true);
+    }
+
+    public Optional<Resolution> resolveWithoutRetry(
+            KnowledgeConceptType type,
+            String tenantId,
+            String userId,
+            KnowledgeNamespaceType namespaceType,
+            String namespaceKey,
+            String identityKey,
+            Draft draft,
+            RevisionMode revisionMode
+    ) {
+        return resolve(type, tenantId, userId, namespaceType, namespaceKey, identityKey,
+                draft, revisionMode, false);
+    }
+
+    private Optional<Resolution> resolve(
+            KnowledgeConceptType type,
+            String tenantId,
+            String userId,
+            KnowledgeNamespaceType namespaceType,
+            String namespaceKey,
+            String identityKey,
+            Draft draft,
+            RevisionMode revisionMode,
+            boolean retry
+    ) {
         Objects.requireNonNull(type, "type");
         Objects.requireNonNull(namespaceType, "namespaceType");
         Objects.requireNonNull(draft, "draft");
@@ -129,7 +158,7 @@ public final class WikiIdentityResolver {
                     revision.title(), revision.description(), truncate(content, 3000)));
         }
         if (candidates.isEmpty()) return Optional.empty();
-        return decide(identityKey, draft, revisionMode, candidates);
+        return decide(identityKey, draft, revisionMode, candidates, retry);
     }
 
     private static KnowledgeRevision memoryRevision(
@@ -157,7 +186,8 @@ public final class WikiIdentityResolver {
             String identityKey,
             Draft draft,
             RevisionMode revisionMode,
-            List<Candidate> candidates
+            List<Candidate> candidates,
+            boolean retry
     ) {
         try {
             List<Map<String, Object>> candidateData = candidates.stream().map(candidate -> Map.<String, Object>of(
@@ -174,8 +204,10 @@ public final class WikiIdentityResolver {
                             "summary", draft.summary(),
                             "content", truncate(draft.content(), 3000)),
                     "candidates", candidateData));
-            JsonNode decision = mapper.readTree(stripFence(
-                    model.summarize(input, RESOLUTION_TASK, 4096).text()));
+            String output = retry
+                    ? model.summarize(input, RESOLUTION_TASK, 4096).text()
+                    : model.summarizeWithoutRetry(input, RESOLUTION_TASK, 4096).text();
+            JsonNode decision = mapper.readTree(stripFence(output));
             if (decision == null || !decision.isObject() || decision.size() != 5
                     || !decision.path("decision").isTextual()) {
                 throw new IllegalStateException("Wiki identity model returned invalid JSON");
@@ -203,10 +235,14 @@ public final class WikiIdentityResolver {
                 requireNullDraft(decision);
             }
             return Optional.of(new Resolution(same.head(), resolved));
-        } catch (IllegalStateException e) {
-            throw e;
         } catch (Exception e) {
-            throw new IllegalStateException("Wiki identity decision failed: " + e.getMessage(), e);
+            throw new ModelDecisionException("Wiki identity decision failed: " + e.getMessage(), e);
+        }
+    }
+
+    public static final class ModelDecisionException extends IllegalStateException {
+        public ModelDecisionException(String message, Throwable cause) {
+            super(message, cause);
         }
     }
 

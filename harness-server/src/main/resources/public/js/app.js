@@ -1653,7 +1653,7 @@ const KnowledgePage = {
       { value: 'OPERATION_PLAYBOOK', label: 'wikiTypeOperation' },
     ];
     const wikiCards = ref([]);
-    const wikiPageInfo = ref({ limit: 20, nextCursor: '', hasMore: false });
+    const wikiPageInfo = ref({ limit: 5, nextCursor: '', hasMore: false });
     const wikiLoading = ref(false);
     const wikiError = ref('');
     const selectedWiki = ref(null);
@@ -1754,11 +1754,10 @@ const KnowledgePage = {
           item.status = 'uploading';
           try {
             const result = await CyreneAPI.uploadKnowledge(item.file, collection);
-            if (!['indexed', 'pending'].includes(result?.status) || typeof result.documentId !== 'string' || typeof result.jobId !== 'string') {
+            if (result?.status !== 'indexed' || typeof result.documentId !== 'string' || typeof result.jobId !== 'string') {
               throw new Error(t('invalidKnowledgeUploadResponse'));
             }
             item.status = result.status;
-            if (result.status === 'pending') item.message = result.message;
           } catch (e) { item.status = 'failed'; item.message = e.message; }
         }
         selectedFiles.value = [];
@@ -1793,7 +1792,7 @@ const KnowledgePage = {
       wikiError.value = '';
       try {
         const page = requirePageResponse(await CyreneAPI.listWiki(userId.value, {
-          type: wikiType.value, limit: 20, cursor,
+          type: wikiType.value, limit: 5, cursor,
         }), card => { requireWikiCard(card); return true; }, t('invalidWikiResponse'));
         if (version !== wikiQueryVersion) return;
         wikiCards.value = append ? [...wikiCards.value, ...page.items] : page.items;

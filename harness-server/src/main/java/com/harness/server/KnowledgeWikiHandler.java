@@ -37,7 +37,7 @@ final class KnowledgeWikiHandler {
             String type = ctx.queryParam("type");
             var kind = type == null ? KnowledgeConceptType.SOURCE_DOCUMENT : KnowledgeConceptType.valueOf(type);
             var page = service.page(owner.tenantId(), owner.userId(), kind, ctx.queryParam("collection"),
-                    KnowledgeWikiService.parseCursor(ctx.queryParam("cursor")), ApiRequestParameters.limit(ctx, 20, 100), authorized(owner));
+                    KnowledgeWikiService.parseCursor(ctx.queryParam("cursor")), ApiRequestParameters.limit(ctx, 5, 100), authorized(owner));
             ctx.json(page);
         });
     }

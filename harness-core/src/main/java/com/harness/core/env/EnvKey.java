@@ -68,6 +68,7 @@ public final class EnvKey {
     public static final String GRAPH_NEO4J_DATABASE = "HARNESS_GRAPH_NEO4J_DATABASE";
     public static final String GRAPH_CONNECT_TIMEOUT_SECONDS = "HARNESS_GRAPH_CONNECT_TIMEOUT_SECONDS";
     public static final String GRAPH_QUERY_TIMEOUT_SECONDS = "HARNESS_GRAPH_QUERY_TIMEOUT_SECONDS";
+    public static final String GRAPH_WRITE_TIMEOUT_SECONDS = "HARNESS_GRAPH_WRITE_TIMEOUT_SECONDS";
     public static final String GRAPH_MAX_CONNECTION_POOL_SIZE = "HARNESS_GRAPH_MAX_CONNECTION_POOL_SIZE";
     public static final String GRAPH_QUERY_DEFAULT_LIMIT = "HARNESS_GRAPH_QUERY_DEFAULT_LIMIT";
     public static final String GRAPH_QUERY_MAX_LIMIT = "HARNESS_GRAPH_QUERY_MAX_LIMIT";
@@ -250,9 +251,6 @@ public final class EnvKey {
     public static final String SYSTEM_PROMPT                   = "HARNESS_SYSTEM_PROMPT";
     /** 会话清理扫描间隔（分钟），默认 60 */
     public static final String MEMORY_CLEANUP_INTERVAL_MINUTES = "HARNESS_MEMORY_CLEANUP_INTERVAL_MINUTES";
-    /** 文档入库 Worker 的分页大小，默认 100。 */
-    public static final String KNOWLEDGE_COMPILER_BATCH_SIZE =
-            "HARNESS_KNOWLEDGE_COMPILER_BATCH_SIZE";
     /** Knowledge Catalog 的独立物理 Collection。 */
     public static final String KNOWLEDGE_CATALOG_COLLECTION =
             "HARNESS_KNOWLEDGE_CATALOG_COLLECTION";
@@ -314,12 +312,6 @@ public final class EnvKey {
     public static final String KNOWLEDGE_DOCX_ENABLED        = "HARNESS_KNOWLEDGE_DOCX_ENABLED";
     public static final String KNOWLEDGE_XLSX_ENABLED        = "HARNESS_KNOWLEDGE_XLSX_ENABLED";
     public static final String KNOWLEDGE_PPTX_ENABLED        = "HARNESS_KNOWLEDGE_PPTX_ENABLED";
-    /** 文档 Ingest Job 领取超时分钟数，默认 30。 */
-    public static final String KNOWLEDGE_INGEST_STUCK_MINUTES =
-            "HARNESS_KNOWLEDGE_INGEST_STUCK_MINUTES";
-    /** 文档 Ingest Job 最大尝试次数，默认 5。 */
-    public static final String KNOWLEDGE_INGEST_MAX_ATTEMPTS =
-            "HARNESS_KNOWLEDGE_INGEST_MAX_ATTEMPTS";
 
     public static final String GRAPH_MUTATION_POLL_SECONDS =
             "HARNESS_GRAPH_MUTATION_POLL_SECONDS";

@@ -1,8 +1,10 @@
 import base64
 import unittest
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
+from unittest.mock import patch
 
-from llm_clients import AnthropicOpenAiAdapter, ObservedVisionClient
+from config import VisionConfig
+from llm_clients import AnthropicOpenAiAdapter, ObservedVisionClient, createVisionClient
 
 
 class FakeAnthropicMessages:
@@ -46,6 +48,24 @@ class AnthropicOpenAiAdapterTest(unittest.TestCase):
 
 
 class ObservedVisionClientTest(unittest.TestCase):
+
+    def test_vision_clients_disable_sdk_retries(self):
+        for provider, moduleName, className in (
+                ("openai", "openai", "OpenAI"),
+                ("anthropic", "anthropic", "Anthropic")):
+            with self.subTest(provider=provider):
+                arguments = {}
+                module = ModuleType(moduleName)
+
+                def factory(**kwargs):
+                    arguments.update(kwargs)
+                    return SimpleNamespace()
+
+                setattr(module, className, factory)
+                vision = VisionConfig(provider, "key", "https://example.test", "model", "vision", True)
+                with patch.dict("sys.modules", {moduleName: module}):
+                    self.assertIsInstance(createVisionClient(vision, 30, 1024), ObservedVisionClient)
+                self.assertEqual(0, arguments["max_retries"])
 
     def test_records_failure_that_upstream_plugin_may_swallow(self):
         def fail(**kwargs):

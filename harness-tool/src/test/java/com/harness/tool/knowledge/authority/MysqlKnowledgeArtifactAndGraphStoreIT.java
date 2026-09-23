@@ -105,27 +105,6 @@ class MysqlKnowledgeArtifactAndGraphStoreIT {
     }
 
     @Test
-    void failedIngestExplicitReplayResumesLastDurableStageAndResetsAttempts() {
-        KnowledgeArtifact artifact = artifact("source-b.md", "artifact-content-b");
-        KnowledgeIngestJob job = job("it-todo12-ingest-b", artifact.id());
-        artifactRepository.registerWithIngestJob(artifact, job);
-        ingestJobStore.claim(job.id(), AVAILABLE_AT).orElseThrow();
-        ingestJobStore.advance(
-                job.id(), KnowledgeIngestJob.Status.UPLOADED,
-                KnowledgeIngestJob.Status.CONVERTED,
-                "converted-artifact", null, null, null);
-        ingestJobStore.claim(job.id(), AVAILABLE_AT).orElseThrow();
-        ingestJobStore.markFailed(job.id(), Instant.now(), "compiler unavailable");
-
-        ingestJobStore.replayFailed(job.id(), AVAILABLE_AT);
-
-        KnowledgeIngestJob replayed = ingestJobStore.findById(job.id()).orElseThrow();
-        assertThat(replayed.status()).isEqualTo(KnowledgeIngestJob.Status.CONVERTED);
-        assertThat(replayed.attempts()).isZero();
-        assertThat(replayed.convertedArtifactId()).isEqualTo("converted-artifact");
-    }
-
-    @Test
     void sourceDocumentCompilationCommitsRevisionOutboxAndJobStageAtomically() {
         KnowledgeArtifact artifact = artifact("source-compile.md", "artifact-content-compile");
         String placeholderConceptId = "it-todo12-doc-placeholder";

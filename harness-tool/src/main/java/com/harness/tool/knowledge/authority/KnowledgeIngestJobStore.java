@@ -10,8 +10,6 @@ public interface KnowledgeIngestJobStore {
 
     Optional<KnowledgeIngestJob> findById(String jobId);
 
-    Optional<KnowledgeIngestJob> claimNext(Instant now);
-
     Optional<KnowledgeIngestJob> claim(String jobId, Instant now);
 
     KnowledgeIngestJob advance(
@@ -31,13 +29,7 @@ public interface KnowledgeIngestJobStore {
     KnowledgeIngestJob commitCompilation(
             String jobId, String expectedSourceConceptId, KnowledgeRevisionChange change);
 
-    void reschedule(String jobId, Instant availableAt, String errorMessage);
-
     void markFailed(String jobId, Instant completedAt, String errorMessage);
-
-    void replayFailed(String jobId, Instant availableAt);
-
-    int recoverStuck(Instant claimedBefore, Instant availableAt);
 
     PageResponse<KnowledgeIngestJob> findPage(String afterJobId, int limit);
 }

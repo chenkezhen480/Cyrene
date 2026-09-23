@@ -6,7 +6,6 @@ import com.harness.core.env.EnvConfig;
 import com.harness.core.env.EnvKey;
 import com.harness.core.knowledge.*;
 import com.harness.core.modelconfig.ModelConfigKey;
-import com.harness.input.document.DocumentConversionException;
 import com.harness.input.document.DocumentConversionResult;
 import com.harness.input.document.DocumentConversionService;
 import com.harness.input.document.DocumentSummarizer;
@@ -25,7 +24,7 @@ import java.nio.file.Files;
 import java.time.Instant;
 import java.util.*;
 
-/** Recoverable immutable-Artifact to whole-document-Revision ingestion pipeline. */
+/** Synchronous immutable-Artifact to whole-document-Revision ingestion pipeline. */
 public final class KnowledgeIngestService {
 
     private static final Logger log = LoggerFactory.getLogger(KnowledgeIngestService.class);
@@ -56,7 +55,6 @@ public final class KnowledgeIngestService {
     private final long maxFileSizeMb;
     private final int chunkSize;
     private final int maxChunks;
-    private final int maxAttempts;
 
     public KnowledgeIngestService(
             EmbeddingModelProvider embeddingProvider,
@@ -99,8 +97,7 @@ public final class KnowledgeIngestService {
         this.maxFileSizeMb = config.getLong(EnvKey.KNOWLEDGE_MAX_FILE_SIZE_MB, 50);
         this.chunkSize = config.getInt(EnvKey.KNOWLEDGE_CHUNK_SIZE, 1024);
         this.maxChunks = config.getInt(EnvKey.KNOWLEDGE_SOURCE_REVISION_MAX_CHUNKS, 10_000);
-        this.maxAttempts = config.getInt(EnvKey.KNOWLEDGE_INGEST_MAX_ATTEMPTS, 5);
-        if (maxChunks < 1 || maxAttempts < 1) {
+        if (maxChunks < 1) {
             throw new IllegalArgumentException("Knowledge ingest limits must be positive");
         }
     }
@@ -141,14 +138,9 @@ public final class KnowledgeIngestService {
             processClaimed(job);
         } catch (RuntimeException failure) {
             recordFailure(job, failure);
-            throw ingestFailure(job, artifact, failure);
+            throw failure;
         }
-        KnowledgeIngestJob completed;
-        try {
-            completed = runToCompletion(job.id());
-        } catch (RuntimeException failure) {
-            throw ingestFailure(job, artifact, failure);
-        }
+        KnowledgeIngestJob completed = runToCompletion(job.id());
         String completedConceptId = completed.sourceConceptId();
         KnowledgeHead head = knowledgeRepository.findById(completedConceptId).orElseThrow(
                 () -> new IllegalStateException("Compiled Source Document is missing"));
@@ -158,33 +150,6 @@ public final class KnowledgeIngestService {
                 numberMetadata(head.currentRevision(), "chunkCount"),
                 embeddingProvider.dimension(), artifact.storageUri(),
                 System.currentTimeMillis() - started);
-    }
-
-    /** Process one durable stage for the next available Job. */
-    public boolean processNext() {
-        Optional<KnowledgeIngestJob> claimed = ingestJobStore.claimNext(Instant.now());
-        if (claimed.isEmpty()) {
-            return false;
-        }
-        KnowledgeIngestJob job = claimed.get();
-        try {
-            processClaimed(job);
-        } catch (RuntimeException failure) {
-            recordFailure(job, failure);
-            throw failure;
-        }
-        return true;
-    }
-
-    public int recoverStuck() {
-        long stuckMinutes = EnvConfig.get().getLong(
-                EnvKey.KNOWLEDGE_INGEST_STUCK_MINUTES, 30);
-        if (stuckMinutes < 1) {
-            throw new IllegalArgumentException(
-                    "HARNESS_KNOWLEDGE_INGEST_STUCK_MINUTES must be positive");
-        }
-        Instant now = Instant.now();
-        return ingestJobStore.recoverStuck(now.minusSeconds(stuckMinutes * 60L), now);
     }
 
     public KnowledgeIngestJob runToCompletion(String jobId) {
@@ -265,10 +230,16 @@ public final class KnowledgeIngestService {
         String conceptId = expectedJobConceptId;
         KnowledgeHead existing = knowledgeRepository.findById(conceptId).orElse(null);
         validateExistingDocument(existing, job);
-        DocumentSummarizer.Summary summary = documentSummarizer.summarize(markdown, WIKI_TASK, 2048);
-        JsonNode card = wikiCard(summary.text());
+        DocumentSummarizer.Summary summary;
+        JsonNode card;
+        try {
+            summary = documentSummarizer.summarizeWithoutRetry(markdown, WIKI_TASK, 2048);
+            card = wikiCard(summary.text());
+        } catch (RuntimeException failure) {
+            throw new IllegalStateException("Document Wiki generation failed: " + failure.getMessage(), failure);
+        }
         if (existing == null && identityResolver != null) {
-            var resolution = identityResolver.resolve(
+            var resolution = identityResolver.resolveWithoutRetry(
                     KnowledgeConceptType.SOURCE_DOCUMENT, job.tenantId(), null,
                     KnowledgeNamespaceType.COLLECTION, job.collectionKey(), source.fileName(),
                     new WikiIdentityResolver.Draft(
@@ -402,33 +373,7 @@ public final class KnowledgeIngestService {
     private void recordFailure(KnowledgeIngestJob job, RuntimeException failure) {
         String message = failure.getMessage() == null
                 ? failure.getClass().getSimpleName() : failure.getMessage();
-        if (!isRetryable(failure) || job.attempts() >= maxAttempts) {
-            ingestJobStore.markFailed(job.id(), Instant.now(), message);
-        } else {
-            long delay = Math.min(3600L, 60L << Math.min(5, Math.max(0, job.attempts() - 1)));
-            ingestJobStore.reschedule(job.id(), Instant.now().plusSeconds(delay), message);
-        }
-    }
-
-    private RuntimeException ingestFailure(
-            KnowledgeIngestJob job,
-            KnowledgeArtifact artifact,
-            RuntimeException failure
-    ) {
-        if (!isRetryable(failure)) return failure;
-        KnowledgeIngestJob current = ingestJobStore.findById(job.id()).orElse(job);
-        if (current.status() == KnowledgeIngestJob.Status.FAILED) return failure;
-        return new KnowledgeIngestPendingException(
-                job.id(), job.sourceConceptId(), artifact.id(),
-                job.collectionKey(), failure);
-    }
-
-    private static boolean isRetryable(RuntimeException failure) {
-        if (failure instanceof DocumentConversionException conversionFailure) {
-            int status = conversionFailure.statusCode();
-            return status != 400 && status != 413 && status != 415 && status != 422;
-        }
-        return !(failure instanceof IllegalArgumentException);
+        ingestJobStore.markFailed(job.id(), Instant.now(), message);
     }
 
     private String resolveConceptId(String requested, String tenantId, String collectionKey) {

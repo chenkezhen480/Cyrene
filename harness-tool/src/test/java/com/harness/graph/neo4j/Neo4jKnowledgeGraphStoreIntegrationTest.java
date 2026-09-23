@@ -445,6 +445,7 @@ class Neo4jKnowledgeGraphStoreIntegrationTest {
                 "neo4j",
                 Duration.ofSeconds(10),
                 Duration.ofSeconds(10),
+                Duration.ofSeconds(120),
                 10,
                 20,
                 100,

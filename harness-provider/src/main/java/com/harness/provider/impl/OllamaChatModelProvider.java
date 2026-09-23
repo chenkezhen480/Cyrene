@@ -35,6 +35,7 @@ public class OllamaChatModelProvider implements ChatModelProvider {
                 .modelName(model)
                 .temperature(temperature)
                 .timeout(Duration.ofSeconds(timeoutSeconds))
+                .maxRetries(0)
                 .build());
     }
 

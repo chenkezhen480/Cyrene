@@ -54,6 +54,7 @@ class GraphSettingsTest {
         assertThat(settings.neo4jDatabase()).isEqualTo("neo4j");
         assertThat(settings.connectTimeout()).isEqualTo(Duration.ofSeconds(10));
         assertThat(settings.queryTimeout()).isEqualTo(Duration.ofSeconds(15));
+        assertThat(settings.writeTimeout()).isEqualTo(Duration.ofSeconds(120));
         assertThat(settings.maxConnectionPoolSize()).isEqualTo(20);
         assertThat(settings.defaultLimit()).isEqualTo(50);
         assertThat(settings.maxLimit()).isEqualTo(200);
@@ -61,6 +62,16 @@ class GraphSettingsTest {
         assertThat(settings.maxDepth()).isEqualTo(2);
         assertThat(settings.contextMaxItems()).isEqualTo(50);
         assertThat(settings.contextMaxChars()).isEqualTo(12_000);
+    }
+
+    @Test
+    void writeTimeoutCanBeRaisedWithoutChangingQueryTimeout() {
+        EnvConfig.init(Map.of(EnvKey.GRAPH_WRITE_TIMEOUT_SECONDS, "300"));
+
+        GraphSettings settings = GraphSettings.fromEnvironment();
+
+        assertThat(settings.queryTimeout()).isEqualTo(Duration.ofSeconds(15));
+        assertThat(settings.writeTimeout()).isEqualTo(Duration.ofSeconds(300));
     }
 
     @Test

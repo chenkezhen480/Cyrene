@@ -102,6 +102,7 @@ def createVisionClient(
             api_key=vision.apiKey,
             base_url=vision.baseUrl,
             timeout=float(visionTimeoutSeconds),
+            max_retries=0,
         )
     elif vision.provider == "anthropic":
         from anthropic import Anthropic
@@ -110,6 +111,7 @@ def createVisionClient(
             api_key=vision.apiKey,
             base_url=vision.baseUrl,
             timeout=float(visionTimeoutSeconds),
+            max_retries=0,
         )
         delegate = AnthropicOpenAiAdapter(anthropicClient, maxTokens)
     else:

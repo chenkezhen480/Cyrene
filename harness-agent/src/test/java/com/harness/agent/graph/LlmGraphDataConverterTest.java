@@ -145,6 +145,7 @@ class LlmGraphDataConverterTest {
                 "", "", "", "",
                 Duration.ofSeconds(10),
                 Duration.ofSeconds(15),
+                Duration.ofSeconds(120),
                 20,
                 20,
                 200,

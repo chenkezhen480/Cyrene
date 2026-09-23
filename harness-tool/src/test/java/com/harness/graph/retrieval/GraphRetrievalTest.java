@@ -271,6 +271,7 @@ class GraphRetrievalTest {
                 "",
                 Duration.ofSeconds(5),
                 Duration.ofSeconds(5),
+                Duration.ofSeconds(120),
                 10,
                 20,
                 100,

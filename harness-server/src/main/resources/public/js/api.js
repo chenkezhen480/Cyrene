@@ -204,7 +204,7 @@ const CyreneAPI = (() => {
     return request('PUT', `/api/knowledge/${encodeURIComponent(collection)}/${encodeURIComponent(id)}`, draft);
   }
 
-  function listWiki(userId, { type = 'SOURCE_DOCUMENT', collection = '', limit = 20, cursor = '' } = {}) {
+  function listWiki(userId, { type = 'SOURCE_DOCUMENT', collection = '', limit = 5, cursor = '' } = {}) {
     const params = new URLSearchParams({ userId, type, limit: String(limit) });
     if (collection) params.set('collection', collection);
     if (cursor) params.set('cursor', cursor);
