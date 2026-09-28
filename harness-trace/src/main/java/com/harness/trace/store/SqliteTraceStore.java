@@ -40,37 +40,26 @@ public class SqliteTraceStore implements TraceStore {
             throw new IllegalArgumentException("dbUrl is required");
         }
         this.dbUrl = dbUrl;
-        initTable();
+        validateSchema();
     }
 
     private Connection getConnection() throws SQLException {
         return DriverManager.getConnection(dbUrl);
     }
 
-    private void initTable() {
+    private void validateSchema() {
         String sql = """
-                CREATE TABLE IF NOT EXISTS agent_traces (
-                    trace_id    TEXT PRIMARY KEY,
-                    timestamp   TEXT NOT NULL,
-                    user_id     TEXT,
-                    session_id  TEXT,
-                    input_text  TEXT,
-                    intent      TEXT,
-                    llm_model   TEXT,
-                    steps_json  TEXT,
-                    final_output TEXT,
-                    risk_level  TEXT,
-                    total_duration_ms INTEGER,
-                    total_tokens INTEGER,
-                    full_json   TEXT NOT NULL
-                )
+                SELECT trace_id, timestamp, user_id, session_id, input_text, intent, llm_model,
+                       steps_json, final_output, risk_level, total_duration_ms, total_tokens, full_json
+                FROM agent_traces WHERE 1 = 0
                 """;
-        try (Connection conn = getConnection(); Statement stmt = conn.createStatement()) {
-            stmt.execute(sql);
-            log.info("Trace store initialized: {}", dbUrl);
+        try (Connection conn = getConnection();
+             Statement stmt = conn.createStatement();
+             ResultSet ignored = stmt.executeQuery(sql)) {
+            log.info("Trace store schema verified: {}", dbUrl);
         } catch (SQLException e) {
-            log.error("Failed to init trace table: {}", e.getMessage(), e);
-            throw new TraceStoreException("Failed to initialize trace table", e);
+            throw new TraceStoreException(
+                    "Failed to validate SQLite trace schema; apply sql/schema-sqlite.sql before startup", e);
         }
     }
 

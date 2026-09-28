@@ -49,7 +49,11 @@ public final class ReadTool implements Tool {
         ToolArguments.intProperty(schema, "offset",
                 "1-based line number to start reading from. Defaults to 1.");
         ToolArguments.intProperty(schema, "limit",
-                "Maximum number of lines to return. Defaults to " + settings.readMaxLines() + ".");
+                "Maximum number of lines to return. Defaults to " + settings.readMaxLines()
+                        + "; larger values are capped at this maximum.");
+        schema.withObject("/properties/offset").put("minimum", 1);
+        schema.withObject("/properties/limit").put("minimum", 1)
+                .put("maximum", settings.readMaxLines());
         ToolArguments.required(schema, "file_path");
         return new ToolSpec(
                 TOOL_NAME,
@@ -86,6 +90,7 @@ public final class ReadTool implements Tool {
         if (limit <= 0) {
             throw new ToolExecutionException(TOOL_NAME, "limit must be greater than 0");
         }
+        limit = Math.min(limit, settings.readMaxLines());
 
         List<String> lines = new ArrayList<>();
         long bytes = 0;
@@ -93,7 +98,11 @@ public final class ReadTool implements Tool {
         try (BufferedReader reader = Files.newBufferedReader(file, StandardCharsets.UTF_8)) {
             int lineNumber = 0;
             while (true) {
-                String line = nextLine(reader, settings.maxOutputBytes());
+                if (lines.size() >= limit) {
+                    truncated = reader.read() != -1;
+                    break;
+                }
+                ReadLine line = nextLine(reader, settings.maxOutputBytes());
                 if (line == null) {
                     break;
                 }
@@ -101,12 +110,19 @@ public final class ReadTool implements Tool {
                 if (lineNumber < offset) {
                     continue;
                 }
-                bytes += line.length() + 1;
-                if (lines.size() >= limit || bytes > settings.maxOutputBytes()) {
+                long lineBytes = (long) line.content().getBytes(StandardCharsets.UTF_8).length
+                        + line.terminatorBytes();
+                if (line.oversized() || bytes + lineBytes > settings.maxOutputBytes()) {
+                    if (lines.isEmpty()) {
+                        throw new ToolExecutionException(TOOL_NAME,
+                                "line " + lineNumber + " exceeds the configured byte limit of "
+                                        + settings.maxOutputBytes() + "; no partial line was returned");
+                    }
                     truncated = true;
                     break;
                 }
-                lines.add(line);
+                bytes += lineBytes;
+                lines.add(line.content());
             }
         } catch (IOException e) {
             throw new ToolExecutionException(
@@ -138,32 +154,38 @@ public final class ReadTool implements Tool {
 
     /**
      * One line, but a single pathological line (minified bundle, generated blob) cannot allocate
-     * unbounded memory: past {@code maxChars} the rest of that line is dropped rather than held.
+     * unbounded memory. Oversized lines are explicitly marked and never returned as partial content.
      *
      * @return the line without its terminator, or null at end of file
      */
-    private static String nextLine(BufferedReader reader, int maxChars) throws IOException {
+    private static ReadLine nextLine(BufferedReader reader, int maxChars) throws IOException {
         StringBuilder line = new StringBuilder();
         int read;
         boolean any = false;
+        boolean oversized = false;
         while ((read = reader.read()) != -1) {
             any = true;
             if (read == '\n') {
-                return line.toString();
+                return new ReadLine(line.toString(), 1, oversized);
             }
             if (read == '\r') {
                 reader.mark(1);
-                if (reader.read() != '\n') {
+                boolean crlf = reader.read() == '\n';
+                if (!crlf) {
                     reader.reset();
                 }
-                return line.toString();
+                return new ReadLine(line.toString(), crlf ? 2 : 1, oversized);
             }
             if (line.length() < maxChars) {
                 line.append((char) read);
+            } else {
+                oversized = true;
             }
         }
-        return any ? line.toString() : null;
+        return any ? new ReadLine(line.toString(), 0, oversized) : null;
     }
+
+    private record ReadLine(String content, int terminatorBytes, boolean oversized) {}
 
     private static boolean isBinary(Path file) {
         byte[] head = new byte[BINARY_SNIFF_BYTES];

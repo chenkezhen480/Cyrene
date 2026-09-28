@@ -70,125 +70,72 @@ public class SubAgentTaskRecord {
         return lifecycleTerminalPublished.compareAndSet(false, true);
     }
 
-    // --- Execution status transitions ---
-
-    /**
-     * Transition to RUNNING state. Returns false if already in a terminal state.
-     */
-    public boolean start() {
+    // Publish the result before its terminal status, and complete each task exactly once.
+    public synchronized boolean start() {
+        if (taskCancellationToken != null && taskCancellationToken.isCancelled()) {
+            markCancelled();
+            return false;
+        }
         return status.compareAndSet(SubAgentStatus.QUEUED, SubAgentStatus.RUNNING);
     }
 
-    /**
-     * Mark as succeeded with result. Uses CAS to prevent overwriting terminal states.
-     */
-    public void succeed(SubAgentResult result) {
-        SubAgentStatus current;
-        do {
-            current = status.get();
-            if (isTerminal(current)) {
-                return; // Already in a terminal state, don't overwrite
-            }
-        } while (!status.compareAndSet(current, SubAgentStatus.SUCCEEDED));
-        this.storedResult = result;
-        completion.complete(result);
-    }
-
-    /**
-     * Mark as failed with error. Uses CAS to prevent overwriting terminal states.
-     */
-    public void fail(SubAgentResult result) {
-        SubAgentStatus current;
-        do {
-            current = status.get();
-            if (isTerminal(current)) {
-                return; // Already in a terminal state, don't overwrite
-            }
-        } while (!status.compareAndSet(current, SubAgentStatus.FAILED));
-        this.storedResult = result;
-        completion.complete(result);
-    }
-
-    /** Mark a normally completed task whose declared completion contract was unmet. */
-    public void markIncomplete(SubAgentResult result) {
-        SubAgentStatus current;
-        do {
-            current = status.get();
-            if (isTerminal(current)) {
-                return;
-            }
-        } while (!status.compareAndSet(current, SubAgentStatus.INCOMPLETE));
-        this.storedResult = result;
-        completion.complete(result);
-    }
-
-    /**
-     * Request cancellation. Transitions to CANCEL_REQUESTED.
-     * Returns false if already in a terminal state, true if cancellation requested (including already requested).
-     */
-    public boolean requestCancel() {
-        SubAgentStatus current;
-        do {
-            current = status.get();
-            if (isTerminal(current)) {
-                return false;
-            }
-            if (current == SubAgentStatus.CANCEL_REQUESTED) {
-                return true; // Already requested
-            }
-        } while (!status.compareAndSet(current, SubAgentStatus.CANCEL_REQUESTED));
-        if (taskCancellationToken != null) {
-            taskCancellationToken.cancel();
+    public synchronized void succeed(SubAgentResult result) {
+        if (isCancelRequested() || taskCancellationToken != null && taskCancellationToken.isCancelled()) {
+            markCancelled();
+        } else {
+            finish(SubAgentStatus.SUCCEEDED, result);
         }
+    }
+
+    public synchronized void fail(SubAgentResult result) {
+        if (isCancelRequested() || taskCancellationToken != null && taskCancellationToken.isCancelled()) {
+            markCancelled();
+        } else {
+            finish(SubAgentStatus.FAILED, result);
+        }
+    }
+
+    public synchronized void markIncomplete(SubAgentResult result) {
+        if (isCancelRequested() || taskCancellationToken != null && taskCancellationToken.isCancelled()) {
+            markCancelled();
+        } else {
+            finish(SubAgentStatus.INCOMPLETE, result);
+        }
+    }
+
+    public synchronized boolean requestCancel() {
+        if (isTerminal()) return false;
+        boolean queued = status.get() == SubAgentStatus.QUEUED;
+        status.set(SubAgentStatus.CANCEL_REQUESTED);
+        if (queued) markCancelled();
+        if (taskCancellationToken != null) taskCancellationToken.cancel();
         return true;
     }
 
-    /**
-     * Mark as cancelled. Uses CAS to prevent overwriting any terminal state.
-     */
-    public void markCancelled() {
-        SubAgentStatus current;
-        do {
-            current = status.get();
-            if (isTerminal(current)) {
-                return;
-            }
-        } while (!status.compareAndSet(current, SubAgentStatus.CANCELLED));
-        this.storedResult = SubAgentResult.failure(
-                taskId, "Cancelled", 0, task.completionContract() != null);
-        completion.complete(storedResult);
+    public synchronized void markCancelled() {
+        finish(SubAgentStatus.CANCELLED, terminalFailure(SubAgentStatus.CANCELLED, "Cancelled"));
     }
 
-    /**
-     * Mark as timed out. Uses CAS to prevent overwriting any terminal state.
-     */
-    public void markTimedOut() {
-        SubAgentStatus current;
-        do {
-            current = status.get();
-            if (isTerminal(current)) {
-                return;
-            }
-        } while (!status.compareAndSet(current, SubAgentStatus.TIMED_OUT));
-        this.storedResult = SubAgentResult.failure(
-                taskId, "Task timed out", 0, task.completionContract() != null);
-        completion.complete(storedResult);
+    public synchronized void markTimedOut() {
+        finish(SubAgentStatus.TIMED_OUT, terminalFailure(SubAgentStatus.TIMED_OUT, "Task timed out"));
     }
 
-    /**
-     * Check if task is in a terminal state.
-     */
-    public boolean isTerminal() {
-        SubAgentStatus s = status.get();
-        return isTerminal(s);
+    private SubAgentResult terminalFailure(SubAgentStatus terminal, String error) {
+        return new SubAgentResult(taskId, null, error, false, terminal, java.util.List.of(),
+                ToolExecutionSummary.empty(), ContractValidation.notEvaluated(task.completionContract() != null),
+                null, 0, null);
     }
 
-    /**
-     * Check if cancellation was requested.
-     */
-    public boolean isCancelRequested() {
-        return status.get() == SubAgentStatus.CANCEL_REQUESTED;
+    private void finish(SubAgentStatus terminal, SubAgentResult result) {
+        if (isTerminal()) return;
+        if (result.status() != terminal) throw new IllegalArgumentException("Task result status mismatch");
+        storedResult = result;
+        status.set(terminal);
+        completion.complete(result);
     }
+
+    public boolean isTerminal() { return isTerminal(status.get()); }
+    public boolean isCancelRequested() { return status.get() == SubAgentStatus.CANCEL_REQUESTED; }
 
     // --- Delivery state transitions (CAS-based) ---
 
@@ -205,7 +152,7 @@ public class SubAgentTaskRecord {
      * CAS: INLINE_PENDING → INLINE_CONSUMED
      */
     public boolean consumeInline() {
-        return deliveryState.compareAndSet(ResultDeliveryState.INLINE_PENDING, ResultDeliveryState.INLINE_CONSUMED);
+        return completion.isDone() && deliveryState.compareAndSet(ResultDeliveryState.INLINE_PENDING, ResultDeliveryState.INLINE_CONSUMED);
     }
 
     /**
@@ -221,13 +168,6 @@ public class SubAgentTaskRecord {
      */
     public boolean isDetached() {
         return deliveryState.get() == ResultDeliveryState.DETACHED;
-    }
-
-    /**
-     * Store result from completion callback (for later delivery).
-     */
-    public void storeCompletionResult(SubAgentResult result) {
-        this.storedResult = result;
     }
 
     private static boolean isTerminal(SubAgentStatus status) {

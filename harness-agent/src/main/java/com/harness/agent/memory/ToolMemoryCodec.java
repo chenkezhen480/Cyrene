@@ -79,25 +79,70 @@ final class ToolMemoryCodec {
 
     static List<ChatMessage> toChatMessages(List<MemoryMessage> memoryMessages) {
         List<ChatMessage> chatMessages = new ArrayList<>();
+        Map<String, ToolExecutionRequest> pending = new LinkedHashMap<>();
+        List<ChatMessage> unmatched = new ArrayList<>();
+        MemoryMessage batch = null;
         for (MemoryMessage message : memoryMessages) {
+            if (TOOL_RESULT_ROLE.equals(message.role()) && !message.isSummary()) {
+                ToolExecutionResultMessage result = decodeResult(message);
+                ToolExecutionRequest request = pending.get(result.id());
+                if (request != null && batch != null
+                        && java.util.Objects.equals(batch.sessionId(), message.sessionId())
+                        && java.util.Objects.equals(batch.traceId(), message.traceId())
+                        && java.util.Objects.equals(request.name(), result.toolName())) {
+                    chatMessages.add(result);
+                    pending.remove(result.id());
+                } else {
+                    unmatched.add(AiMessage.from("[Historical tool result without a matching call: "
+                            + result.id() + "/" + result.toolName() + "]\n" + result.text()));
+                }
+                if (pending.isEmpty()) closeBatch(chatMessages, pending, unmatched);
+                continue;
+            }
+            closeBatch(chatMessages, pending, unmatched);
+            batch = null;
             String modelText = message.modelText();
             if (message.isSummary()) {
-                chatMessages.add(AiMessage.from(
-                        "[Previous conversation summary]\n" + modelText));
+                chatMessages.add(AiMessage.from("[Previous conversation summary]\n" + modelText));
                 continue;
             }
             switch (message.role()) {
                 case "user" -> chatMessages.add(UserMessage.from(modelText));
-                case "assistant", "assistant_partial" ->
-                        chatMessages.add(AiMessage.from(modelText));
-                case TOOL_CALL_ROLE -> chatMessages.add(decodeCalls(message));
-                case TOOL_RESULT_ROLE -> chatMessages.add(decodeResult(message));
-                default -> {
-                    // Non-conversation system records are not injected into model history.
+                case "assistant", "assistant_partial" -> chatMessages.add(AiMessage.from(modelText));
+                case TOOL_CALL_ROLE -> {
+                    AiMessage calls = decodeCalls(message);
+                    chatMessages.add(calls);
+                    for (ToolExecutionRequest request : calls.toolExecutionRequests()) {
+                        if (request.id() == null || request.id().isBlank()
+                                || pending.putIfAbsent(request.id(), request) != null) {
+                            throw new IllegalArgumentException("Persisted Tool calls require distinct nonblank IDs");
+                        }
+                    }
+                    batch = message;
                 }
+                case "subagent_event" -> {
+                    Map<String, Object> metadata = firstMetadata(message.content());
+                    chatMessages.add(AiMessage.from("[Sub-Agent completion: task=" + metadata.get("taskId")
+                            + ", status=" + metadata.get("status") + "]\n" + modelText));
+                }
+                default -> { }
             }
         }
+        closeBatch(chatMessages, pending, unmatched);
         return chatMessages;
+    }
+
+    private static void closeBatch(List<ChatMessage> messages,
+                                   Map<String, ToolExecutionRequest> pending,
+                                   List<ChatMessage> unmatched) {
+        for (ToolExecutionRequest request : pending.values()) {
+            messages.add(ToolExecutionResultMessage.from(request.id(), request.name(),
+                    "ERROR: UNKNOWN execution outcome: the persisted tool result is missing. "
+                            + "The previous request may have been interrupted. Do not assume success or retry a write without checking its state."));
+        }
+        pending.clear();
+        messages.addAll(unmatched);
+        unmatched.clear();
     }
 
     private static AiMessage decodeCalls(MemoryMessage message) {

@@ -7,7 +7,6 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.harness.core.exception.ToolExecutionException;
 import com.harness.core.model.ResultStatus;
 import com.harness.core.model.ToolExecutionOutcome;
-import com.harness.core.model.ToolOutput;
 import com.harness.core.model.ToolSpec;
 import com.harness.tool.Tool;
 import org.slf4j.Logger;
@@ -65,6 +64,7 @@ public class GetSubAgentsTool implements Tool {
         try {
             ObjectNode result = mapper.createObjectNode();
             ArrayNode tasksArray = mapper.createArrayNode();
+            List<SubAgentResult> delivered = new java.util.ArrayList<>();
 
             List<SubAgentTaskRecord> tasks = taskIds.isEmpty()
                     ? List.copyOf(scope.getAllTasks().values())
@@ -79,6 +79,11 @@ public class GetSubAgentsTool implements Tool {
 
                 if (record.isTerminal()) {
                     SubAgentResult subResult = record.completion().join();
+                    if (SubAgentToolHelper.consumeInline(record)) {
+                        delivered.add(subResult);
+                    } else {
+                        taskNode.put("delivery", "RESUME_SESSION");
+                    }
                     ObjectNode resultNode = taskNode.putObject("result");
                     SubAgentToolHelper.serializeResult(resultNode, subResult, mapper);
                 }
@@ -91,7 +96,7 @@ public class GetSubAgentsTool implements Tool {
             result.put("scope_run_id", runContext.runId());
 
             return ToolExecutionOutcome.succeeded(
-                    ToolOutput.text(mapper.writeValueAsString(result)),
+                    SubAgentToolHelper.output(result, delivered, mapper),
                     ResultStatus.AVAILABLE);
 
         } catch (Exception e) {

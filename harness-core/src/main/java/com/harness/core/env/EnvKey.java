@@ -363,7 +363,7 @@ public final class EnvKey {
     public static final String CODE_RG_PATH              = "HARNESS_CODE_RG_PATH";
     /** 单次代码工具的返回字节上限，默认 262144 */
     public static final String CODE_MAX_OUTPUT_BYTES     = "HARNESS_CODE_MAX_OUTPUT_BYTES";
-    /** read 工具单次返回的最大行数，默认 2000 */
+    /** read 工具单次返回的最大行数，默认 100；请求 limit 不能突破该上限 */
     public static final String CODE_READ_MAX_LINES       = "HARNESS_CODE_READ_MAX_LINES";
     /** ripgrep 单次执行超时（秒），默认 30 */
     public static final String CODE_RG_TIMEOUT_SECONDS   = "HARNESS_CODE_RG_TIMEOUT_SECONDS";

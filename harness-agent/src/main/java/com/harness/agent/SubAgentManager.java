@@ -155,6 +155,10 @@ public class SubAgentManager {
         }
 
         scope.markOwnerFinished();
+        scope.getAllTasks().values().forEach(record -> {
+            if (parentCancelled(record)) record.requestCancel();
+            else detachTask(record);
+        });
 
         // If all tasks are already terminal, clean up immediately
         if (scope.allTasksTerminal()) {
@@ -165,6 +169,19 @@ public class SubAgentManager {
             int queued = scope.getTasksByStatus(SubAgentStatus.QUEUED).size();
             log.info("[SubAgentManager] Scope {} has {} running/{} queued tasks, will cleanup on TTL", runId, running, queued);
         }
+    }
+
+    /** Subscribe after claiming delivery; already completed futures deliver immediately. */
+    public void detachTask(SubAgentTaskRecord record) {
+        if (record.ownerSessionId() == null || parentCancelled(record)) return;
+        if (record.detach()) {
+            record.completion().thenAccept(result -> submitCompletionEvent(record, result));
+        }
+    }
+
+    private static boolean parentCancelled(SubAgentTaskRecord record) {
+        CancellationToken token = record.taskCancellationToken();
+        return token != null && token.getParent() != null && token.getParent().isCancelled();
     }
 
     /**
@@ -189,9 +206,9 @@ public class SubAgentManager {
     public boolean hasDetachedTasks(String runId) {
         SubAgentRunScope scope = scopes.get(runId);
         return scope != null && scope.getAllTasks().values().stream()
+                .filter(record -> record.ownerSessionId() != null && !parentCancelled(record))
                 .map(record -> record.deliveryState().get())
-                .anyMatch(state -> state == ResultDeliveryState.DETACHED
-                        || state == ResultDeliveryState.SESSION_RESUMED);
+                .anyMatch(state -> state != ResultDeliveryState.INLINE_CONSUMED);
     }
 
     /**
@@ -243,6 +260,11 @@ public class SubAgentManager {
             return null;  // Scope not open, spawn limit reached, or duplicate
         }
 
+        record.completion().thenAccept(result -> {
+            publishTerminal(scope, toolCallId, record, result);
+            cleanupIfDone(runId);
+        });
+
         // Execute async
         executeTask(runContext, scope, record, toolCallId);
 
@@ -287,22 +309,11 @@ public class SubAgentManager {
             String taskId = record.taskId();
             activeTasks.incrementAndGet();
 
-            // Mark as running
-            if (!record.start()) {
-                log.warn("[SubAgentManager] Task {} already in terminal state, skipping", taskId);
-                activeTasks.decrementAndGet();
-                // Untrack before leaving: this worker belongs to a process-wide pool and is about
-                // to run another session's task, so leaving it on this token would let a later
-                // cancel of this run abort whichever request that thread is running by then.
-                taskToken.untrackThread(currentThread);
-                return record.completion().join();
-            }
-            publishLifecycle(scope, toolCallId, record,
-                    SubAgentLifecycleEvent.Status.RUNNING, "");
-
-            log.debug("[SubAgentManager] Executing task: id={}, activeTasks={}", taskId, activeTasks.get());
-
             try {
+                if (!record.start()) return record.completion().join();
+                publishLifecycle(scope, toolCallId, record,
+                        SubAgentLifecycleEvent.Status.RUNNING, "");
+
                 FinalOutputContract outputContract = finalOutputContract(record.task());
                 RunToolCatalog subAgentToolCatalog =
                         runContext.toolCatalog().allowing(record.task().tools());
@@ -358,8 +369,7 @@ public class SubAgentManager {
                             taskId, result.output(), evaluation, duration, subTraceId);
                     record.markIncomplete(subResult);
                 }
-                publishTerminal(scope, toolCallId, record, subResult);
-                return subResult;
+                return record.completion().join();
 
             } catch (Exception e) {
                 long duration = System.currentTimeMillis() - start;
@@ -368,11 +378,7 @@ public class SubAgentManager {
                 if (record.isCancelRequested() || taskToken.isCancelled()) {
                     log.info("[SubAgentManager] Task {} cancelled after {}ms", taskId, duration);
                     record.markCancelled();
-                    SubAgentResult cancelled = SubAgentResult.failure(
-                            taskId, "Cancelled", duration,
-                            record.task().completionContract() != null);
-                    publishTerminal(scope, toolCallId, record, cancelled);
-                    return cancelled;
+                    return record.completion().join();
                 }
 
                 log.error("[SubAgentManager] Task {} failed in {}ms: {}", taskId, duration, e.getMessage());
@@ -380,8 +386,7 @@ public class SubAgentManager {
                         taskId, e.getMessage(), duration,
                         record.task().completionContract() != null);
                 record.fail(failResult);
-                publishTerminal(scope, toolCallId, record, failResult);
-                return failResult;
+                return record.completion().join();
 
             } finally {
                 HttpApiTool.clearCurrentCredentials();
@@ -391,6 +396,7 @@ public class SubAgentManager {
                 AuthorizedUrlContext.clear();
                 taskToken.untrackThread(currentThread);
                 activeTasks.decrementAndGet();
+                Thread.interrupted();
 
                 // If scope is owner-finished and all tasks terminal, clean up
                 cleanupIfDone(runContext.runId());
@@ -406,48 +412,16 @@ public class SubAgentManager {
                           log.warn("[SubAgentManager] Task {} timed out after {}s", record.taskId(), taskTimeoutSeconds);
                           record.markTimedOut();
                           record.taskCancellationToken().cancel();
-                          publishTerminal(scope, toolCallId, record,
-                                  record.storedResult());
-                          // If detached, submit timeout event to session inbox
-                          if (record.isDetached() && record.ownerSessionId() != null) {
-                              SubAgentResult timeoutResult = SubAgentResult.failure(
-                                      record.taskId(), "Task timed out after " + taskTimeoutSeconds + "s",
-                                      0, record.task().completionContract() != null);
-                              submitCompletionEvent(record, timeoutResult);
-                          }
+
                       }
                       return null;
                   });
         }
 
-        // On completion, check delivery state to decide how to deliver result
         future.whenComplete((result, error) -> {
-            // Don't overwrite result already set by markTimedOut/markCancelled
-            if (record.storedResult() == null) {
-                if (result != null) {
-                    record.storeCompletionResult(result);
-                } else {
-                    record.storeCompletionResult(SubAgentResult.failure(record.taskId(),
-                            error != null ? error.getMessage() : "Task failed", 0,
-                            record.task().completionContract() != null));
-                }
-            }
-
-            // Check delivery state to decide what to do
-            switch (record.deliveryState().get()) {
-                case DETACHED -> {
-                    // Await timed out; submit to session inbox for auto-resume
-                    if (record.ownerSessionId() != null) {
-                        submitCompletionEvent(record, record.storedResult());
-                    }
-                }
-                case INLINE_PENDING -> {
-                    // Result ready but no one is waiting yet (race condition fallback)
-                    // Don't submit to inbox — await will pick it up
-                }
-                case INLINE_CONSUMED, SESSION_RESUMED -> {
-                    // Already handled, do nothing
-                }
+            if (error != null && !(error instanceof TimeoutException)) {
+                record.fail(SubAgentResult.failure(record.taskId(), error.getMessage(), 0,
+                        record.task().completionContract() != null));
             }
         });
     }
@@ -504,6 +478,7 @@ public class SubAgentManager {
      * Uses CAS to ensure each task only submits one event (DETACHED → SESSION_RESUMED).
      */
     private void submitCompletionEvent(SubAgentTaskRecord record, SubAgentResult result) {
+        if (parentCancelled(record)) return;
         // CAS: DETACHED → SESSION_RESUMED. Prevents duplicate submission.
         if (!record.markSessionResumed()) {
             log.debug("[SubAgentManager] Task {} already session-resumed, skipping duplicate event", record.taskId());

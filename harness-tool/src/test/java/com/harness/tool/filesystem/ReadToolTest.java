@@ -9,6 +9,8 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -22,9 +24,18 @@ class ReadToolTest {
     Path outside;
 
     private ReadTool tool() {
+        return tool(FileSystemAccessPolicy.Settings.defaults());
+    }
+
+    private ReadTool tool(FileSystemAccessPolicy.Settings settings) {
         FileSystemAccessPolicy policy = FileSystemAccessPolicy.host(root.toString(), List.of(),
-                FileSystemAccessPolicy.Settings.defaults());
+                settings);
         return new ReadTool(policy, FileSystemWorkspace.host(policy.searchRoot()));
+    }
+
+    private ReadTool boundedTool(int maxLines, int maxBytes) {
+        return tool(new FileSystemAccessPolicy.Settings(FileSystemAccessPolicy.ReadScope.HOST,
+                "", 30, maxBytes, 100, maxLines, 1024));
     }
 
     private static ObjectNode args(String file) {
@@ -106,5 +117,83 @@ class ReadToolTest {
 
         assertThat(tool().execute(args(target.toString()).put("offset", 99)))
                 .contains("no content at offset 99");
+    }
+
+    @Test
+    void defaultsToOneHundredLinesAndPagesWithoutSkippingContent() throws IOException {
+        Path target = Files.writeString(root.resolve("large.java"), IntStream.rangeClosed(1, 101)
+                .mapToObj(i -> "source-" + i).collect(Collectors.joining("\n")));
+
+        String first = tool().execute(args(target.toString()));
+        String second = tool().execute(args(target.toString()).put("offset", 101));
+
+        assertThat(first).contains("100\tsource-100", "continue with offset 101")
+                .doesNotContain("source-101");
+        assertThat(second).contains("101\tsource-101").doesNotContain("truncated");
+    }
+
+    @Test
+    void explicitLimitCannotExceedConfiguredMaximum() throws IOException {
+        Path target = Files.writeString(root.resolve("large.java"), "one\ntwo\nthree\n");
+
+        String output = boundedTool(2, 1024).execute(args(target.toString()).put("limit", 1000));
+
+        assertThat(output).contains("1\tone", "2\ttwo", "continue with offset 3")
+                .doesNotContain("three");
+    }
+
+    @Test
+    void schemaAdvertisesEnforcedLimit() {
+        var limit = boundedTool(2, 1024).spec().parameters().path("properties").path("limit");
+        assertThat(limit.path("minimum").asInt()).isEqualTo(1);
+        assertThat(limit.path("maximum").asInt()).isEqualTo(2);
+    }
+
+    @Test
+    void countsUtf8BytesAndContinuesAtTheFirstUnreturnedLine() throws IOException {
+        Path target = Files.writeString(root.resolve("unicode.txt"), "汉字\n汉字\n");
+        ReadTool reader = boundedTool(100, 10);
+
+        assertThat(reader.execute(args(target.toString())))
+                .contains("1\t汉字", "continue with offset 2").doesNotContain("2\t汉字");
+        assertThat(reader.execute(args(target.toString()).put("offset", 2)))
+                .contains("2\t汉字").doesNotContain("truncated");
+    }
+
+    @Test
+    void reportsOversizedLineInsteadOfClaimingEmptyContent() throws IOException {
+        Path target = Files.writeString(root.resolve("minified.js"), "x".repeat(100));
+
+        assertThatThrownBy(() -> boundedTool(100, 10).execute(args(target.toString())))
+                .isInstanceOf(ToolExecutionException.class)
+                .hasMessageContaining("line 1").hasMessageContaining("byte limit");
+    }
+
+    @Test
+    void oversizedLineAfterPageIsNotSkippedByContinuation() throws IOException {
+        Path target = Files.writeString(root.resolve("minified.js"), "ok\n" + "x".repeat(100));
+        ReadTool reader = boundedTool(100, 10);
+
+        assertThat(reader.execute(args(target.toString())))
+                .contains("1\tok", "continue with offset 2");
+        assertThatThrownBy(() -> reader.execute(args(target.toString()).put("offset", 2)))
+                .isInstanceOf(ToolExecutionException.class)
+                .hasMessageContaining("line 2").hasMessageContaining("byte limit");
+    }
+
+    @Test
+    void canSkipOversizedLinesBeforeRequestedOffset() throws IOException {
+        Path target = Files.writeString(root.resolve("minified.js"), "x".repeat(100) + "\nnext\n");
+
+        assertThat(boundedTool(100, 10).execute(args(target.toString()).put("offset", 2)))
+                .contains("2\tnext").doesNotContain("truncated");
+    }
+
+    @Test
+    void acceptsAnExactByteBudgetWithoutFinalNewline() throws IOException {
+        Path target = Files.writeString(root.resolve("exact.txt"), "1234567890");
+
+        assertThat(boundedTool(100, 10).execute(args(target.toString())))
+                .contains("1\t1234567890").doesNotContain("truncated");
     }
 }

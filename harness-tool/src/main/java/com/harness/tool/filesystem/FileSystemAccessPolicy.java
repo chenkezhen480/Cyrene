@@ -70,12 +70,12 @@ public final class FileSystemAccessPolicy {
                     config.getInt(EnvKey.CODE_RG_TIMEOUT_SECONDS, 30),
                     config.getInt(EnvKey.CODE_MAX_OUTPUT_BYTES, 262144),
                     config.getInt(EnvKey.TOOL_MAX_RESULTS, 100),
-                    config.getInt(EnvKey.CODE_READ_MAX_LINES, 2000),
+                    config.getInt(EnvKey.CODE_READ_MAX_LINES, 100),
                     config.getLong(EnvKey.CODE_EDIT_MAX_FILE_MB, 10) * 1024L * 1024L);
         }
 
         public static Settings defaults() {
-            return new Settings(ReadScope.HOST, "", 30, 262_144, 100, 2000, 10L * 1024 * 1024);
+            return new Settings(ReadScope.HOST, "", 30, 262_144, 100, 100, 10L * 1024 * 1024);
         }
     }
 

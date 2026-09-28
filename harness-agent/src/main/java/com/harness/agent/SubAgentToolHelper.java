@@ -146,4 +146,20 @@ final class SubAgentToolHelper {
             taskNode.set("structured_output", result.structuredOutput());
         }
     }
+
+    /** Keep artifacts typed so the parent ReAct loop can persist and render them. */
+    static com.harness.core.model.ToolOutput output(
+            ObjectNode payload, List<SubAgentResult> results, ObjectMapper mapper)
+            throws com.fasterxml.jackson.core.JsonProcessingException {
+        var artifacts = new java.util.LinkedHashMap<String, com.harness.core.model.Artifact>();
+        for (SubAgentResult result : results) {
+            result.artifacts().forEach(artifact -> artifacts.put(artifact.id(), artifact));
+        }
+        return new com.harness.core.model.ToolOutput(
+                mapper.writeValueAsString(payload), List.copyOf(artifacts.values()), null);
+    }
+
+    static boolean consumeInline(SubAgentTaskRecord record) {
+        return record.consumeInline() || record.deliveryState().get() == ResultDeliveryState.INLINE_CONSUMED;
+    }
 }

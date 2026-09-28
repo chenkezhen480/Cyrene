@@ -6,10 +6,13 @@ import com.harness.core.model.TraceCursor;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.sql.DriverManager;
 import java.time.Instant;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class SqliteTraceStoreTest {
 
@@ -17,9 +20,24 @@ class SqliteTraceStoreTest {
     Path tempDir;
 
     @Test
-    void findBySessionUsesStableTimestampAndTraceIdCursor() {
-        SqliteTraceStore store = new SqliteTraceStore(
-                "jdbc:sqlite:" + tempDir.resolve("trace.db").toAbsolutePath());
+    void constructorRejectsMissingSchemaWithoutCreatingTables() throws Exception {
+        String dbUrl = "jdbc:sqlite:" + tempDir.resolve("missing-schema.db").toAbsolutePath();
+
+        assertThatThrownBy(() -> new SqliteTraceStore(dbUrl))
+                .isInstanceOf(TraceStoreException.class)
+                .hasMessageContaining("sql/schema-sqlite.sql");
+
+        try (var connection = DriverManager.getConnection(dbUrl);
+             var statement = connection.createStatement();
+             var result = statement.executeQuery(
+                     "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'agent_traces'")) {
+            assertThat(result.next()).isFalse();
+        }
+    }
+
+    @Test
+    void findBySessionUsesStableTimestampAndTraceIdCursor() throws Exception {
+        SqliteTraceStore store = initializedStore("trace.db");
         Instant newest = Instant.parse("2026-09-01T05:00:00Z");
         Instant older = Instant.parse("2026-09-01T04:00:00Z");
         store.save(trace("trace-c", "session-1", newest));
@@ -46,9 +64,8 @@ class SqliteTraceStoreTest {
     }
 
     @Test
-    void cleanup_removesAllExpiredTraces() {
-        SqliteTraceStore store = new SqliteTraceStore(
-                "jdbc:sqlite:" + tempDir.resolve("cleanup.db").toAbsolutePath());
+    void cleanup_removesAllExpiredTraces() throws Exception {
+        SqliteTraceStore store = initializedStore("cleanup.db");
         Instant old = Instant.parse("2000-01-01T00:00:00Z");
         store.save(trace("expired-1", "session-1", old));
         store.save(trace("expired-2", "session-1", old));
@@ -58,6 +75,16 @@ class SqliteTraceStoreTest {
         assertThat(deleted).isEqualTo(2);
         assertThat(store.findById("expired-1")).isEmpty();
         assertThat(store.findById("expired-2")).isEmpty();
+    }
+
+    private SqliteTraceStore initializedStore(String fileName) throws Exception {
+        String dbUrl = "jdbc:sqlite:" + tempDir.resolve(fileName).toAbsolutePath();
+        String schema = Files.readString(Path.of("..", "sql", "schema-sqlite.sql"));
+        try (var connection = DriverManager.getConnection(dbUrl);
+             var statement = connection.createStatement()) {
+            statement.executeUpdate(schema);
+        }
+        return new SqliteTraceStore(dbUrl);
     }
 
     private static AgentTrace trace(String traceId, String sessionId, Instant timestamp) {

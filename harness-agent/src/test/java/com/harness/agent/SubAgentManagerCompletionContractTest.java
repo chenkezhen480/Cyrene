@@ -146,10 +146,14 @@ class SubAgentManagerCompletionContractTest {
                 artifactStore, new SessionInbox(), mock(SessionResumeDispatcher.class),
                 mock(com.harness.provider.ChatModelProvider.class));
         List<SubAgentLifecycleEvent> events = new CopyOnWriteArrayList<>();
+        var terminalEvent = new java.util.concurrent.CountDownLatch(1);
 
         try {
             String runId = "run-lifecycle";
-            manager.openScope(runId, events::add);
+            manager.openScope(runId, event -> {
+                events.add(event);
+                if (event.status() == SubAgentLifecycleEvent.Status.COMPLETED) terminalEvent.countDown();
+            });
             AgentRunContext runContext = new AgentRunContext(
                     runId, "session-1", new CancellationToken(), "parent-trace",
                     new ToolRegistry().snapshot());
@@ -160,6 +164,7 @@ class SubAgentManagerCompletionContractTest {
             manager.submitTask(runContext, task, "session-1", "call-1")
                     .completion().get(5, TimeUnit.SECONDS);
 
+            assertThat(terminalEvent.await(5, TimeUnit.SECONDS)).isTrue();
             assertThat(events).extracting(SubAgentLifecycleEvent::status)
                     .containsExactly(
                             SubAgentLifecycleEvent.Status.RUNNING,
