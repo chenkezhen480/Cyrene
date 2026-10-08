@@ -32,6 +32,14 @@ public final class ArtifactSessionContext {
         return CURRENT.get();
     }
 
+    public static com.harness.core.model.Artifact requireAccess(com.harness.core.model.Artifact artifact) {
+        String sessionId = current();
+        if (sessionId == null || !sessionId.equals(artifact.sessionId())) {
+            throw new SecurityException("Artifact belongs to another session");
+        }
+        return artifact;
+    }
+
     public static void clear() {
         CURRENT.remove();
     }

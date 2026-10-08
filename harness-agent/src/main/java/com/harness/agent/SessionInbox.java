@@ -27,7 +27,8 @@ public class SessionInbox {
             String parentTurnId,
             SubAgentResult result,
             Instant timestamp,
-            EventStatus status
+            EventStatus status,
+            AgentRunContext.Owner owner
     ) {
         public enum EventStatus {
             PENDING,
@@ -73,7 +74,7 @@ public class SessionInbox {
                     pending.add(new SubAgentCompletedEvent(
                             event.eventId(), event.sessionId(), event.taskId(),
                             event.taskDescription(), event.parentTurnId(), event.result(), event.timestamp(),
-                            SubAgentCompletedEvent.EventStatus.PROCESSING
+                            SubAgentCompletedEvent.EventStatus.PROCESSING, event.owner()
                     ));
                 } else {
                     updated.add(event);
@@ -106,7 +107,7 @@ public class SessionInbox {
                     updated.add(new SubAgentCompletedEvent(
                             event.eventId(), event.sessionId(), event.taskId(),
                             event.taskDescription(), event.parentTurnId(), event.result(), event.timestamp(),
-                            SubAgentCompletedEvent.EventStatus.CONSUMED
+                            SubAgentCompletedEvent.EventStatus.CONSUMED, event.owner()
                     ));
                 } else {
                     updated.add(event);
@@ -147,7 +148,7 @@ public class SessionInbox {
                     updated.add(new SubAgentCompletedEvent(
                             event.eventId(), event.sessionId(), event.taskId(),
                             event.taskDescription(), event.parentTurnId(), event.result(), event.timestamp(),
-                            SubAgentCompletedEvent.EventStatus.PENDING
+                            SubAgentCompletedEvent.EventStatus.PENDING, event.owner()
                     ));
                 } else {
                     updated.add(event);

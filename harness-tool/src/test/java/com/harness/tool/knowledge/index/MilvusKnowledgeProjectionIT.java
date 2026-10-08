@@ -99,6 +99,40 @@ class MilvusKnowledgeProjectionIT {
     }
 
     @Test
+    void activatesFreshCatalogVersionsWithoutFlushAndClearsPreviousVersions() {
+        String conceptId = "fresh-activation-it";
+        var first = projection(conceptId, null, null, KnowledgeNamespaceType.COLLECTION,
+                KnowledgeConceptType.SOURCE_DOCUMENT, "Fresh activation").withRevisionData("{}");
+        var second = new KnowledgeProjection(conceptId + "-r2", conceptId, conceptId + "-r2",
+                first.tenantId(), first.userId(), first.namespaceType(), first.namespaceKey(),
+                first.conceptType(), first.routeTarget(), first.resourceUri(), first.title(),
+                first.description(), first.content(), first.generatedAt(), first.eventTime(),
+                first.logicalKey(), first.qualityScore(), first.requiredTools(), first.embedding(), "{}");
+        try {
+            store.upsertCatalog(List.of(first));
+            store.activateRevision(conceptId, first.revisionId());
+            assertCurrentVersions(conceptId, first.revisionId());
+            store.upsertCatalog(List.of(second));
+            store.activateRevision(conceptId, second.revisionId());
+            assertCurrentVersions(conceptId, second.revisionId());
+            store.activateRevision(conceptId, null);
+            assertCurrentVersions(conceptId);
+        } finally {
+            store.deleteConcept(conceptId);
+        }
+    }
+
+    private static void assertCurrentVersions(String conceptId, String... revisionIds) {
+        var rows = client.query(io.milvus.v2.service.vector.request.QueryReq.builder()
+                .consistencyLevel(io.milvus.v2.common.ConsistencyLevel.STRONG)
+                .collectionName(CATALOG_COLLECTION)
+                .filter("concept_id == \"" + conceptId + "\" and revision_data[\"current\"] == true")
+                .outputFields(List.of("revision_id")).limit(10L).build()).getQueryResults();
+        assertThat(rows).extracting(row -> (String) row.getEntity().get("revision_id"))
+                .containsExactlyInAnyOrder(revisionIds);
+    }
+
+    @Test
     void dedicatedMemoryCollectionsEnforceOwnerAndTenantScope() {
         store.upsert(List.of(
                 projection(SCOPE_CONCEPTS.get(0), "tenant-a", "user-a",

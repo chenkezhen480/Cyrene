@@ -7062,31 +7062,40 @@ const AuditPage = {
   setup() {
     const Icons = inject('Icons');
     const t = inject('t');
+    const userId = inject('userId');
     const traces = ref([]);
     const stats = ref(null);
     const loading = ref(false);
+    const error = ref('');
+    const nextCursor = ref('');
+    const hasMore = ref(false);
 
-    async function loadTraces() {
+    async function loadTraces(append = false) {
       loading.value = true;
+      error.value = '';
       try {
         const [traceData, statsData] = await Promise.all([
-          CyreneAPI.listTraces(50),
-          CyreneAPI.getTraceStats(),
+          CyreneAPI.listTraces(50, append ? nextCursor.value : '', userId.value),
+          append ? Promise.resolve(stats.value) : CyreneAPI.getTraceStats(userId.value),
         ]);
-        traces.value = requireArrayResponse(
+        const page = requirePageResponse(
           traceData,
           trace => trace && typeof trace === 'object',
           t('invalidTraceListResponse')
         );
+        traces.value = append ? [...traces.value, ...page.items] : page.items;
+        nextCursor.value = page.pageInfo.nextCursor;
+        hasMore.value = page.pageInfo.hasMore;
         stats.value = statsData;
       } catch (e) {
-        console.error('Failed to load traces:', e);
+        error.value = e.message;
       } finally {
         loading.value = false;
       }
     }
 
     async function deleteTrace(traceId) {
+      if (!window.confirm(t('deleteTraceConfirm'))) return;
       try {
         await CyreneAPI.deleteTrace(traceId);
         showToast(t('deleted'), 'success');
@@ -7097,9 +7106,10 @@ const AuditPage = {
     }
 
     async function cleanupTraces() {
+      if (!window.confirm(t('cleanupTraceConfirm'))) return;
       try {
-        const result = await CyreneAPI.cleanupTraces();
-        showToast(`${result.deleted || 0} ${t('cleanedNRecords')}`, 'success');
+        const result = await CyreneAPI.cleanupTraces(userId.value);
+        showToast(`${result.deleted} ${t('cleanedNRecords')}`, 'success');
         loadTraces();
       } catch (e) {
         showToast(t('deleteFailed') + e.message, 'error');
@@ -7119,7 +7129,8 @@ const AuditPage = {
 
     onMounted(loadTraces);
 
-    return { Icons, t, traces, stats, loading, loadTraces, deleteTrace, cleanupTraces, formatDuration, formatTime };
+    return { Icons, t, traces, stats, loading, error, hasMore,
+      loadTraces, deleteTrace, cleanupTraces, formatDuration, formatTime };
   },
   template: `
     <div>
@@ -7144,13 +7155,14 @@ const AuditPage = {
         <div class="card-header">
           <div class="card-title">{{ t('auditRecords') }}</div>
           <div style="display: flex; gap: var(--space-2);">
-            <button class="btn btn-ghost btn-sm" @click="loadTraces">
+            <button class="btn btn-ghost btn-sm" @click="loadTraces(false)" :disabled="loading">
               <span v-html="Icons.refresh" style="width:14px;height:14px;"></span>
             </button>
-            <button class="btn btn-danger btn-sm" @click="cleanupTraces">{{ t('cleanupExpired') }}</button>
+            <button class="btn btn-danger btn-sm" @click="cleanupTraces" :disabled="loading">{{ t('cleanupExpired') }}</button>
           </div>
         </div>
         <div class="card-body">
+          <div v-if="error" role="alert" class="text-sm" style="color:var(--error)">{{ error }}</div>
           <template v-if="traces.length">
             <div class="table-container">
               <table>
@@ -7185,7 +7197,9 @@ const AuditPage = {
               </table>
             </div>
           </template>
-          <empty-state v-else
+          <button v-if="hasMore" class="btn btn-ghost mt-2" @click="loadTraces(true)"
+            :disabled="loading">{{ loading ? t('loading') : t('loadMore') }}</button>
+          <empty-state v-if="!traces.length && !error && !loading"
             :icon="Icons.audit"
             :title="t('journeyNotStarted')"
             :hint="t('auditHint')" />
@@ -7691,10 +7705,12 @@ const ToolPermissionPage = {
   setup() {
     const Icons = inject('Icons');
     const t = inject('t');
-    // Standalone installations have no tenant system; every request resolves to 000000.
+    // The framework default tenant; the server validates the selected scope.
     const tenantId = ref('000000');
     const identity = ref('DEFAULT');
     const profiles = ref([]);
+    const identityCursor = ref('');
+    const hasMoreIdentities = ref(false);
     const tenants = ref([]);
     const tools = ref([]);
     const disabled = ref(new Set());
@@ -7702,10 +7718,75 @@ const ToolPermissionPage = {
     const saving = ref(false);
     const error = ref('');
     const restricted = ref(false);
+    const permissionTab = ref('tools');
+    const endpoints = ref([]);
+    const allowedEndpointKeys = ref(new Set());
+    const endpointCursor = ref('');
+    const hasMoreEndpoints = ref(false);
+    const loadedScope = ref('');
+    const scopeKey = () => JSON.stringify([tenantId.value.trim(), identity.value.trim()]);
+
+    async function loadIdentities(append = false) {
+      const tenant = tenantId.value.trim();
+      const page = requirePageResponse(await CyreneAPI.getPermissionIdentities(tenant, append ? identityCursor.value : ''),
+        row => typeof row === 'string', t('invalidPermissionResponse'));
+      if (tenant !== tenantId.value.trim()) throw new Error(t('permissionScopeChanged'));
+      profiles.value = append ? [...profiles.value, ...page.items] : page.items;
+      identityCursor.value = page.pageInfo.nextCursor;
+      hasMoreIdentities.value = page.pageInfo.hasMore;
+    }
+
+    async function loadMoreIdentities() {
+      loading.value = true;
+      error.value = '';
+      try { await loadIdentities(true); }
+      catch (e) { error.value = e.message; }
+      finally { loading.value = false; }
+    }
+
+    async function loadApiPermissions() {
+      const scope = scopeKey();
+      const grants = [];
+      let cursor = '';
+      do {
+        const page = requirePageResponse(await CyreneAPI.getInternalApiPermissions(
+          tenantId.value.trim(), identity.value.trim(), cursor),
+          row => row && typeof row.endpointKey === 'string', t('invalidPermissionResponse'));
+        grants.push(...page.items.map(row => row.endpointKey));
+        cursor = page.pageInfo.hasMore ? page.pageInfo.nextCursor : '';
+      } while (cursor);
+      const page = requirePageResponse(await CyreneAPI.getInternalApiEndpoints(),
+        row => row && typeof row.endpointKey === 'string', t('invalidPermissionResponse'));
+      if (scope !== scopeKey()) throw new Error(t('permissionScopeChanged'));
+      allowedEndpointKeys.value = new Set(grants);
+      endpoints.value = page.items;
+      endpointCursor.value = page.pageInfo.nextCursor;
+      hasMoreEndpoints.value = page.pageInfo.hasMore;
+      loadedScope.value = scope;
+    }
+
+    async function loadMoreEndpoints() {
+      loading.value = true;
+      error.value = '';
+      try {
+        const page = requirePageResponse(await CyreneAPI.getInternalApiEndpoints(endpointCursor.value),
+          row => row && typeof row.endpointKey === 'string', t('invalidPermissionResponse'));
+        endpoints.value.push(...page.items);
+        endpointCursor.value = page.pageInfo.nextCursor;
+        hasMoreEndpoints.value = page.pageInfo.hasMore;
+      } catch (e) { error.value = e.message; }
+      finally { loading.value = false; }
+    }
+
+    function toggleEndpoint(key) {
+      const next = new Set(allowedEndpointKeys.value);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      allowedEndpointKeys.value = next;
+    }
 
     function applyView(data) {
       identity.value = data.identity;
-      profiles.value = data.profiles;
       tenants.value = data.tenants;
       tools.value = data.tools;
       disabled.value = new Set(data.disabledTools);
@@ -7719,21 +7800,21 @@ const ToolPermissionPage = {
       }
       loading.value = true;
       error.value = '';
+      loadedScope.value = '';
       try {
-        applyView(await CyreneAPI.getToolPermissions(
-          tenantId.value.trim(), identity.value.trim() || 'DEFAULT'));
+        const scope = scopeKey();
+        if (permissionTab.value === 'internalApi') await loadApiPermissions();
+        else {
+          await loadIdentities();
+          const view = await CyreneAPI.getToolPermissions(tenantId.value.trim(), identity.value.trim() || 'DEFAULT');
+          if (scope !== scopeKey()) throw new Error(t('permissionScopeChanged'));
+          applyView(view);
+          loadedScope.value = scopeKey();
+        }
       } catch (e) {
         error.value = e.message;
       } finally {
         loading.value = false;
-      }
-    }
-
-    async function loadTenants() {
-      try {
-        tenants.value = (await CyreneAPI.getToolPermissions()).tenants || [];
-      } catch (e) {
-        // The picker is a convenience; an empty list still lets a tenant be typed in.
       }
     }
 
@@ -7766,12 +7847,15 @@ const ToolPermissionPage = {
       saving.value = true;
       error.value = '';
       try {
-        await CyreneAPI.saveToolPermissions({
-          tenantId: tenantId.value.trim(),
-          identity: identity.value.trim() || 'DEFAULT',
-          disabledTools: [...disabled.value],
-        });
-        restricted.value = disabled.value.size > 0;
+        if (loadedScope.value !== scopeKey()) throw new Error(t('permissionScopeChanged'));
+        if (permissionTab.value === 'internalApi') {
+          await CyreneAPI.saveInternalApiPermissions({ tenantId: tenantId.value.trim(),
+            identity: identity.value.trim(), allowedEndpointKeys: [...allowedEndpointKeys.value].sort() });
+        } else {
+          await CyreneAPI.saveToolPermissions({ tenantId: tenantId.value.trim(),
+            identity: identity.value.trim(), disabledTools: [...disabled.value] });
+          restricted.value = disabled.value.size > 0;
+        }
         showToast(t('permissionsSaved'), 'success');
         await load();
       } catch (e) {
@@ -7781,12 +7865,12 @@ const ToolPermissionPage = {
       }
     }
 
-    onMounted(loadTenants);
-
     return {
       Icons, t, tenantId, identity, profiles, tenants,
       tools, disabled, loading, saving, error, restricted,
       load, toggleTool, disableAll, clearAll, save, inheritedDenial, isDisabled, disabledCount,
+      permissionTab, endpoints, allowedEndpointKeys, toggleEndpoint, hasMoreEndpoints,
+      loadMoreEndpoints, loadedScope, scopeKey, hasMoreIdentities, loadMoreIdentities,
     };
   },
   template: `
@@ -7794,12 +7878,21 @@ const ToolPermissionPage = {
       <div class="card">
         <div class="card-header" style="flex-wrap: wrap; gap: var(--space-2);">
           <div class="card-title">{{ t('toolPermissions') }}</div>
+          <div class="graph-tabs" role="tablist">
+            <button class="graph-tab" :class="{ active: permissionTab === 'tools' }" role="tab"
+              :aria-selected="permissionTab === 'tools'" :disabled="loading || saving"
+              @click="permissionTab = 'tools'; loadedScope = ''">{{ t('toolPermissions') }}</button>
+            <button class="graph-tab" :class="{ active: permissionTab === 'internalApi' }" role="tab"
+              :aria-selected="permissionTab === 'internalApi'" :disabled="loading || saving"
+              @click="permissionTab = 'internalApi'; loadedScope = ''">{{ t('internalApiPermissions') }}</button>
+          </div>
         </div>
         <div class="card-body">
           <div style="display: flex; flex-wrap: wrap; gap: var(--space-3); align-items: end;">
             <div class="input-group" style="flex: 1 1 200px;">
               <label class="input-label">{{ t('tenantId') }}</label>
               <input class="input" v-model="tenantId" list="tenant-options"
+                     :disabled="loading || saving"
                      :placeholder="t('tenantIdPlaceholder')" />
               <datalist id="tenant-options">
                 <option v-for="item in tenants" :key="item" :value="item"></option>
@@ -7807,21 +7900,22 @@ const ToolPermissionPage = {
             </div>
             <div class="input-group" style="flex: 1 1 200px;">
               <label class="input-label">{{ t('identity') }}</label>
-              <input class="input" v-model="identity" list="identity-options" :placeholder="t('identityPlaceholder')" />
+              <input class="input" v-model="identity" list="identity-options" :placeholder="t('identityPlaceholder')" :disabled="loading || saving" />
               <datalist id="identity-options">
                 <option v-for="item in profiles" :key="item" :value="item"></option>
               </datalist>
             </div>
-            <button class="btn btn-primary btn-input" @click="load" :disabled="loading">
+            <button class="btn btn-primary btn-input" @click="load" :disabled="loading || saving">
               {{ loading ? t('loading') : t('loadTenant') }}
             </button>
+            <button v-if="hasMoreIdentities" class="btn btn-input" @click="loadMoreIdentities" :disabled="loading || saving">{{ t('loadMore') }}</button>
           </div>
-          <div class="text-xs text-ash mt-2">{{ t('toolPermissionHint') }}</div>
+          <div class="text-xs text-ash mt-2">{{ t(permissionTab === 'tools' ? 'toolPermissionHint' : 'internalApiPermissionHint') }}</div>
           <div v-if="error" class="text-sm mt-2" style="color: var(--error);">{{ error }}</div>
         </div>
       </div>
 
-      <div class="card mt-4">
+      <div v-if="permissionTab === 'tools'" class="card mt-4">
         <div class="card-header" style="flex-wrap: wrap; gap: var(--space-2);">
           <div class="card-title">
             {{ t('registeredTools') }} ({{ t('disabledCount') }} {{ disabledCount }}/{{ tools.length }})
@@ -7832,7 +7926,7 @@ const ToolPermissionPage = {
             </span>
             <button class="btn btn-ghost btn-sm" @click="disableAll">{{ t('disableAll') }}</button>
             <button class="btn btn-ghost btn-sm" @click="clearAll">{{ t('clearAll') }}</button>
-            <button class="btn btn-primary btn-sm" @click="save" :disabled="saving">
+            <button class="btn btn-primary btn-sm" @click="save" :disabled="saving || loading || loadedScope !== scopeKey()">
               <span v-html="Icons.save" style="width:14px;height:14px;"></span>
               {{ saving ? t('saving') : t('save') }}
             </button>
@@ -7865,6 +7959,28 @@ const ToolPermissionPage = {
             :icon="Icons.tool"
             :title="t('loadTenantFirst')"
             :hint="t('toolPermissionHint')" />
+        </div>
+      </div>
+      <div v-else class="card mt-4">
+        <div class="card-header permission-api-header">
+          <div class="card-title">{{ t('internalApiPermissions') }}</div>
+          <button class="btn btn-primary btn-sm" @click="save"
+            :disabled="saving || loading || loadedScope !== scopeKey()">{{ saving ? t('saving') : t('save') }}</button>
+        </div>
+        <div class="card-body">
+          <div class="table-container"><table>
+            <thead><tr><th>{{ t('allowedColumn') }}</th><th>{{ t('apiEndpoint') }}</th><th>{{ t('apiModule') }}</th></tr></thead>
+            <tbody><tr v-for="endpoint in endpoints" :key="endpoint.endpointKey">
+              <td><input type="checkbox" :checked="allowedEndpointKeys.has(endpoint.endpointKey)"
+                :aria-label="endpoint.endpointKey" :disabled="loading || saving"
+                @change="toggleEndpoint(endpoint.endpointKey)" /></td>
+              <td class="permission-api-path"><strong>{{ endpoint.method }}</strong> {{ endpoint.pathTemplate }}
+                <div class="text-xs text-ash">{{ endpoint.name }}</div></td>
+              <td>{{ endpoint.module }}</td>
+            </tr></tbody>
+          </table></div>
+          <button v-if="hasMoreEndpoints" class="btn btn-ghost mt-2" @click="loadMoreEndpoints"
+            :disabled="loading || saving">{{ loading ? t('loading') : t('loadMore') }}</button>
         </div>
       </div>
     </div>
@@ -7965,6 +8081,13 @@ const app = createApp({
 
     // ── Global userId (persisted in localStorage) ──
     const userId = ref(localStorage.getItem('cyrene_user') || '');
+    const authMode = ref('');
+    const authLoading = ref(true);
+    const authError = ref('');
+    const authSecret = ref('');
+    const authVersion = ref(0);
+    CyreneAPI.setToken(sessionStorage.getItem('cyrene_token'));
+    CyreneAPI.onTokenRefresh(token => sessionStorage.setItem('cyrene_token', token));
     const showWelcome = ref(!userId.value);
     const editingUser = ref(false);
     const editUserId = ref('');
@@ -7975,17 +8098,48 @@ const app = createApp({
     provide('t', t);
     provide('locale', locale);
 
-    function confirmUserId() {
+    async function confirmUserId() {
       const val = editUserId.value.trim();
-      if (!val) return;
-      userId.value = val;
-      localStorage.setItem('cyrene_user', val);
-      showWelcome.value = false;
-      editingUser.value = false;
-      showToast(t('userIdSet') + val, 'success');
+      if (!val || authLoading.value) return;
+      authLoading.value = true;
+      authError.value = '';
+      try {
+        let verifiedUserId = val;
+        if (authMode.value === 'jwt') {
+          const result = await CyreneAPI.login(val, authSecret.value);
+          if (typeof result.token !== 'string' || typeof result.userId !== 'string') throw new Error(t('invalidAuthResponse'));
+          CyreneAPI.setToken(result.token);
+          sessionStorage.setItem('cyrene_token', result.token);
+          verifiedUserId = result.userId;
+        } else if (authMode.value === 'token') {
+          if (!authSecret.value.trim()) throw new Error(t('tokenRequired'));
+          CyreneAPI.setToken(authSecret.value.trim());
+          sessionStorage.setItem('cyrene_token', authSecret.value.trim());
+        }
+        userId.value = verifiedUserId;
+        localStorage.setItem('cyrene_user', verifiedUserId);
+        authSecret.value = '';
+        showWelcome.value = false;
+        editingUser.value = false;
+        authVersion.value++;
+      } catch (e) {
+        authError.value = e.message;
+      } finally { authLoading.value = false; }
     }
 
-    function startEditUser() {
+    async function startEditUser() {
+      if (authMode.value !== 'none') {
+        try {
+          await CyreneAPI.logout();
+          CyreneAPI.setToken(null);
+          sessionStorage.removeItem('cyrene_token');
+          localStorage.removeItem('cyrene_user');
+          userId.value = '';
+          showWelcome.value = true;
+          authVersion.value++;
+        } catch (e) { showToast(e.message, 'error'); }
+        return;
+      }
       editUserId.value = userId.value;
       editingUser.value = true;
     }
@@ -8024,8 +8178,10 @@ const app = createApp({
         await CyreneAPI.getConfig();
         configExists.value = true;
       } catch (e) {
-        configExists.value = false;
-        showPreConfig.value = true;
+        if (e.code === 'NOT_FOUND') {
+          configExists.value = false;
+          showPreConfig.value = true;
+        } else { showToast(e.message, 'error'); }
       }
     }
 
@@ -8046,10 +8202,17 @@ const app = createApp({
       }
     }
 
-    onMounted(() => {
+    onMounted(async () => {
       handleHash();
       window.addEventListener('hashchange', handleHash);
-      checkConfig();
+      try {
+        const status = await CyreneAPI.health();
+        if (!['none', 'jwt', 'token'].includes(status.authMode)) throw new Error(t('invalidAuthResponse'));
+        authMode.value = status.authMode;
+        if (status.authMode !== 'none' && !CyreneAPI.getToken()) showWelcome.value = true;
+        if (!showWelcome.value) await checkConfig();
+      } catch (e) { authError.value = e.message; showWelcome.value = true; }
+      finally { authLoading.value = false; }
     });
 
     onUnmounted(() => {
@@ -8061,6 +8224,8 @@ const app = createApp({
       showPreConfig, configExists,
       navItems, pageTitle, t, locale,
       userId, showWelcome, editingUser, editUserId,
+      authMode, authLoading, authError, authSecret,
+      authVersion,
       confirmUserId, startEditUser, cancelEditUser,
       navigate, toggleSidebar, onPreConfigComplete, onPreConfigClose,
     };
@@ -8079,18 +8244,24 @@ const app = createApp({
           </div>
           <div class="modal-body">
             <div class="input-group">
-              <label class="input-label">{{ t('userId') }}</label>
-              <input class="input" v-model="editUserId"
+              <label class="input-label" for="login-user-id">{{ t('userId') }}</label>
+              <input id="login-user-id" class="input" v-model="editUserId" autocomplete="username"
                      :placeholder="t('enterUserId')"
-                     @keydown.enter="confirmUserId" autofocus />
+                     :disabled="authLoading" @keydown.enter="confirmUserId" autofocus />
               <div class="text-xs text-ash mt-2">
-                {{ t('userIdHint') }}
+                {{ t(authMode === 'none' ? 'userIdHint' : 'verifiedUserHint') }}
               </div>
             </div>
+            <div v-if="authMode !== 'none' && authMode" class="input-group mt-3">
+              <label class="input-label" for="login-secret">{{ t(authMode === 'jwt' ? 'password' : 'apiToken') }}</label>
+              <input id="login-secret" class="input" type="password" v-model="authSecret" :disabled="authLoading"
+                     :autocomplete="authMode === 'jwt' ? 'current-password' : 'off'" @keydown.enter="confirmUserId" />
+            </div>
+            <div v-if="authError" class="text-sm mt-2" role="alert" style="color: var(--error);">{{ authError }}</div>
           </div>
           <div class="modal-footer">
-            <button class="btn btn-primary" @click="confirmUserId" :disabled="!editUserId.trim()">
-              {{ t('enterCyrene') }}
+            <button class="btn btn-primary" @click="confirmUserId" :disabled="authLoading || !editUserId.trim()">
+              {{ t(authLoading ? 'loading' : 'enterCyrene') }}
             </button>
           </div>
         </div>
@@ -8152,10 +8323,10 @@ const app = createApp({
                 {{ locale === 'zh' ? 'EN' : '中' }}
               </button>
               <!-- User ID badge (click to edit) -->
-              <div class="user-badge" @click="startEditUser" style="cursor: pointer;" :title="t('clickToEditUserId')">
+              <button class="user-badge" @click="startEditUser" :disabled="authLoading" :title="t(authMode === 'none' ? 'clickToEditUserId' : 'signOut')">
                 <span class="user-dot"></span>
                 <span>{{ userId || t('unset') }}</span>
-              </div>
+              </button>
             </div>
           </header>
 
@@ -8171,8 +8342,8 @@ const app = createApp({
           </div>
 
           <div class="page-container">
-            <keep-alive>
-              <component :is="currentPage + '-page'" />
+            <keep-alive :key="userId + ':' + authVersion">
+              <component :is="currentPage + '-page'" :key="currentPage" />
             </keep-alive>
           </div>
         </main>

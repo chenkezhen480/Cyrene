@@ -255,7 +255,7 @@ public class SubAgentManager {
 
         // Register task in scope
         SubAgentTaskRecord record = scope.registerTask(
-                task, taskToken, sessionId, runContext.turnId());
+                task, taskToken, sessionId, runContext.turnId(), runContext.owner());
         if (record == null) {
             return null;  // Scope not open, spawn limit reached, or duplicate
         }
@@ -327,7 +327,12 @@ public class SubAgentManager {
                 // pointing it at the parent trace would overwrite the parent's own search.
                 RunTrace trace = traceFactory.start();
                 trace.setSessionId(runContext.sessionId());
-                trace.recordInput(null, record.task().description(), List.of());
+                trace.recordInput(record.owner() == null ? null : record.owner().userId(),
+                        record.task().description(), List.of());
+                if (record.owner() != null) {
+                    if (record.owner().tenantId() != null) trace.putMetadata("tenant_id", record.owner().tenantId());
+                    trace.putMetadata("identity", record.owner().identity());
+                }
                 trace.recordLlmMeta("sub-agent", "sub-agent");
                 KnowledgeToolRuntimeContext.restoreForCatalog(
                         unifiedKnowledgeContext, subAgentToolCatalog, trace);
@@ -496,7 +501,8 @@ public class SubAgentManager {
                 record.ownerTurnId(),
                 result,
                 java.time.Instant.now(),
-                SessionInbox.SubAgentCompletedEvent.EventStatus.PENDING
+                SessionInbox.SubAgentCompletedEvent.EventStatus.PENDING,
+                record.owner()
         );
 
         sessionInbox.submit(event);

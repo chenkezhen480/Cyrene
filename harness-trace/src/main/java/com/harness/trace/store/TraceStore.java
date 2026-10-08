@@ -32,6 +32,18 @@ public interface TraceStore {
     /** Stable newest-first pagination scoped to one session. */
     PageResponse<AgentTrace> findBySession(String sessionId, TraceCursor cursor, int limit);
 
+    default PageResponse<AgentTrace> findByOwner(String userId, String tenantId, TraceCursor cursor, int limit) {
+        throw new UnsupportedOperationException("Owner-scoped Trace queries require a supporting Trace store");
+    }
+
+    default int countByOwner(String userId, String tenantId) {
+        throw new UnsupportedOperationException("Owner-scoped Trace statistics require a supporting Trace store");
+    }
+
+    default int cleanupByOwner(String userId, String tenantId, int retentionDays) {
+        throw new UnsupportedOperationException("Owner-scoped Trace cleanup requires a supporting Trace store");
+    }
+
     /**
      * Delete traces older than the given number of days.
      */

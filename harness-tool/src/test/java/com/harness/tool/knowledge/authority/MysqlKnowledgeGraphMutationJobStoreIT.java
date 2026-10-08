@@ -5,6 +5,7 @@ import com.harness.graph.model.GraphChangeSet;
 import com.harness.graph.model.GraphMutationResult;
 import com.harness.graph.model.GraphNode;
 import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Tag;
@@ -25,22 +26,22 @@ class MysqlKnowledgeGraphMutationJobStoreIT {
 
     private static final String REQUEST_ID = "it-graph-saga-request";
     private static final String REVISION_ID = "it-graph-space-revision";
-    private static final String URL = "jdbc:mysql://localhost:3306/zhi_du_yuan"
-            + "?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai";
+    private static final String URL = System.getenv("HARNESS_TEST_MYSQL_URL");
 
     @BeforeAll
     static void configure() throws Exception {
+        Assumptions.assumeTrue(URL != null && !URL.isBlank(), "An isolated MySQL test URL is required");
         EnvConfig.init(Map.of(
                 "HARNESS_AUDIT_DB_URL", URL,
-                "HARNESS_AUDIT_DB_USER", "root",
-                "HARNESS_AUDIT_DB_PASS", "1234",
+                "HARNESS_AUDIT_DB_USER", System.getenv("HARNESS_TEST_MYSQL_USER"),
+                "HARNESS_AUDIT_DB_PASS", System.getenv("HARNESS_TEST_MYSQL_PASSWORD"),
                 "HARNESS_AUDIT_STORE", "mysql"));
         cleanup();
     }
 
     @AfterAll
     static void cleanupAfter() throws Exception {
-        cleanup();
+        if (URL != null && !URL.isBlank()) cleanup();
     }
 
     @Test
@@ -77,8 +78,8 @@ class MysqlKnowledgeGraphMutationJobStoreIT {
                 .isEqualTo(KnowledgeGraphMutationJob.Status.KNOWLEDGE_COMMITTED);
         try (Connection connection = connection();
              PreparedStatement statement = connection.prepareStatement("""
-                     SELECT COUNT(*) FROM knowledge_graph_mutation_jobs
-                     WHERE result_revision_id = ? AND graph_id = 'graph-it'
+                     SELECT COUNT(*) FROM knowledge_tasks
+                     WHERE task_type = 'graph_mutation' AND result_revision_id = ? AND graph_id = 'graph-it'
                        AND schema_id = 'schema-it' AND status = 'knowledge_committed'
                      """)) {
             statement.setString(1, REVISION_ID);
@@ -100,7 +101,7 @@ class MysqlKnowledgeGraphMutationJobStoreIT {
         try (Connection connection = connection()) {
             connection.setAutoCommit(false);
             try (PreparedStatement jobs = connection.prepareStatement(
-                         "DELETE FROM knowledge_graph_mutation_jobs WHERE request_id = ?")) {
+                         "DELETE FROM knowledge_tasks WHERE task_type = 'graph_mutation' AND id = ?")) {
                 jobs.setString(1, REQUEST_ID);
                 jobs.executeUpdate();
                 connection.commit();
@@ -112,6 +113,7 @@ class MysqlKnowledgeGraphMutationJobStoreIT {
     }
 
     private static Connection connection() throws Exception {
-        return DriverManager.getConnection(URL, "root", "1234");
+        return DriverManager.getConnection(URL, System.getenv("HARNESS_TEST_MYSQL_USER"),
+                System.getenv("HARNESS_TEST_MYSQL_PASSWORD"));
     }
 }

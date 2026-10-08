@@ -14,7 +14,6 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
-import java.util.Optional;
 import java.util.Set;
 
 /**
@@ -50,6 +49,21 @@ public final class ToolPermissionHandler {
     private boolean authorized(Context ctx) {
         try {
             authenticator.authenticate(ctx);
+            var principal = authenticator.principal(ctx);
+            String tenantId = ctx.queryParam("tenantId");
+            if ("PUT".equals(ctx.method().name())) {
+                ToolPermissionRequest request = ctx.bodyAsClass(ToolPermissionRequest.class);
+                tenantId = request.tenantId();
+                String identity = request.identity() == null ? AgentContext.DEFAULT_IDENTITY : required(request.identity(), "identity");
+                if (principal.identity().equalsIgnoreCase(identity)
+                        || (AgentContext.DEFAULT_IDENTITY.equalsIgnoreCase(identity)
+                        && service.store().findDisabledTools(principal.tenantId(), principal.identity()).isEmpty())) {
+                    throw new SecurityException("Callers cannot edit their own tool permissions");
+                }
+            }
+            if (tenantId != null && !principal.tenantId().equals(tenantId.trim())) {
+                throw new SecurityException("Cross-tenant tool permission management is forbidden");
+            }
             return true;
         } catch (ApiRequestAuthenticator.RequestAuthenticationException e) {
             log.warn("[ToolPermission] Rejected unauthenticated admin request: {}", e.getMessage());
@@ -63,19 +77,15 @@ public final class ToolPermissionHandler {
             return;
         }
         try {
-            ToolPermissionStore store = service.store();
-            List<String> tenants = service.tablePresent() ? store.listTenants() : List.of();
+            List<String> tenants = List.of(authenticator.principal(ctx).tenantId());
             String tenantId = trimmed(ctx.queryParam("tenantId"));
             if (tenantId == null) {
                 ctx.json(new ToolPermissionView(
-                        null, null, List.of(), tenants, false, List.of(), registeredTools()));
+                        null, null, tenants, false, List.of(), registeredTools()));
                 return;
             }
             String identity = trimmed(ctx.queryParam("identity"));
             String profileIdentity = identity != null ? identity : AgentContext.DEFAULT_IDENTITY;
-            List<String> profiles = service.tablePresent()
-                    ? store.listIdentities(tenantId)
-                    : List.of();
             // Reads through the same lookup enforcement uses, so the page cannot claim an
             // identity is unrestricted while a request for it is actually limited.
             List<ToolView> tools = registeredTools();
@@ -93,7 +103,6 @@ public final class ToolPermissionHandler {
             ctx.json(new ToolPermissionView(
                     tenantId,
                     profileIdentity,
-                    profiles,
                     tenants,
                     !disabled.isEmpty(),
                     disabled,
@@ -101,6 +110,19 @@ public final class ToolPermissionHandler {
         } catch (ToolPermissionException e) {
             log.error("[ToolPermission] Read failed: {}", e.getMessage(), e);
             ApiResponses.error(ctx, 500, ApiErrorCode.INTERNAL_ERROR, e.getMessage());
+        }
+    }
+
+    public void identities(Context ctx) {
+        if (!authorized(ctx)) return;
+        try {
+            requireTable();
+            String tenantId = required(ctx.queryParam("tenantId"), "tenantId");
+            String limit = ctx.queryParam("limit");
+            ctx.json(service.store().listIdentities(tenantId, trimmed(ctx.queryParam("cursor")),
+                    limit == null ? 50 : Integer.parseInt(limit)));
+        } catch (ToolPermissionException e) {
+            ApiResponses.error(ctx, 503, ApiErrorCode.INTERNAL_ERROR, e.getMessage());
         }
     }
 
@@ -195,7 +217,6 @@ public final class ToolPermissionHandler {
     public record ToolPermissionView(
             String tenantId,
             String identity,
-            List<String> profiles,
             List<String> tenants,
             boolean restricted,
             List<String> disabledTools,

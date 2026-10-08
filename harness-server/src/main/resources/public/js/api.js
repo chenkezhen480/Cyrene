@@ -115,6 +115,26 @@ const CyreneAPI = (() => {
     return request('PUT', '/api/tool-permissions', payload);
   }
 
+  function logout() {
+    return request('POST', '/api/auth/logout');
+  }
+
+  function getPermissionIdentities(tenantId, cursor = '') {
+    return request('GET', `/api/tool-permissions/identities?${new URLSearchParams({ tenantId, cursor, limit: 50 })}`);
+  }
+
+  function getInternalApiEndpoints(cursor = '') {
+    return request('GET', `/api/internal-api-endpoints?${new URLSearchParams({ limit: 50, cursor })}`);
+  }
+
+  function getInternalApiPermissions(tenantId, identity, cursor = '') {
+    return request('GET', `/api/internal-api-permissions?${new URLSearchParams({ tenantId, identity, limit: 100, cursor })}`);
+  }
+
+  function saveInternalApiPermissions(payload) {
+    return request('PUT', '/api/internal-api-permissions', payload);
+  }
+
   function approveConfirmation(requestId, userId, sessionId) {
     return request(
       'POST',
@@ -371,16 +391,18 @@ const CyreneAPI = (() => {
     return request('GET', `/api/trace/${traceId}`);
   }
 
-  function listTraces(limit = 20) {
-    return request('GET', `/api/traces?limit=${limit}`);
+  function listTraces(limit = 20, cursor = '', userId) {
+    const params = new URLSearchParams({ limit, cursor });
+    if (userId) params.set('userId', userId);
+    return request('GET', `/api/traces?${params}`);
   }
 
-  function getTraceStats() {
-    return request('GET', '/api/traces/stats');
+  function getTraceStats(userId) {
+    return request('GET', `/api/traces/stats${userId ? `?${new URLSearchParams({ userId })}` : ''}`);
   }
 
-  function cleanupTraces() {
-    return request('DELETE', '/api/traces/cleanup');
+  function cleanupTraces(userId) {
+    return request('DELETE', `/api/traces/cleanup${userId ? `?${new URLSearchParams({ userId })}` : ''}`);
   }
 
   function deleteTrace(traceId) {
@@ -427,9 +449,10 @@ const CyreneAPI = (() => {
 
   return {
     setToken, getToken, onTokenRefresh,
-    login,
+    login, logout,
     chat, cancelChat, approveConfirmation, rejectConfirmation, uploadFile,
-    getToolPermissions, saveToolPermissions,
+    getToolPermissions, saveToolPermissions, getPermissionIdentities,
+    getInternalApiEndpoints, getInternalApiPermissions, saveInternalApiPermissions,
     getModelConfiguration, updateModelConfiguration, getKnowledgeStatus,
     createSession, listSessions, getSession, getMessages, getSessionStats, closeSession,
     listCollections, uploadKnowledge, listKnowledge, getKnowledgeChunk, updateKnowledgeChunk, listWiki, getWiki, updateWiki, deleteWiki, exportWiki, exportAllWiki,

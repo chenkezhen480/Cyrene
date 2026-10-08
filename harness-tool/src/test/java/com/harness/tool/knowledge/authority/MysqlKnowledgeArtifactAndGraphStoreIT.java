@@ -2,6 +2,7 @@ package com.harness.tool.knowledge.authority;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.harness.core.env.EnvConfig;
+import org.junit.jupiter.api.Assumptions;
 import com.harness.core.env.MysqlConnectionPool;
 import com.harness.core.knowledge.KnowledgeArtifact;
 import com.harness.core.knowledge.KnowledgeArtifactType;
@@ -44,10 +45,12 @@ class MysqlKnowledgeArtifactAndGraphStoreIT {
 
     @BeforeAll
     static void initEnv() {
+        String url = System.getenv("HARNESS_TEST_MYSQL_URL");
+        Assumptions.assumeTrue(url != null && !url.isBlank(), "An isolated MySQL test URL is required");
         EnvConfig.init(Map.of(
-                "HARNESS_AUDIT_DB_URL", "jdbc:mysql://localhost:3306/zhi_du_yuan?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai",
-                "HARNESS_AUDIT_DB_USER", "root",
-                "HARNESS_AUDIT_DB_PASS", "1234",
+                "HARNESS_AUDIT_DB_URL", url,
+                "HARNESS_AUDIT_DB_USER", System.getenv("HARNESS_TEST_MYSQL_USER"),
+                "HARNESS_AUDIT_DB_PASS", System.getenv("HARNESS_TEST_MYSQL_PASSWORD"),
                 "HARNESS_AUDIT_STORE", "mysql"));
     }
 

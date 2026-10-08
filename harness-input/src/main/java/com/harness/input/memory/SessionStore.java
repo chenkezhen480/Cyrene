@@ -12,6 +12,9 @@ public interface SessionStore {
 
     Session create(String userId, String tenantId);
 
+    /** Record the verified identity only after resolving an owner-scoped session. */
+    void recordIdentity(String sessionId, String userId, String tenantId, String identity);
+
     Optional<Session> findActiveByOwner(String sessionId, String userId, String tenantId);
 
     Optional<Session> findByIdAndOwner(String sessionId, String userId, String tenantId);

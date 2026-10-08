@@ -31,7 +31,7 @@ public class ArtifactHandler {
      */
     public void download(Context ctx) {
         String id = ctx.pathParam("id");
-        Optional<Artifact> artifactOpt = artifactStore.get(id);
+        Optional<Artifact> artifactOpt = authorizedArtifact(ctx, id);
         if (artifactOpt.isEmpty()) {
             ApiResponses.error(ctx, 404, ApiErrorCode.NOT_FOUND, "Artifact not found: " + id);
             return;
@@ -45,7 +45,7 @@ public class ArtifactHandler {
      */
     public void preview(Context ctx) {
         String id = ctx.pathParam("id");
-        Optional<Artifact> artifactOpt = artifactStore.get(id);
+        Optional<Artifact> artifactOpt = authorizedArtifact(ctx, id);
         if (artifactOpt.isEmpty()) {
             ApiResponses.error(ctx, 404, ApiErrorCode.NOT_FOUND, "Artifact not found: " + id);
             return;
@@ -60,6 +60,11 @@ public class ArtifactHandler {
     public void listBySession(Context ctx) {
         String sessionId = ctx.pathParam("sessionId");
         ctx.json(artifactStore.listBySession(sessionId));
+    }
+
+    private Optional<Artifact> authorizedArtifact(Context ctx, String id) {
+        Artifact authorized = ctx.attribute(com.harness.server.security.InternalApiResourceAuthorizer.AUTHORIZED_ARTIFACT);
+        return authorized == null ? artifactStore.get(id) : Optional.of(authorized);
     }
 
     private void serveFile(Context ctx, Artifact artifact, String disposition) {

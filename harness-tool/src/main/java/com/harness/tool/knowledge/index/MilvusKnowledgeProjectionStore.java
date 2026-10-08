@@ -159,13 +159,18 @@ public final class MilvusKnowledgeProjectionStore implements KnowledgeProjection
         try {
             var fields = new ArrayList<>(outputFields(Set.of()));
             fields.addAll(List.of("embedding", "revision_data"));
+            String filter = "concept_id == " + literal(conceptId)
+                    + " and (revision_data[\"current\"] == true"
+                    + (revisionId == null ? "" : " or revision_id == " + literal(revisionId)) + ")";
+            // Milvus 2.5.13 iterators override STRONG with collection consistency; query first to await fresh writes.
+            client.get().query(io.milvus.v2.service.vector.request.QueryReq.builder()
+                    .consistencyLevel(io.milvus.v2.common.ConsistencyLevel.STRONG)
+                    .collectionName(requireCollections().catalogCollection())
+                    .filter(filter).outputFields(List.of("id")).limit(1L).build());
             iterator = client.get().queryIterator(QueryIteratorReq.builder()
                     .consistencyLevel(io.milvus.v2.common.ConsistencyLevel.STRONG)
                     .collectionName(requireCollections().catalogCollection())
-                    .expr("concept_id == " + literal(conceptId)
-                            + " and (revision_data[\"current\"] == true"
-                            + (revisionId == null ? "" : " or revision_id == " + literal(revisionId)) + ")")
-                    .outputFields(fields).batchSize(100L).build());
+                    .expr(filter).outputFields(fields).batchSize(100L).build());
             var gson = new com.google.gson.Gson();
             while (true) {
                 var batch = iterator.next();

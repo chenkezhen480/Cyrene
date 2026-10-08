@@ -109,7 +109,7 @@ class ReActEngineTerminationTest {
         ToolCatalog catalog = catalog();
         ToolExecutor executor = mock(ToolExecutor.class);
         AtomicReference<String> executedCallId = new AtomicReference<>();
-        when(executor.executeAuthorized(any(), any(), isNull()))
+        when(executor.executeAuthorized(any(), any(), isNull(), any()))
                 .thenAnswer(invocation -> {
                     ToolCall call = invocation.getArgument(0);
                     executedCallId.set(call.id());
@@ -118,10 +118,12 @@ class ReActEngineTerminationTest {
                             com.harness.core.model.ResultStatus.AVAILABLE);
                 });
 
+        RunTrace trace = mock(RunTrace.class);
+        when(trace.snapshot()).thenReturn(com.harness.core.model.AgentTrace.builder().sessionId("blocking-session").build());
         ReActResult result = new ReActEngine(
                 provider, catalog, executor, null, null, 1)
                 .execute(new ReActRequest(
-                        "system", "use the tool", List.of(), RunTrace.noop(),
+                        "system", "use the tool", List.of(), trace,
                         null, null, ThinkingLevel.OFF, null));
 
         assertThat(result.output()).isEqualTo("final answer after limit");
@@ -130,6 +132,7 @@ class ReActEngineTerminationTest {
         assertThat(requests).hasSize(2);
         assertThat(requests.get(1).parameters().toolSpecifications()).isEmpty();
         assertThat(executedCallId.get()).isNotBlank();
+        verify(executor).executeAuthorized(any(), any(), isNull(), org.mockito.ArgumentMatchers.eq("blocking-session"));
 
         AiMessage normalizedPlanningMessage = requests.get(1).messages().stream()
                 .filter(AiMessage.class::isInstance)
@@ -175,7 +178,7 @@ class ReActEngineTerminationTest {
             });
             ToolExecutor executor = mock(ToolExecutor.class);
             AtomicInteger executions = new AtomicInteger();
-            when(executor.executeAuthorized(any(), any(), isNull())).thenAnswer(invocation -> {
+            when(executor.executeAuthorized(any(), any(), isNull(), any())).thenAnswer(invocation -> {
                 ToolCall call = invocation.getArgument(0);
                 executions.incrementAndGet();
                 return ToolResult.ok(call.id(), call.toolName(), "ok", 1,
@@ -226,7 +229,7 @@ class ReActEngineTerminationTest {
         };
         ToolExecutor executor = mock(ToolExecutor.class);
         AtomicInteger executions = new AtomicInteger();
-        when(executor.executeAuthorized(any(), any(), isNull()))
+        when(executor.executeAuthorized(any(), any(), isNull(), any()))
                 .thenAnswer(invocation -> {
                     ToolCall call = invocation.getArgument(0);
                     executions.incrementAndGet();
@@ -307,7 +310,7 @@ class ReActEngineTerminationTest {
                         .build())).build());
         var token = new CancellationToken();
         ToolExecutor executor = mock(ToolExecutor.class);
-        when(executor.executeAuthorized(any(), any(), isNull())).thenAnswer(invocation -> {
+        when(executor.executeAuthorized(any(), any(), isNull(), any())).thenAnswer(invocation -> {
             token.cancel();
             ToolCall call = invocation.getArgument(0);
             return ToolResult.fail(call.id(), call.toolName(), "Cancelled", 0);

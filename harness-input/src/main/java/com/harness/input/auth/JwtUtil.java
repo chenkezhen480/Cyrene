@@ -2,6 +2,7 @@ package com.harness.input.auth;
 
 import com.harness.core.env.EnvConfig;
 import com.harness.core.env.EnvKey;
+import com.harness.core.security.RequestPrincipal;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.JwtException;
 import io.jsonwebtoken.Jwts;
@@ -25,11 +26,13 @@ public class JwtUtil {
 
     private final SecretKey secretKey;
     private final String issuer;
+    private final String audience;
 
     public JwtUtil() {
         EnvConfig cfg = EnvConfig.get();
         String secret = cfg.getString(EnvKey.AUTH_JWT_SECRET, "");
         this.issuer = cfg.getString(EnvKey.AUTH_JWT_ISSUER, "harness-agent");
+        this.audience = cfg.requireString(EnvKey.AUTH_JWT_AUDIENCE);
 
         if (secret.isBlank()) {
             throw new IllegalStateException(EnvKey.AUTH_JWT_SECRET + " is required for JWT auth");
@@ -49,11 +52,15 @@ public class JwtUtil {
     /**
      * Generate a JWT token for the given userId.
      */
-    public String generateToken(String userId) {
+    public String generateToken(String userId, String tenantId, String identity) {
+        new RequestPrincipal(userId, tenantId, identity, RequestPrincipal.AuthenticationType.JWT);
         long now = System.currentTimeMillis();
         String token = Jwts.builder()
                 .subject(userId)
                 .issuer(issuer)
+                .audience().add(audience).and()
+                .claim("tenantId", tenantId)
+                .claim("identity", identity)
                 .issuedAt(new Date(now))
                 .expiration(new Date(now + EXPIRATION_MS))
                 .signWith(secretKey)
@@ -68,12 +75,7 @@ public class JwtUtil {
      * @throws JwtException if token is invalid or expired
      */
     public String verifyToken(String token) {
-        Claims claims = Jwts.parser()
-                .verifyWith(secretKey)
-                .requireIssuer(issuer)
-                .build()
-                .parseSignedClaims(token)
-                .getPayload();
+        Claims claims = verifyTokenClaims(token);
         String userId = claims.getSubject();
         log.debug("[Auth-JWT] Token verified: userId={}", userId);
         return userId;
@@ -85,12 +87,20 @@ public class JwtUtil {
      * @throws JwtException if token is invalid or expired
      */
     public Claims verifyTokenClaims(String token) {
-        return Jwts.parser()
+        Claims claims = Jwts.parser()
                 .verifyWith(secretKey)
                 .requireIssuer(issuer)
+                .requireAudience(audience)
                 .build()
                 .parseSignedClaims(token)
                 .getPayload();
+        if (claims.getExpiration() == null) throw new JwtException("JWT expiration is required");
+        try {
+            principal(claims);
+        } catch (IllegalArgumentException e) {
+            throw new JwtException("JWT trusted identity claims are missing or invalid", e);
+        }
+        return claims;
     }
 
     /**
@@ -115,7 +125,14 @@ public class JwtUtil {
     /**
      * Generate a refreshed JWT token for the given userId, preserving the original expiration duration.
      */
-    public String refreshToken(String userId) {
-        return generateToken(userId);
+    public String refreshToken(Claims claims) {
+        var principal = principal(claims);
+        return generateToken(principal.userId(), principal.tenantId(), principal.identity());
+    }
+
+    public RequestPrincipal principal(Claims claims) {
+        return new RequestPrincipal(claims.getSubject(),
+                claims.get("tenantId", String.class), claims.get("identity", String.class),
+                RequestPrincipal.AuthenticationType.JWT);
     }
 }

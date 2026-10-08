@@ -1,6 +1,7 @@
 package com.harness.agent.runtime;
 
 import com.harness.agent.KnowledgeGraphTool;
+import com.harness.agent.AgentRunContext;
 import com.harness.agent.context.AgentPromptBuilder;
 import com.harness.agent.context.KnowledgeAccessService;
 import com.harness.agent.knowledge.KnowledgeReadTool;
@@ -17,6 +18,7 @@ import com.harness.core.model.AgentContext;
 import com.harness.core.model.AgentMessage;
 import com.harness.core.model.GraphRequestContext;
 import com.harness.core.model.MemoryMessage;
+import com.harness.core.security.RequestPrincipal;
 import com.harness.core.runtime.RunTrace;
 import com.harness.input.ProcessedInput;
 import com.harness.input.gap.GapAnalysis;
@@ -68,11 +70,18 @@ public final class AgentRunPreparer {
     }
 
     public PreparedAgentRun prepare(AgentRunRequest request, RunTrace trace) {
+        AgentContext agentContext = request.agentContext() != null
+                ? request.agentContext()
+                : AgentContext.empty();
         ProcessedInput input = runtime.input().process(
                 request.token(),
                 request.text(),
                 request.attachments(),
                 request.contextUserId());
+        if (agentContext.principal() != null
+                && agentContext.principal().authenticationType() != RequestPrincipal.AuthenticationType.ANONYMOUS) {
+            input = new ProcessedInput(agentContext.principal().requireUserId(), input.message());
+        }
         AuthorizedUrlContext.setFromUserText(request.text());
         trace.recordInput(
                 input.userId(),
@@ -81,12 +90,10 @@ public final class AgentRunPreparer {
                         .map(AgentMessage.Attachment::name)
                         .toList());
 
-        AgentContext agentContext = request.agentContext() != null
-                ? request.agentContext()
-                : AgentContext.empty();
         MemoryContext memoryContext = memoryRuntime.resolve(
                 input.userId(), agentContext.optionalTenantId().orElse(null),
                 request.requestedSessionId(), request.text(), trace);
+        trace.setSessionId(memoryContext.sessionId());
         String enhancedText = promptBuilder.enhanceUserText(
                 request.text(), input.message().attachments(), agentContext, memoryContext.sessionId());
         activateRequestContexts(agentContext, memoryContext);
@@ -105,6 +112,11 @@ public final class AgentRunPreparer {
                 knowledgeGraphToolEnabled,
                 graphRequestContext,
                 Boolean.TRUE.equals(gapAnalysis.needsWebSearch()));
+        if (memoryRuntime.enabled() && memoryContext.userId() != null) {
+            var owner = AgentRunContext.Owner.from(memoryContext.userId(), memoryContext.tenantId(), agentContext);
+            memoryRuntime.sessionStore().recordIdentity(memoryContext.sessionId(), owner.userId(),
+                    owner.tenantId(), owner.identity());
+        }
         trace.recordLlmMeta(runtime.providers().chat().modelName(), "v1");
 
         log.debug("Prepared run: sessionId={}, userId={}, history={}, unavailableTools={}",

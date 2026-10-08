@@ -2,6 +2,7 @@ package com.harness.server;
 
 import com.harness.agent.voice.VoiceConversationService;
 import com.harness.core.model.AgentContext;
+import com.harness.core.security.RequestPrincipal;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -25,6 +26,12 @@ public final class AgentContextRequestMapper {
         // Resolved from the tenant's stored profile, never from the request body: a caller
         // must not be able to lift its own tool restriction.
         contextData.remove(AgentContext.KEY_TOOL_DENYLIST);
+        contextData.remove("principal");
         return contextData;
+    }
+
+    public static AgentContext bind(AgentContext context, RequestPrincipal principal) {
+        java.util.Objects.requireNonNull(principal, "principal");
+        return new AgentContext(context.data(), principal);
     }
 }

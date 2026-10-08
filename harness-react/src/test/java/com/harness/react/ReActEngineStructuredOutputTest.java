@@ -115,7 +115,7 @@ class ReActEngineStructuredOutputTest {
         when(catalog.size()).thenReturn(2);
 
         ToolExecutor executor = mock(ToolExecutor.class);
-        when(executor.executeAuthorized(any(), any(), isNull()))
+        when(executor.executeAuthorized(any(), any(), isNull(), any()))
                 .thenAnswer(invocation -> {
                     ToolCall call = invocation.getArgument(0);
                     if (StructuredOutputTool.TOOL_NAME.equals(call.toolName())) {
@@ -182,7 +182,7 @@ class ReActEngineStructuredOutputTest {
         when(catalog.size()).thenReturn(1);
 
         ToolExecutor executor = mock(ToolExecutor.class);
-        when(executor.executeAuthorized(any(), any(), isNull()))
+        when(executor.executeAuthorized(any(), any(), isNull(), any()))
                 .thenAnswer(invocation -> {
                     ToolCall call = invocation.getArgument(0);
                     return ToolResult.ok(

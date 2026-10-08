@@ -68,6 +68,9 @@ public final class AgentToolRuntime {
     private final ArtifactStore artifactStore;
     private final ArtifactStorageService artifactStorageService;
     private final VoiceModelProvider voiceProvider;
+    private final java.util.concurrent.ConcurrentMap<String, VideoGenerationTool.TaskState> videoTasks =
+            new java.util.concurrent.ConcurrentHashMap<>();
+    private final com.harness.tool.artifact.UploadedFileAccess uploadedFiles;
     private KnowledgeAccessService knowledgeAccessService;
     private KnowledgeGraphTool graphKnowledgeExecutor;
 
@@ -90,6 +93,8 @@ public final class AgentToolRuntime {
                 artifactStorageService, "artifactStorageService");
         this.voiceProvider = java.util.Objects.requireNonNull(
                 providers.voice(), "voiceProvider");
+        this.uploadedFiles = new com.harness.tool.artifact.UploadedFileAccess(Path.of(EnvConfig.get().getString(
+                EnvKey.KNOWLEDGE_UPLOAD_DIR, "./knowledge-uploads")), new ObjectMapper());
         if (contextBuilder.vectorStore() != null) {
             this.knowledgeAccessService = new KnowledgeAccessService(contextBuilder,
                     EnvConfig.get().getInt(EnvKey.RAG_CONTEXT_WINDOW_MAX, 10));
@@ -347,9 +352,16 @@ public final class AgentToolRuntime {
                         @Override
                         public byte[] loadBytes(String artifactId) {
                             return artifactStore.get(artifactId)
+                                    .map(com.harness.tool.artifact.ArtifactSessionContext::requireAccess)
                                     .map(artifact -> readArtifact(artifactId, artifact))
                                     .orElseThrow(() -> new IllegalArgumentException(
                                             "Artifact not found: " + artifactId));
+                        }
+
+                        @Override
+                        public byte[] loadUploadedBytes(String reference) {
+                            try { return Files.readAllBytes(authorizedUpload(reference)); }
+                            catch (java.io.IOException e) { throw new java.io.UncheckedIOException(e); }
                         }
                     },
                     config);
@@ -372,7 +384,7 @@ public final class AgentToolRuntime {
                     (sessionId, artifact) -> log.info(
                             "[ArtifactCallback] Video artifact ready: {} for session {}",
                             artifact.name(), sessionId),
-                    config);
+                    config, videoTasks);
             replacements.put(videoTool.spec().name(), videoTool);
         } else {
             removals.add("video_generation");
@@ -395,7 +407,7 @@ public final class AgentToolRuntime {
         VoiceCapabilities capabilities = capabilitySource.capabilities();
         if (capabilities.asrAvailable()) {
             AudioTranscriptionTool transcriptionTool = new AudioTranscriptionTool(
-                    voiceProvider, this::loadAudioSource);
+                    voiceProvider, this::loadAuthorizedAudioSource);
             replacements.put(transcriptionTool.spec().name(), transcriptionTool);
         } else {
             removals.add(AudioTranscriptionTool.TOOL_NAME);
@@ -491,6 +503,30 @@ public final class AgentToolRuntime {
         } catch (Exception e) {
             throw new IllegalStateException("Failed to read audio file: " + reference, e);
         }
+    }
+
+    private AudioTranscriptionTool.AudioSource loadAuthorizedAudioSource(String reference) {
+        if (reference != null && reference.startsWith("/api/artifacts/")) {
+            String id = reference.substring("/api/artifacts/".length()).split("[/?]", 2)[0];
+            com.harness.tool.artifact.ArtifactSessionContext.requireAccess(artifactStore.get(id)
+                    .orElseThrow(() -> new SecurityException("Artifact access denied")));
+        } else {
+            try { authorizedUpload(reference); }
+            catch (java.io.IOException e) { throw new java.io.UncheckedIOException(e); }
+        }
+        return loadAudioSource(reference);
+    }
+
+    private Path authorizedUpload(String reference) throws java.io.IOException {
+        var scope = com.harness.agent.knowledge.KnowledgeToolRuntimeContext.requireCurrent("uploaded_file");
+        var config = EnvConfig.get();
+        if ("none".equals(config.getString(EnvKey.AUTH_MODE, "none"))
+                && !config.getBool(EnvKey.INTERNAL_API_AUTHORIZATION_ENABLED, true)) {
+            return uploadedFiles.authorize(reference, new com.harness.core.security.RequestPrincipal(null,
+                    com.harness.core.model.AgentContext.DEFAULT_TENANT_ID, "DEFAULT",
+                    com.harness.core.security.RequestPrincipal.AuthenticationType.ANONYMOUS)).path();
+        }
+        return uploadedFiles.authorize(reference, scope.userId(), scope.tenantId()).path();
     }
 
     /**

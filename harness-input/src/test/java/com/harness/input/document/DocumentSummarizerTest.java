@@ -45,7 +45,7 @@ class DocumentSummarizerTest {
         @Override public int contextWindow() { return contextWindow; }
         @Override public dev.langchain4j.model.chat.request.ChatRequestParameters planningRequestParameters(
                 com.harness.core.model.ThinkingLevel thinkingLevel, List<dev.langchain4j.agent.tool.ToolSpecification> tools) {
-            assertThat(thinkingLevel).isEqualTo(com.harness.core.model.ThinkingLevel.OFF);
+            assertThat(thinkingLevel).as("Summary must preserve model reasoning defaults").isNull();
             assertThat(tools).isEmpty();
             return dev.langchain4j.model.chat.request.ChatRequestParameters.builder().temperature(0.2).build();
         }

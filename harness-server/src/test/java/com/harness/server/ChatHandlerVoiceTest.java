@@ -189,6 +189,8 @@ class ChatHandlerVoiceTest {
             }
 
             ApiRequestAuthenticator authenticator = mock(ApiRequestAuthenticator.class);
+            when(authenticator.principal(context)).thenReturn(new com.harness.core.security.RequestPrincipal(
+                    "user-1", "000000", "DEFAULT", com.harness.core.security.RequestPrincipal.AuthenticationType.JWT));
             try {
                 when(authenticator.authenticate(context)).thenReturn("token");
             } catch (ApiRequestAuthenticator.RequestAuthenticationException e) {

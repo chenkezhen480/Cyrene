@@ -11,6 +11,24 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class AgentContextTest {
 
     @Test
+    void trustedPrincipalBindsImmutableOwnerScopeAndSurvivesCopies() {
+        var principal = new com.harness.core.security.RequestPrincipal("verified-user", "tenant-a", "reader",
+                com.harness.core.security.RequestPrincipal.AuthenticationType.SERVICE_TOKEN);
+        var clientData = new java.util.HashMap<String, Object>(Map.of("userId", "other", "tenantId", "foreign",
+                "identity", "administrator", "credentials", Map.of("business", "secret")));
+        var context = new AgentContext(clientData, principal);
+        clientData.put("tenantId", "changed");
+        assertThat(context.userId()).isEqualTo("verified-user");
+        assertThat(context.tenantId()).isEqualTo("tenant-a");
+        assertThat(context.data().get("identity")).isEqualTo("reader");
+        assertThatThrownBy(() -> context.data().put("userId", "other")).isInstanceOf(UnsupportedOperationException.class);
+        assertThat(context.withToolDenylist(java.util.Set.of("web.search")).principal()).isSameAs(principal);
+        assertThat(context.withClearedCredentials().principal()).isSameAs(principal);
+        assertThat(context.withClearedCredentials().credentials()).isEmpty();
+        assertThat(AgentContext.of(Map.of("principal", principal)).principal()).isNull();
+    }
+
+    @Test
     void empty_returnsDefaultBlockingMode() {
         var ctx = AgentContext.empty();
         assertThat(ctx.outputMode()).isEqualTo("blocking");

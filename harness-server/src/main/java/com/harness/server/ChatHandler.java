@@ -100,6 +100,9 @@ public class ChatHandler {
                 return;
             }
 
+            AgentContext agentContext = toolPermissions.apply(AgentContextRequestMapper.bind(
+                    toAgentContext(req), authenticator.principal(ctx)));
+
             // Register the cancellation token, superseding any run already in flight for this
             // session: a new message means the previous run is no longer wanted. Scoped to this
             // run's own threads so one session's Stop cannot abort another session's model call.
@@ -149,7 +152,6 @@ public class ChatHandler {
 
             // Tools are filtered before the run exists: a tool this tenant+identity may not
             // use is never handed to the model, so the agent cannot know it exists at all.
-            AgentContext agentContext = toolPermissions.apply(toAgentContext(effectiveRequest));
             ThinkingLevel thinkingLevel = agentContext.thinkingLevel();
             String contextUserId = agentContext.userId();
 

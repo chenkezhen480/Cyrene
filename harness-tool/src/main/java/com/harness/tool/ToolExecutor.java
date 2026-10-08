@@ -46,6 +46,12 @@ public class ToolExecutor {
             Tool authorizedTool,
             ConfirmationExecutionContext confirmationContext
     ) {
+        return executeAuthorized(toolCall, authorizedTool, confirmationContext,
+                confirmationContext == null ? null : confirmationContext.sessionId());
+    }
+
+    public ToolResult executeAuthorized(ToolCall toolCall, Tool authorizedTool,
+                                       ConfirmationExecutionContext confirmationContext, String sessionId) {
         Objects.requireNonNull(toolCall, "toolCall");
         Objects.requireNonNull(authorizedTool, "authorizedTool");
         String name = toolCall.toolName();
@@ -78,8 +84,7 @@ public class ToolExecutor {
         }
 
         notifyExecutionStart(confirmationContext, toolCall);
-        return executeTool(toolCall, tool,
-                confirmationContext != null ? confirmationContext.sessionId() : null);
+        return executeTool(toolCall, tool, sessionId);
     }
 
     private ToolResult executeAfterConfirmation(ToolCall toolCall, Tool tool,

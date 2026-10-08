@@ -70,6 +70,16 @@ public final class ConfirmationHandler {
     }
 
     private String resolveUserId(Context ctx, String requestedUserId) {
+        com.harness.core.security.RequestPrincipal principal = ctx.attribute(
+                com.harness.server.security.RequestPrincipalResolver.PRINCIPAL_ATTRIBUTE);
+        if (principal != null && principal.authenticationType()
+                != com.harness.core.security.RequestPrincipal.AuthenticationType.ANONYMOUS) {
+            String userId = principal.requireUserId();
+            if (requestedUserId != null && !requestedUserId.isBlank() && !userId.equals(requestedUserId)) {
+                throw new SecurityException("Authenticated user does not match confirmation userId");
+            }
+            return userId;
+        }
         String authorization = ctx.header("Authorization");
         String token = authorization != null && authorization.startsWith("Bearer ")
                 ? authorization.substring(7)

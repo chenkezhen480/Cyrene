@@ -50,7 +50,8 @@ CREATE TABLE IF NOT EXISTS `agent_traces` (
     INDEX `idx_timestamp` (`timestamp`),
     INDEX `idx_user_id` (`user_id`),
     INDEX `idx_session_id` (`session_id`),
-    INDEX `idx_trace_session_time` (`session_id`, `timestamp`, `trace_id`),
+    INDEX `idx_trace_session_time` (`session_id`, `timestamp`, `trace_id`, `user_id`),
+    INDEX `idx_trace_owner_time` (`user_id`, `timestamp`, `trace_id`, `session_id`),
     INDEX `idx_risk_level` (`risk_level`),
     INDEX `idx_llm_model` (`llm_model`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='审计追踪表 - 记录Agent每次请求的完整执行链路';
@@ -60,6 +61,7 @@ CREATE TABLE IF NOT EXISTS `sessions` (
     `id`                  VARCHAR(64)     NOT NULL     DEFAULT ''                   COMMENT '会话ID（主键）',
     `user_id`             VARCHAR(128)    NOT NULL     DEFAULT ''                   COMMENT '用户ID',
     `tenant_id`           VARCHAR(128)    DEFAULT NULL                              COMMENT '可空租户ID',
+    `identity`            VARCHAR(128) COLLATE utf8mb4_bin DEFAULT NULL             COMMENT '最近一次请求的可信身份；异步任务单独保留原请求身份',
     `title`               VARCHAR(256)    DEFAULT NULL                              COMMENT '会话标题（用户首条消息）',
     `created_at`          DATETIME(3)     NOT NULL     DEFAULT CURRENT_TIMESTAMP(3) COMMENT '创建时间',
     `last_active`         DATETIME(3)     NOT NULL     DEFAULT CURRENT_TIMESTAMP(3) COMMENT '最后活跃时间',
@@ -102,6 +104,8 @@ CREATE TABLE IF NOT EXISTS `users` (
     `username`      VARCHAR(64)     NOT NULL     COMMENT '登录用户名',
     `password_hash` VARCHAR(256)    NOT NULL     COMMENT '密码哈希（SHA-256）',
     `display_name`  VARCHAR(128)    DEFAULT NULL COMMENT '显示名称',
+    `tenant_id`     VARCHAR(128) COLLATE utf8mb4_bin DEFAULT NULL COMMENT '可信认证租户，必须由管理侧配置',
+    `identity`      VARCHAR(128) COLLATE utf8mb4_bin DEFAULT NULL COMMENT '可信认证身份，必须由管理侧配置',
     `status`        VARCHAR(16)     NOT NULL DEFAULT 'active' COMMENT '状态（active/disabled）',
     `created_at`    DATETIME(3)     NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '创建时间',
     `updated_at`    DATETIME(3)     NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) COMMENT '更新时间',
@@ -118,6 +122,18 @@ VALUES ('test-user-001', 'test', '937e8d5fbb48bd4949536cd65b8d35c426b80d2f830c5c
 ON DUPLICATE KEY UPDATE `user_id` = `user_id`;
 
 -- ========== 知识权威层 ==========
+CREATE TABLE IF NOT EXISTS internal_api_permission (
+    id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY COMMENT 'Permission row ID',
+    tenant_id VARCHAR(128) COLLATE utf8mb4_bin NOT NULL COMMENT 'Trusted tenant ID',
+    identity VARCHAR(128) COLLATE utf8mb4_bin NOT NULL COMMENT 'Trusted business identity',
+    endpoint_key VARCHAR(128) COLLATE utf8mb4_bin NOT NULL COMMENT 'Allowed endpoint key',
+    created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT 'Created time',
+    updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) COMMENT 'Updated time',
+    UNIQUE KEY uk_internal_api_scope (tenant_id, identity, endpoint_key),
+    INDEX idx_internal_api_page (tenant_id, id),
+    INDEX idx_internal_api_identity_page (tenant_id, identity, id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='Internal API permissions by tenant and identity';
+
 -- Wiki 权威层、用户偏好、原文件登记与后台任务，与 Milvus 投影集合配合使用。
 
 CREATE TABLE IF NOT EXISTS knowledge_metadata (
@@ -243,8 +259,8 @@ CREATE TABLE IF NOT EXISTS knowledge_tasks (
 
 CREATE TABLE IF NOT EXISTS `tool_permission_profile` (
     `id`                  BIGINT        NOT NULL AUTO_INCREMENT                     COMMENT '自增主键',
-    `tenant_id`           VARCHAR(128)  NOT NULL                                    COMMENT '所属租户，无租户体系的接入使用 000000',
-    `identity`            VARCHAR(128)  NOT NULL                                    COMMENT '工具身份，例如 teacher/parent/DEFAULT',
+    `tenant_id`           VARCHAR(128) COLLATE utf8mb4_bin NOT NULL                                    COMMENT '所属租户，无租户体系的接入使用 000000',
+    `identity`            VARCHAR(128) COLLATE utf8mb4_bin NOT NULL                                    COMMENT '工具身份，例如 teacher/parent/DEFAULT',
     `disabled_tools_json` JSON          NOT NULL                                    COMMENT '该身份禁用的工具名 JSON 数组；空数组代表全部启用，工具定义仍以 ToolRegistry 为准',
     `created_at`          DATETIME(3)   NOT NULL DEFAULT CURRENT_TIMESTAMP(3)       COMMENT '创建时间',
     `updated_at`          DATETIME(3)   NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) COMMENT '更新时间',

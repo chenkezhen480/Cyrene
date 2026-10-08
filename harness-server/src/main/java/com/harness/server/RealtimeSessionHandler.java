@@ -7,6 +7,8 @@ import com.harness.agent.AgentOrchestrator;
 import com.harness.core.env.EnvConfig;
 import com.harness.core.env.EnvKey;
 import com.harness.core.model.AgentContext;
+import com.harness.core.security.RequestPrincipal;
+import com.harness.server.security.RequestPrincipalResolver;
 import com.harness.core.model.CancellationToken;
 import com.harness.provider.RealtimeEvent;
 import com.harness.provider.RealtimeInput;
@@ -73,24 +75,26 @@ final class RealtimeSessionHandler implements AutoCloseable {
             CreateRequest request = context.bodyAsClass(CreateRequest.class);
             SessionRequestOwnerResolver.Owner owner = owners.resolve(
                     context, request.userId(), request.tenantId());
-            String identity = optional(request.identity(), AgentContext.DEFAULT_IDENTITY);
+            RequestPrincipal principal = context.attribute(RequestPrincipalResolver.PRINCIPAL_ATTRIBUTE);
+            String identity = principal != null
+                    ? principal.identity() : optional(request.identity(), AgentContext.DEFAULT_IDENTITY);
             if (identity.length() > 128) {
                 throw new IllegalArgumentException("identity must not exceed 128 characters");
             }
-            String sessionId = UUID.randomUUID().toString();
-            ManagedSession managed = new ManagedSession(
-                    sessionId, owner.userId(), owner.tenantId(), identity);
-            if (sessions.putIfAbsent(sessionId, managed) != null) {
-                throw new IllegalStateException("Realtime session ID collision");
-            }
-            try {
-                RealtimeSessionConfig config = new RealtimeSessionConfig(
+            RealtimeSessionConfig config = new RealtimeSessionConfig(
                         request.instructions(), request.voice(),
                         request.audioOutput() == null || request.audioOutput(),
                         positive(request.inputSampleRate(), 16_000, "inputSampleRate"),
                         positive(request.outputSampleRate(), 24_000, "outputSampleRate"),
                         turnDetection(request.turnDetection()),
                         java.util.List.of());
+            String sessionId = agent.sessionStore().create(owner.userId(), owner.tenantId()).id();
+            ManagedSession managed = new ManagedSession(
+                    sessionId, owner.userId(), owner.tenantId(), identity);
+            if (sessions.putIfAbsent(sessionId, managed) != null) {
+                throw new IllegalStateException("Realtime session ID collision");
+            }
+            try {
                 RealtimeSession providerSession = agent.openRealtimeSession(
                         sessionId, owner.tenantId(), owner.userId(), identity,
                         config, managed.cancellationToken, managed::onEvent);
@@ -100,6 +104,8 @@ final class RealtimeSessionHandler implements AutoCloseable {
             } catch (RuntimeException e) {
                 sessions.remove(sessionId, managed);
                 managed.closeProvider();
+                try { agent.sessionStore().close(sessionId, com.harness.core.model.Session.SessionStatus.ended); }
+                catch (RuntimeException cleanup) { e.addSuppressed(cleanup); }
                 throw e;
             }
             context.status(201).json(Map.of(
@@ -123,6 +129,16 @@ final class RealtimeSessionHandler implements AutoCloseable {
         if (!managed.connect(context)) {
             context.closeSession(1008, "realtime session already has a client");
         }
+    }
+
+    RequestPrincipal principal(Context context) {
+        ManagedSession session = sessions.get(context.pathParam("sessionId"));
+        if (session == null || !session.matchesToken(context.queryParam("token"))) {
+            throw new ApiRequestAuthenticator.RequestAuthenticationException("Invalid realtime session token");
+        }
+        return new RequestPrincipal(session.userId, session.tenantId == null
+                ? AgentContext.DEFAULT_TENANT_ID : session.tenantId, session.identity,
+                RequestPrincipal.AuthenticationType.JWT);
     }
 
     void message(WsMessageContext context) {
@@ -199,10 +215,11 @@ final class RealtimeSessionHandler implements AutoCloseable {
     private void terminate(String sessionId, boolean closeProvider) {
         ManagedSession managed = sessions.remove(sessionId);
         if (managed != null) {
-            if (closeProvider) {
-                managed.closeProvider();
-            } else {
-                managed.finish();
+            try {
+                if (closeProvider) managed.closeProvider();
+                else managed.finish();
+            } finally {
+                agent.sessionStore().close(sessionId, com.harness.core.model.Session.SessionStatus.ended);
             }
         }
     }

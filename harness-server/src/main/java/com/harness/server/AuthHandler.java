@@ -1,7 +1,7 @@
 package com.harness.server;
 
-import com.harness.core.env.EnvConfig;
-import com.harness.core.env.EnvKey;
+import com.harness.core.env.MysqlConnectionPool;
+import com.harness.core.security.RequestPrincipal;
 import com.harness.input.auth.JwtUtil;
 import com.harness.server.api.ApiErrorCode;
 import com.harness.server.api.ApiResponses;
@@ -12,7 +12,6 @@ import org.slf4j.LoggerFactory;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.sql.Connection;
-import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.util.Map;
@@ -25,17 +24,16 @@ public class AuthHandler {
 
     private static final Logger log = LoggerFactory.getLogger(AuthHandler.class);
     private final JwtUtil jwtUtil;
-
-    static {
-        try {
-            Class.forName("com.mysql.cj.jdbc.Driver");
-        } catch (ClassNotFoundException e) {
-            log.error("MySQL JDBC Driver not found", e);
-        }
-    }
+    private final java.util.function.BiFunction<String, String, RequestPrincipal> credentialsVerifier;
 
     public AuthHandler() {
-        this.jwtUtil = new JwtUtil();
+        this(new JwtUtil(), AuthHandler::verifyCredentials);
+    }
+
+    public AuthHandler(JwtUtil jwtUtil,
+                       java.util.function.BiFunction<String, String, RequestPrincipal> credentialsVerifier) {
+        this.jwtUtil = java.util.Objects.requireNonNull(jwtUtil, "jwtUtil");
+        this.credentialsVerifier = java.util.Objects.requireNonNull(credentialsVerifier, "credentialsVerifier");
     }
 
     public void handle(Context ctx) {
@@ -59,15 +57,17 @@ public class AuthHandler {
             log.debug("[Server] POST /api/auth/token: identifier={}", identifier);
 
             // Verify credentials against users table
-            String userId = verifyCredentials(identifier, req.password());
-            if (userId == null) {
+            RequestPrincipal principal = credentialsVerifier.apply(identifier, req.password());
+            if (principal == null) {
                 log.warn("[Server] Auth failed for identifier={}", identifier);
                 ApiResponses.error(ctx, 401, ApiErrorCode.UNAUTHORIZED, "Invalid credentials");
                 return;
             }
 
             // Generate JWT
-            String token = jwtUtil.generateToken(userId);
+            String userId = principal.requireUserId();
+            String token = jwtUtil.generateToken(userId, principal.tenantId(), principal.identity());
+            com.harness.server.security.RequestPrincipalResolver.setMediaCookie(ctx, token);
             long duration = System.currentTimeMillis() - start;
             log.info("[Server] Auth success: userId={}, duration={}ms", userId, duration);
 
@@ -77,6 +77,10 @@ public class AuthHandler {
                     "tokenType", "Bearer",
                     "expiresIn", 86400
             ));
+        } catch (SecurityException e) {
+            ApiResponses.error(ctx, 403, ApiErrorCode.FORBIDDEN, e.getMessage());
+        } catch (IllegalStateException e) {
+            ApiResponses.error(ctx, 503, ApiErrorCode.INTERNAL_ERROR, e.getMessage());
         } catch (Exception e) {
             long duration = System.currentTimeMillis() - start;
             log.error("[Server] Auth error after {}ms: {}", duration, e.getMessage(), e);
@@ -84,28 +88,31 @@ public class AuthHandler {
         }
     }
 
-    private String verifyCredentials(String identifier, String password) {
+    private static RequestPrincipal verifyCredentials(String identifier, String password) {
         String passwordHash = sha256(password);
-        EnvConfig cfg = EnvConfig.get();
-        String dbUrl = cfg.getString(EnvKey.AUDIT_DB_URL, "");
-        String dbUser = cfg.getString(EnvKey.AUDIT_DB_USER, "");
-        String dbPass = cfg.getString(EnvKey.AUDIT_DB_PASS, "");
 
         // Try matching by user_id first, then by username
-        String sql = "SELECT user_id FROM users WHERE (user_id = ? OR username = ?) AND password_hash = ? AND status = 'active'";
+        String sql = "SELECT user_id, tenant_id, identity FROM users WHERE (user_id = ? OR username = ?) "
+                + "AND password_hash = ? AND status = 'active' ORDER BY id LIMIT 2";
 
-        try (Connection conn = DriverManager.getConnection(dbUrl, dbUser, dbPass);
+        try (Connection conn = MysqlConnectionPool.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, identifier);
             ps.setString(2, identifier);
             ps.setString(3, passwordHash);
             try (ResultSet rs = ps.executeQuery()) {
                 if (rs.next()) {
-                    return rs.getString("user_id");
+                    if (rs.getString("tenant_id") == null || rs.getString("identity") == null) {
+                        throw new SecurityException("Trusted tenant and identity mapping is required");
+                    }
+                    RequestPrincipal principal = new RequestPrincipal(rs.getString("user_id"),
+                            rs.getString("tenant_id"), rs.getString("identity"),
+                            RequestPrincipal.AuthenticationType.JWT);
+                    return rs.next() ? null : principal;
                 }
             }
-        } catch (Exception e) {
-            log.error("[Server] DB error during auth: {}", e.getMessage(), e);
+        } catch (java.sql.SQLException e) {
+            throw new IllegalStateException("Authentication identity store is unavailable", e);
         }
         return null;
     }

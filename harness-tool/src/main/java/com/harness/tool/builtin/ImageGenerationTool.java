@@ -1,7 +1,5 @@
 package com.harness.tool.builtin;
 
-import com.harness.core.env.EnvConfig;
-
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -62,6 +60,10 @@ public class ImageGenerationTool implements TypedOutputTool, CancellableTool {
          */
         default byte[] loadBytes(String artifactId) {
             throw new UnsupportedOperationException("loadBytes not implemented");
+        }
+
+        default byte[] loadUploadedBytes(String reference) {
+            throw new UnsupportedOperationException("Authorized upload loading is unavailable");
         }
     }
 
@@ -264,11 +266,7 @@ public class ImageGenerationTool implements TypedOutputTool, CancellableTool {
         // Try extracting artifact ID first (handles both relative /api/artifacts/{id}/preview and absolute URLs)
         String artifactId = extractArtifactId(ref);
         if (artifactId != null && storer != null) {
-            try {
-                return storer.loadBytes(artifactId);
-            } catch (Exception e) {
-                log.debug("Failed to load artifact {}, falling back", artifactId);
-            }
+            return storer.loadBytes(artifactId);
         }
 
         // If it looks like an absolute URL, download it
@@ -278,15 +276,8 @@ public class ImageGenerationTool implements TypedOutputTool, CancellableTool {
 
         // If it starts with /files/, resolve to local knowledge-uploads directory
         if (ref.startsWith("/files/")) {
-            String relativePath = ref.substring("/files/".length());
-            String uploadDir = EnvConfig.get().getString(
-                    com.harness.core.env.EnvKey.KNOWLEDGE_UPLOAD_DIR, "./knowledge-uploads");
-            java.nio.file.Path filePath = java.nio.file.Path.of(uploadDir, relativePath);
-            if (java.nio.file.Files.exists(filePath)) {
-                log.debug("Loading reference image from local file: {}", filePath);
-                return java.nio.file.Files.readAllBytes(filePath);
-            }
-            log.warn("Local file not found: {}", filePath);
+            if (storer == null) throw new IOException("Authorized upload loading is unavailable");
+            return storer.loadUploadedBytes(ref);
         }
 
         // Otherwise treat as artifact ID directly

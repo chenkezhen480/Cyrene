@@ -42,6 +42,7 @@ public class ArtifactStorageService {
         if (data.length > maxSizeBytes) {
             throw new IllegalArgumentException("File size " + data.length + " exceeds limit " + maxSizeBytes);
         }
+        sessionId = ownedSession(sessionId);
         validateName(name);
         String id = UUID.randomUUID().toString();
         Path fileDir = artifactDir.resolve(id);
@@ -65,6 +66,7 @@ public class ArtifactStorageService {
      * Store artifact from an existing file path (moves the file).
      */
     public Artifact storeFromPath(Path source, String name, String mimeType, String sessionId) {
+        sessionId = ownedSession(sessionId);
         validateName(name);
         try {
             long size = Files.size(source);
@@ -88,6 +90,17 @@ public class ArtifactStorageService {
                 || Path.of(name).getNameCount() != 1) {
             throw new IllegalArgumentException("Artifact name must be a single file name");
         }
+    }
+
+    private static String ownedSession(String sessionId) {
+        String currentSessionId = ArtifactSessionContext.current();
+        if (currentSessionId != null) {
+            if (sessionId != null && !sessionId.equals(currentSessionId)) {
+                throw new SecurityException("Artifact session does not match the executing run");
+            }
+            sessionId = currentSessionId;
+        }
+        return sessionId;
     }
 
     private Artifact saveMetadata(String id, String sessionId, String name, String mimeType, long size, Path filePath) {

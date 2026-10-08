@@ -97,7 +97,7 @@ class ReActEngineStreamingBaselineTest {
         when(catalog.version()).thenReturn(1L);
 
         ToolExecutor executor = mock(ToolExecutor.class);
-        when(executor.executeAuthorized(any(), any(), isNull()))
+        when(executor.executeAuthorized(any(), any(), isNull(), any()))
                 .thenAnswer(invocation -> {
                     ToolCall toolCall = invocation.getArgument(0);
                     return ToolResult.ok(
@@ -158,11 +158,13 @@ class ReActEngineStreamingBaselineTest {
             }
         };
         ReActEngine engine = new ReActEngine(provider, catalog, executor, null, null, 3);
+        RunTrace trace = mock(RunTrace.class);
+        when(trace.snapshot()).thenReturn(com.harness.core.model.AgentTrace.builder().sessionId("streaming-session").build());
         ReActRequest request = new ReActRequest(
                 "system",
                 "use the tool",
                 List.of(),
-                RunTrace.noop(),
+                trace,
                 listener,
                 null,
                 ThinkingLevel.OFF,
@@ -170,6 +172,8 @@ class ReActEngineStreamingBaselineTest {
 
         ReActResult result = engine.streamExecute(request);
 
+        org.mockito.Mockito.verify(executor, org.mockito.Mockito.times(2)).executeAuthorized(
+                any(), any(), isNull(), org.mockito.ArgumentMatchers.eq("streaming-session"));
         assertThat(result.output()).isEqualTo("The final answer.");
         assertThat(result.loopStats().llmCalls()).isEqualTo(3);
         assertThat(String.join("", visibleTokens)).isEqualTo(

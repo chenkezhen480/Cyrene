@@ -22,7 +22,7 @@ import java.util.UUID;
 public class MysqlSessionStore implements SessionStore {
 
     private static final String COLUMNS = """
-            id, user_id, tenant_id, title, created_at, last_active, ended_at, status
+            id, user_id, tenant_id, title, created_at, last_active, ended_at, status, identity
             """;
 
     private final SqlConnectionProvider connectionProvider;
@@ -34,6 +34,23 @@ public class MysqlSessionStore implements SessionStore {
     public MysqlSessionStore(SqlConnectionProvider connectionProvider) {
         this.connectionProvider = java.util.Objects.requireNonNull(
                 connectionProvider, "connectionProvider");
+    }
+
+    @Override
+    public void recordIdentity(String sessionId, String userId, String tenantId, String identity) {
+        if (userId == null || userId.isBlank() || identity == null || identity.isBlank()
+                || identity.length() > 128) {
+            throw new IllegalArgumentException("Session userId and identity are required");
+        }
+        executeRequiredUpdate("""
+                UPDATE sessions SET identity = ?
+                WHERE id = BINARY ? AND user_id = BINARY ? AND tenant_id <=> BINARY ?
+                """, statement -> {
+            statement.setString(1, identity);
+            statement.setString(2, sessionId);
+            statement.setString(3, userId);
+            statement.setString(4, normalizeTenant(tenantId));
+        }, "Session owner not found: " + sessionId);
     }
 
     @Override
@@ -132,7 +149,7 @@ public class MysqlSessionStore implements SessionStore {
         }
         validateLimit(limit);
         StringBuilder sql = new StringBuilder("SELECT ").append(COLUMNS).append("""
-                 FROM sessions WHERE user_id = ? AND tenant_id <=> ?
+                 FROM sessions WHERE user_id = BINARY ? AND tenant_id <=> BINARY ?
                 """);
         if (status != null) {
             sql.append(" AND status = ?");
@@ -211,7 +228,7 @@ public class MysqlSessionStore implements SessionStore {
             throw new IllegalArgumentException("userId is required");
         }
         String sql = "SELECT " + COLUMNS
-                + " FROM sessions WHERE id = ? AND user_id = ? AND tenant_id <=> ?"
+                + " FROM sessions WHERE id = ? AND user_id = BINARY ? AND tenant_id <=> BINARY ?"
                 + (activeOnly ? " AND status = 'active'" : "");
         try (Connection connection = connectionProvider.getConnection();
              PreparedStatement statement = connection.prepareStatement(sql)) {
@@ -242,7 +259,7 @@ public class MysqlSessionStore implements SessionStore {
                  FROM sessions WHERE status = 'active' AND last_active < ?
                 """);
         if (ownerScoped) {
-            sql.append(" AND user_id = ? AND tenant_id <=> ?");
+            sql.append(" AND user_id = BINARY ? AND tenant_id <=> BINARY ?");
         }
         if (cursor != null) {
             sql.append(" AND (last_active > ? OR (last_active = ? AND id > ?))");
@@ -313,7 +330,8 @@ public class MysqlSessionStore implements SessionStore {
                 resultSet.getTimestamp("created_at").toInstant(),
                 resultSet.getTimestamp("last_active").toInstant(),
                 endedAt == null ? null : endedAt.toInstant(),
-                Session.SessionStatus.valueOf(resultSet.getString("status")));
+                Session.SessionStatus.valueOf(resultSet.getString("status")),
+                resultSet.getString("identity"));
     }
 
     private static String normalizeTenant(String tenantId) {

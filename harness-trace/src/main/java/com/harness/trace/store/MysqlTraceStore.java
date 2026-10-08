@@ -101,6 +101,7 @@ public class MysqlTraceStore implements TraceStore {
             }
         } catch (Exception e) {
             log.error("Failed to find trace {} from MySQL: {}", traceId, e.getMessage(), e);
+            throw new TraceStoreException("Failed to read trace " + traceId, e);
         }
         return Optional.empty();
     }
@@ -130,12 +131,11 @@ public class MysqlTraceStore implements TraceStore {
             throw new IllegalArgumentException("limit must be between 1 and 200");
         }
         String sql = cursor == null
-                ? "SELECT full_json FROM agent_traces WHERE session_id = ? "
+                ? "SELECT timestamp, full_json FROM agent_traces WHERE session_id = ? "
                         + "ORDER BY timestamp DESC, trace_id DESC LIMIT ?"
-                : "SELECT full_json FROM agent_traces WHERE session_id = ? "
+                : "SELECT timestamp, full_json FROM agent_traces WHERE session_id = ? "
                         + "AND (timestamp < ? OR (timestamp = ? AND trace_id < ?)) "
                         + "ORDER BY timestamp DESC, trace_id DESC LIMIT ?";
-        List<AgentTrace> results = new ArrayList<>();
         try (Connection connection = MysqlConnectionPool.getConnection();
              PreparedStatement statement = connection.prepareStatement(sql)) {
             statement.setString(1, sessionId);
@@ -149,17 +149,11 @@ public class MysqlTraceStore implements TraceStore {
                 statement.setInt(5, limit + 1);
             }
             try (ResultSet resultSet = statement.executeQuery()) {
-                while (resultSet.next()) {
-                    results.add(mapper.readValue(resultSet.getString("full_json"), AgentTrace.class));
-                }
+                return readPage(resultSet, limit);
             }
         } catch (Exception e) {
             throw new TraceStoreException("Failed to list traces for session " + sessionId, e);
         }
-        return PageResponse.fromFetched(
-                results,
-                limit,
-                trace -> trace.timestamp() + "|" + trace.traceId());
     }
 
     @Override
@@ -198,6 +192,81 @@ public class MysqlTraceStore implements TraceStore {
         } finally {
             closeCleanupConnection(connection);
         }
+    }
+
+    @Override
+    public PageResponse<AgentTrace> findByOwner(String userId, String tenantId, TraceCursor cursor, int limit) {
+        if (limit < 1 || limit > 200) throw new IllegalArgumentException("limit must be between 1 and 200");
+        // Authorize and page through the covering index before fetching potentially large JSON snapshots.
+        String sql = "SELECT t.timestamp, t.full_json FROM ("
+                + "SELECT t.trace_id, t.timestamp FROM sessions s STRAIGHT_JOIN agent_traces t "
+                + "ON s.id = t.session_id AND BINARY s.id = BINARY t.session_id "
+                + "WHERE s.user_id = BINARY ? AND s.tenant_id <=> BINARY ? AND t.user_id = s.user_id AND BINARY t.user_id = BINARY s.user_id "
+                + (cursor == null ? "" : "AND (t.timestamp < ? OR (t.timestamp = ? AND t.trace_id < ?)) ")
+                + "ORDER BY t.timestamp DESC, t.trace_id DESC LIMIT ?) visible "
+                + "JOIN agent_traces t ON t.trace_id = visible.trace_id "
+                + "ORDER BY visible.timestamp DESC, visible.trace_id DESC";
+        try (Connection connection = MysqlConnectionPool.getConnection();
+             PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setString(1, userId);
+            statement.setString(2, tenantId);
+            int index = 3;
+            if (cursor != null) {
+                statement.setTimestamp(index++, Timestamp.from(cursor.timestamp()));
+                statement.setTimestamp(index++, Timestamp.from(cursor.timestamp()));
+                statement.setString(index++, cursor.traceId());
+            }
+            statement.setInt(index, limit + 1);
+            try (ResultSet rows = statement.executeQuery()) {
+                return readPage(rows, limit);
+            }
+        } catch (Exception e) { throw new TraceStoreException("Failed to query owner-scoped traces", e); }
+    }
+
+    @Override
+    public int countByOwner(String userId, String tenantId) {
+        String sql = "SELECT COUNT(*) FROM sessions s STRAIGHT_JOIN agent_traces t ON t.session_id = s.id AND t.user_id = s.user_id AND BINARY t.session_id = BINARY s.id "
+                + "WHERE s.user_id = BINARY ? AND s.tenant_id <=> BINARY ? AND BINARY t.user_id = BINARY s.user_id";
+        try (Connection connection = MysqlConnectionPool.getConnection();
+             PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setString(1, userId);
+            statement.setString(2, tenantId);
+            try (ResultSet rows = statement.executeQuery()) { rows.next(); return rows.getInt(1); }
+        } catch (SQLException e) { throw new TraceStoreException("Failed to count owner-scoped traces", e); }
+    }
+
+    @Override
+    public int cleanupByOwner(String userId, String tenantId, int retentionDays) {
+        if (retentionDays < 1) throw new IllegalArgumentException("retentionDays must be positive");
+        String sql = "DELETE t FROM agent_traces t JOIN sessions s ON s.id = t.session_id AND BINARY s.id = BINARY t.session_id "
+                + "WHERE s.user_id = BINARY ? AND s.tenant_id <=> BINARY ? AND t.user_id = BINARY ? AND t.timestamp < ?";
+        try (Connection connection = MysqlConnectionPool.getConnection()) {
+            connection.setAutoCommit(false);
+            try (PreparedStatement statement = connection.prepareStatement(sql)) {
+                statement.setString(1, userId);
+                statement.setString(2, tenantId);
+                statement.setString(3, userId);
+                statement.setTimestamp(4, Timestamp.from(Instant.now().minusSeconds(retentionDays * 86400L)));
+                int deleted = statement.executeUpdate();
+                connection.commit();
+                return deleted;
+            } catch (SQLException | RuntimeException e) {
+                try { connection.rollback(); } catch (SQLException rollback) { e.addSuppressed(rollback); }
+                throw e;
+            }
+        } catch (SQLException e) { throw new TraceStoreException("Failed to clean up owner-scoped traces", e); }
+    }
+
+    private PageResponse<AgentTrace> readPage(ResultSet rows, int limit) throws SQLException, JsonProcessingException {
+        var items = new ArrayList<AgentTrace>();
+        var timestamps = new HashMap<String, Instant>();
+        while (rows.next()) {
+            AgentTrace trace = mapper.readValue(rows.getString("full_json"), AgentTrace.class);
+            items.add(trace);
+            // The JSON snapshot can retain more precision than the indexed DATETIME column.
+            timestamps.put(trace.traceId(), rows.getTimestamp("timestamp").toInstant());
+        }
+        return PageResponse.fromFetched(items, limit, trace -> timestamps.get(trace.traceId()) + "|" + trace.traceId());
     }
 
     private static List<ExpiredTraceCursor> findExpiredPage(

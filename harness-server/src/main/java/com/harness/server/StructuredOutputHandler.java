@@ -73,8 +73,8 @@ public final class StructuredOutputHandler {
                     request.outputSchema().name(),
                     request.outputSchema().schema(),
                     request.outputSchema().strict());
-            AgentContext agentContext = toolPermissions.apply(AgentContext.of(
-                    AgentContextRequestMapper.sanitize(request.context())));
+            AgentContext agentContext = toolPermissions.apply(AgentContextRequestMapper.bind(AgentContext.of(
+                    AgentContextRequestMapper.sanitize(request.context())), authenticator.principal(context)));
 
             String requestedSessionId = context.header("X-Session-Id");
             requestId = requestedSessionId != null

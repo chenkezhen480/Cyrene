@@ -7,6 +7,11 @@ import com.harness.graph.store.KnowledgeGraphStore;
 import com.harness.tool.knowledge.KnowledgeWikiService;
 import com.harness.tool.knowledge.authority.KnowledgeHead;
 import com.harness.server.api.*;
+import com.harness.core.env.EnvConfig;
+import com.harness.core.env.EnvKey;
+import com.harness.core.model.AgentContext;
+import com.harness.server.security.InternalApiPermissionService;
+import com.harness.server.security.RequestPrincipalResolver;
 import io.javalin.http.Context;
 import io.javalin.http.HttpResponseException;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -19,16 +24,24 @@ final class KnowledgeWikiHandler {
     private final GraphSpaceAccessService graphAccess;
     private final KnowledgeGraphStore graphStore;
     private final SessionRequestOwnerResolver owners;
+    private final String managementTenantId;
 
     KnowledgeWikiHandler(
             KnowledgeWikiService service,
             GraphSpaceAccessService graphAccess,
             KnowledgeGraphStore graphStore
     ) {
+        this(service, graphAccess, graphStore, EnvConfig.get().getString(
+                EnvKey.INTERNAL_API_ADMIN_TENANT_ID, AgentContext.DEFAULT_TENANT_ID));
+    }
+
+    KnowledgeWikiHandler(KnowledgeWikiService service, GraphSpaceAccessService graphAccess,
+                         KnowledgeGraphStore graphStore, String managementTenantId) {
         this.service = service;
         this.graphAccess = graphAccess;
         this.graphStore = graphStore;
         this.owners = new SessionRequestOwnerResolver();
+        this.managementTenantId = Objects.requireNonNull(managementTenantId, "managementTenantId");
     }
 
     void list(Context ctx) {
@@ -53,7 +66,7 @@ final class KnowledgeWikiHandler {
             if (draft == null || draft.revisionId() == null || draft.revisionId().isBlank())
                 throw new IllegalArgumentException("revisionId is required");
             ctx.json(service.update(ctx.pathParam("conceptId"), draft.revisionId(), draft.title(), draft.summary(),
-                    owner.userId(), authorized(owner)));
+                    owner.userId(), authorizedMutation(ctx, owner)));
         });
     }
 
@@ -62,7 +75,7 @@ final class KnowledgeWikiHandler {
             String revisionId = ctx.queryParam("revisionId");
             if (revisionId == null || revisionId.isBlank())
                 throw new IllegalArgumentException("revisionId is required");
-            ctx.json(service.delete(ctx.pathParam("conceptId"), revisionId, authorized(owner(ctx))));
+            ctx.json(service.delete(ctx.pathParam("conceptId"), revisionId, authorizedMutation(ctx, owner(ctx))));
         });
     }
 
@@ -117,6 +130,12 @@ final class KnowledgeWikiHandler {
             }
             return true;
         };
+    }
+
+    private Predicate<KnowledgeHead> authorizedMutation(Context ctx, SessionRequestOwnerResolver.Owner owner) {
+        boolean global = InternalApiPermissionService.hasGlobalManagementScope(
+                ctx.attribute(RequestPrincipalResolver.PRINCIPAL_ATTRIBUTE), managementTenantId);
+        return authorized(owner).and(head -> head.concept().tenantId() != null || global);
     }
 
     /**

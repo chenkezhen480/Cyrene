@@ -52,8 +52,11 @@ class KnowledgeHandleCodecTest {
                 KnowledgeConceptType.USER_EPISODE, "concept-1", "revision-1",
                 KnowledgeRouteTarget.USER_MEMORY);
         String encoded = codec.encode(handle);
-        String altered = encoded.substring(0, encoded.length() - 1)
-                + (encoded.endsWith("A") ? "B" : "A");
+        // Change signature data bits; the final Base64 character can differ only in padding bits.
+        int signatureStart = encoded.lastIndexOf('.') + 1;
+        String altered = encoded.substring(0, signatureStart)
+                + (encoded.charAt(signatureStart) == 'A' ? "B" : "A")
+                + encoded.substring(signatureStart + 1);
 
         assertThatThrownBy(() -> codec.decode(altered))
                 .isInstanceOf(IllegalArgumentException.class)

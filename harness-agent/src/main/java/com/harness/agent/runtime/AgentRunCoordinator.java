@@ -119,7 +119,8 @@ public final class AgentRunCoordinator {
                     finalOutputContract);
             prepared = runPreparer.complete(prepared, toolCatalog, trace);
             openRunScope(
-                    runId, prepared.sessionId(), command.cancellationToken(), toolCatalog, trace, null);
+                    runId, prepared.sessionId(), command.cancellationToken(), toolCatalog, trace, null,
+                    AgentRunContext.Owner.from(prepared.userId(), prepared.tenantId(), prepared.agentContext()));
 
             List<MessageBlock> blocks = new ArrayList<>();
             StringBuilder text = new StringBuilder();
@@ -209,7 +210,8 @@ public final class AgentRunCoordinator {
             CompressionOutcome compression = prepared.compressionOutcome();
             emitCompressionEvents(compression, runCallback);
             openRunScope(
-                    runId, prepared.sessionId(), command.cancellationToken(), toolCatalog, trace, runCallback);
+                    runId, prepared.sessionId(), command.cancellationToken(), toolCatalog, trace, runCallback,
+                    AgentRunContext.Owner.from(prepared.userId(), prepared.tenantId(), prepared.agentContext()));
             List<MessageBlock> blocks = new ArrayList<>();
             StringBuilder text = new StringBuilder();
             AtomicReference<ConfirmationDecision> confirmationDecision = new AtomicReference<>();
@@ -509,7 +511,8 @@ public final class AgentRunCoordinator {
             CancellationToken cancellationToken,
             RunToolCatalog toolCatalog,
             RunTrace trace,
-            StreamCallback callback
+            StreamCallback callback,
+            AgentRunContext.Owner owner
     ) {
         subAgentManager.openScope(runId, event -> {
             if (callback != null) {
@@ -517,9 +520,11 @@ public final class AgentRunCoordinator {
             }
         });
         SpawnSubAgentTool.setCurrentRunContext(new AgentRunContext(
-                runId, sessionId, cancellationToken, trace.traceId(), toolCatalog));
+                runId, sessionId, cancellationToken, trace.traceId(), toolCatalog, trace.traceId(), owner));
         Map<String, String> metadata = new HashMap<>(trace.snapshot().metadata());
         metadata.put("run_id", runId);
+        if (owner.tenantId() != null) metadata.put("tenant_id", owner.tenantId());
+        metadata.put("identity", owner.identity());
         metadata.put("tool_catalog_version", String.valueOf(toolCatalog.version()));
         metadata.put("tool_count", String.valueOf(toolCatalog.size()));
         metadata.put("authorized_tools", toolCatalog.getAll().stream()

@@ -3,6 +3,8 @@ package com.harness.server;
 import com.harness.core.env.EnvConfig;
 import com.harness.core.env.EnvKey;
 import com.harness.input.auth.Authenticator;
+import com.harness.core.security.RequestPrincipal;
+import com.harness.server.security.RequestPrincipalResolver;
 import io.javalin.http.Context;
 
 import java.util.Objects;
@@ -25,6 +27,16 @@ final class SessionRequestOwnerResolver {
     }
 
     Owner resolve(Context context, String requestedUserId, String requestedTenantId) {
+        RequestPrincipal principal = context.attribute(RequestPrincipalResolver.PRINCIPAL_ATTRIBUTE);
+        if (principal != null && principal.authenticationType() != RequestPrincipal.AuthenticationType.ANONYMOUS) {
+            String userId = principal.requireUserId();
+            if ((requestedUserId != null && !requestedUserId.isBlank() && !userId.equals(requestedUserId.trim()))
+                    || (requestedTenantId != null && !requestedTenantId.isBlank()
+                    && !principal.tenantId().equals(requestedTenantId.trim()))) {
+                throw new SecurityException("Requested owner does not match authenticated scope");
+            }
+            return new Owner(userId, principal.tenantId());
+        }
         if ("none".equals(authMode)) {
             if (requestedUserId == null || requestedUserId.isBlank()) {
                 throw new OwnerResolutionException("userId is required when authentication is disabled");

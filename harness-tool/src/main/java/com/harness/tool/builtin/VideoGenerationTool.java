@@ -29,7 +29,7 @@ import java.util.concurrent.*;
  *
  * Background polling thread monitors submitted tasks and stores completed videos as artifacts.
  */
-public class VideoGenerationTool implements TypedOutputTool {
+public class VideoGenerationTool implements TypedOutputTool, AutoCloseable {
 
     private static final Logger log = LoggerFactory.getLogger(VideoGenerationTool.class);
     private static final MediaType JSON_TYPE = MediaType.get("application/json");
@@ -55,15 +55,26 @@ public class VideoGenerationTool implements TypedOutputTool {
     private final String submitPath;
     private final String statusPath;
     private final ScheduledExecutorService scheduler;
-    private final ConcurrentHashMap<String, TaskState> tasks = new ConcurrentHashMap<>();
+    private final long taskRetentionMillis;
+    private final ConcurrentMap<String, TaskState> tasks;
 
     public VideoGenerationTool(
             ArtifactStorer storer,
             ArtifactCallback callback,
             ModelConfig cfg
     ) {
+        this(storer, callback, cfg, new ConcurrentHashMap<>());
+    }
+
+    public VideoGenerationTool(ArtifactStorer storer, ArtifactCallback callback, ModelConfig cfg,
+                               ConcurrentMap<String, TaskState> tasks) {
+        this.tasks = java.util.Objects.requireNonNull(tasks, "tasks");
         this.storer = storer;
         this.callback = callback;
+        long retentionSeconds = com.harness.core.env.EnvConfig.get().getLong(
+                com.harness.core.env.EnvKey.TOOL_VIDEO_TASK_RETENTION_SECONDS, 86400);
+        if (retentionSeconds < 1) throw new IllegalArgumentException("Video task retention must be positive");
+        this.taskRetentionMillis = Math.multiplyExact(retentionSeconds, 1000L);
         int timeoutSeconds = cfg.getInt(ModelConfigKey.CHAT_TIMEOUT_SECONDS, 300);
         this.http = new OkHttpClient.Builder()
                 .connectTimeout(30, TimeUnit.SECONDS)
@@ -131,6 +142,7 @@ public class VideoGenerationTool implements TypedOutputTool {
                     "videoGeneration.apiKey, and videoGeneration.baseUrl in model.conf");
         }
 
+        pruneExpiredTasks();
         return switch (action) {
             case "submit" -> handleSubmit(arguments);
             case "check" -> handleCheck(arguments);
@@ -140,6 +152,8 @@ public class VideoGenerationTool implements TypedOutputTool {
     }
 
     private ToolExecutionOutcome handleSubmit(JsonNode arguments) {
+        String sessionId = com.harness.tool.artifact.ArtifactSessionContext.current();
+        if (sessionId == null) throw new ToolExecutionException("video_generation", "Trusted session is required");
         String prompt = arguments.has("prompt") ? arguments.get("prompt").asText() : null;
         if (prompt == null || prompt.isBlank()) {
             throw new ToolExecutionException("video_generation", "Missing required parameter for submit: prompt");
@@ -183,9 +197,11 @@ public class VideoGenerationTool implements TypedOutputTool {
                 }
 
                 // Store task state and start background polling
-                TaskState state = new TaskState(taskId, prompt, System.currentTimeMillis());
-                tasks.put(taskId, state);
-                startPolling(taskId);
+                TaskState state = new TaskState(this, sessionId, System.currentTimeMillis());
+                if (tasks.putIfAbsent(taskId, state) != null) {
+                    throw new ToolExecutionException("video_generation", "Video task ID collision");
+                }
+                startPolling(taskId, state);
 
                 ObjectNode result = mapper.createObjectNode();
                 result.put("status", "submitted");
@@ -210,14 +226,8 @@ public class VideoGenerationTool implements TypedOutputTool {
         }
 
         TaskState state = tasks.get(taskId);
-        if (state == null) {
-            // Try polling once in case it was submitted in a different session
-            try {
-                return pollOutcome(pollTaskStatus(taskId));
-            } catch (Exception e) {
-                throw new ToolExecutionException("video_generation",
-                        "Unknown task_id: " + taskId + ". It may have been submitted in a different session or already expired.");
-            }
+        if (state == null || !state.sessionId.equals(com.harness.tool.artifact.ArtifactSessionContext.current())) {
+            throw new ToolExecutionException("video_generation", "Video task access denied");
         }
 
         if (state.artifact != null) {
@@ -250,36 +260,34 @@ public class VideoGenerationTool implements TypedOutputTool {
         }
     }
 
-    private void startPolling(String taskId) {
-        scheduler.scheduleAtFixedRate(() -> {
+    private void startPolling(String taskId, TaskState state) {
+        state.poll = scheduler.scheduleWithFixedDelay(() -> {
             try {
-                ToolOutput output = pollTaskStatus(taskId);
-                JsonNode result = mapper.readTree(output.text());
-                String status = result.has("status") ? result.get("status").asText() : "unknown";
-
-                TaskState state = tasks.get(taskId);
-                if (state == null) return;
-                state.status = status;
-
-                if ("completed".equals(status) && !output.artifacts().isEmpty()) {
-                    // Video is done — artifact already stored by pollTaskStatus
-                    Artifact artifact = output.artifacts().get(0);
-                    if (artifact != null) {
-                        String artifactId = artifact.id();
-                        log.info("Video generation completed: taskId={}, artifactId={}", taskId, artifactId);
-                        // Mark as done, stop polling
-                        tasks.remove(taskId);
-                        // TODO: notify via callback when sessionId is available
+                synchronized (state) {
+                    pruneExpiredTasks();
+                    if (tasks.get(taskId) != state) { state.poll.cancel(false); return; }
+                    pollTaskStatus(taskId);
+                    if (state.artifact != null || "failed".equals(state.status)) {
+                        state.poll.cancel(false);
+                        if (state.artifact != null && callback != null) callback.onArtifactReady(state.sessionId, state.artifact);
                     }
-                } else if ("failed".equals(status)) {
-                    log.warn("Video generation failed: taskId={}", taskId);
-                    state.status = "failed";
-                    tasks.remove(taskId);
                 }
             } catch (Exception e) {
-                log.debug("Video poll error for taskId={}: {}", taskId, e.getMessage());
+                log.warn("Video poll failed for taskId={}: {}", taskId, e.getMessage());
             }
         }, 10, 10, TimeUnit.SECONDS);
+    }
+
+    private void pruneExpiredTasks() {
+        long cutoff = System.currentTimeMillis() - taskRetentionMillis;
+        tasks.forEach((id, state) -> {
+            if (state.submittedAt < cutoff && tasks.remove(id, state) && state.poll != null) state.poll.cancel(false);
+        });
+    }
+
+    @Override public void close() {
+        scheduler.shutdownNow();
+        tasks.entrySet().removeIf(entry -> entry.getValue().owner == this);
     }
 
     /**
@@ -287,6 +295,8 @@ public class VideoGenerationTool implements TypedOutputTool {
      * Returns JSON with status, and artifacts if completed.
      */
     private ToolOutput pollTaskStatus(String taskId) {
+        TaskState state = tasks.get(taskId);
+        if (state == null) throw new ToolExecutionException("video_generation", "Video task is unavailable");
         String statusUrl = baseUrl + statusPath + "/" + taskId;
         Request request = new Request.Builder()
                 .url(statusUrl)
@@ -306,6 +316,7 @@ public class VideoGenerationTool implements TypedOutputTool {
             ObjectNode result = mapper.createObjectNode();
             result.put("status", status);
             result.put("task_id", taskId);
+            state.status = status;
             List<Artifact> artifacts = new java.util.ArrayList<>();
 
             if ("completed".equals(status)) {
@@ -314,13 +325,9 @@ public class VideoGenerationTool implements TypedOutputTool {
                 if (videoUrl != null) {
                     byte[] videoBytes = downloadFile(videoUrl);
                     String fileName = "video-" + System.currentTimeMillis() + ".mp4";
-                    Artifact artifact = storer.store(videoBytes, fileName, "video/mp4", null);
+                    Artifact artifact = storer.store(videoBytes, fileName, "video/mp4", state.sessionId);
 
-                    TaskState state = tasks.get(taskId);
-                    if (state != null) {
-                        state.artifact = artifact;
-                        state.status = "completed";
-                    }
+                    state.artifact = artifact;
                     artifacts.add(artifact);
                 }
             }
@@ -328,22 +335,6 @@ public class VideoGenerationTool implements TypedOutputTool {
             return ToolOutput.artifacts(mapper.writeValueAsString(result), artifacts);
         } catch (Exception e) {
             throw new RuntimeException("Poll failed: " + e.getMessage(), e);
-        }
-    }
-
-    private ToolExecutionOutcome pollOutcome(ToolOutput output) {
-        try {
-            JsonNode result = mapper.readTree(output.text());
-            String status = result.path("status").asText("unknown");
-            ResultStatus resultStatus = switch (status) {
-                case "completed" -> ResultStatus.AVAILABLE;
-                case "failed" -> ResultStatus.CONTRACT_FAILED;
-                default -> ResultStatus.PENDING;
-            };
-            return ToolExecutionOutcome.succeeded(output, resultStatus);
-        } catch (IOException e) {
-            throw new ToolExecutionException(
-                    "video_generation", "Invalid status response: " + e.getMessage(), e);
         }
     }
 
@@ -362,16 +353,17 @@ public class VideoGenerationTool implements TypedOutputTool {
         return text.length() <= maxLen ? text : text.substring(0, maxLen) + "...";
     }
 
-    private static class TaskState {
-        final String taskId;
-        final String prompt;
+    public static final class TaskState {
+        private final VideoGenerationTool owner;
+        final String sessionId;
+        volatile ScheduledFuture<?> poll;
         final long submittedAt;
         volatile String status = "processing";
         volatile Artifact artifact;
 
-        TaskState(String taskId, String prompt, long submittedAt) {
-            this.taskId = taskId;
-            this.prompt = prompt;
+        private TaskState(VideoGenerationTool owner, String sessionId, long submittedAt) {
+            this.owner = owner;
+            this.sessionId = sessionId;
             this.submittedAt = submittedAt;
         }
     }

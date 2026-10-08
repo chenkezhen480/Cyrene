@@ -26,6 +26,10 @@ import java.util.Optional;
 public class SqliteTraceStore implements TraceStore {
 
     private static final Logger log = LoggerFactory.getLogger(SqliteTraceStore.class);
+    // Normalize legacy variable-precision ISO timestamps without rewriting stored data.
+    static final String TIMESTAMP_ORDER = "(rtrim(timestamp, 'Z') || CASE WHEN instr(timestamp, '.') = 0 THEN '.000000000' ELSE substr('000000000', length(substr(timestamp, instr(timestamp, '.'))) - 1) END || 'Z')";
+    private static final java.time.format.DateTimeFormatter TIMESTAMP_FORMAT =
+            new java.time.format.DateTimeFormatterBuilder().appendInstant(9).toFormatter();
     private final ObjectMapper mapper;
     private final String dbUrl;
 
@@ -105,24 +109,14 @@ public class SqliteTraceStore implements TraceStore {
             }
         } catch (Exception e) {
             log.error("Failed to find trace {}: {}", traceId, e.getMessage(), e);
+            throw new TraceStoreException("Failed to read trace " + traceId, e);
         }
         return Optional.empty();
     }
 
     @Override
     public List<AgentTrace> listRecent(int limit) {
-        String sql = "SELECT full_json FROM agent_traces ORDER BY timestamp DESC LIMIT ?";
-        List<AgentTrace> results = new ArrayList<>();
-        try (Connection conn = getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setInt(1, limit);
-            ResultSet rs = ps.executeQuery();
-            while (rs.next()) {
-                results.add(mapper.readValue(rs.getString("full_json"), AgentTrace.class));
-            }
-        } catch (Exception e) {
-            log.error("Failed to list traces: {}", e.getMessage(), e);
-        }
-        return results;
+        return findPage("1 = 1", List.of(), null, limit).items();
     }
 
     @Override
@@ -130,35 +124,42 @@ public class SqliteTraceStore implements TraceStore {
         if (sessionId == null || sessionId.isBlank()) {
             throw new IllegalArgumentException("sessionId is required");
         }
+        return findPage("session_id = ?", List.of(sessionId), cursor, limit);
+    }
+
+    @Override
+    public PageResponse<AgentTrace> findByOwner(String userId, String tenantId, TraceCursor cursor, int limit) {
+        requireOwner(userId);
+        return findPage("user_id = ? AND json_extract(full_json, '$.metadata.tenant_id') IS ?",
+                java.util.Arrays.asList(userId, tenantId), cursor, limit);
+    }
+
+    private PageResponse<AgentTrace> findPage(String scope, List<String> values, TraceCursor cursor, int limit) {
         if (limit < 1 || limit > 200) {
             throw new IllegalArgumentException("limit must be between 1 and 200");
         }
-        String sql = cursor == null
-                ? "SELECT full_json FROM agent_traces WHERE session_id = ? "
-                        + "ORDER BY timestamp DESC, trace_id DESC LIMIT ?"
-                : "SELECT full_json FROM agent_traces WHERE session_id = ? "
-                        + "AND (timestamp < ? OR (timestamp = ? AND trace_id < ?)) "
-                        + "ORDER BY timestamp DESC, trace_id DESC LIMIT ?";
+        String sql = "SELECT full_json FROM agent_traces WHERE " + scope
+                + (cursor == null ? "" : " AND (" + TIMESTAMP_ORDER + " < ? OR (" + TIMESTAMP_ORDER + " = ? AND trace_id < ?))")
+                + " ORDER BY " + TIMESTAMP_ORDER + " DESC, trace_id DESC LIMIT ?";
         List<AgentTrace> results = new ArrayList<>();
         try (Connection connection = getConnection();
              PreparedStatement statement = connection.prepareStatement(sql)) {
-            statement.setString(1, sessionId);
-            if (cursor == null) {
-                statement.setInt(2, limit + 1);
-            } else {
-                String timestamp = cursor.timestamp().toString();
-                statement.setString(2, timestamp);
-                statement.setString(3, timestamp);
-                statement.setString(4, cursor.traceId());
-                statement.setInt(5, limit + 1);
+            int parameter = 1;
+            for (String value : values) statement.setString(parameter++, value);
+            if (cursor != null) {
+                String timestamp = TIMESTAMP_FORMAT.format(cursor.timestamp());
+                statement.setString(parameter++, timestamp);
+                statement.setString(parameter++, timestamp);
+                statement.setString(parameter++, cursor.traceId());
             }
+            statement.setInt(parameter, limit + 1);
             try (ResultSet resultSet = statement.executeQuery()) {
                 while (resultSet.next()) {
                     results.add(mapper.readValue(resultSet.getString("full_json"), AgentTrace.class));
                 }
             }
         } catch (Exception e) {
-            throw new TraceStoreException("Failed to list traces for session " + sessionId, e);
+            throw new TraceStoreException("Failed to list scoped traces", e);
         }
         return PageResponse.fromFetched(
                 results,
@@ -167,9 +168,57 @@ public class SqliteTraceStore implements TraceStore {
     }
 
     @Override
+    public int countByOwner(String userId, String tenantId) {
+        requireOwner(userId);
+        try (Connection connection = getConnection(); PreparedStatement statement = connection.prepareStatement(
+                "SELECT COUNT(*) FROM agent_traces WHERE user_id = ? "
+                        + "AND json_extract(full_json, '$.metadata.tenant_id') IS ?")) {
+            statement.setString(1, userId);
+            statement.setString(2, tenantId);
+            try (ResultSet result = statement.executeQuery()) {
+                result.next();
+                return result.getInt(1);
+            }
+        } catch (SQLException e) {
+            throw new TraceStoreException("Failed to count owner traces", e);
+        }
+    }
+
+    @Override
+    public int cleanupByOwner(String userId, String tenantId, int retentionDays) {
+        requireOwner(userId);
+        if (retentionDays < 1) throw new IllegalArgumentException("retentionDays must be positive");
+        Connection connection = null;
+        try {
+            connection = getConnection();
+            connection.setAutoCommit(false);
+            int deleted;
+            try (PreparedStatement statement = connection.prepareStatement(
+                    "DELETE FROM agent_traces WHERE user_id = ? "
+                            + "AND json_extract(full_json, '$.metadata.tenant_id') IS ? AND " + TIMESTAMP_ORDER + " < ?")) {
+                statement.setString(1, userId);
+                statement.setString(2, tenantId);
+                statement.setString(3, TIMESTAMP_FORMAT.format(Instant.now().minusSeconds(retentionDays * 86400L)));
+                deleted = statement.executeUpdate();
+            }
+            connection.commit();
+            return deleted;
+        } catch (SQLException | RuntimeException e) {
+            rollback(connection);
+            throw new TraceStoreException("Failed to cleanup owner traces", e);
+        } finally {
+            closeCleanupConnection(connection);
+        }
+    }
+
+    private static void requireOwner(String userId) {
+        if (userId == null || userId.isBlank()) throw new IllegalArgumentException("userId is required");
+    }
+
+    @Override
     public int cleanup(int retentionDays) {
         Instant cutoff = Instant.now().minusSeconds(retentionDays * 86400L);
-        String deleteSql = "DELETE FROM agent_traces WHERE trace_id = ? AND timestamp < ?";
+        String deleteSql = "DELETE FROM agent_traces WHERE trace_id = ? AND " + TIMESTAMP_ORDER + " < ?";
         Connection connection = null;
         try {
             connection = getConnection();
@@ -179,7 +228,7 @@ public class SqliteTraceStore implements TraceStore {
             boolean hasMore;
             do {
                 List<ExpiredTraceCursor> fetched = findExpiredPage(
-                        connection, cutoff.toString(), cursor, 500);
+                        connection, TIMESTAMP_FORMAT.format(cutoff), cursor, 500);
                 hasMore = fetched.size() > 500;
                 List<ExpiredTraceCursor> page = hasMore
                         ? fetched.subList(0, 500)
@@ -187,7 +236,7 @@ public class SqliteTraceStore implements TraceStore {
                 try (PreparedStatement statement = connection.prepareStatement(deleteSql)) {
                     for (ExpiredTraceCursor candidate : page) {
                         statement.setString(1, candidate.traceId());
-                        statement.setString(2, cutoff.toString());
+                        statement.setString(2, TIMESTAMP_FORMAT.format(cutoff));
                         deleted += statement.executeUpdate();
                     }
                 }
@@ -210,18 +259,11 @@ public class SqliteTraceStore implements TraceStore {
             ExpiredTraceCursor cursor,
             int limit
     ) throws SQLException {
-        String sql = cursor == null
-                ? """
-                SELECT trace_id, timestamp FROM agent_traces
-                WHERE timestamp < ?
-                ORDER BY timestamp ASC, trace_id ASC LIMIT ?
-                """
-                : """
-                SELECT trace_id, timestamp FROM agent_traces
-                WHERE timestamp < ?
-                  AND (timestamp > ? OR (timestamp = ? AND trace_id > ?))
-                ORDER BY timestamp ASC, trace_id ASC LIMIT ?
-                """;
+        String sql = "SELECT trace_id, " + TIMESTAMP_ORDER + " AS timestamp FROM agent_traces WHERE "
+                + TIMESTAMP_ORDER + " < ?"
+                + (cursor == null ? "" : " AND (" + TIMESTAMP_ORDER + " > ? OR ("
+                + TIMESTAMP_ORDER + " = ? AND trace_id > ?))")
+                + " ORDER BY " + TIMESTAMP_ORDER + " ASC, trace_id ASC LIMIT ?";
         List<ExpiredTraceCursor> fetched = new ArrayList<>(limit + 1);
         try (PreparedStatement statement = connection.prepareStatement(sql)) {
             statement.setString(1, cutoff);

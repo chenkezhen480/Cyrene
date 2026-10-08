@@ -3,7 +3,6 @@ package com.harness.input.document;
 import com.harness.core.env.EnvConfig;
 import com.harness.core.env.EnvKey;
 import com.harness.core.exception.AgentException;
-import com.harness.core.model.ThinkingLevel;
 import com.harness.core.text.TextTokenEstimator;
 import com.harness.input.multimodal.TextChunker;
 import com.harness.provider.ChatModelProvider;
@@ -84,7 +83,7 @@ public final class DocumentSummarizer {
             throw new AgentException("Document summarization requires a configured primary Chat model");
         }
         String modelName = provider.modelName();
-        ChatRequestParameters parameters = provider.planningRequestParameters(ThinkingLevel.OFF, List.of());
+        ChatRequestParameters parameters = provider.planningRequestParameters(null, List.of());
         AtomicInteger calls = new AtomicInteger();
         if (tokenEstimator.estimate(markdown) <= contentBudget) {
             return new Summary(generate(model, parameters, finalTask, markdown, inputBudget, maxOutputTokens, calls, retry),

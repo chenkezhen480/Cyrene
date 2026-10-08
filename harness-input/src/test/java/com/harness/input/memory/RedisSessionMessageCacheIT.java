@@ -30,13 +30,15 @@ class RedisSessionMessageCacheIT {
 
     @BeforeAll
     static void initEnv() {
+        String url = System.getenv("HARNESS_TEST_REDIS_URL");
+        Assumptions.assumeTrue(url != null && !url.isBlank(), "An isolated Redis test URL is required");
         EnvConfig.init(envWith(Map.of()));
     }
 
     /** Class defaults, plus optional overrides — EnvConfig is a global singleton. */
     static Map<String, String> envWith(Map<String, String> overrides) {
         Map<String, String> env = new HashMap<>(Map.of(
-                "HARNESS_MEMORY_REDIS_URL", "redis://localhost:6379",
+                "HARNESS_MEMORY_REDIS_URL", System.getenv("HARNESS_TEST_REDIS_URL"),
                 "HARNESS_MEMORY_REDIS_DB", "10",
                 "HARNESS_MEMORY_REDIS_KEY_PREFIX", TEST_PREFIX,
                 "HARNESS_MEMORY_REDIS_TTL_MINUTES", "10"));
@@ -142,27 +144,6 @@ class RedisSessionMessageCacheIT {
         assertThat(cache.size()).isGreaterThanOrEqualTo(15);
     }
 
-    /**
-     * DISABLED — fails for a reason outside this cache, kept as a reproduction.
-     *
-     * <p>Symptom: 8 threads appending 40 messages each to one session end up with far fewer
-     * than 321 elements, while the same Lua script is flawless single-threaded (0 of 100
-     * failures, repeatedly). Redis executes a script atomically, so the cache cannot be at
-     * fault — a per-session write queue would not fix this either.
-     *
-     * <p>Measured cause, isolated with a sentinel key written through a direct connection
-     * pinned to db 10: of 8 connections borrowed from {@link RedisConnectionPool}, only 4 saw
-     * the key ({@code sentinel=null, dbSize=4} for the rest). Connections from the same pool
-     * do not all address the same database, which also explains a clean {@code MONITOR -n 10}
-     * and {@code dbSize} readings that disagree with {@code KEYS}.
-     *
-     * <p>{@code RedisConnectionPool.init()} has exactly one caller
-     * ({@code AgentOrchestrator.startup}) and this class only reaches it through the lazy path
-     * in {@code getConnection()}, so by inspection every connection should use the configured
-     * database. The discrepancy is unexplained; treat this test as evidence about the pool,
-     * not about the cache, until it is resolved.
-     */
-    @Disabled("RedisConnectionPool hands out connections on more than one database")
     @Test
     void concurrentAppendsToTheSameSession_loseNothing() throws Exception {
         String sid = newSessionId();

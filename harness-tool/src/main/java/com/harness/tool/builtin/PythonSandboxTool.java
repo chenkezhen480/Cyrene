@@ -147,7 +147,7 @@ public class PythonSandboxTool implements TypedOutputTool {
                     String artifactId = idNode.asText();
                     Optional<Artifact> artifactOpt = lookup.get(artifactId);
                     if (artifactOpt.isPresent()) {
-                        Artifact artifact = artifactOpt.get();
+                        Artifact artifact = com.harness.tool.artifact.ArtifactSessionContext.requireAccess(artifactOpt.get());
                         Path source = Path.of(artifact.filePath());
                         if (Files.exists(source)) {
                             Files.copy(source, inputDir.resolve(artifact.name()), StandardCopyOption.REPLACE_EXISTING);

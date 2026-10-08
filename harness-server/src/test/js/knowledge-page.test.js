@@ -9,7 +9,7 @@ const source = readFileSync(join(__dirname, '../../main/resources/public/js/app.
 const page = source.slice(source.indexOf('const KnowledgePage = {'), source.indexOf('function requirePageResponse'));
 const contract = source.slice(source.indexOf('function requirePageResponse'), source.indexOf('function requireArrayResponse'));
 
-test('one upload processes every selected file, including a failure and a queued retry', async () => {
+test('one upload processes every selected file, including a failure and an unsupported response', async () => {
   const calls = [];
   const emptyPage = { items: [], pageInfo: { limit: 20, nextCursor: '', hasMore: false } };
   const api = {
@@ -35,9 +35,9 @@ test('one upload processes every selected file, including a failure and a queued
   await state.uploadFiles();
   assert.deepEqual(calls.map(x => x[0]), ['ok.md', 'failed.md', 'pending.md', 'last.md']);
   assert.ok(calls.every(x => x[1] === 'docs'));
-  assert.equal(Array.from(state.uploadQueue.value, x => x.status).join(','), 'indexed,failed,pending,indexed');
+  assert.equal(Array.from(state.uploadQueue.value, x => x.status).join(','), 'indexed,failed,failed,indexed');
   assert.equal(state.uploadQueue.value[1].message, 'conversion failed');
-  assert.equal(state.uploadQueue.value[2].message, 'retry queued');
+  assert.equal(state.uploadQueue.value[2].message, 'invalidKnowledgeUploadResponse');
   assert.equal(state.uploadedCount.value, 4);
   assert.equal(state.uploading.value, false);
   assert.equal(state.selectedFiles.value.length, 0);

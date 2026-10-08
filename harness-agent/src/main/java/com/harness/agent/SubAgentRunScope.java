@@ -116,6 +116,13 @@ public class SubAgentRunScope {
             String ownerSessionId,
             String ownerTurnId
     ) {
+        return registerTask(task, taskToken, ownerSessionId, ownerTurnId, null);
+    }
+
+    public SubAgentTaskRecord registerTask(
+            SubAgentTask task, CancellationToken taskToken, String ownerSessionId,
+            String ownerTurnId, AgentRunContext.Owner owner
+    ) {
         lastAccessedAt = Instant.now();
 
         if (!isOpen()) {
@@ -125,7 +132,7 @@ public class SubAgentRunScope {
 
         String taskId = task.taskId();
         SubAgentTaskRecord record = new SubAgentTaskRecord(
-                taskId, runId, ownerSessionId, ownerTurnId, task, taskToken);
+                taskId, runId, ownerSessionId, ownerTurnId, task, taskToken, owner);
 
         if (tasks.putIfAbsent(taskId, record) != null) {
             log.warn("[SubAgentScope] Duplicate taskId {} in run {}", taskId, runId);

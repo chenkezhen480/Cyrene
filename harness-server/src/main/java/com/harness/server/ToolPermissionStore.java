@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.harness.core.env.MysqlConnectionPool;
 import com.harness.core.persistence.SqlConnectionProvider;
+import com.harness.core.model.PageResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -41,7 +42,7 @@ public class ToolPermissionStore {
             """;
 
     private static final String FIND_PROFILE_SQL = """
-            SELECT disabled_tools_json
+            SELECT tenant_id, identity, disabled_tools_json
             FROM tool_permission_profile
             WHERE tenant_id <=> ? AND identity = ?
             """;
@@ -53,21 +54,13 @@ public class ToolPermissionStore {
             """;
 
     private static final String LIST_IDENTITIES_SQL = """
-            SELECT identity
-            FROM tool_permission_profile
-            WHERE tenant_id <=> ?
-            ORDER BY identity
-            """;
-
-    /**
-     * Bounded because it only feeds a suggestion list: the admin types the tenant, and the
-     * datalist is a convenience, so this needs no cursor.
-     */
-    private static final String LIST_TENANTS_SQL = """
-            SELECT DISTINCT tenant_id
-            FROM tool_permission_profile
-            ORDER BY tenant_id
-            LIMIT 200
+            SELECT identity FROM (
+                (SELECT identity COLLATE utf8mb4_bin AS identity FROM tool_permission_profile
+                 WHERE tenant_id <=> BINARY ? %s ORDER BY identity COLLATE utf8mb4_bin LIMIT ?)
+                UNION
+                (SELECT DISTINCT identity FROM internal_api_permission
+                 WHERE tenant_id = ? %s ORDER BY identity COLLATE utf8mb4_bin LIMIT ?)
+            ) profiles ORDER BY identity COLLATE utf8mb4_bin LIMIT ?
             """;
 
     private static final TypeReference<List<String>> TOOL_NAMES = new TypeReference<>() {
@@ -115,6 +108,7 @@ public class ToolPermissionStore {
                 if (!rows.next()) {
                     return Optional.empty();
                 }
+                requireExactScope(rows, normalize(tenantId), identity);
                 return Optional.of(decodeToolNames(rows.getString("disabled_tools_json")));
             }
         } catch (SQLException e) {
@@ -122,46 +116,64 @@ public class ToolPermissionStore {
         }
     }
 
-    List<String> listIdentities(String tenantId) {
+    PageResponse<String> listIdentities(String tenantId, String cursor, int limit) {
+        if (limit < 1 || limit > 100) throw new IllegalArgumentException("limit must be between 1 and 100");
         try (Connection connection = connectionProvider.getConnection();
-             PreparedStatement statement = connection.prepareStatement(LIST_IDENTITIES_SQL)) {
-            statement.setString(1, normalize(tenantId));
+             PreparedStatement statement = connection.prepareStatement(LIST_IDENTITIES_SQL.formatted(
+                     cursor == null ? "" : "AND identity COLLATE utf8mb4_bin > ?",
+                     cursor == null ? "" : "AND identity COLLATE utf8mb4_bin > ?"))) {
+            int parameter = 1;
+            for (int source = 0; source < 2; source++) {
+                statement.setString(parameter++, normalize(tenantId));
+                if (cursor != null) statement.setString(parameter++, cursor);
+                statement.setInt(parameter++, limit + 1);
+            }
+            statement.setInt(parameter, limit + 1);
             try (ResultSet rows = statement.executeQuery()) {
                 List<String> identities = new ArrayList<>();
                 while (rows.next()) {
                     identities.add(rows.getString("identity"));
                 }
-                return List.copyOf(identities);
+                return PageResponse.fromFetched(identities, limit, identity -> identity);
             }
         } catch (SQLException e) {
             throw new ToolPermissionException("Failed to list tool permission identities", e);
         }
     }
 
-    /** Tenants that have at least one stored permission row. */
-    List<String> listTenants() {
-        try (Connection connection = connectionProvider.getConnection();
-             PreparedStatement statement = connection.prepareStatement(LIST_TENANTS_SQL);
-             ResultSet rows = statement.executeQuery()) {
-            List<String> tenants = new ArrayList<>();
-            while (rows.next()) {
-                tenants.add(rows.getString("tenant_id"));
+
+    void saveProfile(String tenantId, String identity, Set<String> disabledTools) {
+        String tenant = required(tenantId, "tenantId");
+        String scopedIdentity = required(identity, "identity");
+        try (Connection connection = connectionProvider.getConnection()) {
+            connection.setAutoCommit(false);
+            try {
+                try (var lookup = connection.prepareStatement(FIND_PROFILE_SQL + " FOR UPDATE")) {
+                    lookup.setString(1, tenant);
+                    lookup.setString(2, scopedIdentity);
+                    try (var rows = lookup.executeQuery()) {
+                        if (rows.next()) requireExactScope(rows, tenant, scopedIdentity);
+                    }
+                }
+                try (PreparedStatement statement = connection.prepareStatement(SAVE_PROFILE_SQL)) {
+                    statement.setString(1, tenant);
+                    statement.setString(2, scopedIdentity);
+                    statement.setString(3, encodeToolNames(disabledTools));
+                    statement.executeUpdate();
+                }
+                connection.commit();
+            } catch (SQLException | RuntimeException e) {
+                try { connection.rollback(); } catch (SQLException rollback) { e.addSuppressed(rollback); }
+                throw e;
             }
-            return List.copyOf(tenants);
         } catch (SQLException e) {
-            throw new ToolPermissionException("Failed to list configured tenants", e);
+            throw new ToolPermissionException("Failed to save tool permission profile", e);
         }
     }
 
-    void saveProfile(String tenantId, String identity, Set<String> disabledTools) {
-        try (Connection connection = connectionProvider.getConnection();
-             PreparedStatement statement = connection.prepareStatement(SAVE_PROFILE_SQL)) {
-            statement.setString(1, normalize(required(tenantId, "tenantId")));
-            statement.setString(2, required(identity, "identity"));
-            statement.setString(3, encodeToolNames(disabledTools));
-            statement.executeUpdate();
-        } catch (SQLException e) {
-            throw new ToolPermissionException("Failed to save tool permission profile", e);
+    private static void requireExactScope(ResultSet rows, String tenantId, String identity) throws SQLException {
+        if (!Objects.equals(rows.getString("tenant_id"), tenantId) || !identity.equals(rows.getString("identity"))) {
+            throw new SecurityException("Tool permission scope does not match verified identity");
         }
     }
 

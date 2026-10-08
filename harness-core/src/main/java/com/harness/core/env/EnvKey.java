@@ -37,6 +37,12 @@ public final class EnvKey {
     public static final String AUTH_TOKEN            = "HARNESS_AUTH_TOKEN";
     public static final String AUTH_JWT_SECRET       = "HARNESS_AUTH_JWT_SECRET";
     public static final String AUTH_JWT_ISSUER       = "HARNESS_AUTH_JWT_ISSUER";
+    public static final String AUTH_JWT_AUDIENCE     = "HARNESS_AUTH_JWT_AUDIENCE";
+    public static final String AUTH_TOKEN_TENANT_ID  = "HARNESS_AUTH_TOKEN_TENANT_ID";
+    public static final String AUTH_TOKEN_IDENTITY   = "HARNESS_AUTH_TOKEN_IDENTITY";
+    public static final String INTERNAL_API_AUTHORIZATION_ENABLED = "HARNESS_INTERNAL_API_AUTHORIZATION_ENABLED";
+    public static final String INTERNAL_API_ADMIN_TOKEN = "HARNESS_INTERNAL_API_ADMIN_TOKEN";
+    public static final String INTERNAL_API_ADMIN_TENANT_ID = "HARNESS_INTERNAL_API_ADMIN_TENANT_ID";
     /** JWT 滑动窗口刷新：剩余有效期小于此阈值时刷新 token（分钟），默认 60 */
     public static final String AUTH_JWT_REFRESH_THRESHOLD_MINUTES = "HARNESS_AUTH_JWT_REFRESH_THRESHOLD_MINUTES";
 
@@ -95,6 +101,8 @@ public final class EnvKey {
     public static final String SEARCH_TIMEOUT_SECONDS         = "HARNESS_SEARCH_TIMEOUT_SECONDS";
     public static final String SEARCH_RESULT_LIMIT            = "HARNESS_SEARCH_RESULT_LIMIT";
     public static final String SEARCH_BLOCKED_DOMAINS         = "HARNESS_SEARCH_BLOCKED_DOMAINS";
+    /** Session-scoped video job and result retention. */
+    public static final String TOOL_VIDEO_TASK_RETENTION_SECONDS = "HARNESS_TOOL_VIDEO_TASK_RETENTION_SECONDS";
     /** Legacy web-search keys remain supported for existing deployments. */
     public static final String TOOL_WEB_SEARCH_ENABLED        = "HARNESS_TOOL_WEB_SEARCH_ENABLED";
     /** SearXNG 实例地址，默认 http://localhost:8888 */

@@ -24,10 +24,12 @@ class MysqlTraceStoreIT {
 
     @BeforeAll
     static void initEnv() {
+        String url = System.getenv("HARNESS_TEST_MYSQL_URL");
+        Assumptions.assumeTrue(url != null && !url.isBlank(), "An isolated MySQL test URL is required");
         EnvConfig.init(Map.of(
-                "HARNESS_AUDIT_DB_URL", "jdbc:mysql://localhost:3306/zhi_du_yuan?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai",
-                "HARNESS_AUDIT_DB_USER", "root",
-                "HARNESS_AUDIT_DB_PASS", "1234"
+                "HARNESS_AUDIT_DB_URL", url,
+                "HARNESS_AUDIT_DB_USER", System.getenv("HARNESS_TEST_MYSQL_USER"),
+                "HARNESS_AUDIT_DB_PASS", System.getenv("HARNESS_TEST_MYSQL_PASSWORD")
         ));
     }
 
@@ -184,4 +186,64 @@ class MysqlTraceStoreIT {
         assertThat(deleted).isZero();
         assertThat(store.findById(testTraceId)).isPresent();
     }
+    @Test void pageCursorUsesPersistedTimestampPrecisionWithoutRepeats() throws Exception {
+        String session = testTraceId + "-session";
+        try (var connection = MysqlConnectionPool.getConnection();
+             var insert = connection.prepareStatement("INSERT INTO sessions(id,user_id,tenant_id) VALUES(?,?,?)")) {
+            insert.setString(1, session); insert.setString(2, "precision-owner"); insert.setString(3, "precision-tenant"); insert.executeUpdate();
+            for (int i = 0; i < 3; i++) store.save(AgentTrace.builder().traceId(testTraceId + "-" + i)
+                    .sessionId(session).userId("precision-owner")
+                    .timestamp(java.time.Instant.parse("2026-01-01T00:00:00.123456789Z")).build());
+            var ownerFirst = store.findByOwner("precision-owner", "precision-tenant", null, 1);
+            var ownerParts = ownerFirst.pageInfo().nextCursor().split("\\|", 2);
+            var ownerCursor = new com.harness.core.model.TraceCursor(java.time.Instant.parse(ownerParts[0]), ownerParts[1]);
+            assertThat(store.findByOwner("precision-owner", "precision-tenant", ownerCursor, 1).items())
+                    .extracting(AgentTrace::traceId).containsExactly(testTraceId + "-1");
+            var sessionFirst = store.findBySession(session, null, 1);
+            var sessionParts = sessionFirst.pageInfo().nextCursor().split("\\|", 2);
+            var sessionCursor = new com.harness.core.model.TraceCursor(java.time.Instant.parse(sessionParts[0]), sessionParts[1]);
+            assertThat(store.findBySession(session, sessionCursor, 1).items())
+                    .extracting(AgentTrace::traceId).containsExactly(testTraceId + "-1");
+            assertThat(ownerFirst.items().getFirst().timestamp())
+                    .isEqualTo(java.time.Instant.parse("2026-01-01T00:00:00.123456789Z"));
+        } finally {
+            try (var connection = MysqlConnectionPool.getConnection();
+                 var delete = connection.prepareStatement("DELETE FROM sessions WHERE id=?")) {
+                delete.setString(1, session); delete.executeUpdate();
+            }
+        }
+    }
+
+    @Test void ownerQueriesPreserveBinaryScopeAndCursorAcrossCaseInsensitiveSessionIds() throws Exception {
+        String session = testTraceId + "-session";
+        try (var connection = MysqlConnectionPool.getConnection();
+             var insert = connection.prepareStatement("INSERT INTO sessions (id,user_id,tenant_id) VALUES (?,?,?)")) {
+            insert.setString(1, session); insert.setString(2, "owner-a"); insert.setString(3, "tenant-a"); insert.executeUpdate();
+            java.time.Instant old = java.time.Instant.parse("2000-01-01T00:00:00Z");
+            for (int i=0;i<3;i++) store.save(AgentTrace.builder().traceId(testTraceId + "-" + i)
+                    .sessionId(session).userId("owner-a").timestamp(old).build());
+            store.save(AgentTrace.builder().traceId(testTraceId + "-case")
+                    .sessionId(session.toUpperCase(java.util.Locale.ROOT)).userId("owner-a").timestamp(old).build());
+            store.save(AgentTrace.builder().traceId(testTraceId + "-user-case")
+                    .sessionId(session).userId("Owner-a").timestamp(old).build());
+            assertThat(store.countByOwner("owner-a", "tenant-a")).isEqualTo(3);
+            assertThat(store.countByOwner("Owner-a", "tenant-a")).isZero();
+            assertThat(store.countByOwner("owner-a", "Tenant-a")).isZero();
+            assertThat(store.findByOwner("owner-a", "Tenant-a", null, 2).items()).isEmpty();
+            assertThat(store.findByOwner("Owner-a", "tenant-a", null, 2).items()).isEmpty();
+            var first=store.findByOwner("owner-a","tenant-a",null,2);
+            assertThat(first.items()).extracting(AgentTrace::traceId).containsExactly(testTraceId+"-2",testTraceId+"-1");
+            assertThat(first.pageInfo().hasMore()).isTrue();
+            assertThat(store.findByOwner("owner-a","tenant-a",new com.harness.core.model.TraceCursor(old,testTraceId+"-1"),2).items())
+                    .extracting(AgentTrace::traceId).containsExactly(testTraceId+"-0");
+            assertThat(store.cleanupByOwner("owner-a","tenant-a",1)).isEqualTo(3);
+            assertThat(store.findById(testTraceId+"-case")).isPresent();
+            assertThat(store.findById(testTraceId+"-user-case")).isPresent();
+        } finally {
+            try (var connection=MysqlConnectionPool.getConnection(); var delete=connection.prepareStatement("DELETE FROM sessions WHERE id=?")) {
+                delete.setString(1,session);delete.executeUpdate();
+            }
+        }
+    }
+
 }

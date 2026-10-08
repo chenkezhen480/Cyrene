@@ -1,6 +1,11 @@
 package com.harness.server;
 
 import com.harness.agent.graph.GraphSpaceAccessService;
+import com.harness.core.env.EnvConfig;
+import com.harness.core.env.EnvKey;
+import com.harness.core.model.AgentContext;
+import com.harness.server.security.InternalApiPermissionService;
+import com.harness.server.security.RequestPrincipalResolver;
 import com.harness.server.api.ApiErrorCode;
 import com.harness.server.api.ApiResponses;
 import com.harness.tool.knowledge.okf.OkfBundle;
@@ -24,6 +29,7 @@ final class KnowledgeOkfHandler {
     private final GraphSpaceAccessService graphAccessService;
     private final SessionRequestOwnerResolver ownerResolver;
     private final boolean enabled;
+    private final String managementTenantId;
 
     KnowledgeOkfHandler(
             OkfBundleExporter exporter,
@@ -41,18 +47,26 @@ final class KnowledgeOkfHandler {
             SessionRequestOwnerResolver ownerResolver,
             boolean enabled
     ) {
+        this(exporter, importer, graphAccessService, ownerResolver, enabled,
+                EnvConfig.get().getString(EnvKey.INTERNAL_API_ADMIN_TENANT_ID, AgentContext.DEFAULT_TENANT_ID));
+    }
+
+    KnowledgeOkfHandler(OkfBundleExporter exporter, OkfImportService importer,
+                        GraphSpaceAccessService graphAccessService, SessionRequestOwnerResolver ownerResolver,
+                        boolean enabled, String managementTenantId) {
         this.exporter = Objects.requireNonNull(exporter, "exporter");
         this.importer = Objects.requireNonNull(importer, "importer");
         this.graphAccessService = Objects.requireNonNull(
                 graphAccessService, "graphAccessService");
         this.ownerResolver = Objects.requireNonNull(ownerResolver, "ownerResolver");
         this.enabled = enabled;
+        this.managementTenantId = Objects.requireNonNull(managementTenantId, "managementTenantId");
     }
 
     void exportBundle(Context context) {
         execute(context, () -> {
             ExchangeRequest request = context.bodyAsClass(ExchangeRequest.class);
-            OkfBundleScope scope = resolveScope(context, request);
+            OkfBundleScope scope = resolveScope(context, request, false);
             OkfBundle bundle = exporter.export(scope);
             context.json(bundle);
         });
@@ -61,7 +75,7 @@ final class KnowledgeOkfHandler {
     void reviewImport(Context context) {
         execute(context, () -> {
             ExchangeRequest request = context.bodyAsClass(ExchangeRequest.class);
-            OkfBundleScope scope = resolveScope(context, request);
+            OkfBundleScope scope = resolveScope(context, request, true);
             OkfImportReview review = importer.review(scope, requiredFiles(request));
             context.json(review);
         });
@@ -70,7 +84,7 @@ final class KnowledgeOkfHandler {
     void commitImport(Context context) {
         execute(context, () -> {
             ExchangeRequest request = context.bodyAsClass(ExchangeRequest.class);
-            OkfBundleScope scope = resolveScope(context, request);
+            OkfBundleScope scope = resolveScope(context, request, true);
             OkfImportResult result = importer.importApproved(
                     scope, requiredFiles(request), request.approvedPaths());
             context.json(result);
@@ -99,13 +113,18 @@ final class KnowledgeOkfHandler {
         }
     }
 
-    private OkfBundleScope resolveScope(Context context, ExchangeRequest request) {
+    private OkfBundleScope resolveScope(Context context, ExchangeRequest request, boolean mutation) {
         if (request == null || request.kind() == null || request.kind().isBlank()) {
             throw new IllegalArgumentException("kind is required");
         }
         SessionRequestOwnerResolver.Owner owner = ownerResolver.resolve(
                 context, request.userId(), request.tenantId());
         String kind = request.kind().trim().toLowerCase(Locale.ROOT);
+        if (("global_operation".equals(kind) || (mutation && "graph".equals(kind)))
+                && !InternalApiPermissionService.hasGlobalManagementScope(
+                context.attribute(RequestPrincipalResolver.PRINCIPAL_ATTRIBUTE), managementTenantId)) {
+            throw new SecurityException("Global knowledge management is restricted to the configured management tenant");
+        }
         return switch (kind) {
             case "user" -> OkfBundleScope.user(owner.tenantId(), owner.userId());
             case "tenant_operation" -> OkfBundleScope.tenantOperation(owner.tenantId());

@@ -1,5 +1,6 @@
 package com.harness.core.model;
 
+import com.harness.core.security.RequestPrincipal;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -12,8 +13,23 @@ import java.util.Set;
  * Contains caller metadata that influences behavior.
  */
 public record AgentContext(
-        Map<String, Object> data
+        Map<String, Object> data,
+        RequestPrincipal principal
 ) {
+    public AgentContext(Map<String, Object> data) {
+        this(data, null);
+    }
+
+    public AgentContext {
+        data = data != null ? data : Map.of();
+        if (principal != null && principal.authenticationType() != RequestPrincipal.AuthenticationType.ANONYMOUS) {
+            Map<String, Object> bound = new HashMap<>(data);
+            bound.put(KEY_USER_ID, principal.requireUserId());
+            bound.put(KEY_TENANT_ID, principal.tenantId());
+            bound.put(KEY_IDENTITY, principal.identity());
+            data = java.util.Collections.unmodifiableMap(bound);
+        }
+    }
     public static final String KEY_USER_ID = "userId";
     public static final String KEY_TENANT_ID = "tenantId";
     public static final String DEFAULT_TENANT_ID = "000000";
@@ -116,7 +132,7 @@ public record AgentContext(
         }
         Map<String, Object> copy = new HashMap<>(data);
         copy.put(KEY_TOOL_DENYLIST, List.copyOf(disabledTools));
-        return new AgentContext(copy);
+        return new AgentContext(copy, principal);
     }
 
     public Boolean enableThinking() {
@@ -239,7 +255,7 @@ public record AgentContext(
         copy.remove(KEY_GRAPH_REQUEST_CONTEXT);
         copy.remove(KEY_KNOWLEDGE_REQUEST_CONTEXT);
         copy.remove(KEY_NEEDS_GRAPH_KNOWLEDGE);
-        return new AgentContext(copy);
+        return new AgentContext(copy, principal);
     }
 
     private static String textValue(Object value) {

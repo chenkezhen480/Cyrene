@@ -11,6 +11,9 @@ import java.util.Optional;
 
 public class NoOpSessionStore implements SessionStore {
     @Override public Session create(String userId, String tenantId) { return null; }
+    @Override public void recordIdentity(String sessionId, String userId, String tenantId, String identity) {
+        throw new UnsupportedOperationException("Session identity persistence is disabled");
+    }
     @Override public Optional<Session> findActiveByOwner(
             String sessionId, String userId, String tenantId) { return Optional.empty(); }
     @Override public Optional<Session> findByIdAndOwner(

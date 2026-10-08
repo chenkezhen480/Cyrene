@@ -12,6 +12,8 @@ import com.harness.core.knowledge.KnowledgeRevision;
 import com.harness.core.knowledge.KnowledgeStatus;
 import com.harness.core.model.PageInfo;
 import com.harness.core.model.PageResponse;
+import com.harness.core.security.RequestPrincipal;
+import com.harness.server.security.RequestPrincipalResolver;
 import com.harness.server.api.ApiError;
 import com.harness.server.api.ApiErrorCode;
 import com.harness.graph.store.KnowledgeGraphStore;
@@ -33,6 +35,54 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 class KnowledgeWikiHandlerTest {
+
+    @Test
+    void mutationsKeepGlobalKnowledgeInTheManagementTenant() {
+        EnvConfig.init(Map.of(EnvKey.AUTH_MODE, "none", EnvKey.INTERNAL_API_ADMIN_TENANT_ID, "management"));
+        for (boolean update : List.of(true, false)) {
+            var ordinary = mutationPredicate(update, "tenant-a");
+            assertThat(ordinary).rejects(knowledgeHead(KnowledgeConceptType.SOURCE_DOCUMENT, null, null));
+            assertThat(ordinary).rejects(knowledgeHead(KnowledgeConceptType.OPERATION_PLAYBOOK, null, null));
+            assertThat(ordinary).accepts(knowledgeHead(KnowledgeConceptType.USER_EPISODE, "tenant-a", "user-a"));
+            assertThat(ordinary).accepts(knowledgeHead(KnowledgeConceptType.OPERATION_PLAYBOOK, "tenant-a", null));
+            assertThat(ordinary).rejects(knowledgeHead(KnowledgeConceptType.USER_EPISODE, "tenant-b", "user-a"));
+            assertThat(ordinary).rejects(knowledgeHead(KnowledgeConceptType.USER_EPISODE, "tenant-a", "other-user"));
+            var management = mutationPredicate(update, "management");
+            assertThat(management).accepts(knowledgeHead(KnowledgeConceptType.SOURCE_DOCUMENT, null, null));
+            assertThat(management).accepts(knowledgeHead(KnowledgeConceptType.OPERATION_PLAYBOOK, null, null));
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Predicate<KnowledgeHead> mutationPredicate(boolean update, String tenantId) {
+        var service = mock(KnowledgeWikiService.class);
+        var context = mock(Context.class);
+        when(context.attribute(RequestPrincipalResolver.PRINCIPAL_ATTRIBUTE)).thenReturn(new RequestPrincipal(
+                "user-a", tenantId, "editor", RequestPrincipal.AuthenticationType.JWT));
+        when(context.pathParam("conceptId")).thenReturn("concept-1");
+        when(context.queryParam("revisionId")).thenReturn("revision-1");
+        when(context.bodyAsClass(KnowledgeWikiHandler.WikiUpdate.class))
+                .thenReturn(new KnowledgeWikiHandler.WikiUpdate("revision-1", "title", "summary"));
+        var handler = new KnowledgeWikiHandler(service, mock(GraphSpaceAccessService.class), mock(KnowledgeGraphStore.class));
+        ArgumentCaptor<Predicate<KnowledgeHead>> predicate = ArgumentCaptor.forClass(Predicate.class);
+        if (update) {
+            handler.update(context);
+            verify(service).update(eq("concept-1"), eq("revision-1"), eq("title"), eq("summary"), eq("user-a"), predicate.capture());
+        } else {
+            handler.delete(context);
+            verify(service).delete(eq("concept-1"), eq("revision-1"), predicate.capture());
+        }
+        return predicate.getValue();
+    }
+
+    private static KnowledgeHead knowledgeHead(KnowledgeConceptType type, String tenantId, String userId) {
+        Instant now = Instant.EPOCH;
+        var concept = new KnowledgeConcept("concept-1", tenantId, userId, KnowledgeNamespaceType.OPERATION_MEMORY,
+                "namespace", type, "key", KnowledgeStatus.STABLE, "revision-1", 1, null, now, now);
+        var revision = new KnowledgeRevision("revision-1", "concept-1", 1, "title", "summary", "body",
+                "test", now, "hash", Map.of(), now);
+        return new KnowledgeHead(concept, revision);
+    }
 
     @Test
     void listDefaultsToFiveCards() {

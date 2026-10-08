@@ -24,7 +24,8 @@ public final class KnowledgeWikiService {
             String collection, KnowledgeConceptCursor cursor, int limit, Predicate<KnowledgeHead> authorized) {
         KnowledgeNamespaceType namespace = namespace(type);
         String owner = type == KnowledgeConceptType.USER_EPISODE ? required(userId, "userId", 128) : null;
-        String tenant = type == KnowledgeConceptType.GRAPH_SCHEMA || type == KnowledgeConceptType.GRAPH_SPACE ? null : tenantId;
+        String tenant = type == KnowledgeConceptType.SOURCE_DOCUMENT
+                || type == KnowledgeConceptType.GRAPH_SCHEMA || type == KnowledgeConceptType.GRAPH_SPACE ? null : tenantId;
         var page = type == KnowledgeConceptType.SOURCE_DOCUMENT && collection != null && !collection.isBlank()
                 ? repository.findPageInNamespace(tenant, namespace, collection.trim(), type, KnowledgeStatus.STABLE, cursor, limit)
                 : repository.findPage(tenant, owner, namespace, type, KnowledgeStatus.STABLE, cursor, limit);

@@ -44,6 +44,7 @@ const messages = {
     wikiEmptyHint: "上传知识文件后，会生成对应的 Wiki。",
     invalidWikiResponse: "Wiki 返回格式无效",
 
+    loadMore: '加载更多',
     // Shared
     cancel: '取消', confirm: '确认', save: '保存', saving: '保存中...', delete: '删除',
     deleted: '已删除', deleteFailed: '删除失败: ', operation: '操作', source: '来源',
@@ -321,6 +322,13 @@ const messages = {
     configDoneHint: 'project-apis.json 已生成，可在「配置」页面查看和修改',
     // Tenant / identity tool permissions
     toolPermissions: '工具权限',
+    internalApiPermissions: '内部接口',
+    internalApiPermissionHint: '勾选表示允许；未配置的接口默认拒绝。只可管理已授权租户，不能修改自己的身份权限。',
+    invalidPermissionResponse: '权限接口返回格式不正确',
+    permissionScopeChanged: '请先加载当前租户和身份的权限，再保存',
+    allowedColumn: '允许',
+    apiEndpoint: '方法与路径',
+    apiModule: '模块',
     tenantId: '租户', tenantIdPlaceholder: '无租户体系填 000000',
     identity: '身份', identityPlaceholder: '无身份体系填 DEFAULT',
     tenantRequired: '请先填写租户',
@@ -329,10 +337,13 @@ const messages = {
     toolName: '工具名', toolDescription: '说明', capability: '能力',
     disableAll: '全部禁用', clearAll: '全部启用',
     disabledCount: '已禁用', disabledColumn: '禁用',
-    permissionsSaved: '工具权限已保存',
+    permissionsSaved: '权限已保存',
+    password: '密码', apiToken: 'API 令牌', tokenRequired: '请输入 API 令牌', invalidAuthResponse: '认证接口返回格式错误',
+    verifiedUserHint: '使用已配置的账号登录；身份与租户由服务端确定。',
+    signOut: '退出登录', deleteTraceConfirm: '确认删除这条审计记录？', cleanupTraceConfirm: '确认清理自己已过期的审计记录？',
     permissionRestricted: '已禁用部分工具', permissionUnrestricted: '未禁用任何工具（全部启用）',
     toolPermissionHint: '勾选 = 禁用：保存后该身份不能使用勾选的工具；一个都不勾 = 什么都不禁用，即全部启用。'
-      + '身份取自请求 context.identity，未传则用 DEFAULT。工具列表来自 ToolRegistry，新增工具会自动出现在这里，'
+      + '身份取自已验证的认证信息。工具列表来自 ToolRegistry，新增工具会自动出现在这里，'
       + '默认可用（要禁用新工具需回到本页勾选）。只配置了部分身份时请同时配置 DEFAULT 行：未命中的身份回退到 DEFAULT 行，'
       + '该行也没有则什么都不禁用。',
   },
@@ -377,6 +388,7 @@ const messages = {
     wikiEmptyHint: "Uploading knowledge files creates their Wiki cards.",
     invalidWikiResponse: "Invalid Wiki response",
 
+    loadMore: 'Load more',
     // Shared
     cancel: 'Cancel', confirm: 'Confirm', save: 'Save', saving: 'Saving...', delete: 'Delete',
     deleted: 'Deleted', deleteFailed: 'Delete failed: ', operation: 'Operation', source: 'Source',
@@ -656,6 +668,13 @@ const messages = {
     configDoneHint: 'project-apis.json has been generated. View and edit in the "Config" page.',
     // Tenant / identity tool permissions
     toolPermissions: 'Tool Permissions',
+    internalApiPermissions: 'Internal APIs',
+    internalApiPermissionHint: 'Checked endpoints are allowed; missing grants deny access. Management is tenant scoped and cannot change your own identity permissions.',
+    invalidPermissionResponse: 'Invalid permission API response',
+    permissionScopeChanged: 'Load permissions for the current tenant and identity before saving',
+    allowedColumn: 'Allowed',
+    apiEndpoint: 'Method and path',
+    apiModule: 'Module',
     tenantId: 'Tenant', tenantIdPlaceholder: 'Use 000000 when there is no tenant system',
     identity: 'Identity', identityPlaceholder: 'Use DEFAULT when there is no identity system',
     tenantRequired: 'Enter a tenant first',
@@ -664,11 +683,14 @@ const messages = {
     toolName: 'Tool', toolDescription: 'Description', capability: 'Capability',
     disableAll: 'Disable all', clearAll: 'Enable all',
     disabledCount: 'disabled', disabledColumn: 'Disabled',
-    permissionsSaved: 'Tool permissions saved',
+    permissionsSaved: 'Permissions saved',
+    password: 'Password', apiToken: 'API token', tokenRequired: 'Enter an API token', invalidAuthResponse: 'Invalid authentication response',
+    verifiedUserHint: 'Sign in with an existing account. The server determines tenant and identity.',
+    signOut: 'Sign out', deleteTraceConfirm: 'Delete this trace?', cleanupTraceConfirm: 'Delete your expired traces?',
     permissionRestricted: 'Some tools disabled', permissionUnrestricted: 'Nothing disabled (all tools on)',
     toolPermissionHint: 'Checking a box disables that tool for this identity. Checking none '
-      + 'disables nothing, so every tool stays enabled. The identity comes from context.identity '
-      + 'and defaults to DEFAULT. The list comes from ToolRegistry, so new tools appear here '
+      + 'disables nothing, so every tool stays enabled. The identity comes from verified authentication. '
+      + 'The list comes from ToolRegistry, so new tools appear here '
       + 'automatically and are enabled by default until you check them. When you configure only '
       + 'some identities, also configure a DEFAULT row: an unmatched identity falls back to it, '
       + 'and with no such row either, nothing is disabled.',

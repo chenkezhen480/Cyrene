@@ -19,7 +19,9 @@ test('group denials affect children and action permissions survive a save and re
     EmptyState: {}, ref: value => ({ value }),
     computed: getter => ({ get value() { return getter(); } }),
     inject: key => key === 't' ? value => value : {}, onMounted() {}, showToast() {},
+    requirePageResponse: value => value,
     CyreneAPI: {
+      async getPermissionIdentities() { return { items: [], pageInfo: { limit: 50, hasMore: false, nextCursor: '' } }; },
       async getToolPermissions() {
         return { identity: 'DEFAULT', profiles: [], tenants: [], tools, disabledTools, restricted: disabledTools.length > 0 };
       },

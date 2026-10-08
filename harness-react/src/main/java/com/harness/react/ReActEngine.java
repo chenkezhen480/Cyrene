@@ -156,6 +156,7 @@ public class ReActEngine implements ReActLoop {
                                 ThinkingLevel thinkingLevel,
                                 ConfirmationExecutionContext confirmationContext,
                                 FinalOutputContract finalOutputContract) {
+        String sessionId = trace.snapshot().sessionId();
         long loopStart = System.currentTimeMillis();
         log.debug("[L3-ReAct] Starting ReAct loop: maxIterations={}, historyMessages={}, tools={}, thinking={}",
                 maxIterations, historyMessages.size(), toolCatalog.size(), thinkingLevel);
@@ -270,7 +271,7 @@ public class ReActEngine implements ReActLoop {
                 }
 
                 ToolExecutionOutput toolOutput = executeToolCalls(
-                        toolReqs, messages, allArtifacts, listener, cancellationToken, confirmationContext);
+                        toolReqs, messages, allArtifacts, listener, cancellationToken, confirmationContext, sessionId);
 
                 if (structuredOutput && isStructuredOutputRound(toolReqs)) {
                     buildStructuredOutputStep(
@@ -389,6 +390,7 @@ public class ReActEngine implements ReActLoop {
                     new FinalOutputContract.Text());
         }
 
+        String sessionId = trace.snapshot().sessionId();
         long loopStart = System.currentTimeMillis();
         log.debug("[L3-ReAct] Starting STREAMING ReAct loop: maxIterations={}, tools={}",
                 maxIterations, toolCatalog.size());
@@ -535,7 +537,7 @@ public class ReActEngine implements ReActLoop {
                 log.debug("[L3-ReAct] Streaming: LLM requested {} tool calls", toolReqs.size());
 
                 ToolExecutionOutput toolOutput = executeToolCalls(
-                        toolReqs, messages, allArtifacts, listener, cancellationToken, confirmationContext);
+                        toolReqs, messages, allArtifacts, listener, cancellationToken, confirmationContext, sessionId);
 
                 // Post-tool processing: inspection, hints, adaptive reflection
                 RoundOutcome outcome = processToolRound(i, aiMessage, toolReqs,
@@ -645,7 +647,7 @@ public class ReActEngine implements ReActLoop {
      */
     private ToolResult executeWithRetry(ToolCall toolCall, ReActListener listener,
                                         com.harness.core.model.CancellationToken cancellationToken,
-                                        ConfirmationExecutionContext confirmationContext) {
+                                        ConfirmationExecutionContext confirmationContext, String sessionId) {
         if (cancellationToken != null && cancellationToken.isCancelled()) {
             return ToolResult.fail(toolCall.id(), toolCall.toolName(), "Cancelled", 0);
         }
@@ -673,7 +675,7 @@ public class ReActEngine implements ReActLoop {
 
         try {
             ToolResult result = toolExecutor.executeAuthorized(
-                    toolCall, tool, confirmationContext);
+                    toolCall, tool, confirmationContext, sessionId);
 
             if (result.success()) {
                 return result;
@@ -883,7 +885,7 @@ public class ReActEngine implements ReActLoop {
                                                  List<Artifact> allArtifacts,
                                                  ReActListener listener,
                                                  com.harness.core.model.CancellationToken cancellationToken,
-                                                 ConfirmationExecutionContext confirmationContext) {
+                                                 ConfirmationExecutionContext confirmationContext, String sessionId) {
         List<ToolCall> toolCalls = new ArrayList<>();
         List<ToolResult> toolResults = new ArrayList<>();
         List<PlannedToolCall> plannedCalls = toolReqs.stream()
@@ -921,7 +923,7 @@ public class ReActEngine implements ReActLoop {
                 log.debug("[L3-ReAct] Executing tool: {}", tc.toolName());
             }
             ToolResult result = callIndex < maxToolCallsPerRound
-                    ? executeWithRetry(tc, listener, cancellationToken, confirmationContext)
+                    ? executeWithRetry(tc, listener, cancellationToken, confirmationContext, sessionId)
                     : ToolResult.fail(tc.id(), tc.toolName(),
                             "Per-round tool call limit " + maxToolCallsPerRound
                                     + " exceeded; retry in a later round", 0);

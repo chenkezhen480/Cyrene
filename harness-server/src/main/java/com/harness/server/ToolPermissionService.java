@@ -13,7 +13,7 @@ import java.util.stream.Collectors;
 /**
  * Resolves which tools one caller may use.
  *
- * <p>Identity is resolved from the request itself: {@code context.identity}, defaulting to
+ * <p>The HTTP boundary binds verified caller identity into {@code context.identity}, defaulting to
  * {@link AgentContext#DEFAULT_IDENTITY}. The resulting (tenantId, identity) pair selects a
  * stored profile, falling back to the tenant's {@code DEFAULT} row.</p>
  *

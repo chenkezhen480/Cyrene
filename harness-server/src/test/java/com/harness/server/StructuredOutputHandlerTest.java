@@ -36,6 +36,8 @@ class StructuredOutputHandlerTest {
         Context context = mock(Context.class);
         StructuredOutputHandler.StructuredOutputRequest request = request();
         when(authenticator.authenticate(context)).thenReturn("token");
+        when(authenticator.principal(context)).thenReturn(new com.harness.core.security.RequestPrincipal(
+                "user-1", "000000", "DEFAULT", com.harness.core.security.RequestPrincipal.AuthenticationType.JWT));
         when(context.bodyAsClass(StructuredOutputHandler.StructuredOutputRequest.class))
                 .thenReturn(request);
         when(context.header("X-Session-Id")).thenReturn("session-request");
@@ -82,6 +84,8 @@ class StructuredOutputHandlerTest {
         ApiRequestAuthenticator authenticator = mock(ApiRequestAuthenticator.class);
         Context context = mock(Context.class);
         when(authenticator.authenticate(context)).thenReturn("token");
+        when(authenticator.principal(context)).thenReturn(new com.harness.core.security.RequestPrincipal(
+                "user-1", "000000", "DEFAULT", com.harness.core.security.RequestPrincipal.AuthenticationType.JWT));
         when(context.bodyAsClass(StructuredOutputHandler.StructuredOutputRequest.class))
                 .thenReturn(request());
         when(context.status(502)).thenReturn(context);

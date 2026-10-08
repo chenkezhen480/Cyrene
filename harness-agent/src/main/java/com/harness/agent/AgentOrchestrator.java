@@ -603,7 +603,8 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
             CancellationToken cancellationToken,
             RunToolCatalog runToolCatalog,
             RunTrace trace,
-            String turnId
+            String turnId,
+            AgentRunContext.Owner owner
     ) {
         String runId = java.util.UUID.randomUUID().toString();
         AgentRunContext runContext = new AgentRunContext(
@@ -612,11 +613,13 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
                 cancellationToken,
                 trace.traceId(),
                 runToolCatalog,
-                turnId);
+                turnId, owner);
         subAgentManager.openScope(runId);
         SpawnSubAgentTool.setCurrentRunContext(runContext);
         Map<String, String> metadata = new HashMap<>(trace.snapshot().metadata());
         metadata.put("run_id", runId);
+        if (owner.tenantId() != null) metadata.put("tenant_id", owner.tenantId());
+        metadata.put("identity", owner.identity());
         metadata.put("tool_catalog_version", String.valueOf(runToolCatalog.version()));
         metadata.put("tool_count", String.valueOf(runToolCatalog.size()));
         metadata.put("authorized_tools", runToolCatalog.getAll().stream()
@@ -778,6 +781,7 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
                 Set.of(), toolDenylistResolver.resolve(tenantId, effectiveIdentity));
         RunTrace trace = runtime.startTrace();
         trace.setSessionId(sessionId);
+        if (tenantId != null) trace.putMetadata("tenant_id", tenantId);
         trace.recordInput(userId, "[realtime session]", List.of());
         trace.recordLlmMeta(realtimeModel().providerName(), "realtime");
         trace.putMetadata(Map.of(
@@ -866,6 +870,22 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
      * Convert MemoryMessage list to LangChain4j ChatMessage list for ReAct history injection.
      * Summary rows are converted to AiMessage to preserve compressed context.
      */
+    static AgentRunContext.Owner resumeOwner(String sessionId, String userId, String tenantId,
+                                            List<SessionInbox.SubAgentCompletedEvent> events) {
+        if (events.isEmpty()) throw new IllegalArgumentException("Resume events are required");
+        AgentRunContext.Owner owner = events.getFirst().owner();
+        if (owner == null || userId == null || !userId.equals(owner.userId())
+                || !java.util.Objects.equals(tenantId, owner.tenantId())) {
+            throw new SecurityException("Resume owner does not match the stored session");
+        }
+        for (var event : events) {
+            if (!sessionId.equals(event.sessionId()) || !owner.equals(event.owner())) {
+                throw new SecurityException("Resume events have conflicting owner scopes");
+            }
+        }
+        return owner;
+    }
+
     private void resumeSession(String sessionId, List<SessionInbox.SubAgentCompletedEvent> events) {
         Map<String, List<SessionInbox.SubAgentCompletedEvent>> eventsByTurn = new LinkedHashMap<>();
         for (SessionInbox.SubAgentCompletedEvent event : events) {
@@ -899,6 +919,7 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
             }
             String userId = session.userId();
             String tenantId = session.tenantId();
+            AgentRunContext.Owner owner = resumeOwner(sessionId, userId, tenantId, events);
             List<MemoryMessage> shorttermMessages =
                     memoryRuntime.loadMessages(sessionId, userId);
 
@@ -930,18 +951,15 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
             eventMessage.append("请结合当前会话历史和该结果，继续处理用户的请求。");
 
             CancellationToken cancellationToken = new CancellationToken();
-            AgentContext resumeAgentContext = AgentContext.empty();
+            AgentContext resumeAgentContext = owner.context();
             // The tenant scope is restored from the session row, which was written under the
             // original trusted boundary, so knowledge tools keep their owner/tenant scope
             // instead of silently falling back to a standalone tenant. No request-scoped
             // graph context exists on this path.
             Set<String> unavailableTools = detachedResumeUnavailableTools(resumeAgentContext);
-            // The originating request's identity is not persisted with the session, so a resume
-            // can only re-apply the tenant's DEFAULT profile. A tenant that restricts *only* a
-            // named identity would resume unrestricted here.
             RunToolCatalog runToolCatalog = createRunToolCatalog(
                     unavailableTools,
-                    toolDenylistResolver.resolve(tenantId, AgentContext.DEFAULT_IDENTITY));
+                    toolDenylistResolver.resolve(tenantId, owner.identity()));
             RunTrace trace = runtime.startTrace();
             trace.setSessionId(sessionId);
             trace.recordInput(userId, eventMessage.toString(), List.of());
@@ -966,7 +984,7 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
                         cancellationToken,
                         runToolCatalog,
                         trace,
-                        turnId);
+                        turnId, owner);
 
                 // Build system prompt
                 GapAnalysis gapAnalysis = lifecycleHooks.beforeLoop(

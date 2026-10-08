@@ -22,6 +22,7 @@ final class GraphRequestAuthenticator {
     }
 
     void authenticate(Context context) {
+        if (context.attribute(com.harness.server.security.RequestPrincipalResolver.PRINCIPAL_ATTRIBUTE) != null) return;
         String authorization = context.header("Authorization");
         String token = authorization != null && authorization.startsWith("Bearer ")
                 ? authorization.substring(7)

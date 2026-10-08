@@ -7,6 +7,12 @@
 @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;0,700;1,400;1,600&family=Inter:wght@300;400;500;600&display=swap');
 
 /* ── Design Tokens ── */
+.permission-api-header { flex-wrap: wrap; gap: var(--space-2); }
+.permission-api-path { overflow-wrap: anywhere; min-width: 180px; }
+@media (max-width: 600px) {
+  .permission-api-header .btn { width: 100%; }
+}
+
 :root {
   /* Palette */
   --abyss: #0d0915;
@@ -532,6 +538,8 @@ h3 {
 }
 
 .user-badge {
+  cursor: pointer;
+  font-family: inherit;
   display: flex;
   align-items: center;
   gap: var(--space-2);

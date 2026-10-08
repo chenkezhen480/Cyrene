@@ -41,7 +41,7 @@ class MysqlCompactKnowledgeIT {
                     try (var tables = statement.executeQuery("SELECT COUNT(*) FROM information_schema.tables "
                             + "WHERE table_schema = '" + database + "' AND table_comment <> ''")) {
                         tables.next();
-                        assertThat(tables.getInt(1)).isEqualTo(10);
+                        assertThat(tables.getInt(1)).isEqualTo(11);
                     }
                     try (var columns = statement.executeQuery("SELECT COUNT(*) FROM information_schema.columns "
                             + "WHERE table_schema = '" + database + "' AND column_comment = ''")) {

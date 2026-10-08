@@ -63,7 +63,7 @@ class KnowledgeWikiServiceTest {
         var info = new PageInfo(1, "2026-09-14T00:00:00Z|doc-1", true);
         when(repository.findPageInNamespace(null, KnowledgeNamespaceType.COLLECTION, "manuals", KnowledgeConceptType.SOURCE_DOCUMENT,
                 KnowledgeStatus.STABLE, null, 1)).thenReturn(new PageResponse<>(List.of(head.concept()), info));
-        var page = service.page(null, "alice", KnowledgeConceptType.SOURCE_DOCUMENT, "manuals", null, 1, ignored -> true);
+        var page = service.page("000000", "alice", KnowledgeConceptType.SOURCE_DOCUMENT, "manuals", null, 1, ignored -> true);
         assertThat(page.pageInfo()).isEqualTo(info);
         assertThat(page.items()).singleElement().satisfies(card -> {
             assertThat(card.title()).isEqualTo("Original title");
