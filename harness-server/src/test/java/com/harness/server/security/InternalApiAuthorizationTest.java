@@ -107,6 +107,23 @@ class InternalApiAuthorizationTest {
                 .isInstanceOf(MysqlInternalApiPermissionStore.PermissionStoreException.class);
     }
 
+    @Test
+    void consoleAdministratorCanManageDefaultWithoutRelaxingBusinessPermissions() {
+        var store = mock(MysqlInternalApiPermissionStore.class);
+        var routes = new InternalApiRouteRegistry();
+        routes.register(endpoint("internalApiPermission.update", "PUT", "/api/internal-api-permissions", BOOTSTRAP));
+        routes.register(endpoint("modelConfig.read", "GET", "/api/model-config", GLOBAL_MANAGEMENT));
+        var service = new InternalApiPermissionService(store, routes, true);
+        var console = new RequestPrincipal("root", "000000", "DEFAULT", CONSOLE_ADMIN);
+        service.replacePermissions(console, "000000", "DEFAULT", Set.of("modelConfig.read"));
+        verify(store).replace("000000", "DEFAULT", Set.of("modelConfig.read"));
+        when(store.isDisabled("000000", "DEFAULT", "modelConfig.read")).thenReturn(true);
+        var endpoint = routes.resolve("GET", "/api/model-config");
+        assertThatCode(() -> service.authorize(console, endpoint)).doesNotThrowAnyException();
+        assertThatThrownBy(() -> service.authorize(new RequestPrincipal("root", "000000", "DEFAULT", JWT), endpoint))
+                .isInstanceOf(SecurityException.class);
+    }
+
     private static ApiEndpointDescriptor endpoint(String key, String method, String path,
                                                    ApiEndpointDescriptor.ResourcePolicy policy) {
         return new ApiEndpointDescriptor(key, key, method, path, "test", policy);

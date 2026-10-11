@@ -34,6 +34,10 @@ public final class EnvKey {
     public static final String LOG_RETENTION_DAYS    = "HARNESS_LOG_RETENTION_DAYS";
 
     // ==================== Auth ====================
+    public static final String CONSOLE_USER = "HARNESS_CONSOLE_USER";
+    public static final String CONSOLE_PASSWORD = "HARNESS_CONSOLE_PASSWORD";
+    public static final String CONSOLE_VISA_DIR = "HARNESS_CONSOLE_VISA_DIR";
+    public static final String CONSOLE_TOKEN_TTL_DAYS = "HARNESS_CONSOLE_TOKEN_TTL_DAYS";
     public static final String AUTH_MODE             = "HARNESS_AUTH_MODE";
     public static final String AUTH_TOKEN            = "HARNESS_AUTH_TOKEN";
     public static final String AUTH_JWT_SECRET       = "HARNESS_AUTH_JWT_SECRET";

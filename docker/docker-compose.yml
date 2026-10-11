@@ -1,7 +1,8 @@
 # Cyrene Agent - Docker Compose 一键部署
-# 启动: cd docker && docker compose --env-file ../.env up -d
+# 仓库根目录启动: docker compose --env-file .env -f docker/docker-compose.yml up -d --build
+# 中间件宿主机端口由 Docker 动态分配，使用 docker compose ps 查看映射
 # 构建镜像: docker compose build
-# 查看日志: docker compose logs -f cyrene
+# 查看日志: docker compose --env-file .env -f docker/docker-compose.yml logs -f cyrene-agent
 
 name: cyrene
 
@@ -35,6 +36,10 @@ services:
       # Docker socket（沙盒容器需要）
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
+      - HARNESS_CONSOLE_USER=${HARNESS_CONSOLE_USER:-root}
+      - HARNESS_CONSOLE_PASSWORD=${HARNESS_CONSOLE_PASSWORD:-root}
+      - HARNESS_CONSOLE_VISA_DIR=${HARNESS_CONSOLE_VISA_DIR:-/app/data/visa}
+      - HARNESS_CONSOLE_TOKEN_TTL_DAYS=${HARNESS_CONSOLE_TOKEN_TTL_DAYS:-30}
       # GID 10001 matches the non-root document-parser account.
       - HARNESS_CONFIG_MODEL_READ_GROUP=cyrene-model
       # 覆盖容器内部的服务地址（使用 Docker 网络内的服务名）
@@ -157,7 +162,7 @@ services:
       - HARNESS_DOCUMENT_PARSER_PORT=8082
       - HARNESS_CONFIG_MODEL_FILE=/app/data/model.conf
     ports:
-      - "127.0.0.1:${HARNESS_DOCUMENT_PARSER_PORT:-8082}:8082"
+      - "127.0.0.1::8082"
     restart: unless-stopped
     logging: *default-logging
     networks:
@@ -170,7 +175,7 @@ services:
     image: mysql:8.0
     container_name: cyrene-mysql
     ports:
-      - "3306:3306"
+      - "3306"
     environment:
       MYSQL_ROOT_PASSWORD: ${HARNESS_AUDIT_DB_PASS:-cyrene123}
       MYSQL_DATABASE: agent
@@ -222,8 +227,8 @@ services:
     image: minio/minio:RELEASE.2023-03-20T20-16-18Z
     container_name: cyrene-minio
     ports:
-      - "9001:9001"     # Console
-      - "9000:9000"     # S3 API
+      - "9001"     # Console
+      - "9000"     # S3 API
     environment:
       MINIO_ACCESS_KEY: minioadmin
       MINIO_SECRET_KEY: minioadmin
@@ -253,8 +258,8 @@ services:
     security_opt:
       - seccomp:unconfined
     ports:
-      - "19530:19530"   # gRPC
-      - "9091:9091"     # Metrics
+      - "19530"   # gRPC
+      - "9091"     # Metrics
     environment:
       ETCD_ENDPOINTS: etcd:2379
       MINIO_ADDRESS: minio:9000
@@ -287,8 +292,8 @@ services:
     image: neo4j:5.26.28
     container_name: cyrene-neo4j
     ports:
-      - "127.0.0.1:${HARNESS_GRAPH_NEO4J_HTTP_PORT:-7474}:7474"
-      - "127.0.0.1:${HARNESS_GRAPH_NEO4J_BOLT_PORT:-7687}:7687"
+      - "127.0.0.1::7474"
+      - "127.0.0.1::7687"
     environment:
       # Empty password makes Neo4j fail explicitly instead of starting with a guessable default.
       NEO4J_AUTH: neo4j/${HARNESS_GRAPH_NEO4J_PASSWORD:-}
@@ -324,7 +329,7 @@ services:
     image: redis:7-alpine
     container_name: cyrene-redis
     ports:
-      - "6379:6379"
+      - "6379"
     volumes:
       - redis-data:/data
     healthcheck:
@@ -344,11 +349,10 @@ services:
     image: searxng/searxng:2026.9.10-931fd9787
     container_name: cyrene-searxng
     ports:
-      - "8888:8888"
+      - "8888"
     volumes:
       - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
     environment:
-      - SEARXNG_BASE_URL=http://localhost:8888/
       - SEARXNG_SECRET=${SEARXNG_SECRET:-}
       - GRANIAN_PORT=8888
     entrypoint:

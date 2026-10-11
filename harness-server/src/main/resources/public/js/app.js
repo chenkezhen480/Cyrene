@@ -8995,19 +8995,26 @@ const app = createApp({
     const sidebarCollapsed = ref(false);
     const testDockOpen = ref(false);
 
-    // ── Global userId (persisted in localStorage) ──
-    const userId = ref(localStorage.getItem('cyrene_user') || '');
+    const userId = ref('');
     const authMode = ref('');
     const authLoading = ref(true);
     const authError = ref('');
-    const authSecret = ref('');
+    const authSecret = ref('root');
     const authVersion = ref(0);
     const showGuideHint = ref(false);
-    CyreneAPI.setToken(sessionStorage.getItem('cyrene_token'));
-    CyreneAPI.onTokenRefresh(token => sessionStorage.setItem('cyrene_token', token));
-    const showWelcome = ref(!userId.value);
-    const editingUser = ref(false);
-    const editUserId = ref('');
+    const consoleUserId = ref('root');
+    const showWelcome = ref(true);
+    const editUserId = ref('root');
+    const showPasswordDialog = ref(false);
+    const mustChangePassword = ref(false);
+    const currentPassword = ref('');
+    const newPassword = ref('');
+    const confirmPassword = ref('');
+    const passwordLoading = ref(false);
+    const passwordError = ref('');
+    CyreneAPI.setToken(localStorage.getItem('cyrene_console_token'));
+    CyreneAPI.onTokenRefresh(token => localStorage.setItem('cyrene_console_token', token));
+    sessionStorage.removeItem('cyrene_token');
 
     provide('userId', userId);
     provide('authMode', authMode);
@@ -9016,64 +9023,99 @@ const app = createApp({
     provide('t', t);
     provide('locale', locale);
 
+    function acceptSession(result, withToken) {
+      if (!result || typeof result.userId !== 'string' || !result.userId
+          || typeof result.mustChangePassword !== 'boolean'
+          || (withToken && (typeof result.token !== 'string' || !result.token
+              || typeof result.expiresAt !== 'string'))) throw new Error(t('invalidAuthResponse'));
+      if (withToken) {
+        CyreneAPI.setToken(result.token);
+        localStorage.setItem('cyrene_console_token', result.token);
+      }
+      const entering = showWelcome.value;
+      userId.value = result.userId;
+      localStorage.setItem('cyrene_user', result.userId);
+      mustChangePassword.value = result.mustChangePassword;
+      showWelcome.value = false;
+      authSecret.value = '';
+      if (entering) {
+        authVersion.value++;
+        showFirstGuide();
+        if (mustChangePassword.value) openPasswordDialog();
+      }
+    }
+
     async function confirmUserId() {
       const val = editUserId.value.trim();
       if (!val || !authSecret.value.trim() || authLoading.value) return;
       authLoading.value = true;
       authError.value = '';
       try {
-        let verifiedUserId = val;
-        if (authMode.value === 'jwt') {
-          const result = await CyreneAPI.login(val, authSecret.value);
-          if (typeof result.token !== 'string' || typeof result.userId !== 'string') throw new Error(t('invalidAuthResponse'));
-          CyreneAPI.setToken(result.token);
-          sessionStorage.setItem('cyrene_token', result.token);
-          verifiedUserId = result.userId;
-        } else if (authMode.value === 'token') {
-          if (!authSecret.value.trim()) throw new Error(t('tokenRequired'));
-          CyreneAPI.setToken(authSecret.value.trim());
-          sessionStorage.setItem('cyrene_token', authSecret.value.trim());
-        } else if (authMode.value === 'none') {
-          const result = await CyreneAPI.setupSingleUser(val, authSecret.value);
-          if (result.status !== 'saved' || typeof result.userId !== 'string') throw new Error(t('invalidAuthResponse'));
-          verifiedUserId = result.userId;
-        }
-        userId.value = verifiedUserId;
-        localStorage.setItem('cyrene_user', verifiedUserId);
-        authSecret.value = '';
-        showWelcome.value = false;
-        editingUser.value = false;
-        authVersion.value++;
-        showFirstGuide();
-      } catch (e) {
-        authError.value = e.message;
-      } finally { authLoading.value = false; }
+        acceptSession(await CyreneAPI.consoleLogin(val, authSecret.value), true);
+      } catch (e) { authError.value = e.message; }
+      finally { authLoading.value = false; }
     }
 
-    async function startEditUser() {
-      if (authMode.value !== 'none') {
-        try {
-          await CyreneAPI.logout();
-          CyreneAPI.setToken(null);
-          sessionStorage.removeItem('cyrene_token');
-          localStorage.removeItem('cyrene_user');
-          userId.value = '';
-          showGuideHint.value = false;
-          showWelcome.value = true;
-          authVersion.value++;
-        } catch (e) { showToast(e.message, 'error'); }
+    function openPasswordDialog() {
+      currentPassword.value = '';
+      newPassword.value = '';
+      confirmPassword.value = '';
+      passwordError.value = '';
+      showPasswordDialog.value = true;
+    }
+
+    function closePasswordDialog() {
+      if (passwordLoading.value) return;
+      currentPassword.value = '';
+      newPassword.value = '';
+      confirmPassword.value = '';
+      passwordError.value = '';
+      showPasswordDialog.value = false;
+    }
+
+    async function changePassword() {
+      if (passwordLoading.value) return;
+      passwordError.value = '';
+      if (newPassword.value !== confirmPassword.value) {
+        passwordError.value = t('passwordMismatch');
         return;
       }
-      editUserId.value = userId.value;
-      authSecret.value = '';
-      authError.value = '';
-      editingUser.value = true;
+      if (!currentPassword.value || !newPassword.value.trim()) return;
+      passwordLoading.value = true;
+      try {
+        const result = await CyreneAPI.changeConsolePassword(currentPassword.value, newPassword.value);
+        acceptSession(result, true);
+        showToast(t('passwordChanged'), 'success');
+        showPasswordDialog.value = false;
+        currentPassword.value = '';
+        newPassword.value = '';
+        confirmPassword.value = '';
+      } catch (e) { passwordError.value = e.message; }
+      finally { passwordLoading.value = false; }
     }
 
-    function cancelEditUser() {
-      editingUser.value = false;
-      authSecret.value = '';
-      authError.value = '';
+    async function signOut() {
+      authLoading.value = true;
+      try { await CyreneAPI.logout(); }
+      catch (e) { showToast(e.message, 'error'); }
+      finally {
+        CyreneAPI.setToken(null);
+        localStorage.removeItem('cyrene_console_token');
+        localStorage.removeItem('cyrene_user');
+        userId.value = '';
+        showGuideHint.value = false;
+        showWelcome.value = true;
+        testDockOpen.value = false;
+        showPasswordDialog.value = false;
+        currentPassword.value = '';
+        newPassword.value = '';
+        confirmPassword.value = '';
+        editUserId.value = consoleUserId.value;
+        authSecret.value = 'root';
+        authError.value = '';
+        authVersion.value++;
+        authLoading.value = false;
+      }
     }
 
     const navItems = computed(() => [
@@ -9129,10 +9171,22 @@ const app = createApp({
       window.addEventListener('hashchange', handleHash);
       try {
         const status = await CyreneAPI.health();
-        if (!['none', 'jwt', 'token'].includes(status.authMode)) throw new Error(t('invalidAuthResponse'));
+        if (!['none', 'jwt', 'token'].includes(status.authMode)
+            || typeof status.consoleUserId !== 'string' || !status.consoleUserId) throw new Error(t('invalidAuthResponse'));
         authMode.value = status.authMode;
-        if (status.authMode !== 'none' && !CyreneAPI.getToken()) showWelcome.value = true;
-        if (userId.value && !showWelcome.value) showFirstGuide();
+        consoleUserId.value = status.consoleUserId;
+        editUserId.value = status.consoleUserId;
+        if (CyreneAPI.getToken()) {
+          try { acceptSession(await CyreneAPI.getConsoleSession(), false); }
+          catch (e) {
+            if (e.status === 401 || e.status === 403) {
+              CyreneAPI.setToken(null);
+              localStorage.removeItem('cyrene_console_token');
+              localStorage.removeItem('cyrene_user');
+            }
+            throw e;
+          }
+        }
       } catch (e) { authError.value = e.message; showWelcome.value = true; }
       finally { authLoading.value = false; }
     });
@@ -9144,10 +9198,11 @@ const app = createApp({
     return {
       Icons, currentPage, sidebarOpen, sidebarCollapsed, testDockOpen,
       navItems, pageTitle, t, locale,
-      userId, showWelcome, editingUser, editUserId,
+      userId, showWelcome, editUserId,
       authMode, authLoading, authError, authSecret,
       authVersion,
-      confirmUserId, startEditUser, cancelEditUser,
+      confirmUserId, signOut, openPasswordDialog, closePasswordDialog, changePassword,
+      showPasswordDialog, mustChangePassword, currentPassword, newPassword, confirmPassword, passwordLoading, passwordError,
       navigate, toggleSidebar, showGuideHint, openGuide,
     };
   },
@@ -9156,7 +9211,7 @@ const app = createApp({
       <stars-background />
       <toast-container />
 
-      <!-- Welcome modal (first visit only) -->
+      <!-- Console login -->
       <div v-if="showWelcome" class="modal-overlay">
         <div class="modal" style="max-width: 420px;">
           <div class="modal-header">
@@ -9170,14 +9225,14 @@ const app = createApp({
                      :placeholder="t('enterUserId')"
                      :disabled="authLoading" @keydown.enter="confirmUserId" autofocus />
               <div class="text-xs text-ash mt-2">
-                {{ t(authMode === 'none' ? 'userIdHint' : 'verifiedUserHint') }}
+                {{ t('userIdHint') }}
               </div>
             </div>
-            <div v-if="authMode" class="input-group mt-3">
-              <label class="input-label" for="login-secret">{{ t(authMode === 'token' ? 'apiToken' : 'password') }}</label>
+            <div class="input-group mt-3">
+              <label class="input-label" for="login-secret">{{ t('password') }}</label>
               <input id="login-secret" class="input" type="password" v-model="authSecret" :disabled="authLoading"
-                     :autocomplete="authMode === 'token' ? 'off' : 'current-password'" @keydown.enter="confirmUserId" />
-              <p v-if="authMode === 'none'" class="text-xs text-ash mt-2">{{ t('singleUserPasswordHint') }}</p>
+                     autocomplete="current-password" maxlength="1024" @keydown.enter="confirmUserId" />
+              <p class="text-xs text-ash mt-2">{{ t('consoleLoginHint') }}</p>
             </div>
             <div v-if="authError" class="text-sm mt-2" role="alert" style="color: var(--error);">{{ authError }}</div>
           </div>
@@ -9186,6 +9241,37 @@ const app = createApp({
               {{ t(authLoading ? 'loading' : 'enterCyrene') }}
             </button>
           </div>
+        </div>
+      </div>
+
+
+      <div v-if="showPasswordDialog && !showWelcome" class="modal-overlay">
+        <div class="modal" style="max-width: 420px;" role="dialog" aria-modal="true" aria-labelledby="password-dialog-title">
+          <div class="modal-header">
+            <div id="password-dialog-title" class="modal-title">{{ t('changePassword') }}</div>
+          </div>
+          <form @submit.prevent="changePassword">
+            <div class="modal-body">
+              <p v-if="mustChangePassword" class="text-sm mb-3" role="status">{{ t('defaultPasswordHint') }}</p>
+              <div class="input-group">
+                <label class="input-label" for="current-password">{{ t('currentPassword') }}</label>
+                <input id="current-password" class="input" type="password" v-model="currentPassword" autocomplete="current-password" :disabled="passwordLoading" required />
+              </div>
+              <div class="input-group mt-3">
+                <label class="input-label" for="new-password">{{ t('newPassword') }}</label>
+                <input id="new-password" class="input" type="password" v-model="newPassword" autocomplete="new-password" :disabled="passwordLoading" maxlength="1024" required />
+              </div>
+              <div class="input-group mt-3">
+                <label class="input-label" for="confirm-password">{{ t('confirmPassword') }}</label>
+                <input id="confirm-password" class="input" type="password" v-model="confirmPassword" autocomplete="new-password" :disabled="passwordLoading" required />
+              </div>
+              <p v-if="passwordError" class="text-sm mt-2" role="alert" style="color: var(--error);">{{ passwordError }}</p>
+            </div>
+            <div class="modal-footer">
+              <button type="button" class="btn btn-ghost" @click="closePasswordDialog" :disabled="passwordLoading">{{ t('later') }}</button>
+              <button type="submit" class="btn btn-primary" :disabled="passwordLoading || !currentPassword || !newPassword.trim() || !confirmPassword">{{ t(passwordLoading ? 'loading' : 'save') }}</button>
+            </div>
+          </form>
         </div>
       </div>
 
@@ -9237,11 +9323,12 @@ const app = createApp({
               <button class="lang-toggle" @click="locale = locale === 'zh' ? 'en' : 'zh'" :title="locale === 'zh' ? 'Switch to English' : '切换到中文'">
                 {{ locale === 'zh' ? 'EN' : '中' }}
               </button>
-              <!-- User ID badge (click to edit) -->
-              <button class="user-badge" @click="startEditUser" :disabled="authLoading" :title="t(authMode === 'none' ? 'clickToEditUserId' : 'signOut')">
+              <!-- Console administrator -->
+              <button class="user-badge" @click="openPasswordDialog" :disabled="authLoading || showWelcome" :title="t('changePassword')">
                 <span class="user-dot"></span>
                 <span>{{ userId || t('unset') }}</span>
               </button>
+              <button v-if="!showWelcome" class="btn btn-ghost btn-sm" @click="signOut" :disabled="authLoading">{{ t('signOut') }}</button>
               <div class="guide-entry">
                 <button class="btn btn-ghost btn-sm" @click="openGuide" :aria-label="t('setupGuide')" :aria-describedby="showGuideHint ? 'guide-first-login-hint' : undefined">{{ t('setupGuide') }}</button>
                 <div v-if="showGuideHint" id="guide-first-login-hint" class="guide-nudge" role="status">
@@ -9253,28 +9340,15 @@ const app = createApp({
             </div>
           </header>
 
-          <!-- Inline user ID editor -->
-          <div v-if="editingUser" style="padding: 0 var(--space-6); background: var(--surface); border-bottom: 1px solid var(--gold-line);">
-            <div style="display: flex; flex-wrap: wrap; gap: var(--space-3); align-items: center; padding: var(--space-3) 0;">
-              <input class="input" v-model="editUserId" :placeholder="t('userId')"
-                     style="flex: 1 1 180px; min-width: 0; max-width: 300px;"
-                     :disabled="authLoading" @keydown.enter="confirmUserId" @keydown.escape="cancelEditUser" />
-              <input class="input" type="password" v-model="authSecret" :placeholder="t('password')" :aria-label="t('password')" style="flex: 1 1 180px; min-width: 0; max-width: 300px;" :disabled="authLoading" autocomplete="current-password" @keydown.enter="confirmUserId" />
-              <button class="btn btn-primary btn-sm" @click="confirmUserId" :disabled="authLoading || !editUserId.trim() || !authSecret.trim()">{{ t('confirm') }}</button>
-              <button class="btn btn-ghost btn-sm" @click="cancelEditUser" :disabled="authLoading">{{ t('cancel') }}</button>
-            </div>
-            <p v-if="authError" class="text-sm mb-3" role="alert" style="color: var(--error);">{{ authError }}</p>
-          </div>
-
           <div class="page-container">
-            <keep-alive :key="userId + ':' + authVersion">
+            <keep-alive v-if="!showWelcome" :key="userId + ':' + authVersion">
               <component :is="currentPage + '-page'" :key="currentPage" />
             </keep-alive>
           </div>
         </main>
 
         <!-- Right-hand test dock: mounts only while open, so the camera follows its lifetime. -->
-        <realtime-test-dock v-if="testDockOpen" @close="testDockOpen = false" />
+        <realtime-test-dock v-if="testDockOpen && !showWelcome" @close="testDockOpen = false" />
       </div>
     </div>
   `

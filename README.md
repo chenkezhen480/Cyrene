@@ -24,9 +24,12 @@ Cyrene Agent 解决的是另一类问题：**如何为已有系统构建专用 A
 
 ```bash
 cp .env.example .env
-# 编辑 .env，至少配置主 Chat Model
+# 编辑 .env 配置服务与认证参数；启动后在 Web 控制台配置主模型和向量模型
 docker compose --env-file .env -f docker/docker-compose.yml up -d --build
 ```
+
+中间件宿主机端口由 Docker 动态分配，避免与本机已有服务冲突；容器内部地址不变。控制台使用 `HARNESS_SERVER_PORT`（默认 `8080`），该端口需要可用。使用 `docker compose --env-file .env -f docker/docker-compose.yml ps` 查看实际映射；重建容器后中间件宿主机端口可能变化。
+
 ### 本地构建
 
 ```bash

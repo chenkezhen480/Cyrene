@@ -65,12 +65,16 @@ const CyreneAPI = (() => {
   }
 
   // ── Auth ──
-  function login(userId, password) {
-    return request('POST', '/api/auth/token', { userId, password });
+  function consoleLogin(userId, password) {
+    return request('POST', '/api/console/auth/login', { userId, password });
   }
 
-  function setupSingleUser(userId, password) {
-    return request('POST', '/api/auth/single-user', { userId, password });
+  function getConsoleSession() {
+    return request('GET', '/api/console/auth/session');
+  }
+
+  function changeConsolePassword(currentPassword, newPassword) {
+    return request('PUT', '/api/console/auth/password', { currentPassword, newPassword });
   }
 
   // ── Chat (SSE) ──
@@ -491,7 +495,7 @@ const CyreneAPI = (() => {
 
   return {
     setToken, getToken, onTokenRefresh,
-    login, logout, setupSingleUser,
+    consoleLogin, getConsoleSession, changeConsolePassword, logout,
     chat, cancelChat, approveConfirmation, rejectConfirmation, uploadFile,
     getToolPermissions, saveToolPermissions, getPermissionIdentities,
     getInternalApiEndpoints, getInternalApiPermissions, saveInternalApiPermissions,

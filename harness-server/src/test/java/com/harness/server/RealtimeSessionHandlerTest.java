@@ -75,6 +75,18 @@ class RealtimeSessionHandlerTest {
     }
 
     @Test
+    void consoleAdministratorScopeSurvivesTheServerOwnedWebSocketCredential() {
+        Fixture fixture = fixture(60);
+        var principal = new com.harness.core.security.RequestPrincipal("user-1", "tenant-a", "DEFAULT",
+                com.harness.core.security.RequestPrincipal.AuthenticationType.CONSOLE_ADMIN);
+        var response = fixture.create(principal);
+        var context = mock(Context.class);
+        when(context.pathParam("sessionId")).thenReturn(response.get("sessionId").toString());
+        when(context.queryParam("token")).thenReturn(response.get("webSocketToken").toString());
+        assertThat(handler.principal(context)).isEqualTo(principal);
+    }
+
+    @Test
     void providerDisconnectRemovesSessionAndTimeoutCancelsAnotherSession() throws Exception {
         Fixture providerClose = fixture(60);
         Map<?, ?> response = providerClose.create();
@@ -171,8 +183,11 @@ class RealtimeSessionHandlerTest {
             this.listener = listener;
         }
 
-        private Map<?, ?> create() {
+        private Map<?, ?> create() { return create(null); }
+
+        private Map<?, ?> create(com.harness.core.security.RequestPrincipal principal) {
             Context context = mock(Context.class);
+            when(context.attribute(com.harness.server.security.RequestPrincipalResolver.PRINCIPAL_ATTRIBUTE)).thenReturn(principal);
             when(context.bodyAsClass(RealtimeSessionHandler.CreateRequest.class)).thenReturn(
                     new RealtimeSessionHandler.CreateRequest(
                             "user-1", "tenant-a", null, null, null,

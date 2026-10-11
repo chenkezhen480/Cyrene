@@ -24,7 +24,6 @@ artifacts/
 .env
 data/model.conf
 data/migration-backups/
-docker/.ports-*.yml
 *.log
 project-apis.json
 
@@ -65,3 +64,6 @@ docker/milvus/minio-data/*
 !docker/milvus/minio-data/.gitkeep
 docker/milvus/standalone/*
 !docker/milvus/standalone/.gitkeep
+
+# Console signing credentials
+data/visa/

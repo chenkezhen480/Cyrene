@@ -90,7 +90,8 @@ final class RealtimeSessionHandler implements AutoCloseable {
                         java.util.List.of());
             String sessionId = agent.sessionStore().create(owner.userId(), owner.tenantId()).id();
             ManagedSession managed = new ManagedSession(
-                    sessionId, owner.userId(), owner.tenantId(), identity);
+                    sessionId, owner.userId(), owner.tenantId(), identity,
+                    principal != null && principal.authenticationType() == RequestPrincipal.AuthenticationType.CONSOLE_ADMIN);
             if (sessions.putIfAbsent(sessionId, managed) != null) {
                 throw new IllegalStateException("Realtime session ID collision");
             }
@@ -138,7 +139,7 @@ final class RealtimeSessionHandler implements AutoCloseable {
         }
         return new RequestPrincipal(session.userId, session.tenantId == null
                 ? AgentContext.DEFAULT_TENANT_ID : session.tenantId, session.identity,
-                RequestPrincipal.AuthenticationType.JWT);
+                session.consoleAdministrator ? RequestPrincipal.AuthenticationType.CONSOLE_ADMIN : RequestPrincipal.AuthenticationType.JWT);
     }
 
     void message(WsMessageContext context) {
@@ -234,10 +235,9 @@ final class RealtimeSessionHandler implements AutoCloseable {
         private final String sessionId;
         private final String userId;
         private final String connectionToken = UUID.randomUUID().toString();
-        @SuppressWarnings("unused")
         private final String tenantId;
-        @SuppressWarnings("unused")
         private final String identity;
+        private final boolean consoleAdministrator;
         private final CancellationToken cancellationToken = new CancellationToken();
         private final AtomicReference<WsContext> client = new AtomicReference<>();
         private final AtomicBoolean finished = new AtomicBoolean();
@@ -245,11 +245,12 @@ final class RealtimeSessionHandler implements AutoCloseable {
         private volatile RealtimeSession provider;
         private volatile ScheduledFuture<?> timeout;
 
-        private ManagedSession(String sessionId, String userId, String tenantId, String identity) {
+        private ManagedSession(String sessionId, String userId, String tenantId, String identity, boolean consoleAdministrator) {
             this.sessionId = sessionId;
             this.userId = userId;
             this.tenantId = tenantId;
             this.identity = identity;
+            this.consoleAdministrator = consoleAdministrator;
         }
 
         private void attach(RealtimeSession provider) {

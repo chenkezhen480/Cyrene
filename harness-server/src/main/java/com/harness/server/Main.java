@@ -143,7 +143,13 @@ public class Main {
         int idleTimeoutMs = EnvConfig.get().getInt(EnvKey.SERVER_IDLE_TIMEOUT, 300_000); // default 5 min
         long maxRequestSize = EnvConfig.get().getLong(EnvKey.SERVER_MAX_REQUEST_SIZE_MB, 20) * 1024 * 1024;
         InternalApiRouteRegistry apiRoutes = new InternalApiRouteRegistry();
-        RequestPrincipalResolver requestPrincipals = new RequestPrincipalResolver(EnvConfig.get());
+        UserAccountService userAccounts = new UserAccountService(
+                new MysqlUserAccountStore(MysqlConnectionPool::getConnection),
+                new com.harness.server.security.PasswordHasher(new java.security.SecureRandom()));
+        ConsoleAuthenticationService consoleAuthentication = new ConsoleAuthenticationService(
+                userAccounts, EnvConfig.get(), new java.security.SecureRandom(), java.time.Clock.systemUTC());
+        RequestPrincipalResolver requestPrincipals = new RequestPrincipalResolver(
+                EnvConfig.get(), context -> null, consoleAuthentication::authenticate);
         ApiRequestAuthenticator requestAuthenticator = new ApiRequestAuthenticator(requestPrincipals);
         MysqlInternalApiPermissionStore apiPermissionStore = new MysqlInternalApiPermissionStore(
                 com.harness.core.env.MysqlConnectionPool::getConnection);
@@ -181,6 +187,8 @@ public class Main {
                 (e, ctx) -> ApiResponses.error(ctx, 403, ApiErrorCode.FORBIDDEN, e.getMessage()));
         app.exception(MysqlInternalApiPermissionStore.PermissionStoreException.class,
                 (e, ctx) -> ApiResponses.error(ctx, 503, ApiErrorCode.INTERNAL_ERROR, e.getMessage()));
+        app.exception(ConsoleAuthenticationService.AccountStoreException.class,
+                (e, ctx) -> ApiResponses.error(ctx, 503, ApiErrorCode.INTERNAL_ERROR, e.getMessage()));
         app.exception(IllegalArgumentException.class,
                 (e, ctx) -> ApiResponses.error(ctx, 400, ApiErrorCode.INVALID_REQUEST, e.getMessage()));
         app.exception(UnsupportedOperationException.class,
@@ -203,17 +211,16 @@ public class Main {
 
         // Health check
         apiRoutes.route(app, "GET", "/api/health", "health.read", "system", PUBLIC, ctx -> ctx.json(Map.of(
-                "status", "ok", "version", VERSION, "authMode", EnvConfig.get().getString(EnvKey.AUTH_MODE, "none"))));
+                "status", "ok", "version", VERSION, "authMode", EnvConfig.get().getString(EnvKey.AUTH_MODE, "none"),
+                "consoleUserId", consoleAuthentication.userId())));
         apiRoutes.route(app, "POST", "/api/auth/logout", "auth.logout", "auth", PUBLIC, ctx -> {
             ctx.removeCookie(RequestPrincipalResolver.MEDIA_COOKIE);
             ctx.json(Map.of("status", "signedOut"));
         });
-        UserAccountService userAccounts = new UserAccountService(
-                new MysqlUserAccountStore(MysqlConnectionPool::getConnection),
-                new com.harness.server.security.PasswordHasher(new java.security.SecureRandom()));
-        SingleUserAccountHandler singleUserAccounts = new SingleUserAccountHandler(userAccounts, EnvConfig.get());
-        apiRoutes.route(app, "POST", "/api/auth/single-user", "auth.setupSingleUser", "auth", GLOBAL_MANAGEMENT,
-                singleUserAccounts::setup);
+        ConsoleAuthenticationHandler consoleAuth = new ConsoleAuthenticationHandler(consoleAuthentication, requestPrincipals);
+        apiRoutes.route(app, "POST", "/api/console/auth/login", "consoleAuth.login", "auth", PUBLIC, consoleAuth::login);
+        apiRoutes.route(app, "GET", "/api/console/auth/session", "consoleAuth.session", "auth", USER, consoleAuth::session);
+        apiRoutes.route(app, "PUT", "/api/console/auth/password", "consoleAuth.password", "auth", USER, consoleAuth::changePassword);
 
         ModelConfigurationHandler modelConfigurationHandler = new ModelConfigurationHandler(
                 new ModelConfigurationService(

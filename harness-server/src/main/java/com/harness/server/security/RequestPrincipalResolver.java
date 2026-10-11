@@ -23,6 +23,7 @@ public final class RequestPrincipalResolver {
     private final String authMode;
     private final JwtUtil jwtUtil;
     private final java.util.function.Function<Context, String> trustedUserResolver;
+    private final java.util.function.Function<String, RequestPrincipal> consoleAuthenticator;
 
     public RequestPrincipalResolver(EnvConfig config) {
         this(config, context -> null);
@@ -30,7 +31,13 @@ public final class RequestPrincipalResolver {
 
     /** The injected adapter must authenticate its own user assertion; HTTP context fields are not assertions. */
     public RequestPrincipalResolver(EnvConfig config, java.util.function.Function<Context, String> trustedUserResolver) {
+        this(config, trustedUserResolver, token -> null);
+    }
+
+    public RequestPrincipalResolver(EnvConfig config, java.util.function.Function<Context, String> trustedUserResolver,
+                                    java.util.function.Function<String, RequestPrincipal> consoleAuthenticator) {
         this.config = config;
+        this.consoleAuthenticator = java.util.Objects.requireNonNull(consoleAuthenticator, "consoleAuthenticator");
         this.trustedUserResolver = java.util.Objects.requireNonNull(trustedUserResolver, "trustedUserResolver");
         this.authMode = config.getString(EnvKey.AUTH_MODE, "none");
         this.jwtUtil = "jwt".equals(authMode) ? new JwtUtil() : null;
@@ -43,7 +50,7 @@ public final class RequestPrincipalResolver {
         RequestPrincipal cached = context.attribute(PRINCIPAL_ATTRIBUTE);
         if (cached != null) return cached;
         String token = bearerToken(context);
-        if (token == null && "jwt".equals(authMode) && Boolean.TRUE.equals(context.attribute(MEDIA_AUTH_ATTRIBUTE))) {
+        if (token == null && Boolean.TRUE.equals(context.attribute(MEDIA_AUTH_ATTRIBUTE))) {
             token = context.cookie(MEDIA_COOKIE);
         }
         RequestPrincipal principal;
@@ -59,6 +66,8 @@ public final class RequestPrincipalResolver {
     }
 
     private RequestPrincipal authenticate(Context context, String token) {
+        RequestPrincipal consolePrincipal = consoleAuthenticator.apply(token);
+        if (consolePrincipal != null) return consolePrincipal;
         if ("none".equals(authMode)) {
             if (config.getBool(EnvKey.INTERNAL_API_AUTHORIZATION_ENABLED, true)) {
                 throw new RequestAuthenticationException("Authentication is required for protected endpoints");

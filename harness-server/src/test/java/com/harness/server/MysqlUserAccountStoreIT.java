@@ -25,7 +25,7 @@ import static org.mockito.Mockito.*;
 @EnabledIfEnvironmentVariable(named = "HARNESS_TEST_MYSQL_URL", matches = "jdbc:mysql:.*")
 class MysqlUserAccountStoreIT {
     @Test
-    void noneModeAccountsPersistAndAuthenticateThroughJwtWithoutPasswordOverwrite() throws Exception {
+    void administratorPasswordPersistsAndAuthenticatesThroughJwtWithoutStartupOverwrite() throws Exception {
         try (Connection connection = DriverManager.getConnection(System.getenv("HARNESS_TEST_MYSQL_URL"),
                 System.getenv("HARNESS_TEST_MYSQL_USER"), System.getenv("HARNESS_TEST_MYSQL_PASSWORD"))) {
             String schema = Files.readString(Path.of("../sql/schema-mysql.sql"));
@@ -40,13 +40,13 @@ class MysqlUserAccountStoreIT {
             doNothing().when(fixture).close();
             var store = new MysqlUserAccountStore(() -> fixture);
             var accounts = new UserAccountService(store, new PasswordHasher(new SecureRandom()));
-            assertThat(accounts.setup("fresh-user", "test password")).isEqualTo("fresh-user");
+            accounts.initializeAdministrator("fresh-user", "test password", AgentContext.DEFAULT_TENANT_ID);
             var saved = store.find("fresh-user").orElseThrow();
             assertThat(saved.tenantId()).isEqualTo(AgentContext.DEFAULT_TENANT_ID);
             assertThat(saved.identity()).isEqualTo(AgentContext.DEFAULT_IDENTITY);
             assertThat(saved.passwordHash()).startsWith("pbkdf2-sha256$").doesNotContain("test password");
-            assertThat(accounts.setup("fresh-user", "test password")).isEqualTo("fresh-user");
-            assertThatThrownBy(() -> accounts.setup("fresh-user", "replace password"))
+            accounts.initializeAdministrator("fresh-user", "replace password", AgentContext.DEFAULT_TENANT_ID);
+            assertThatThrownBy(() -> accounts.changePassword("fresh-user", "wrong", "changed password"))
                     .isInstanceOf(SecurityException.class);
             assertThatThrownBy(() -> store.create(saved)).isInstanceOf(MysqlUserAccountStore.AccountConflictException.class);
             assertThat(store.find("fresh-user").orElseThrow()).isEqualTo(saved);
@@ -72,6 +72,13 @@ class MysqlUserAccountStoreIT {
                 new AuthHandler(jwt, accounts::verify).handle(rejected);
                 verify(rejected).status(401);
             } finally { EnvConfig.init(Map.of()); }
+            accounts.changePassword("fresh-user", "test password", "changed password");
+            accounts.initializeAdministrator("fresh-user", "test password", AgentContext.DEFAULT_TENANT_ID);
+            assertThat(accounts.verify("fresh-user", "test password")).isNull();
+            assertThat(accounts.verify("fresh-user", "changed password").userId()).isEqualTo("fresh-user");
+            assertThatThrownBy(() -> store.replacePassword("fresh-user", saved.passwordHash(), "stale update"))
+                    .isInstanceOf(SecurityException.class);
+            assertThat(accounts.verify("fresh-user", "changed password")).isNotNull();
         }
     }
 }

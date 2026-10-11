@@ -59,6 +59,19 @@ public class InputProcessor implements InputStage {
         }
         log.debug("[L1-Input] Authenticated: userId={}", userId);
 
+        return parse(userId, text, attachments);
+    }
+
+    @Override
+    public ProcessedInput processAuthenticated(com.harness.core.security.RequestPrincipal principal,
+                                              String text, List<MultimodalParser.RawAttachment> attachments) {
+        if (principal == null || principal.authenticationType() == com.harness.core.security.RequestPrincipal.AuthenticationType.ANONYMOUS) {
+            throw new SecurityException("Verified user scope is required");
+        }
+        return parse(principal.requireUserId(), text, attachments);
+    }
+
+    private ProcessedInput parse(String userId, String text, List<MultimodalParser.RawAttachment> attachments) {
         // Step 2: Validate text
         if (text == null || text.isBlank()) {
             log.warn("[L1-Input] Rejected: empty input text");

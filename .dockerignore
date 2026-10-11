@@ -1,0 +1,12 @@
+.git/
+.env
+data/
+**/target/
+output/
+.playwright-cli/
+docker/milvus/etcd/
+docker/milvus/minio/
+docker/milvus/minio-data/
+docker/milvus/standalone/
+docker/neo4j/data/
+docker/neo4j/logs/

@@ -74,7 +74,10 @@ public final class AgentRunPreparer {
         AgentContext agentContext = request.agentContext() != null
                 ? request.agentContext()
                 : AgentContext.empty();
-        ProcessedInput input = runtime.input().process(
+        ProcessedInput input = agentContext.principal() != null
+                && agentContext.principal().authenticationType() == RequestPrincipal.AuthenticationType.CONSOLE_ADMIN
+                ? runtime.input().processAuthenticated(agentContext.principal(), request.text(), request.attachments())
+                : runtime.input().process(
                 request.token(),
                 request.text(),
                 request.attachments(),

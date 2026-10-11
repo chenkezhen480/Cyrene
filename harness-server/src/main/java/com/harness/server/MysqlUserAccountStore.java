@@ -53,6 +53,25 @@ public final class MysqlUserAccountStore {
         }
     }
 
+    public void replacePassword(String userId, String currentHash, String newHash) {
+        String sql = "UPDATE users SET password_hash = ? WHERE user_id = ? AND password_hash = ? AND status = 'active'";
+        try (var connection = connections.getConnection()) {
+            connection.setAutoCommit(false);
+            try (var statement = connection.prepareStatement(sql)) {
+                statement.setString(1, newHash);
+                statement.setString(2, userId);
+                statement.setString(3, currentHash);
+                if (statement.executeUpdate() != 1) throw new SecurityException("Account changed; sign in again");
+                connection.commit();
+            } catch (SQLException | SecurityException e) {
+                connection.rollback();
+                throw e;
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("Authentication identity store is unavailable", e);
+        }
+    }
+
     public record Account(String userId, String tenantId, String identity, String passwordHash, String status) {}
     public static final class AccountConflictException extends RuntimeException {
         public AccountConflictException() { super("Account already exists; its password was not changed"); }

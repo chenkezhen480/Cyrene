@@ -31,7 +31,7 @@ public final class InternalApiPermissionService {
     public void authorize(RequestPrincipal principal, ApiEndpointDescriptor endpoint) {
         if (endpoint.resourcePolicy() == PUBLIC) return;
         InternalApiRouteRegistry.requireAuthenticated(principal, endpoint);
-        if (principal.authenticationType() == ADMIN_BOOTSTRAP) return;
+        if (principal.authenticationType() == ADMIN_BOOTSTRAP || principal.authenticationType() == CONSOLE_ADMIN) return;
         if (!enabled) return;
         if (principal.authenticationType() == ANONYMOUS) throw new SecurityException("Authentication is required");
         if (endpoint.resourcePolicy() == GLOBAL_MANAGEMENT && !hasGlobalManagementScope(principal, managementTenantId)) {
@@ -54,7 +54,7 @@ public final class InternalApiPermissionService {
     public void replacePermissions(RequestPrincipal manager, String tenantId, String identity, Set<String> keys) {
         requireTenant(manager, tenantId);
         authorize(manager, routes.resolve("PUT", "/api/internal-api-permissions"));
-        if (manager.authenticationType() != ADMIN_BOOTSTRAP && manager.identity().equals(identity)) {
+        if (manager.authenticationType() != ADMIN_BOOTSTRAP && manager.authenticationType() != CONSOLE_ADMIN && manager.identity().equals(identity)) {
             throw new SecurityException("Callers cannot edit their own identity permissions");
         }
         new RequestPrincipal(null, tenantId, identity, SERVICE_TOKEN);

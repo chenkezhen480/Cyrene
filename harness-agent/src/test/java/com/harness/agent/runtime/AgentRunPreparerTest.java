@@ -20,6 +20,7 @@ import com.harness.react.ReActLoopFactory;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.*;
 
 import java.util.List;
@@ -61,6 +62,15 @@ class AgentRunPreparerTest {
                 "service-token", "hello", List.of(), null, null, "forged-user",
                 AgentContext.of(Map.of("userId", "forged-user", "tenantId", "tenant-a")), false), trace, beforeHistoryLoad);
         assertThat(sdkInput.userId()).isEqualTo("token-user");
+        var consolePrincipal = new RequestPrincipal("root", "000000", "DEFAULT", RequestPrincipal.AuthenticationType.CONSOLE_ADMIN);
+        var console = preparer.prepare(new AgentRunPreparer.AgentRunRequest(
+                "console.credential", "hello", List.of(), null, null, "forged-user",
+                new AgentContext(Map.of("userId", "forged-user"), consolePrincipal), false), trace, beforeHistoryLoad);
+        assertThat(console.userId()).isEqualTo("root");
+        assertThatThrownBy(() -> input.processAuthenticated(new RequestPrincipal(null, "000000", "DEFAULT",
+                RequestPrincipal.AuthenticationType.ANONYMOUS), "hello", List.of())).isInstanceOf(SecurityException.class);
+        assertThatThrownBy(() -> input.processAuthenticated(consolePrincipal, " ", List.of()))
+                .isInstanceOf(com.harness.core.exception.AgentException.class);
     }
 
     @Test

@@ -5,15 +5,15 @@ import java.util.Objects;
 /** Identity from verified credentials; never constructed from model or HTTP context JSON. */
 public record RequestPrincipal(String userId, String tenantId, String identity,
                                AuthenticationType authenticationType) {
-    public enum AuthenticationType { JWT, SERVICE_TOKEN, ADMIN_BOOTSTRAP, ANONYMOUS }
+    public enum AuthenticationType { JWT, CONSOLE_ADMIN, SERVICE_TOKEN, ADMIN_BOOTSTRAP, ANONYMOUS }
 
     public RequestPrincipal {
         tenantId = required(tenantId, "tenantId");
         identity = required(identity, "identity");
         Objects.requireNonNull(authenticationType, "authenticationType");
         if (userId != null) userId = required(userId, "userId");
-        if (authenticationType == AuthenticationType.JWT && userId == null) {
-            throw new IllegalArgumentException("JWT userId is required");
+        if ((authenticationType == AuthenticationType.JWT || authenticationType == AuthenticationType.CONSOLE_ADMIN) && userId == null) {
+            throw new IllegalArgumentException("Authenticated userId is required");
         }
     }
 

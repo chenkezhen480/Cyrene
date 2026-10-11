@@ -1,42 +1,36 @@
 package com.harness.server;
 
-import com.harness.core.env.EnvConfig;
-import com.harness.core.env.EnvKey;
 import com.harness.core.model.AgentContext;
 import com.harness.core.security.RequestPrincipal;
 import com.harness.server.security.PasswordHasher;
-import io.javalin.http.Context;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import java.security.SecureRandom;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
-import java.util.Map;
 import java.util.Optional;
 import static org.assertj.core.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 class UserAccountServiceTest {
-    @Test void singleUserPasswordsProduceTheSameTrustedJwtIdentityLater() {
+    @Test void initializationPersistsHashAndNeverResetsAnExistingPassword() {
         var store = mock(MysqlUserAccountStore.class);
         var passwords = new PasswordHasher(new SecureRandom());
         var service = new UserAccountService(store, passwords);
-        when(store.find("fresh-user")).thenReturn(Optional.empty());
-        assertThat(service.setup("fresh-user", "my password")).isEqualTo("fresh-user");
+        when(store.find("root")).thenReturn(Optional.empty());
+        service.initializeAdministrator("root", "root", AgentContext.DEFAULT_TENANT_ID);
         var captured = ArgumentCaptor.forClass(MysqlUserAccountStore.Account.class);
         verify(store).create(captured.capture());
         var account = captured.getValue();
         assertThat(account.passwordHash()).startsWith("pbkdf2-sha256$");
         assertThat(account.tenantId()).isEqualTo(AgentContext.DEFAULT_TENANT_ID);
         assertThat(account.identity()).isEqualTo(AgentContext.DEFAULT_IDENTITY);
-        when(store.find("fresh-user")).thenReturn(Optional.of(account));
-        assertThat(service.verify("fresh-user", "my password")).isEqualTo(new RequestPrincipal(
-                "fresh-user", account.tenantId(), account.identity(), RequestPrincipal.AuthenticationType.JWT));
-        assertThat(service.verify("fresh-user", "wrong")).isNull();
-        assertThat(service.setup("fresh-user", "my password")).isEqualTo("fresh-user");
-        assertThatThrownBy(() -> service.setup("fresh-user", "overwrite attempt")).isInstanceOf(SecurityException.class);
+        when(store.find("root")).thenReturn(Optional.of(account));
+        service.initializeAdministrator("root", "another environment password", AgentContext.DEFAULT_TENANT_ID);
         verify(store, times(1)).create(any());
+        assertThat(service.verify("root", "root").authenticationType()).isEqualTo(RequestPrincipal.AuthenticationType.JWT);
+        assertThat(service.verify("root", "wrong")).isNull();
     }
 
     @Test void disabledAndUnmappedAccountsCannotSignIn() {
@@ -46,12 +40,12 @@ class UserAccountServiceTest {
         String hash = passwords.hash("original password");
         when(store.find("disabled")).thenReturn(Optional.of(new MysqlUserAccountStore.Account("disabled", "tenant", "reader", hash, "disabled")));
         assertThat(service.verify("disabled", "original password")).isNull();
-        assertThatThrownBy(() -> service.setup("disabled", "original password")).isInstanceOf(SecurityException.class);
+        assertThatThrownBy(() -> service.administrator("disabled")).isInstanceOf(SecurityException.class);
         when(store.find("unmapped")).thenReturn(Optional.of(new MysqlUserAccountStore.Account("unmapped", null, null, hash, "active")));
         assertThatThrownBy(() -> service.verify("unmapped", "original password")).isInstanceOf(SecurityException.class);
     }
 
-    @Test void accountInsertCommitsAndUniqueConflictRollsBackInsteadOfOverwriting() throws Exception {
+    @Test void insertsCommitAndUniqueConflictsRollbackWithoutOverwriting() throws Exception {
         var connection = mock(Connection.class);
         var statement = mock(PreparedStatement.class);
         when(connection.prepareStatement(anyString())).thenReturn(statement);
@@ -66,40 +60,37 @@ class UserAccountServiceTest {
         verify(connection, times(1)).commit();
     }
 
-    @Test void setupEndpointRejectsJwtAndTokenModes() {
-        var service = mock(UserAccountService.class);
-        for (var config : java.util.List.of(Map.of("HARNESS_AUTH_MODE", "jwt"), Map.of("HARNESS_AUTH_MODE", "token"))) {
-            EnvConfig.init(config);
-            try {
-                var context = mock(Context.class);
-                when(context.status(anyInt())).thenReturn(context);
-                new SingleUserAccountHandler(service, EnvConfig.get()).setup(context);
-                verify(context).status(403);
-                verify(context, never()).bodyAsClass(any());
-            } finally { EnvConfig.init(Map.of()); }
-        }
-        verifyNoInteractions(service);
+    @Test void passwordChangesCommitAndConcurrentChangesRollback() throws Exception {
+        var connection = mock(Connection.class);
+        var statement = mock(PreparedStatement.class);
+        when(connection.prepareStatement(anyString())).thenReturn(statement);
+        when(statement.executeUpdate()).thenReturn(1, 0).thenThrow(new SQLException("offline", "08000"));
+        var store = new MysqlUserAccountStore(() -> connection);
+        store.replacePassword("root", "original", "new");
+        verify(statement).setString(1, "new");
+        verify(statement).setString(3, "original");
+        verify(connection).commit();
+        assertThatThrownBy(() -> store.replacePassword("root", "original", "new")).isInstanceOf(SecurityException.class);
+        assertThatThrownBy(() -> store.replacePassword("root", "original", "new")).isInstanceOf(IllegalStateException.class);
+        verify(connection, times(2)).rollback();
+        verify(connection, times(1)).commit();
     }
 
-    @Test void setupValidationDoesNotWriteInvalidPasswords() {
+    @Test void invalidPasswordOrAdministratorIdDoesNotWrite() {
         var store = mock(MysqlUserAccountStore.class);
         var service = new UserAccountService(store, new PasswordHasher(new SecureRandom()));
-        assertThatThrownBy(() -> service.setup("user", " ")).isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> service.setup("x".repeat(65), "password")).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> service.initializeAdministrator("root", " ", "000000")).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> service.initializeAdministrator("x".repeat(65), "root", "000000")).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> service.initializeAdministrator(" root ", "root", "000000")).isInstanceOf(IllegalArgumentException.class);
         verifyNoInteractions(store);
     }
 
-    @Test void setupUsesExistingNoneModeEvenWhenApiAuthorizationIsEnabled() {
-        EnvConfig.init(Map.of(EnvKey.AUTH_MODE, "none", EnvKey.INTERNAL_API_AUTHORIZATION_ENABLED, "true"));
-        try {
-            var service = mock(UserAccountService.class);
-            var context = mock(Context.class);
-            when(context.bodyAsClass(SingleUserAccountHandler.AccountRequest.class)).thenReturn(
-                    new SingleUserAccountHandler.AccountRequest(" fresh-user ", "password"));
-            when(service.setup("fresh-user", "password")).thenReturn("fresh-user");
-            new SingleUserAccountHandler(service, EnvConfig.get()).setup(context);
-            verify(context).json(Map.of("userId", "fresh-user", "status", "saved"));
-            verify(service).setup("fresh-user", "password");
-        } finally { EnvConfig.init(Map.of()); }
+    @Test void wrongCurrentPasswordDoesNotMutateAccount() {
+        var store = mock(MysqlUserAccountStore.class);
+        var passwords = new PasswordHasher(new SecureRandom());
+        when(store.find("root")).thenReturn(Optional.of(new MysqlUserAccountStore.Account("root", "000000", "DEFAULT", passwords.hash("root"), "active")));
+        var service = new UserAccountService(store, passwords);
+        assertThatThrownBy(() -> service.changePassword("root", "wrong", "new")).isInstanceOf(SecurityException.class);
+        verify(store, never()).replacePassword(any(), any(), any());
     }
 }

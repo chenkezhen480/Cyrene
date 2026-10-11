@@ -24,9 +24,11 @@ Use case 1:
 
 ```bash
 cp .env.example .env
-# Edit .env and configure at least the main Chat Model
+# Edit .env for service and authentication settings; configure chat and embedding models in the Web console after startup
 docker compose --env-file .env -f docker/docker-compose.yml up -d --build
 ```
+
+Docker dynamically assigns middleware host ports to avoid conflicts with local services; internal container addresses stay unchanged. The console uses `HARNESS_SERVER_PORT` (default `8080`), which must be available. Run `docker compose --env-file .env -f docker/docker-compose.yml ps` to see the actual mappings. Middleware host ports may change when containers are recreated.
 
 ### Local Build
 
