@@ -57,6 +57,8 @@ public final class EnvKey {
     public static final String RAG_COLLECTION        = "HARNESS_RAG_COLLECTION";
     /** Milvus 数据库名，默认 default */
     public static final String RAG_DATABASE          = "HARNESS_RAG_DATABASE";
+    public static final String RAG_CONNECT_TIMEOUT_MS = "HARNESS_RAG_CONNECT_TIMEOUT_MS";
+    public static final String RAG_STARTUP_TIMEOUT_MS = "HARNESS_RAG_STARTUP_TIMEOUT_MS";
     /** 最低相似度阈值，默认 0.5 */
     public static final String RAG_SCORE_THRESHOLD   = "HARNESS_RAG_SCORE_THRESHOLD";
 
@@ -179,11 +181,14 @@ public final class EnvKey {
     public static final String AGENT_MAX_TASKS_PER_RUN   = "HARNESS_AGENT_MAX_TASKS_PER_RUN";
     /** Scope TTL（分钟），默认 30 */
     public static final String AGENT_SCOPE_TTL_MINUTES   = "HARNESS_AGENT_SCOPE_TTL_MINUTES";
-    /** await_subagents 共享超时（秒），默认 120；超时后未完成任务转为 Session Resume */
+    /** Runtime batch wait deadline; unfinished tasks resume their session after timeout. */
     public static final String AGENT_AWAIT_TIMEOUT_SECONDS = "HARNESS_AGENT_AWAIT_TIMEOUT_SECONDS";
+    public static final String AGENT_AUTO_WAIT = "HARNESS_AGENT_AUTO_WAIT";
+    public static final String AGENT_TASK_RETENTION_HOURS = "HARNESS_AGENT_TASK_RETENTION_HOURS";
+    public static final String AGENT_DELIVERY_LEASE_SECONDS = "HARNESS_AGENT_DELIVERY_LEASE_SECONDS";
 
-    // ==================== Storage（统一存储配置，记忆 + Trace 共享） ====================
-    /** 存储类型：mysql | sqlite | none（默认）。同时控制记忆和 Trace 存储后端 */
+    // ==================== Storage（记忆与 Trace 共享 MySQL 连接配置） ====================
+    /** Trace 存储类型：mysql（默认）| file | none；记忆独立使用 MEMORY_STORE */
     public static final String AUDIT_STORE           = "HARNESS_AUDIT_STORE";
     public static final String AUDIT_DB_URL          = "HARNESS_AUDIT_DB_URL";
     public static final String AUDIT_DB_USER         = "HARNESS_AUDIT_DB_USER";

@@ -84,6 +84,7 @@ public final class ModelConfigInitializer {
         Objects.requireNonNull(configFile, "configFile");
         Objects.requireNonNull(legacyValues, "legacyValues");
         if (Files.exists(configFile.path())) {
+            configFile.completeVisibleKeys();
             return InitializationResult.EXISTING;
         }
 

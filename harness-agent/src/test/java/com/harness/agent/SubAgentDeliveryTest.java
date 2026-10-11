@@ -20,12 +20,15 @@ import static org.mockito.Mockito.mock;
 class SubAgentDeliveryTest {
     private final ObjectMapper mapper = new ObjectMapper();
     private final SessionInbox inbox = new SessionInbox();
+    private final AgentRunContext.Owner owner = new AgentRunContext.Owner("user", "tenant", "DEFAULT");
+    private final com.harness.agent.subagent.SubAgentTaskRepository repository =
+            new com.harness.agent.subagent.InMemorySubAgentTaskRepository(java.time.Duration.ofHours(1));
     private final SubAgentManager manager = new SubAgentManager(
             mock(ReActLoopFactory.class), RunTrace::noop, null, mock(com.harness.core.model.ArtifactStore.class),
-            inbox, mock(SessionResumeDispatcher.class), mock(ChatModelProvider.class));
+            inbox, mock(SessionResumeDispatcher.class), mock(ChatModelProvider.class), repository);
     private final SubAgentRunScope scope = manager.openScope("run");
     private final ToolGroup tool = new ToolGroup("subagent", "tasks", Map.of(
-            "await", new AwaitSubAgentsTool(manager), "get", new GetSubAgentsTool(manager)), List.of());
+            "get", new GetSubAgentsTool(manager)), List.of());
 
     @AfterEach
     void close() {
@@ -34,45 +37,65 @@ class SubAgentDeliveryTest {
     }
 
     @Test
-    void anyReturnsCompletedResultsWithoutTreatingEarlyReturnAsTimeout() throws Exception {
-        succeed(task("done"));
+    void batchWaitDoesNotReturnUntilBothSubmittedChildrenComplete() throws Exception {
+        var first = task("first");
+        var second = task("second");
+        var worker = java.util.concurrent.Executors.newSingleThreadExecutor();
+        try {
+            var waited = worker.submit(() -> coordinate(manager, List.of(first, second),
+                    java.time.Duration.ofSeconds(5), true));
+            succeed(first);
+            assertThat(waited.isDone()).isFalse();
+            succeed(second);
+            var results = waited.get(2, java.util.concurrent.TimeUnit.SECONDS);
+            assertThat(results).allMatch(result -> result.resultStatus() == com.harness.core.model.ResultStatus.AVAILABLE);
+            assertThat(results.stream().map(com.harness.core.model.ToolResult::toolCallId))
+                    .containsExactly("call-first", "call-second");
+            assertThat(inbox.hasPending("session")).isFalse();
+        } finally {
+            worker.shutdownNow();
+        }
+    }
+
+    @Test
+    void sharedDeadlineReturnsCompletedResultsAndDetachesOnlyPending() throws Exception {
+        var done = task("done");
+        succeed(done);
         var pending = task("pending");
-        var result = call("await", """
-                {"task_ids":["done","pending"],"return_when":"ANY","on_timeout":"CANCEL"}
-                """);
-        assertThat(result.path("wait_timed_out").asBoolean()).isFalse();
-        assertThat(result.path("completed").size()).isEqualTo(1);
+        var results = coordinate(manager, List.of(done, pending), java.time.Duration.ZERO, true);
+        assertThat(mapper.readTree(results.getFirst().output()).path("output").asText()).isEqualTo("answer");
+        assertThat(results.getLast().resultStatus()).isEqualTo(com.harness.core.model.ResultStatus.PENDING);
+        assertThat(pending.deliveryState().get()).isEqualTo(ResultDeliveryState.DETACHED);
         assertThat(pending.status().get()).isEqualTo(SubAgentStatus.QUEUED);
     }
 
     @Test
-    void repeatedAwaitReturnsCompletedResultsWithoutReportingTimeout() throws Exception {
-        succeed(task("done"));
-        call("await", "{\"task_ids\":[\"done\"]}");
-        var result = call("await", "{\"task_ids\":[\"done\"]}");
-        assertThat(result.path("wait_timed_out").asBoolean()).isFalse();
-        assertThat(result.path("completed").get(0).path("output").asText()).isEqualTo("answer");
+    void disabledAutoWaitDetachesEvenAlreadyCompletedResults() {
+        var done = task("done");
+        succeed(done);
+        var result = coordinate(manager, List.of(done), java.time.Duration.ofSeconds(1), false).getFirst();
+        assertThat(result.resultStatus()).isEqualTo(com.harness.core.model.ResultStatus.PENDING);
+        assertThat(inbox.drain("session")).isEmpty();
+        manager.finishRun("run");
+        assertThat(inbox.drain("session")).hasSize(1);
     }
 
     @Test
-    void firstSuccessReturnsTerminalFailuresInsteadOfCallingThemPending() throws Exception {
+    void terminalFailuresAreReturnedInsteadOfCallingThemPending() throws Exception {
         var failed = task("failed");
         failed.fail(SubAgentResult.failure("failed", "failure", 0, false));
-        var result = call("await", """
-                {"task_ids":["failed"],"return_when":"FIRST_SUCCESS","timeout_seconds":0}
-                """);
-        assertThat(result.path("wait_timed_out").asBoolean()).isFalse();
-        assertThat(result.path("completed").size()).isEqualTo(1);
-        assertThat(result.path("deferred").size()).isZero();
+        var result = coordinate(manager, List.of(failed), java.time.Duration.ZERO, true).getFirst();
+        assertThat(result.resultStatus()).isEqualTo(com.harness.core.model.ResultStatus.AVAILABLE);
+        assertThat(mapper.readTree(result.output()).path("status").asText()).isEqualTo("FAILED");
     }
 
     @Test
-    void getConsumesTheResultThroughTheGroupedToolEntry() throws Exception {
+    void getReadsWithoutConsumingTheResultThroughTheGroupedToolEntry() throws Exception {
         var record = task("done");
         succeed(record);
         var result = call("get", "{\"task_ids\":[\"done\"]}");
-        assertThat(result.path("tasks").get(0).path("result").path("output").asText()).isEqualTo("answer");
-        assertThat(record.deliveryState().get()).isEqualTo(ResultDeliveryState.INLINE_CONSUMED);
+        assertThat(result.path("items").get(0).path("result").path("output").asText()).isEqualTo("answer");
+        assertThat(record.deliveryState().get()).isEqualTo(ResultDeliveryState.INLINE_PENDING);
     }
 
     @Test
@@ -125,6 +148,8 @@ class SubAgentDeliveryTest {
         var record = task("detached");
         manager.detachTask(record);
         succeed(record);
+        assertThat(inbox.hasPending("session")).isFalse();
+        manager.finishRun("run");
         assertThat(inbox.hasPending("session")).isTrue();
         manager.detachTask(record);
         assertThat(inbox.drain("session")).hasSize(1);
@@ -136,6 +161,8 @@ class SubAgentDeliveryTest {
         succeed(record);
         manager.detachTask(record);
         manager.detachTask(record);
+        manager.finishRun("run");
+        manager.finishRun("run");
         assertThat(inbox.drain("session")).hasSize(1);
     }
 
@@ -149,7 +176,7 @@ class SubAgentDeliveryTest {
     }
 
     @Test
-    void awaitPropagatesArtifactsToTheParentToolOutput() throws Exception {
+    void coordinationPropagatesArtifactsToTheParentToolOutput() throws Exception {
         var record = task("artifact");
         var artifact = new com.harness.core.model.Artifact("artifact-1", "session", "report.txt",
                 com.harness.core.model.Artifact.ArtifactType.DOCUMENT, "text/plain", 10, "report.txt",
@@ -160,37 +187,23 @@ class SubAgentDeliveryTest {
                         ContractValidation.notDeclared(), null), 0, null));
         SpawnSubAgentTool.setCurrentRunContext(new AgentRunContext(
                 "run", "session", new CancellationToken(), "trace", new ToolRegistry().snapshot()));
-        var outcome = tool.executeOutcome(mapper.readTree("""
-                {"action":"await","input":{"task_ids":["artifact"]}}
-                """));
-        assertThat(outcome.content().artifacts()).containsExactly(artifact);
+        var result = coordinate(manager, List.of(record), java.time.Duration.ZERO, true).getFirst();
+        assertThat(result.content().artifacts()).containsExactly(artifact);
     }
 
     @Test
     void getDoesNotAttachArtifactsFromATaskReportedAsPending() throws Exception {
-        var artifact = new com.harness.core.model.Artifact("late-artifact", "session", "late.txt",
-                com.harness.core.model.Artifact.ArtifactType.DOCUMENT, "text/plain", 1, "late.txt",
-                java.time.Instant.EPOCH);
-        var record = org.mockito.Mockito.spy(task("late"));
-        // Complete exactly after the get action takes its pending/terminal snapshot.
-        org.mockito.Mockito.doAnswer(invocation -> {
-            var wasTerminal = invocation.callRealMethod();
-            org.mockito.Mockito.doCallRealMethod().when(record).isTerminal();
-            record.start();
-            record.succeed(SubAgentResult.success(record.taskId(), "late result",
-                    new SubAgentCompletionContractValidator.Evaluation(List.of(artifact), ToolExecutionSummary.empty(),
-                            ContractValidation.notDeclared(), null), 0, null));
-            return wasTerminal;
-        }).when(record).isTerminal();
-        var scopeView = org.mockito.Mockito.spy(scope);
-        org.mockito.Mockito.doReturn(record).when(scopeView).getTask("late");
+        var record = task("late");
+        var snapshot = repository.findAuthorized(owner, "session", "late").orElseThrow();
         var managerView = mock(SubAgentManager.class);
-        org.mockito.Mockito.when(managerView.getScope("run")).thenReturn(scopeView);
+        org.mockito.Mockito.when(managerView.findTasks(owner, "session", List.of("late")))
+                .thenReturn(List.of(snapshot));
+        succeed(record);
         SpawnSubAgentTool.setCurrentRunContext(new AgentRunContext(
-                "run", "session", new CancellationToken(), "trace", new ToolRegistry().snapshot()));
+                "run", "session", new CancellationToken(), "trace", new ToolRegistry().snapshot(), "turn", owner));
         var output = new GetSubAgentsTool(managerView)
                 .executeOutcome(mapper.readTree("{\"task_ids\":[\"late\"]}")).content();
-        assertThat(mapper.readTree(output.text()).path("tasks").get(0).has("result")).isFalse();
+        assertThat(mapper.readTree(output.text()).path("items").get(0).path("result").isNull()).isTrue();
         assertThat(output.artifacts()).isEmpty();
     }
 
@@ -205,19 +218,34 @@ class SubAgentDeliveryTest {
         }).when(managerView).detachTask(record);
         SpawnSubAgentTool.setCurrentRunContext(new AgentRunContext(
                 "run", "session", new CancellationToken(), "trace", new ToolRegistry().snapshot()));
-        var output = new AwaitSubAgentsTool(managerView).executeOutcome(mapper.readTree("""
-                {"task_ids":["detaching"],"timeout_seconds":0,"on_timeout":"RESUME_SESSION"}
-                """)).content();
+        var output = coordinate(managerView, List.of(record), java.time.Duration.ZERO, true).getFirst().content();
         var response = mapper.readTree(output.text());
-        assertThat(response.path("completed").size()).isZero();
-        assertThat(response.path("deferred").size()).isEqualTo(1);
+        assertThat(response.path("status").asText()).isEqualTo("PENDING");
         assertThat(output.artifacts()).isEmpty();
+        manager.finishRun("run");
         assertThat(inbox.drain("session")).hasSize(1);
     }
 
     private SubAgentTaskRecord task(String id) {
         return scope.registerTask(new SubAgentTask(id, "task", "", "persona", "prompt",
-                List.of(), List.of(), null), new CancellationToken(), "session");
+                List.of(), List.of(), null), new CancellationToken(), "session", "turn", owner,
+                "call-" + id, "trace", repository);
+    }
+
+    private List<com.harness.core.model.ToolResult> coordinate(SubAgentManager delegate,
+            List<SubAgentTaskRecord> records, java.time.Duration timeout, boolean autoWait) {
+        var view = org.mockito.Mockito.mockingDetails(delegate).isSpy()
+                ? delegate : org.mockito.Mockito.spy(delegate);
+        var calls = new java.util.ArrayList<com.harness.core.model.ToolCall>();
+        var results = new java.util.ArrayList<com.harness.core.model.ToolResult>();
+        for (var record : records) {
+            String callId = "call-" + record.taskId();
+            org.mockito.Mockito.doReturn(record).when(view).findTask("run", callId);
+            calls.add(new com.harness.core.model.ToolCall(callId, "subagent", mapper.createObjectNode()));
+            results.add(com.harness.core.model.ToolResult.ok(callId, "subagent", "accepted", 0));
+        }
+        return new SubAgentBatchCoordinator(view, "run", timeout, autoWait)
+                .coordinate(calls, results, new CancellationToken());
     }
 
     private void succeed(SubAgentTaskRecord record) {
@@ -229,7 +257,7 @@ class SubAgentDeliveryTest {
 
     private JsonNode call(String action, String input) throws Exception {
         SpawnSubAgentTool.setCurrentRunContext(new AgentRunContext(
-                "run", "session", new CancellationToken(), "trace", new ToolRegistry().snapshot()));
+                "run", "session", new CancellationToken(), "trace", new ToolRegistry().snapshot(), "turn", owner));
         var arguments = mapper.createObjectNode().put("action", action);
         arguments.set("input", mapper.readTree(input));
         return mapper.readTree(tool.execute(arguments));

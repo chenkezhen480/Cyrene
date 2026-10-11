@@ -15,8 +15,13 @@ public record AgentRunContext(
         String parentTraceId,
         RunToolCatalog toolCatalog,
         String turnId,
-        Owner owner
+        Owner owner,
+        String taskId
 ) {
+    public AgentRunContext(String runId, String sessionId, CancellationToken cancellationToken,
+                           String parentTraceId, RunToolCatalog toolCatalog, String turnId, Owner owner) {
+        this(runId, sessionId, cancellationToken, parentTraceId, toolCatalog, turnId, owner, null);
+    }
     /** Owner values come from prepared input, never sub-agent arguments or result text. */
     public record Owner(String userId, String tenantId, String identity) {
         public Owner {

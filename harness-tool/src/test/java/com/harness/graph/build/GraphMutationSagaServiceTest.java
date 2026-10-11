@@ -191,6 +191,18 @@ class GraphMutationSagaServiceTest {
         assertThat(codec.decode(first.canonicalPayload())).isEqualTo(original);
     }
 
+    @Test void exposesOnlyTerminalFailuresAndKeepsTheGraphCommitStage() {
+        KnowledgeGraphMutationJobStore jobStore = mock(KnowledgeGraphMutationJobStore.class);
+        GraphMutationSagaService service = new GraphMutationSagaService(mock(GraphMutationCommitter.class),
+                mock(GraphSpaceWikiCompiler.class), jobStore, Clock.fixed(NOW, ZoneOffset.UTC), 5);
+        when(jobStore.findById("request-1")).thenReturn(Optional.of(job(changeSet(), KnowledgeGraphMutationJob.Status.PENDING, 1, null, null)));
+        assertThat(service.findFailure("request-1")).isEmpty();
+        when(jobStore.findById("request-1")).thenReturn(Optional.of(job(changeSet(), KnowledgeGraphMutationJob.Status.FAILED, 5, null, null)));
+        assertThat(service.findFailure("request-1").orElseThrow().graphCommitted()).isFalse();
+        when(jobStore.findById("request-1")).thenReturn(Optional.of(job(changeSet(), KnowledgeGraphMutationJob.Status.FAILED, 5, 2, 1)));
+        assertThat(service.findFailure("request-1").orElseThrow().graphCommitted()).isTrue();
+    }
+
     private static KnowledgeGraphMutationJob job(
             GraphChangeSet changeSet,
             KnowledgeGraphMutationJob.Status status,

@@ -13,16 +13,18 @@ import static org.mockito.Mockito.*;
 
 class InternalApiAuthorizationTest {
     @Test
-    void absenceDeniesAndRevocationTakesEffectOnTheNextRequest() {
+    void absenceAllowsAndDisablingOrEnablingTakesEffectOnTheNextRequest() {
         var store = mock(MysqlInternalApiPermissionStore.class);
         var routes = new InternalApiRouteRegistry();
         var service = new InternalApiPermissionService(store, routes, true);
         var principal = new RequestPrincipal("u1", "t1", "reader", JWT);
         var endpoint = endpoint("trace.read", "GET", "/api/trace/{id}", TRACE);
-        when(store.isAllowed("t1", "reader", "trace.read")).thenReturn(false, true, false);
-        assertThatThrownBy(() -> service.authorize(principal, endpoint)).isInstanceOf(SecurityException.class);
+        when(store.isDisabled("t1", "reader", "trace.read")).thenReturn(false, true, false);
         assertThatCode(() -> service.authorize(principal, endpoint)).doesNotThrowAnyException();
         assertThatThrownBy(() -> service.authorize(principal, endpoint)).isInstanceOf(SecurityException.class);
+        assertThatCode(() -> service.authorize(principal, endpoint)).doesNotThrowAnyException();
+        assertThatCode(() -> service.authorize(new RequestPrincipal("u1", "t1", "DEFAULT", JWT), endpoint))
+                .doesNotThrowAnyException();
     }
 
     @Test
@@ -41,7 +43,6 @@ class InternalApiAuthorizationTest {
         routes.register(endpoint("internalApiPermission.update", "PUT", "/api/internal-api-permissions", BOOTSTRAP));
         var service = new InternalApiPermissionService(store, routes, true);
         var manager = new RequestPrincipal("u1", "t1", "manager", JWT);
-        when(store.isAllowed("t1", "manager", "internalApiPermission.update")).thenReturn(true);
         assertThatThrownBy(() -> service.replacePermissions(manager, "t1", "manager", Set.of()))
                 .isInstanceOf(SecurityException.class);
         assertThatThrownBy(() -> service.replacePermissions(manager, "t2", "reader", Set.of()))
@@ -51,14 +52,33 @@ class InternalApiAuthorizationTest {
     }
 
     @Test
+    void disabledPermissionEditorsCannotChangeOtherIdentities() {
+        var store = mock(MysqlInternalApiPermissionStore.class);
+        var routes = new InternalApiRouteRegistry();
+        routes.register(endpoint("internalApiPermission.update", "PUT", "/api/internal-api-permissions", BOOTSTRAP));
+        var service = new InternalApiPermissionService(store, routes, true);
+        when(store.isDisabled("t1", "reader", "internalApiPermission.update")).thenReturn(true);
+        assertThatThrownBy(() -> service.replacePermissions(new RequestPrincipal("u1", "t1", "reader", JWT),
+                "t1", "other", Set.of())).isInstanceOf(SecurityException.class);
+        verify(store, never()).replace(anyString(), anyString(), anySet());
+    }
+
+    @Test
+    void unconfiguredPermissionsNeverAllowAnonymousRequests() {
+        var store = mock(MysqlInternalApiPermissionStore.class);
+        var service = new InternalApiPermissionService(store, new InternalApiRouteRegistry(), true);
+        assertThatThrownBy(() -> service.authorize(new RequestPrincipal(null, "t1", "DEFAULT", ANONYMOUS),
+                endpoint("trace.read", "GET", "/api/trace/{id}", TRACE))).isInstanceOf(SecurityException.class);
+        verifyNoInteractions(store);
+    }
+
+    @Test
     void globalManagementGrantsCannotExposeOtherTenantData() {
         var store = mock(MysqlInternalApiPermissionStore.class);
         var service = new InternalApiPermissionService(store, new InternalApiRouteRegistry(), true, "management");
-        when(store.isAllowed("tenant-1", "manager", "knowledge.read")).thenReturn(true);
         var endpoint = endpoint("knowledge.read", "GET", "/api/knowledge/{collection}/{id}", GLOBAL_MANAGEMENT);
         assertThatThrownBy(() -> service.authorize(new RequestPrincipal("u1", "tenant-1", "manager", JWT), endpoint))
                 .isInstanceOf(SecurityException.class);
-        when(store.isAllowed("management", "manager", "knowledge.read")).thenReturn(true);
         assertThatCode(() -> service.authorize(new RequestPrincipal("u1", "management", "manager", JWT), endpoint))
                 .doesNotThrowAnyException();
     }

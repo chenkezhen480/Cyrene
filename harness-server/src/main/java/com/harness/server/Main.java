@@ -15,16 +15,12 @@ import com.harness.graph.build.GraphBuildService;
 import com.harness.graph.build.GraphMutationCommitter;
 import com.harness.agent.graph.LlmGraphDataConverter;
 import com.harness.graph.build.GraphDataConverterRegistry;
-import com.harness.tool.knowledge.KnowledgeIngestService;
-import com.harness.tool.knowledge.KnowledgeDocumentLifecycleService;
 import com.harness.tool.knowledge.PersistentGraphSchemaWikiCompiler;
 import com.harness.tool.knowledge.PersistentGraphSpaceWikiCompiler;
 import com.harness.tool.knowledge.GraphCapabilityDescriber;
 import com.harness.tool.knowledge.GraphSchemaWikiCompiler;
 import com.harness.tool.knowledge.GraphSpaceWikiCompiler;
-import com.harness.tool.knowledge.authority.ContentAddressedArtifactStorage;
 import com.harness.tool.knowledge.authority.MysqlKnowledgeArtifactRepository;
-import com.harness.tool.knowledge.authority.MysqlKnowledgeIngestJobStore;
 import com.harness.tool.knowledge.authority.MysqlKnowledgeIndexOutboxStore;
 import com.harness.tool.knowledge.okf.OkfBundleExporter;
 import com.harness.tool.knowledge.okf.OkfImportService;
@@ -110,24 +106,19 @@ public class Main {
         int port = EnvConfig.get().getInt(EnvKey.SERVER_PORT, 8080);
         int workers = Math.max(EnvConfig.get().getInt(EnvKey.SERVER_WORKERS, Runtime.getRuntime().availableProcessors() * 2), 8);
 
-        AgentOrchestrator agent = new AgentOrchestrator();
+        AgentOrchestrator agent;
+        try {
+            agent = new AgentOrchestrator();
+        } catch (RuntimeException startupFailure) {
+            log.error("[Server] 应用启动失败：{}", startupFailure.getMessage());
+            throw startupFailure;
+        }
         Runtime.getRuntime().addShutdownHook(new Thread(agent::shutdown));
 
-        // Knowledge base upload service — reuse agent's instances
         String knowledgeUploadDir = EnvConfig.get().getString(
                 EnvKey.KNOWLEDGE_UPLOAD_DIR, "./knowledge-uploads");
         MysqlKnowledgeArtifactRepository knowledgeArtifactRepository =
                 new MysqlKnowledgeArtifactRepository();
-        KnowledgeIngestService ingestService = new KnowledgeIngestService(
-                agent.embeddingModel(),
-                agent.vectorStore(),
-                agent.documentConversionService(),
-                agent.documentSummarizer(),
-                new ContentAddressedArtifactStorage(Path.of(knowledgeUploadDir)),
-                knowledgeArtifactRepository,
-                new MysqlKnowledgeIngestJobStore(agent.knowledgeRepository()),
-                agent.knowledgeRepository(),
-                agent.wikiIdentityResolver());
         TraceStore traceStore = agent.traceStore();
 
         // Shared cancellation token registry for in-flight chat requests
@@ -228,15 +219,6 @@ public class Main {
         apiRoutes.route(app, "PUT", "/api/model-config", "modelConfig.update", "model", GLOBAL_MANAGEMENT, modelConfigurationHandler::update);
 
         apiRoutes.route(app, "GET", "/api/knowledge-status", "knowledge.status", "knowledge", TENANT, ctx -> ctx.json(agent.knowledgeVectorRuntime().status()));
-        io.javalin.http.Handler requireKnowledge = ctx -> {
-            if (!agent.knowledgeVectorRuntime().isReady()) {
-                ApiResponses.error(ctx, 503, ApiErrorCode.KNOWLEDGE_NOT_READY,
-                        agent.knowledgeVectorRuntime().status().message());
-                ctx.skipRemainingHandlers();
-            }
-        };
-        app.before("/api/knowledge", requireKnowledge);
-        app.before("/api/knowledge/*", requireKnowledge);
 
         // Auth token endpoint
         if ("jwt".equals(authMode)) {
@@ -244,28 +226,12 @@ public class Main {
             apiRoutes.route(app, "POST", "/api/auth/token", "auth.login", "auth", PUBLIC, authHandler::handle);
         }
 
-        // Knowledge base upload endpoint
-        KnowledgeUploadHandler knowledgeHandler = new KnowledgeUploadHandler(ingestService, traceStore);
-        apiRoutes.route(app, "POST", "/api/knowledge/upload", "knowledge.upload", "knowledge", GLOBAL_MANAGEMENT, knowledgeHandler::handle);
+        var knowledgeWikiService = KnowledgeApiRoutes.register(app, apiRoutes, agent,
+                knowledgeArtifactRepository, traceStore, Path.of(knowledgeUploadDir));
 
         // File upload endpoint (for image-to-image and other file references)
         apiRoutes.route(app, "POST", "/api/files/upload", "files.upload", "files", USER, fileUploadHandler::handle);
         apiRoutes.route(app, "GET", "/files/input/{fileName}", "files.read", "files", USER, fileUploadHandler::download);
-
-        // Knowledge base management endpoints
-        var knowledgeWikiService = new com.harness.tool.knowledge.KnowledgeWikiService(
-                agent.knowledgeRepository(), agent.vectorStore());
-        KnowledgeManagementHandler knowledgeMgmtHandler = new KnowledgeManagementHandler(
-                agent.vectorStore(),
-                new KnowledgeDocumentLifecycleService(
-                        agent.knowledgeRepository(), agent.vectorStore()), knowledgeWikiService);
-        apiRoutes.route(app, "GET", "/api/knowledge/{collection}", "knowledge.documents", "knowledge", GLOBAL_MANAGEMENT, knowledgeMgmtHandler::listDocuments);
-        // List all knowledge collections
-        apiRoutes.route(app, "GET", "/api/knowledge", "knowledge.collections", "knowledge", GLOBAL_MANAGEMENT, knowledgeMgmtHandler::listCollections);
-        apiRoutes.route(app, "GET", "/api/knowledge/{collection}/{documentId}", "knowledge.read", "knowledge", GLOBAL_MANAGEMENT, knowledgeMgmtHandler::getDocument);
-        apiRoutes.route(app, "PUT", "/api/knowledge/{collection}/{documentId}", "knowledge.update", "knowledge", GLOBAL_MANAGEMENT, knowledgeMgmtHandler::updateDocument);
-        apiRoutes.route(app, "DELETE", "/api/knowledge/{collection}", "knowledge.deleteCollection", "knowledge", GLOBAL_MANAGEMENT, knowledgeMgmtHandler::deleteCollection);
-        apiRoutes.route(app, "DELETE", "/api/knowledge/{collection}/{documentId}", "knowledge.deleteDocument", "knowledge", GLOBAL_MANAGEMENT, knowledgeMgmtHandler::deleteDocument);
 
         KnowledgeWikiHandler wikiHandler = new KnowledgeWikiHandler(
                 knowledgeWikiService,
@@ -336,6 +302,14 @@ public class Main {
                 graphMutationCommitter, graphDataConverterRegistry);
         GraphBuildHandler graphBuildHandler =
                 new GraphBuildHandler(graphBuildService, graphRequestExecutor);
+        if (agent.graphChangeDraftService() != null) {
+            GraphChangeDraftHandler drafts = new GraphChangeDraftHandler(agent.graphChangeDraftService(),
+                    new GraphDraftScopeResolver(agent.sessionStore(), mapper));
+            apiRoutes.route(app, "GET", "/api/graph/change-drafts/{draftId}", "graph.draft.read", "graph", USER, drafts::read);
+            apiRoutes.route(app, "GET", "/api/graph/change-drafts/{draftId}/changes", "graph.draft.changes", "graph", USER, drafts::changes);
+            apiRoutes.route(app, "POST", "/api/graph/change-drafts", "graph.draft.prepare", "graph", USER, drafts::prepare);
+            apiRoutes.route(app, "POST", "/api/graph/change-drafts/{draftId}/apply", "graph.draft.apply", "graph", USER, drafts::apply);
+        }
         GraphSchemaManagementHandler graphSchemaHandler = new GraphSchemaManagementHandler(
                 agent.graphSchemaManagementService(),
                 agent.graphSettings(),
@@ -442,6 +416,8 @@ public class Main {
         apiRoutes.route(app, "GET", "/api/sessions", "session.list", "sessions", USER, sessionHandler::list);
         apiRoutes.route(app, "GET", "/api/sessions/{sessionId}", "session.read", "sessions", SESSION, sessionHandler::detail);
         apiRoutes.route(app, "GET", "/api/sessions/{sessionId}/messages", "session.messages", "sessions", SESSION, sessionHandler::messages);
+        SessionTaskHandler sessionTasks = new SessionTaskHandler(agent.subAgentManager(), agent.sessionStore());
+        apiRoutes.route(app, "GET", "/api/sessions/{sessionId}/tasks", "session.tasks", "sessions", SESSION, sessionTasks::list);
         apiRoutes.route(app, "GET", "/api/sessions/{sessionId}/stats", "session.stats", "sessions", SESSION, sessionHandler::stats);
         apiRoutes.route(app, "DELETE", "/api/sessions/{sessionId}", "session.delete", "sessions", SESSION, sessionHandler::delete);
 
@@ -450,18 +426,8 @@ public class Main {
                 ctx -> ctx.json(agent.messageCache().metricsSnapshot()));
 
         // Cancel in-progress chat request
-        apiRoutes.route(app, "DELETE", "/api/chat/{sessionId}", "chat.cancel", "chat", SESSION, ctx -> {
-            String sessionId = ctx.pathParam("sessionId");
-            CancellationToken token = activeRequests.get(sessionId);
-            if (token == null) {
-                ApiResponses.error(ctx, 404, ApiErrorCode.NOT_FOUND,
-                        "No active request found for session: " + sessionId);
-                return;
-            }
-            token.cancel();
-            log.info("[Server] Cancellation requested for session: {}", sessionId);
-            ctx.json(Map.of("status", "cancelled", "sessionId", sessionId));
-        });
+        ChatCancellationHandler cancellation = new ChatCancellationHandler(activeRequests, agent.subAgentManager());
+        apiRoutes.route(app, "DELETE", "/api/chat/{sessionId}", "chat.cancel", "chat", SESSION, cancellation::cancel);
 
         // Get trace by ID
         apiRoutes.route(app, "GET", "/api/trace/{id}", "trace.read", "traces", TRACE, ctx -> {

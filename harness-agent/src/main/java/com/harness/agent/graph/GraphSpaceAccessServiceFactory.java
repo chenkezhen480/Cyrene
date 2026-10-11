@@ -33,7 +33,7 @@ public final class GraphSpaceAccessServiceFactory {
             return new OpenGraphSpaceAccessService(graphStore);
         }
 
-        String relationalStore = EnvConfig.get().getString(EnvKey.AUDIT_STORE, "none");
+        String relationalStore = EnvConfig.get().getString(EnvKey.AUDIT_STORE, "mysql");
         if (!"mysql".equalsIgnoreCase(relationalStore)) {
             log.info("[KnowledgeGraph] graph-space bindings inactive (MySQL storage is disabled)");
             return new OpenGraphSpaceAccessService(graphStore);

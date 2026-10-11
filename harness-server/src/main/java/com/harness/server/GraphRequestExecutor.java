@@ -2,6 +2,7 @@ package com.harness.server;
 
 import com.harness.core.exception.AgentException;
 import com.harness.graph.build.GraphDataConversionException;
+import com.harness.graph.build.GraphDraftConflictException;
 import com.harness.graph.schema.GraphSchemaPersistenceException;
 import com.harness.graph.store.GraphStoreException;
 import com.harness.server.api.ApiErrorCode;
@@ -12,6 +13,7 @@ import org.slf4j.LoggerFactory;
 
 import java.util.NoSuchElementException;
 import java.util.Objects;
+import java.util.Map;
 
 final class GraphRequestExecutor {
 
@@ -38,6 +40,9 @@ final class GraphRequestExecutor {
             ApiResponses.error(context, 422, ApiErrorCode.GRAPH_PARSE_FAILED, e.getMessage());
         } catch (IllegalArgumentException e) {
             ApiResponses.error(context, 400, ApiErrorCode.INVALID_REQUEST, e.getMessage());
+        } catch (GraphDraftConflictException e) {
+            ApiResponses.error(context, 409, ApiErrorCode.CONFLICT, e.getMessage(),
+                    Map.of("currentDraftId", e.currentDraftId(), "currentContentHash", e.currentContentHash()));
         } catch (IllegalStateException e) {
             ApiResponses.error(context, 409, ApiErrorCode.CONFLICT, e.getMessage());
         } catch (GraphStoreException | GraphSchemaPersistenceException e) {

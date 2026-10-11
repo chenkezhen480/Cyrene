@@ -24,6 +24,7 @@ artifacts/
 .env
 data/model.conf
 data/migration-backups/
+docker/.ports-*.yml
 *.log
 project-apis.json
 

@@ -10,7 +10,7 @@ import java.util.Optional;
 
 /**
  * Interface for trace persistence.
- * Implementations: MySQL, SQLite, file-based.
+ * Implementations: MySQL, file-based.
  */
 public interface TraceStore {
 

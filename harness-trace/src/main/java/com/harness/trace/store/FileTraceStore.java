@@ -144,7 +144,7 @@ public class FileTraceStore implements TraceStore {
     @Override
     public synchronized int countByOwner(String userId, String tenantId) {
         var scope = owner(userId, tenantId);
-        // ponytail: file queries scan all JSON; use SQLite/MySQL when Trace volume grows.
+        // shortcut: file queries scan all JSON; use MySQL when Trace volume grows.
         try (var paths = Files.list(traceDir)) {
             return Math.toIntExact(paths.filter(path -> path.toString().endsWith(".json"))
                     .map(this::readRequired).filter(scope).count());

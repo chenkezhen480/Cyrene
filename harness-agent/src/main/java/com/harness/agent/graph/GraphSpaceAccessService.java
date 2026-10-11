@@ -19,6 +19,10 @@ public interface GraphSpaceAccessService {
             String schemaId
     );
 
+    default void requireWritable(String tenantId, String graphId, String schemaId) {
+        throw new SecurityException("Graph space write authorization is not configured");
+    }
+
     int deleteBindings(String graphId, String schemaId);
 
     /**

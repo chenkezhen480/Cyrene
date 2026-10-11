@@ -37,16 +37,17 @@ const CyreneAPI = (() => {
     }
 
     const error = new Error(errorBody.message);
+    error.status = resp.status;
     error.code = errorBody.code;
     error.details = errorBody.details;
     throw error;
   }
 
-  async function request(method, path, body = null) {
+  async function request(method, path, body = null, signal) {
     const headers = { 'Content-Type': 'application/json' };
     if (_token) headers['Authorization'] = `Bearer ${_token}`;
 
-    const config = { method, headers };
+    const config = { method, headers, signal };
     if (body && method !== 'GET') {
       config.body = typeof body === 'string' ? body : JSON.stringify(body);
     }
@@ -69,13 +70,13 @@ const CyreneAPI = (() => {
   }
 
   // ── Chat (SSE) ──
-  function chat(sessionId, text, context = {}, attachments = [], interactionMode = 'TEXT') {
+  function chat(sessionId, text, context = {}, attachments = [], interactionMode = 'TEXT', signal) {
     const headers = { 'Content-Type': 'application/json' };
     if (_token) headers['Authorization'] = `Bearer ${_token}`;
     if (sessionId) headers['X-Session-Id'] = sessionId;
 
     const body = { text, context, attachments, interactionMode };
-    return fetch('/api/chat', { method: 'POST', headers, body: JSON.stringify(body) })
+    return fetch('/api/chat', { method: 'POST', headers, body: JSON.stringify(body), signal })
       .then(requireOkResponse);
   }
 
@@ -152,8 +153,8 @@ const CyreneAPI = (() => {
   }
 
   // ── Sessions ──
-  function createSession(userId, title) {
-    return request('POST', '/api/sessions', { userId, title });
+  function createSession(userId, title, signal) {
+    return request('POST', '/api/sessions', { userId, title }, signal);
   }
 
   function listSessions(userId, { status, limit, cursor } = {}) {
@@ -170,13 +171,19 @@ const CyreneAPI = (() => {
     return request('GET', `/api/sessions/${sessionId}?${params}`);
   }
 
-  function getMessages(sessionId, userId, { limit, cursor, direction } = {}) {
+  function getMessages(sessionId, userId, { limit, cursor, direction, signal } = {}) {
     const params = new URLSearchParams();
     if (userId) params.set('userId', userId);
     if (limit) params.set('limit', limit);
     if (cursor) params.set('cursor', cursor);
     if (direction) params.set('direction', direction);
-    return request('GET', `/api/sessions/${sessionId}/messages?${params}`);
+    return request('GET', `/api/sessions/${sessionId}/messages?${params}`, null, signal);
+  }
+
+  function getSessionTasks(sessionId, userId, { limit = 50, cursor, signal } = {}) {
+    const params = new URLSearchParams({ userId, limit: String(limit) });
+    if (cursor) params.set('cursor', cursor);
+    return request('GET', `/api/sessions/${encodeURIComponent(sessionId)}/tasks?${params}`, null, signal);
   }
 
   function getSessionStats(sessionId, userId) {
@@ -369,6 +376,26 @@ const CyreneAPI = (() => {
     return request('POST', '/api/graph/build', payload);
   }
 
+  function getGraphDraft(draftId, userId, { expectedContentHash, signal } = {}) {
+    const params = new URLSearchParams({ userId });
+    if (expectedContentHash) params.set('expectedContentHash', expectedContentHash);
+    return request('GET', `/api/graph/change-drafts/${encodeURIComponent(draftId)}?${params}`, null, signal);
+  }
+
+  function getGraphDraftChanges(draftId, userId, { expectedContentHash, limit = 50, cursor, signal } = {}) {
+    const params = new URLSearchParams({ userId, expectedContentHash, limit: String(limit) });
+    if (cursor) params.set('cursor', cursor);
+    return request('GET', `/api/graph/change-drafts/${encodeURIComponent(draftId)}/changes?${params}`, null, signal);
+  }
+
+  function saveGraphDraft(payload, signal) {
+    return request('POST', '/api/graph/change-drafts', payload, signal);
+  }
+
+  function applyGraphDraft(draftId, userId, expectedContentHash) {
+    return request('POST', `/api/graph/change-drafts/${encodeURIComponent(draftId)}/apply`, { userId, expectedContentHash });
+  }
+
   function previewNaturalLanguageGraph(payload) {
     return request('POST', '/api/graph/build/preview', payload);
   }
@@ -454,7 +481,8 @@ const CyreneAPI = (() => {
     getToolPermissions, saveToolPermissions, getPermissionIdentities,
     getInternalApiEndpoints, getInternalApiPermissions, saveInternalApiPermissions,
     getModelConfiguration, updateModelConfiguration, getKnowledgeStatus,
-    createSession, listSessions, getSession, getMessages, getSessionStats, closeSession,
+    createSession, listSessions, getSession, getMessages, getSessionTasks, getSessionStats, closeSession,
+    getGraphDraft, getGraphDraftChanges, saveGraphDraft, applyGraphDraft,
     listCollections, uploadKnowledge, listKnowledge, getKnowledgeChunk, updateKnowledgeChunk, listWiki, getWiki, updateWiki, deleteWiki, exportWiki, exportAllWiki,
     getGraphStatus, listGraphSchemas, getGraphSchema,
     listGraphSchemaConfigs, getGraphSchemaConfig, createGraphSchemaConfig, updateGraphSchemaConfig,

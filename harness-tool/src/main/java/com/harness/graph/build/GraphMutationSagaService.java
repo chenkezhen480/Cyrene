@@ -73,6 +73,20 @@ public final class GraphMutationSagaService implements GraphMutationCommitter {
         return true;
     }
 
+    @Override
+    public Optional<GraphMutationResult> findCommitted(String requestId) {
+        return jobStore.findById(requestId)
+                .filter(job -> job.status() == KnowledgeGraphMutationJob.Status.KNOWLEDGE_COMMITTED)
+                .map(GraphMutationSagaService::result);
+    }
+
+    @Override
+    public Optional<Failure> findFailure(String requestId) {
+        return jobStore.findById(requestId)
+                .filter(job -> job.status() == KnowledgeGraphMutationJob.Status.FAILED)
+                .map(job -> new Failure(job.errorMessage(), job.graphCommittedAt() != null));
+    }
+
     public int recoverStuck() {
         int stuckMinutes = EnvConfig.get().getInt(
                 EnvKey.GRAPH_MUTATION_STUCK_MINUTES, 30);

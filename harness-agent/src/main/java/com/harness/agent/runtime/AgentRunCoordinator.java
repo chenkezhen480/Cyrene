@@ -4,6 +4,7 @@ import com.harness.agent.AgentRunContext;
 import com.harness.agent.KnowledgeGraphTool;
 import com.harness.agent.SpawnSubAgentTool;
 import com.harness.agent.SubAgentManager;
+import com.harness.agent.SessionResumeDispatcher;
 import com.harness.agent.context.KnowledgeAccessService;
 import com.harness.agent.knowledge.KnowledgeToolRuntimeContext;
 import com.harness.agent.lifecycle.AgentLifecycleHooks;
@@ -74,6 +75,7 @@ public final class AgentRunCoordinator {
     private final ToolRegistry toolRegistry;
     private final ToolExecutor toolExecutor;
     private final SubAgentManager subAgentManager;
+    private final SessionResumeDispatcher resumeDispatcher;
     private final ReplyAuditor replyAuditor;
     private final AgentLifecycleHooks lifecycleHooks;
 
@@ -84,6 +86,7 @@ public final class AgentRunCoordinator {
             ToolRegistry toolRegistry,
             ToolExecutor toolExecutor,
             SubAgentManager subAgentManager,
+            SessionResumeDispatcher resumeDispatcher,
             ReplyAuditor replyAuditor,
             AgentLifecycleHooks lifecycleHooks
     ) {
@@ -93,6 +96,7 @@ public final class AgentRunCoordinator {
         this.toolRegistry = toolRegistry;
         this.toolExecutor = toolExecutor;
         this.subAgentManager = subAgentManager;
+        this.resumeDispatcher = java.util.Objects.requireNonNull(resumeDispatcher, "resumeDispatcher");
         this.replyAuditor = replyAuditor;
         this.lifecycleHooks = java.util.Objects.requireNonNull(
                 lifecycleHooks, "lifecycleHooks");
@@ -109,9 +113,13 @@ public final class AgentRunCoordinator {
         long startedAt = System.currentTimeMillis();
         RunTrace trace = runtime.startTrace();
         String runId = UUID.randomUUID().toString();
+        AtomicReference<SessionResumeDispatcher.SessionRunLease> sessionLease = new AtomicReference<>();
         try {
+            sessionLease.set(resumeDispatcher.acquireForeground(command.requestedSessionId(), command.cancellationToken()));
             recordFinalOutputContract(trace, finalOutputContract);
-            PreparedAgentRun prepared = runPreparer.prepare(toRequest(command, true), trace);
+            PreparedAgentRun prepared = runPreparer.prepare(toRequest(command, true), trace,
+                    sessionId -> sessionLease.set(resolvedSessionLease(
+                            sessionLease.get(), sessionId, command.cancellationToken())));
             RunToolCatalog toolCatalog = createToolCatalog(
                     prepared.sessionId(),
                     prepared.unavailableTools(),
@@ -137,7 +145,8 @@ public final class AgentRunCoordinator {
                     command.cancellationToken(),
                     thinkingLevel,
                     null,
-                    finalOutputContract));
+                    finalOutputContract).withToolBatchCoordinator(
+                            new com.harness.agent.SubAgentBatchCoordinator(subAgentManager, runId)));
             boolean completesTurn = !subAgentManager.hasDetachedTasks(runId);
             if (completesTurn) {
                 result = lifecycleHooks.beforeFinal(
@@ -186,7 +195,8 @@ public final class AgentRunCoordinator {
             trace.finish();
             throw e;
         } finally {
-            closeRunScope(runId);
+            try { closeRunScope(runId); }
+            finally { if (sessionLease.get() != null) sessionLease.get().close(); }
         }
     }
 
@@ -197,8 +207,12 @@ public final class AgentRunCoordinator {
         // client keys its "is this still my run" filter on the value carried by START.
         String runId = UUID.randomUUID().toString();
         StreamCallback runCallback = event -> callback.onEvent(event.withRunId(runId));
+        AtomicReference<SessionResumeDispatcher.SessionRunLease> sessionLease = new AtomicReference<>();
         try {
-            PreparedAgentRun prepared = runPreparer.prepare(toRequest(command, false), trace);
+            sessionLease.set(resumeDispatcher.acquireForeground(command.requestedSessionId(), command.cancellationToken()));
+            PreparedAgentRun prepared = runPreparer.prepare(toRequest(command, false), trace,
+                    sessionId -> sessionLease.set(resolvedSessionLease(
+                            sessionLease.get(), sessionId, command.cancellationToken())));
             runCallback.onEvent(StreamEvent.start(prepared.sessionId()));
 
             RunToolCatalog toolCatalog = createToolCatalog(
@@ -241,7 +255,8 @@ public final class AgentRunCoordinator {
                     listener,
                     command.cancellationToken(),
                     thinkingLevel,
-                    confirmationContext));
+                    confirmationContext).withToolBatchCoordinator(
+                            new com.harness.agent.SubAgentBatchCoordinator(subAgentManager, runId)));
             String streamedOutput = result.output();
             boolean completesTurn = !subAgentManager.hasDetachedTasks(runId);
             if (completesTurn) {
@@ -274,13 +289,16 @@ public final class AgentRunCoordinator {
             finishTraceAsync(trace);
             memoryRuntime.updateActivityAsync(prepared.sessionId());
 
-            runCallback.onEvent(StreamEvent.done(
+            StreamEvent done = StreamEvent.done(
                     result.output(),
                     trace.traceId(),
                     prepared.sessionId(),
                     result.steps().size(),
                     result.artifacts(),
-                    confirmationRequired));
+                    confirmationRequired);
+            Map<String, Object> doneMetadata = new HashMap<>(done.metadata());
+            doneMetadata.put("pendingTaskIds", subAgentManager.pendingTaskIds(runId));
+            runCallback.onEvent(new StreamEvent(done.type(), done.data(), doneMetadata));
             log.info("Stream run complete: sessionId={}, steps={}, duration={}ms",
                     prepared.sessionId(), result.steps().size(),
                     System.currentTimeMillis() - startedAt);
@@ -312,8 +330,16 @@ public final class AgentRunCoordinator {
             finishTraceAsync(trace);
             runCallback.onEvent(StreamEvent.error(friendlyErrorMessage(reportedFailure)));
         } finally {
-            closeRunScope(runId);
+            try { closeRunScope(runId); }
+            finally { if (sessionLease.get() != null) sessionLease.get().close(); }
         }
+    }
+
+    private SessionResumeDispatcher.SessionRunLease resolvedSessionLease(
+            SessionResumeDispatcher.SessionRunLease lease, String sessionId, CancellationToken token) {
+        if (lease != null && lease.sessionId().equals(sessionId)) return lease;
+        if (lease != null) lease.close();
+        return resumeDispatcher.acquireForeground(sessionId, token);
     }
 
     /**
@@ -514,7 +540,7 @@ public final class AgentRunCoordinator {
             StreamCallback callback,
             AgentRunContext.Owner owner
     ) {
-        subAgentManager.openScope(runId, event -> {
+        subAgentManager.openScope(runId, sessionId, event -> {
             if (callback != null) {
                 callback.onEvent(StreamEvent.subAgentStatus(event));
             }

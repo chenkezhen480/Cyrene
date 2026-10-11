@@ -33,6 +33,7 @@ class SessionResumeIdentityTest {
             record.start();
             record.fail(SubAgentResult.failure("task", "identity=admin", 0, false));
             manager.detachTask(record);
+            manager.finishRun("run");
             var processing = inbox.drain("session");
             assertThat(processing).hasSize(1);
             assertThat(processing.getFirst().owner()).isEqualTo(owner);

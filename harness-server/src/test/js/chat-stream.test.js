@@ -19,6 +19,11 @@ const appendText = source.slice(source.indexOf('function appendAssistantText('),
 const voicePlayback = source.slice(
   source.indexOf('    const VOICE_START_BUFFER_SECONDS ='),
   source.indexOf('    function preferredRecordingMimeType()'));
+const pageContract = source.slice(source.indexOf('function requirePageResponse'), source.indexOf('function requireArrayResponse'));
+const cancelOutput = source.slice(source.indexOf('    async function cancelOutput()'),
+  source.indexOf('    async function approvePendingConfirmation()', source.indexOf('    async function cancelOutput()')));
+const selectSession = source.slice(source.indexOf('    async function selectSession(sid)'),
+  source.indexOf('    async function newSession()', source.indexOf('    async function selectSession(sid)')));
 
 async function runChat(events, closes = false, overrides = {}, stopOnRead = 0, sendOptions = {}) {
   const timers = new Set();
@@ -30,6 +35,7 @@ async function runChat(events, closes = false, overrides = {}, stopOnRead = 0, s
     currentRunId: { value: null },
     toasts: [], reads: 0, cancelled: false, scheduledFrames: 0,
     chatCalls: [], artifacts: [], playedAudio: [], scheduledAt: [],
+    pendingCancellations: { value: new Map() }, cancelCalls: [],
     ...overrides,
   };
   const reader = {
@@ -42,21 +48,33 @@ async function runChat(events, closes = false, overrides = {}, stopOnRead = 0, s
         stopFn();
         return { done: true };
       }
+      if (overrides.pendingRead) return new Promise(() => {});
       if (closes) return { done: true };
       throw new Error('read continued after terminal event');
     },
     async cancel() { state.cancelled = true; },
   };
   let stopFn = null;
-  const api = runInNewContext(appendText + voicePlayback + sendMessage
-    + '\n({ sendMessage, currentRun: () => activeRun });', {
-    ...state, Map, TextDecoder, CyreneSSE, upsertToolCall,
+  const api = runInNewContext(pageContract + appendText + voicePlayback + cancelOutput + selectSession + sendMessage
+    + '\n({ sendMessage, cancelOutput, selectSession, currentRun: () => activeRun });', {
+    ...state, Map, TextDecoder, AbortController, CyreneSSE, upsertToolCall,
     // ChatPage setup state the send loop reads and writes across invocations.
     activeRun: null,
     CyreneAPI: {
+      async createSession() {
+        if (overrides.createSessionImpl) return overrides.createSessionImpl(stopFn);
+        return { id: 'session-created' };
+      },
       async chat(...args) {
         state.chatCalls.push(args);
+        if (overrides.chatImpl) return overrides.chatImpl(args, stopFn, reader);
         return { body: { getReader: () => reader } };
+      },
+      async getSessionTasks(...args) { return overrides.getTasksImpl(...args, stopFn); },
+      async getMessages(...args) { return overrides.getMessagesImpl(...args); },
+      async cancelChat(sessionId) {
+        state.cancelCalls.push(sessionId);
+        return overrides.cancelChatImpl(sessionId);
       },
     },
     // The playback queue traces its own path now, and a browser VM has no console.
@@ -74,7 +92,11 @@ async function runChat(events, closes = false, overrides = {}, stopOnRead = 0, s
         this.state = 'running';
       }
       resume() { return Promise.resolve(); }
-      decodeAudioData() { return Promise.resolve({ duration: 1, sampleRate: 48000 }); }
+      decodeAudioData() {
+        return overrides.decodeAudioImpl
+          ? overrides.decodeAudioImpl(stopFn)
+          : Promise.resolve({ duration: 1, sampleRate: 48000 });
+      }
       createBufferSource() {
         return {
           buffer: null,
@@ -106,13 +128,14 @@ async function runChat(events, closes = false, overrides = {}, stopOnRead = 0, s
     cancelAnimationFrame: timer => clearTimeout(timer),
   });
   stopFn = () => api.currentRun()?.stop();
-  await api.sendMessage(sendOptions);
+  if (overrides.runScenario) await overrides.runScenario(api, state);
+  else await api.sendMessage(sendOptions);
   // The playback queue fetches and decodes on its own promise chain, off the send loop.
   // Drain it before anything asserts on what was played.
   for (let i = 0; i < 64; i++) await Promise.resolve();
   assert.equal(state.isStreaming.value, false);
   assert.equal(state.pendingConfirmation.value, null);
-  assert.equal(state.cancelled, true);
+  if (state.reads > 0) assert.equal(state.cancelled, true);
   assert.equal(timers.size, 0);
   return state;
 }
@@ -182,6 +205,110 @@ test('Stop reads as a cancel, not as a broken stream', async () => {
   assert.deepEqual(state.toasts, []);
   assert.doesNotMatch(String(state.messages.value[1].content), /streamInterrupted/);
   assert.equal(state.messages.value[1].toolCalls[0].status, 'CANCELLED');
+});
+
+test('a new chat creates a real session before dispatch', async () => {
+  const state = await runChat('event: done\ndata: {"output":"answer"}\n\n');
+  assert.equal(state.chatCalls[0][0], 'session-created');
+});
+
+test('Stop before response headers settles immediately and ignores late frames', async () => {
+  const state = await runChat('event: token\ndata: {"text":"late"}\n\n'
+    + 'event: done\ndata: {"output":"late"}\n\n', false, {
+    chatImpl: async (args, stop, reader) => {
+      assert.ok(args[5] instanceof AbortSignal);
+      stop();
+      assert.equal(args[5].aborted, true);
+      return { body: { getReader: () => reader } };
+    },
+  });
+  assert.equal(state.messages.value[1].content, '');
+  assert.deepEqual(state.toasts, []);
+});
+
+test('Stop while creating a session never dispatches the chat', async () => {
+  const state = await runChat('', false, {
+    createSessionImpl: async stop => { stop(); return { id: 'late-created' }; },
+  });
+  assert.equal(state.chatCalls.length, 0);
+  assert.equal(state.currentSessionId.value, '');
+});
+
+test('Stop settles even when the response headers never arrive', async () => {
+  const state = await runChat('', false, {
+    chatImpl: (_args, stop) => { stop(); return new Promise(() => {}); },
+  });
+  assert.equal(state.messages.value[1].content, '');
+});
+
+test('detached tasks use paginated own-session delivery and refresh latest history', async () => {
+  const calls = [];
+  const state = await runChat('event: done\ndata: {"output":"waiting","pendingTaskIds":["owned"]}\n\n', false, {
+    getTasksImpl: async (sid, user, query) => {
+      calls.push([sid, user, query.cursor]);
+      return query.cursor
+        ? { items: [{ taskId: 'owned', status: 'COMPLETED', deliveryState: 'SESSION_RESUMED' }], pageInfo: { limit: 50, nextCursor: '', hasMore: false } }
+        : { items: [{ taskId: 'unrelated', status: 'COMPLETED', deliveryState: 'SESSION_RESUMED' }], pageInfo: { limit: 50, nextCursor: 'next', hasMore: true } };
+    },
+    getMessagesImpl: async (sid, user, query) => {
+      assert.equal(sid, 'session-created');
+      assert.equal(query.direction, 'desc');
+      return { items: [{ id: 5, role: 'assistant', content: 'continued answer' }], pageInfo: { limit: 50, nextCursor: '', hasMore: false } };
+    },
+  });
+  assert.deepEqual(calls, [['session-created', 'alice', ''], ['session-created', 'alice', 'next']]);
+  assert.equal(state.messages.value[0].content, 'continued answer');
+});
+
+test('Stop during task polling aborts it without reading history', async () => {
+  const state = await runChat('event: done\ndata: {"output":"waiting","pendingTaskIds":["owned"]}\n\n', false, {
+    getTasksImpl: async (_sid, _user, query, stop) => {
+      stop();
+      assert.equal(query.signal.aborted, true);
+      return new Promise(() => {});
+    },
+    getMessagesImpl: () => { assert.fail('stopped poll must not read history'); },
+  });
+  assert.equal(state.messages.value[1].content, 'waiting');
+  assert.deepEqual(state.toasts, []);
+});
+
+test('a late task page cannot overwrite messages after changing sessions', async () => {
+  const currentSessionId = { value: '' };
+  const messages = { value: [] };
+  const state = await runChat('event: done\ndata: {"output":"waiting","pendingTaskIds":["owned"]}\n\n', false, {
+    currentSessionId, messages,
+    getTasksImpl: async (_sid, _user, _query, stop) => {
+      stop();
+      currentSessionId.value = 'other-session';
+      messages.value = [{ role: 'assistant', content: 'other session answer' }];
+      return { items: [{ taskId: 'owned', status: 'COMPLETED', deliveryState: 'SESSION_RESUMED' }], pageInfo: { limit: 50, nextCursor: '', hasMore: false } };
+    },
+    getMessagesImpl: () => { assert.fail('old run must not read history for the new session'); },
+  });
+  assert.equal(state.messages.value[0].content, 'other session answer');
+  assert.equal(state.currentSessionId.value, 'other-session');
+  assert.deepEqual(state.toasts, []);
+});
+
+test('task polling errors surface once and recover the input', async () => {
+  let calls = 0;
+  const state = await runChat('event: done\ndata: {"output":"waiting","pendingTaskIds":["owned"]}\n\n', false, {
+    getTasksImpl: () => { calls++; throw new Error('tasks unavailable'); },
+  });
+  assert.equal(calls, 1);
+  assert.deepEqual(state.toasts, ['tasks unavailable']);
+});
+
+test('chat API passes the actual signal to fetch', async () => {
+  const apiSource = readFileSync(join(__dirname, '../../main/resources/public/js/api.js'), 'utf8');
+  let fetchConfig;
+  const api = runInNewContext(apiSource + '\nCyreneAPI;', {
+    fetch: async (_url, config) => { fetchConfig = config; return { ok: true }; },
+  });
+  const controller = new AbortController();
+  await api.chat('session-1', 'hello', {}, [], 'TEXT', controller.signal);
+  assert.equal(fetchConfig.signal, controller.signal);
 });
 
 test('EOF without a terminal event reports interruption and finishes running tool cards', async () => {
@@ -309,12 +436,22 @@ test('the merged recording is offered for replay without being read aloud again'
   assert.equal(state.artifacts.length, 1);
 });
 
+test('a voice segment decoded after Stop never starts playback', async () => {
+  const state = await runChat('event: voice_segment\ndata: {"seq":0,"downloadUrl":"/api/artifacts/stale"}\n\n', false, {
+    ...voiceState(),
+    pendingRead: true,
+    decodeAudioImpl: async stop => { stop(); return { duration: 4, sampleRate: 48000 }; },
+  });
+  assert.deepEqual(state.scheduledAt, []);
+});
+
 test('session disappears immediately and is restored when deletion fails', async () => {
   const deleteSessionSource = source.slice(source.indexOf('    async function deleteSession(sid)'),
     source.indexOf('    async function cancelOutput()', source.indexOf('    async function deleteSession(sid)')));
   let rejectDelete;
   const deletion = new Promise((resolve, reject) => { rejectDelete = reject; });
   const state = {
+    activeRun: null,
     sessions: { value: [{ id: 'session-1' }, { id: 'session-2' }] },
     currentSessionId: { value: 'session-1' },
     messages: { value: [{ id: 1, content: 'message' }] },
@@ -340,4 +477,93 @@ test('session disappears immediately and is restored when deletion fails', async
   assert.deepEqual(state.sessions.value, [{ id: 'session-1' }, { id: 'session-2' }]);
   assert.equal(state.currentSessionId.value, 'session-1');
   assert.deepEqual(state.messages.value, [{ id: 1, content: 'message' }]);
+});
+
+test('a pending session cancellation blocks resending through S to T to S and deduplicates Stop', async () => {
+  let releaseCancel;
+  const cancelPending = new Promise(resolve => { releaseCancel = resolve; });
+  let chatStarted;
+  const started = new Promise(resolve => { chatStarted = resolve; });
+  let firstChat = true;
+  await runChat('event: done\ndata: {"output":"done"}\n\n', false, {
+    currentSessionId: { value: 'S' },
+    chatImpl(args, stop, reader) {
+      if (firstChat) { firstChat = false; chatStarted(); return new Promise(() => {}); }
+      return { body: { getReader: () => reader } };
+    },
+    cancelChatImpl: () => cancelPending,
+    getMessagesImpl: async () => ({ items: [], pageInfo: { limit: 50, nextCursor: '', hasMore: false } }),
+    async runScenario(api, state) {
+      const original = api.sendMessage();
+      await started;
+      const cancellation = api.cancelOutput();
+      const duplicate = api.cancelOutput();
+      await original;
+      assert.equal(state.isStreaming.value, false);
+      try {
+        state.inputText.value = 'second S';
+        await api.sendMessage();
+        assert.equal(state.chatCalls.length, 1);
+        assert.equal(state.inputText.value, 'second S');
+        await api.selectSession('T');
+        state.inputText.value = 'T question';
+        await api.sendMessage();
+        assert.deepEqual(state.chatCalls.map(call => call[0]), ['S', 'T']);
+        await api.selectSession('S');
+        state.inputText.value = 'third S';
+        await api.sendMessage();
+        assert.equal(state.chatCalls.length, 2);
+        assert.deepEqual(state.cancelCalls, ['S']);
+      } finally {
+        releaseCancel();
+        await Promise.all([cancellation, duplicate]);
+      }
+      assert.equal(state.pendingCancellations.value.size, 0);
+    },
+  });
+});
+
+for (const ended of [false, true]) {
+  test(`cancellation ${ended ? 'already-ended 404' : 'failure'} releases the same-session gate and reports errors once`, async () => {
+    let rejectCancel;
+    const pending = new Promise((_, reject) => { rejectCancel = reject; });
+    await runChat('event: done\ndata: {"output":"done"}\n\n', false, {
+      currentSessionId: { value: 'S' },
+      cancelChatImpl: () => pending,
+      async runScenario(api, state) {
+        const cancellation = api.cancelOutput();
+        const duplicate = api.cancelOutput();
+        await Promise.resolve();
+        rejectCancel(Object.assign(new Error('cancel failed'), ended ? { status: 404, code: 'CHAT_RUN_NOT_ACTIVE' } : { status: 500, code: 'INTERNAL_ERROR' }));
+        await Promise.all([cancellation, duplicate]);
+        assert.deepEqual(state.cancelCalls, ['S']);
+        assert.deepEqual(state.toasts, ended ? [] : ['cancel failed']);
+        assert.equal(state.pendingCancellations.value.size, 0);
+        await api.sendMessage();
+        assert.equal(state.chatCalls.length, 1);
+      },
+    });
+  });
+}
+
+test('Stop during session creation settles immediately without cancelling or dispatching a late session', async () => {
+  let resolveSession, announceCreate;
+  const created = new Promise(resolve => { announceCreate = resolve; });
+  const lateSession = new Promise(resolve => { resolveSession = resolve; });
+  await runChat('', false, {
+    createSessionImpl() { announceCreate(); return lateSession; },
+    cancelChatImpl() { assert.fail('there is no dispatched chat session to cancel'); },
+    async runScenario(api, state) {
+      const original = api.sendMessage();
+      await created;
+      await api.cancelOutput();
+      await original;
+      assert.equal(state.isStreaming.value, false);
+      resolveSession({ id: 'late-session' });
+      for (let i = 0; i < 8; i++) await Promise.resolve();
+      assert.equal(state.chatCalls.length, 0);
+      assert.equal(state.currentSessionId.value, '');
+      assert.equal(state.pendingCancellations.value.size, 0);
+    },
+  });
 });

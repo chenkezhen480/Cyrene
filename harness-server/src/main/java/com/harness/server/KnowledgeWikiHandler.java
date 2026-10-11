@@ -177,6 +177,7 @@ final class KnowledgeWikiHandler {
         catch (HttpResponseException invalid) { ApiResponses.error(ctx, invalid.getStatus(), ApiErrorCode.fromHttpStatus(invalid.getStatus()), invalid.getMessage()); }
         catch (IllegalArgumentException invalid) { ApiResponses.error(ctx, 400, ApiErrorCode.INVALID_REQUEST, invalid.getMessage()); }
         catch (IllegalStateException conflict) { ApiResponses.error(ctx, 409, ApiErrorCode.CONFLICT, conflict.getMessage()); }
+        catch (UnsupportedOperationException disabled) { ApiResponses.error(ctx, 503, ApiErrorCode.CAPABILITY_DISABLED, disabled.getMessage()); }
         catch (Exception failure) {
             if (failure instanceof JsonProcessingException)
                 ApiResponses.error(ctx, 400, ApiErrorCode.INVALID_REQUEST, "Invalid Wiki JSON request");

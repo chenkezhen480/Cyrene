@@ -2,6 +2,7 @@ package com.harness.server.security;
 
 import com.harness.core.security.RequestPrincipal;
 import io.javalin.http.Context;
+import io.javalin.validation.ValidationException;
 
 import java.util.Map;
 import java.util.Set;
@@ -36,12 +37,17 @@ public final class InternalApiPermissionHandler {
     }
 
     public void replace(Context context) {
-        var request = context.bodyAsClass(PermissionRequest.class);
+        PermissionRequest request;
+        try {
+            request = context.bodyValidator(PermissionRequest.class).get();
+        } catch (ValidationException invalid) {
+            throw new IllegalArgumentException("Invalid API permission JSON: tenantId, identity and disabledEndpointKeys are required", invalid);
+        }
         if (request == null) throw new IllegalArgumentException("Permission request is required");
         permissions.replacePermissions(principals.resolve(context), request.tenantId(),
-                request.identity(), request.allowedEndpointKeys());
+                request.identity(), request.disabledEndpointKeys());
         context.json(Map.of("tenantId", request.tenantId(), "identity", request.identity(),
-                "allowedEndpointKeys", request.allowedEndpointKeys().stream().sorted().toList()));
+                "disabledEndpointKeys", request.disabledEndpointKeys().stream().sorted().toList()));
     }
 
     private static int limit(Context context) {
@@ -49,5 +55,5 @@ public final class InternalApiPermissionHandler {
         return value == null ? 50 : Integer.parseInt(value);
     }
 
-    public record PermissionRequest(String tenantId, String identity, Set<String> allowedEndpointKeys) {}
+    public record PermissionRequest(String tenantId, String identity, Set<String> disabledEndpointKeys) {}
 }

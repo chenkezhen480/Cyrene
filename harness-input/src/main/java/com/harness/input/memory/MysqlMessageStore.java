@@ -41,6 +41,48 @@ public class MysqlMessageStore implements TurnCompressibleMessageStore {
     }
 
     @Override
+    public List<Long> appendOnceBatch(List<EventMessage> messages) {
+        if (messages == null || messages.isEmpty() || messages.size() > 101) throw new IllegalArgumentException("Provide between 1 and 101 event messages");
+        String sql = """
+                INSERT INTO messages (session_id,trace_id,role,content,is_summary,external_event_id)
+                VALUES (?,?,?,CAST(? AS JSON),?,?)
+                ON DUPLICATE KEY UPDATE id=LAST_INSERT_ID(id)
+                """;
+        Connection connection = null;
+        try {
+            connection = getConnection(); connection.setAutoCommit(false);
+            List<Long> ids = new ArrayList<>(messages.size());
+            try (PreparedStatement statement = connection.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS)) {
+                for (EventMessage event : messages) {
+                    MessageWrite message = event.message();
+                    statement.setString(1, message.sessionId()); statement.setString(2, message.traceId());
+                    statement.setString(3, message.role());
+                    statement.setString(4, message.content().isEmpty() ? "[]" : MessageBlock.toJson(message.content()));
+                    statement.setBoolean(5, message.isSummary()); statement.setString(6, event.eventId());
+                    statement.executeUpdate();
+                    try (ResultSet keys = statement.getGeneratedKeys()) {
+                        if (!keys.next()) throw new SQLException("Event message generated key missing");
+                        ids.add(keys.getLong(1));
+                    }
+                }
+            }
+            connection.commit(); return List.copyOf(ids);
+        } catch (SQLException | RuntimeException e) {
+            rollback(connection); throw new MemoryStoreException("Failed to append durable event messages", e);
+        } finally { close(connection); }
+    }
+
+    @Override
+    public Optional<MemoryMessage> findByExternalEventId(String sessionId, String eventId) {
+        if (sessionId == null || sessionId.isBlank() || eventId == null || eventId.isBlank()) throw new IllegalArgumentException("Session and event ID are required");
+        try (Connection connection = getConnection(); PreparedStatement statement = connection.prepareStatement(
+                "SELECT id,session_id,trace_id,role,content,is_summary,created_at FROM messages WHERE session_id=BINARY ? AND external_event_id=BINARY ?")) {
+            statement.setString(1, sessionId); statement.setString(2, eventId);
+            try (ResultSet rows = statement.executeQuery()) { return rows.next() ? Optional.of(mapMessage(rows)) : Optional.empty(); }
+        } catch (SQLException e) { throw new MemoryStoreException("Failed to read event message", e); }
+    }
+
+    @Override
     public List<Long> saveBatch(List<MessageWrite> messages) {
         if (messages == null || messages.isEmpty()) {
             return List.of();

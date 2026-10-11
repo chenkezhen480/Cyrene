@@ -21,7 +21,41 @@ import static org.mockito.Mockito.*;
 @EnabledIfEnvironmentVariable(named = "HARNESS_TEST_MYSQL_URL", matches = "jdbc:mysql:.*")
 class MysqlInternalApiPermissionStoreIT {
     @Test
-    void mysqlEnforcesUniqueBinaryScopesRollbackRevocationAndStablePages() throws Exception {
+    void legacyAllowRowsRemainEnabledAndRepeatedMigrationPreservesDenials() throws Exception {
+        try (Connection connection = DriverManager.getConnection(System.getenv("HARNESS_TEST_MYSQL_URL"),
+                System.getenv("HARNESS_TEST_MYSQL_USER"), System.getenv("HARNESS_TEST_MYSQL_PASSWORD"))) {
+            String schema = Files.readString(Path.of("../sql/schema-mysql.sql"));
+            int start = schema.indexOf("CREATE TABLE IF NOT EXISTS internal_api_permission");
+            String ddl = schema.substring(start, schema.indexOf(';', start))
+                    .replace("CREATE TABLE IF NOT EXISTS", "CREATE TEMPORARY TABLE")
+                    .replaceAll("(?m)^\\s*disabled TINYINT[^\\r\\n]*\\R", "");
+            String migration = schema.substring(schema.indexOf("SET @internal_api_disabled_migration"));
+            try (var statement = connection.createStatement()) {
+                statement.execute(ddl);
+                statement.execute("INSERT INTO internal_api_permission (tenant_id, identity, endpoint_key) "
+                        + "VALUES ('t1', 'reader', 'trace.read')");
+                // Temporary tables are absent from information_schema; supply the known column state.
+                statement.execute("SET @internal_api_disabled_exists = 0");
+                for (String sql : migration.split(";")) if (!sql.isBlank()) statement.execute(sql);
+            }
+            Connection fixture = spy(connection);
+            doNothing().when(fixture).close();
+            var store = new MysqlInternalApiPermissionStore(() -> fixture);
+            assertThat(store.isDisabled("t1", "reader", "trace.read")).isFalse();
+            assertThat(store.page("t1", "reader", 0, 50).items()).isEmpty();
+            store.replace("t1", "reader", Set.of("trace.read"));
+            try (var statement = connection.createStatement()) {
+                statement.execute("SET @internal_api_disabled_exists = 1");
+                for (String sql : migration.split(";")) if (!sql.isBlank()) statement.execute(sql);
+            }
+            assertThat(store.isDisabled("t1", "reader", "trace.read")).isTrue();
+            store.replace("t1", "reader", Set.of());
+            assertThat(store.isDisabled("t1", "reader", "trace.read")).isFalse();
+        }
+    }
+
+    @Test
+    void mysqlEnforcesUniqueBinaryScopesRollbackDisablementAndStablePages() throws Exception {
         try (Connection connection = DriverManager.getConnection(System.getenv("HARNESS_TEST_MYSQL_URL"),
                 System.getenv("HARNESS_TEST_MYSQL_USER"), System.getenv("HARNESS_TEST_MYSQL_PASSWORD"))) {
             String schema = Files.readString(Path.of("../sql/schema-mysql.sql"));
@@ -64,17 +98,17 @@ class MysqlInternalApiPermissionStoreIT {
             assertThat(profiles.listIdentities("t1", identities.pageInfo().nextCursor(), 1).items()).containsExactly("reader");
             profiles.saveProfile("t1", "alpha", Set.of("web.search"));
             assertThat(profiles.findDisabledTools("t1", "alpha").orElseThrow()).containsExactly("web.search");
-            assertThat(store.isAllowed("t1", "Reader", "a")).isFalse();
-            assertThat(store.isAllowed("t1", "reader", "A")).isFalse();
-            assertThat(store.isAllowed("t1", "reader", "private")).isFalse();
+            assertThat(store.isDisabled("t1", "Reader", "a")).isFalse();
+            assertThat(store.isDisabled("t1", "reader", "A")).isFalse();
+            assertThat(store.isDisabled("t1", "reader", "private")).isFalse();
             var first = store.page("t1", "reader", 0, 1);
             assertThat(first.items()).extracting(MysqlInternalApiPermissionStore.PermissionView::endpointKey).containsExactly("a");
             assertThat(store.page("t1", "reader", Long.parseLong(first.pageInfo().nextCursor()), 1).items())
                     .extracting(MysqlInternalApiPermissionStore.PermissionView::endpointKey).containsExactly("b");
             assertThatThrownBy(() -> store.replace("t1", "reader", Set.of("new", "z".repeat(129))))
                     .isInstanceOf(MysqlInternalApiPermissionStore.PermissionStoreException.class);
-            assertThat(store.isAllowed("t1", "reader", "a")).isTrue();
-            assertThat(store.isAllowed("t1", "reader", "new")).isFalse();
+            assertThat(store.isDisabled("t1", "reader", "a")).isTrue();
+            assertThat(store.isDisabled("t1", "reader", "new")).isFalse();
             store.replace("t1", "reader", Set.of("a", "c"));
             assertThat(store.page("t1", "reader", 0, 1).items().getFirst().id()).isEqualTo(first.items().getFirst().id());
             connection.setAutoCommit(true);
@@ -83,8 +117,8 @@ class MysqlInternalApiPermissionStoreIT {
                 assertThatThrownBy(statement::executeUpdate).isInstanceOf(java.sql.SQLException.class);
             }
             store.replace("t1", "reader", Set.of());
-            assertThat(store.isAllowed("t1", "reader", "a")).isFalse();
-            assertThat(store.isAllowed("t2", "reader", "private")).isTrue();
+            assertThat(store.isDisabled("t1", "reader", "a")).isFalse();
+            assertThat(store.isDisabled("t2", "reader", "private")).isTrue();
         }
     }
 }

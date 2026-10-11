@@ -38,6 +38,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.function.Consumer;
 import java.util.concurrent.CompletableFuture;
 import java.time.Clock;
 
@@ -171,18 +172,21 @@ public final class AgentMemoryRuntime {
             String tenantId,
             String requestedSessionId,
             String text,
-            RunTrace trace
+            RunTrace trace,
+            Consumer<String> beforeHistoryLoad
     ) {
         if (!enabled || userId == null) {
             String sessionId = requestedSessionId != null
                     ? requestedSessionId
                     : UUID.randomUUID().toString();
+            beforeHistoryLoad.accept(sessionId);
             return new MemoryContext(sessionId, userId, tenantId, List.of());
         }
 
         SessionLifecycleManager.LifecycleResult lifecycle =
                 sessionLifecycle.process(userId, tenantId, requestedSessionId);
         String sessionId = lifecycle.session().id();
+        beforeHistoryLoad.accept(sessionId);
         trace.setSessionId(sessionId);
         Map<String, String> metadata = new HashMap<>(trace.snapshot().metadata());
         metadata.put("session_id", sessionId);
@@ -353,6 +357,7 @@ public final class AgentMemoryRuntime {
             String turnId,
             List<com.harness.agent.SessionInbox.SubAgentCompletedEvent> events
     ) {
+        requireDurableDelivery(sessionId, userId, events);
         for (var event : events) {
             Map<String, Object> metadata = new HashMap<>();
             metadata.put("toolName", "subagent");
@@ -378,9 +383,51 @@ public final class AgentMemoryRuntime {
                             "type", artifact.type().name(),
                             "mimeType", artifact.mimeType() != null ? artifact.mimeType() : "",
                             "name", artifact.name() != null ? artifact.name() : ""))));
-            appendContextMessage(
-                    sessionId, userId, turnId, "subagent_event", List.copyOf(blocks));
+            messageStore.appendOnce(new com.harness.input.memory.MessageWrite(
+                    sessionId, turnId, "subagent_event", List.copyOf(blocks), false), event.eventId());
         }
+        messageCache.remove(sessionId);
+    }
+
+    public List<com.harness.agent.SessionInbox.SubAgentCompletedEvent> pendingSubAgentResumeEvents(
+            String sessionId, List<com.harness.agent.SessionInbox.SubAgentCompletedEvent> events) {
+        if (!enabled) throw new IllegalStateException("Durable sub-agent delivery requires session persistence");
+        return events.stream().filter(event -> messageStore.findByExternalEventId(
+                sessionId, "subagent-replied:" + event.eventId()).isEmpty()).toList();
+    }
+
+    public boolean hasCompletedSubAgentResume(String sessionId, List<com.harness.agent.SessionInbox.SubAgentCompletedEvent> events) {
+        return pendingSubAgentResumeEvents(sessionId, events).isEmpty();
+    }
+
+    public void persistSubAgentResumeAssistant(String sessionId, String userId, String turnId,
+                                             List<MessageBlock> blocks, boolean completesTurn,
+                                             List<com.harness.agent.SessionInbox.SubAgentCompletedEvent> events) {
+        requireDurableDelivery(sessionId, userId, events);
+        String eventIds = events.stream().map(com.harness.agent.SessionInbox.SubAgentCompletedEvent::eventId).sorted()
+                .collect(java.util.stream.Collectors.joining("\n"));
+        String hash;
+        try {
+            hash = java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256")
+                    .digest(eventIds.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        } catch (java.security.NoSuchAlgorithmException e) { throw new IllegalStateException(e); }
+        var writes = new java.util.ArrayList<MessageStore.EventMessage>();
+        writes.add(new MessageStore.EventMessage(new com.harness.input.memory.MessageWrite(
+                sessionId, turnId, completesTurn ? "assistant" : "assistant_partial", blocks, false), "subagent-reply:" + hash));
+        for (var event : events) {
+            writes.add(new MessageStore.EventMessage(new com.harness.input.memory.MessageWrite(
+                    sessionId, turnId, "subagent_resume_done", List.of(), false), "subagent-replied:" + event.eventId()));
+        }
+        messageStore.appendOnceBatch(writes);
+        messageCache.remove(sessionId);
+        sessionStore.updateLastActive(sessionId);
+    }
+
+    private void requireDurableDelivery(String sessionId, String userId,
+                                       List<com.harness.agent.SessionInbox.SubAgentCompletedEvent> events) {
+        if (!enabled || sessionId == null || userId == null) throw new IllegalStateException("Durable sub-agent delivery requires an owned persisted session");
+        if (events == null || events.isEmpty() || events.size() > 100
+                || events.stream().anyMatch(event -> !sessionId.equals(event.sessionId()))) throw new IllegalArgumentException("Invalid session delivery events");
     }
 
     public List<ChatMessage> toChatMessages(List<MemoryMessage> memoryMessages) {
@@ -473,10 +520,6 @@ public final class AgentMemoryRuntime {
      * continuation tail — persist the tool round, persist the assistant message, await the
      * writes — so the next continuation only enters once the transcript is stable at the store,
      * not merely at the cache.
-     *
-     * <p>ponytail: guards the write tail, not the run. A continuation that loaded history before
-     * another writer committed still builds its prompt from a stale tail. Widen the guard to the
-     * whole ReAct loop if that ever surfaces.
      */
     public static void withSessionWriteLock(String sessionId, Runnable action) {
         Object lock = SESSION_WRITE_LOCKS[

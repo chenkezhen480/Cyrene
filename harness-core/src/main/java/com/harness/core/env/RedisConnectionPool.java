@@ -31,36 +31,48 @@ public class RedisConnectionPool {
     }
 
     /** 启动时调用，主动建立连接池 */
-    public static void init() {
+    public static synchronized void init() {
+        if (pool != null) return;
         EnvConfig cfg = EnvConfig.get();
         String redisUrl = cfg.getString(EnvKey.MEMORY_REDIS_URL, "redis://localhost:6379");
         String password = cfg.getString(EnvKey.MEMORY_REDIS_PASSWORD, "");
-        int db = cfg.getInt(EnvKey.MEMORY_REDIS_DB, 0);
 
-        URI uri = URI.create(redisUrl);
-        String host = uri.getHost() != null ? uri.getHost() : "localhost";
-        int port = uri.getPort() > 0 ? uri.getPort() : 6379;
+        JedisPool candidate = null;
+        try {
+            int db = cfg.getInt(EnvKey.MEMORY_REDIS_DB, 0);
+            URI uri = URI.create(redisUrl);
+            String host = uri.getHost();
+            if (host == null) throw new IllegalArgumentException("Redis URL must contain a host");
+            int port = uri.getPort() > 0 ? uri.getPort() : 6379;
 
-        JedisPoolConfig poolConfig = new JedisPoolConfig();
-        poolConfig.setMaxTotal(10);
-        poolConfig.setMaxIdle(5);
-        poolConfig.setMinIdle(1);
-        poolConfig.setTestOnBorrow(true);
-        poolConfig.setTestWhileIdle(true);
+            JedisPoolConfig poolConfig = new JedisPoolConfig();
+            poolConfig.setMaxTotal(10);
+            poolConfig.setMaxIdle(5);
+            poolConfig.setMinIdle(1);
+            poolConfig.setTestOnBorrow(true);
+            poolConfig.setTestWhileIdle(true);
 
-        if (password != null && !password.isBlank()) {
-            pool = new JedisPool(poolConfig, host, port, 5000, password, db);
-        } else {
-            pool = new JedisPool(poolConfig, host, port, 5000, null, db);
+            candidate = new JedisPool(poolConfig, host, port, 5000,
+                    password != null && !password.isBlank() ? password : null, db);
+            try (Jedis connection = candidate.getResource()) {
+                connection.ping();
+            }
+            pool = candidate;
+            log.info("[Redis] Jedis pool initialized: host={}, port={}, db={}", host, port, db);
+        } catch (RuntimeException failure) {
+            if (candidate != null) {
+                try { candidate.close(); } catch (RuntimeException closeFailure) { failure.addSuppressed(closeFailure); }
+            }
+            throw new IllegalStateException(MiddlewareConnectionDiagnostics.failureMessage(
+                    MiddlewareConnectionDiagnostics.Service.REDIS, redisUrl, failure), failure);
         }
-
-        log.info("[Redis] Jedis pool initialized: host={}, port={}, db={}", host, port, db);
     }
 
-    public static void shutdown() {
+    public static synchronized void shutdown() {
         if (pool != null && !pool.isClosed()) {
             pool.close();
             log.info("[Redis] Jedis pool shut down");
         }
+        pool = null;
     }
 }

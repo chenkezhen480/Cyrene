@@ -55,6 +55,11 @@ public final class OpenGraphSpaceAccessService implements GraphSpaceAccessServic
     }
 
     @Override
+    public void requireWritable(String tenantId, String graphId, String schemaId) {
+        requireStandaloneTenant(tenantId);
+    }
+
+    @Override
     public int deleteBindingsBySchema(String schemaId) {
         return 0;
     }

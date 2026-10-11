@@ -2,12 +2,17 @@ package com.harness.tool.rag;
 
 import com.harness.core.env.EnvConfig;
 import com.harness.core.env.EnvKey;
+import com.harness.core.env.MiddlewareConnectionDiagnostics;
 import io.milvus.v2.client.ConnectConfig;
 import io.milvus.v2.client.MilvusClientV2;
+import io.milvus.v2.client.RetryConfig;
 import io.milvus.v2.service.database.request.CreateDatabaseReq;
+import io.milvus.v2.service.database.request.DescribeDatabaseReq;
 import io.milvus.v2.service.database.response.ListDatabasesResp;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import java.util.concurrent.TimeUnit;
 
 /**
  * Milvus 客户端连接池（单例）。
@@ -34,32 +39,53 @@ public class MilvusConnectionPool {
         String apiKey = cfg.getString(EnvKey.RAG_API_KEY, "");
         String database = cfg.getString(EnvKey.RAG_DATABASE, "default");
 
-        // 确保目标数据库存在（先连 default 库创建，再切过去）
-        if (!"default".equalsIgnoreCase(database)) {
-            ensureDatabase(url, apiKey, database);
+        MilvusClientV2 candidate = null;
+        try {
+            long startupTimeoutMs = startupTimeoutMs();
+            // 确保目标数据库存在（先连 default 库创建，再切过去）。
+            if (!"default".equalsIgnoreCase(database)) ensureDatabase(url, apiKey, database, startupTimeoutMs);
+            ConnectConfig config = connectConfig(url, apiKey, database);
+            candidate = new MilvusClientV2(config);
+            long requestDeadlineMs = config.getRpcDeadlineMs();
+            candidate.withTimeout(startupTimeoutMs, TimeUnit.MILLISECONDS);
+            candidate.retryConfig(RetryConfig.builder().maxRetryTimes(1).build());
+            candidate.describeDatabase(DescribeDatabaseReq.builder().databaseName(database).build());
+            candidate.withTimeout(requestDeadlineMs, TimeUnit.MILLISECONDS);
+            candidate.retryConfig(RetryConfig.builder().build());
+            client = candidate;
+            log.info("[Milvus] Milvus v2 client initialized: endpoint={}, db={}",
+                    MiddlewareConnectionDiagnostics.endpoint(url), database);
+        } catch (RuntimeException failure) {
+            if (candidate != null) {
+                try { candidate.close(); } catch (RuntimeException closeFailure) { failure.addSuppressed(closeFailure); }
+            }
+            throw new IllegalStateException(MiddlewareConnectionDiagnostics.failureMessage(
+                    MiddlewareConnectionDiagnostics.Service.MILVUS, url, failure), failure);
         }
+    }
 
-        ConnectConfig config = ConnectConfig.builder()
-                .uri(url)
-                .token(apiKey != null ? apiKey : "")
-                .dbName(database)
-                .build();
+    private static ConnectConfig connectConfig(String url, String apiKey, String database) {
+        EnvConfig cfg = EnvConfig.get();
+        long connectTimeoutMs = cfg.getLong(EnvKey.RAG_CONNECT_TIMEOUT_MS, 10_000);
+        if (connectTimeoutMs <= 0) throw new IllegalArgumentException(EnvKey.RAG_CONNECT_TIMEOUT_MS + " must be positive");
+        return ConnectConfig.builder().uri(url).token(apiKey != null ? apiKey : "").dbName(database)
+                .connectTimeoutMs(connectTimeoutMs).build();
+    }
 
-        client = new MilvusClientV2(config);
-        log.info("[Milvus] Milvus v2 client initialized: url={}, db={}", url, database);
+    private static long startupTimeoutMs() {
+        long timeoutMs = EnvConfig.get().getLong(EnvKey.RAG_STARTUP_TIMEOUT_MS, 10_000);
+        if (timeoutMs <= 0) throw new IllegalArgumentException(EnvKey.RAG_STARTUP_TIMEOUT_MS + " must be positive");
+        return timeoutMs;
     }
 
     /**
      * 连接 default 库，确保目标数据库存在
      */
-    private static void ensureDatabase(String url, String apiKey, String database) {
-        ConnectConfig defaultConfig = ConnectConfig.builder()
-                .uri(url)
-                .token(apiKey != null ? apiKey : "")
-                .dbName("default")
-                .build();
-        MilvusClientV2 defaultClient = new MilvusClientV2(defaultConfig);
+    private static void ensureDatabase(String url, String apiKey, String database, long startupTimeoutMs) {
+        MilvusClientV2 defaultClient = new MilvusClientV2(connectConfig(url, apiKey, "default"));
         try {
+            defaultClient.withTimeout(startupTimeoutMs, TimeUnit.MILLISECONDS);
+            defaultClient.retryConfig(RetryConfig.builder().maxRetryTimes(1).build());
             ListDatabasesResp databases = defaultClient.listDatabases();
             if (databases.getDatabaseNames().contains(database)) {
                 log.debug("[Milvus] Milvus database '{}' already exists", database);
@@ -68,11 +94,11 @@ public class MilvusConnectionPool {
             defaultClient.createDatabase(CreateDatabaseReq.builder()
                     .databaseName(database).build());
             log.info("[Milvus] Milvus database '{}' created", database);
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             if (e.getMessage() != null && e.getMessage().contains("already exist")) {
                 log.debug("[Milvus] Milvus database '{}' already exists", database);
             } else {
-                log.warn("[Milvus] Failed to create database '{}': {}", database, e.getMessage());
+                throw e;
             }
         } finally {
             defaultClient.close();
@@ -86,7 +112,7 @@ public class MilvusConnectionPool {
         return client;
     }
 
-    public static void shutdown() {
+    public static synchronized void shutdown() {
         if (client != null) {
             try {
                 client.close();

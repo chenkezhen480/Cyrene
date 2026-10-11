@@ -3,8 +3,9 @@
 -- Database: agent（Docker Compose 部署由 MYSQL_DATABASE=agent 自动选择；
 --           手动执行前请先创建并选中数据库，例如：
 --           CREATE DATABASE IF NOT EXISTS `agent` DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;）
--- 包含：审计追踪、会话、消息、用户、知识权威层（metadata/偏好/制品/任务）、身份工具禁用、图谱租户绑定
--- 幂等：全部 CREATE TABLE IF NOT EXISTS，可在已有库重复执行。
+-- 包含：审计追踪、会话、消息、子 Agent 任务、用户、知识权威层、API/工具禁用、图谱租户绑定。
+-- 新库建表与旧库增量升级统一在本文件，升级语句集中于末尾，可重复执行。
+-- 仅在选中的目标库执行，不为旧用户自动分配 tenant_id/identity；MySQL DDL 会隐式提交。
 -- 图空间访问绑定（graph_space_bindings）随本文件一起建立，见文件末尾；
 -- 建图空间时会自动为创建方租户登记绑定行，多租户部署再按需调整权限。
 -- ============================================================
@@ -86,16 +87,45 @@ CREATE TABLE IF NOT EXISTS `messages` (
     `role`          VARCHAR(32)     NOT NULL     DEFAULT ''                          COMMENT '角色（user/assistant/assistant_tool_call/tool/system）',
     `content`       JSON            NOT NULL                                         COMMENT '结构化内容块数组（TEXT/ARTIFACT）',
     `is_summary`    TINYINT(1)      NOT NULL DEFAULT 0                               COMMENT '是否为压缩摘要（0=原始消息，1=摘要）',
+    `external_event_id` VARCHAR(128) COLLATE utf8mb4_bin DEFAULT NULL COMMENT '外部事件幂等标识',
     `created_at`    DATETIME(3)     NOT NULL DEFAULT CURRENT_TIMESTAMP(3)           COMMENT '创建时间',
     PRIMARY KEY (`id`),
     INDEX `idx_messages_session_id` (`session_id`),
     INDEX `idx_messages_session_summary` (`session_id`, `is_summary`),
-    INDEX `idx_message_session_trace` (`session_id`, `trace_id`, `id`)
+    INDEX `idx_message_session_trace` (`session_id`, `trace_id`, `id`),
+    UNIQUE KEY `uk_messages_external_event` (`session_id`, `external_event_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='消息表 - 存储会话中的所有消息（含压缩摘要）';
 
--- 已有数据库迁移：将 content 从 MEDIUMTEXT 改为 JSON
--- ALTER TABLE messages MODIFY COLUMN content JSON NOT NULL COMMENT '结构化内容块数组（TEXT/ARTIFACT）';
--- UPDATE messages SET content = JSON_ARRAY(JSON_OBJECT('type', 'TEXT', 'text', content)) WHERE JSON_VALID(content) = 0;
+-- ========== 子 Agent 持久化任务与结果投递 ==========
+CREATE TABLE IF NOT EXISTS subagent_tasks (
+    task_id VARCHAR(64) COLLATE utf8mb4_bin NOT NULL COMMENT '任务 ID',
+    tenant_id VARCHAR(64) COLLATE utf8mb4_bin NOT NULL COMMENT '可信租户 ID',
+    owner_user_id VARCHAR(64) COLLATE utf8mb4_bin NOT NULL COMMENT '任务所属用户',
+    owner_identity VARCHAR(128) COLLATE utf8mb4_bin NOT NULL COMMENT '任务创建时的可信身份',
+    owner_session_id VARCHAR(64) COLLATE utf8mb4_bin NOT NULL COMMENT '所属会话 ID',
+    owner_run_id VARCHAR(64) COLLATE utf8mb4_bin NOT NULL COMMENT '主 Agent 运行 ID',
+    owner_turn_id VARCHAR(64) COLLATE utf8mb4_bin NOT NULL COMMENT '所属请求轮次 ID',
+    root_trace_id VARCHAR(64) COLLATE utf8mb4_bin DEFAULT NULL COMMENT '主 Agent Trace ID',
+    child_trace_id VARCHAR(64) COLLATE utf8mb4_bin DEFAULT NULL COMMENT '子 Agent Trace ID',
+    spawn_tool_call_id VARCHAR(128) COLLATE utf8mb4_bin DEFAULT NULL COMMENT '派发工具调用 ID',
+    task_json JSON NOT NULL COMMENT '任务输入与完成约束',
+    status VARCHAR(32) NOT NULL COMMENT '任务运行状态',
+    result_json JSON DEFAULT NULL COMMENT '持久化完成结果',
+    delivery_state VARCHAR(32) NOT NULL COMMENT '结果投递状态',
+    delivery_event_id VARCHAR(128) COLLATE utf8mb4_bin DEFAULT NULL COMMENT '幂等投递事件 ID',
+    delivery_lease_until DATETIME(3) DEFAULT NULL COMMENT '投递领取租约截止时间',
+    delivery_lease_token VARCHAR(64) COLLATE utf8mb4_bin DEFAULT NULL COMMENT '投递领取租约令牌',
+    created_at DATETIME(3) NOT NULL COMMENT '创建时间',
+    updated_at DATETIME(3) NOT NULL COMMENT '更新时间',
+    finished_at DATETIME(3) DEFAULT NULL COMMENT '完成时间',
+    expires_at DATETIME(3) NOT NULL COMMENT '任务与结果过期时间',
+    PRIMARY KEY (task_id),
+    UNIQUE KEY uk_subagent_delivery_event (delivery_event_id),
+    UNIQUE KEY uk_subagent_spawn_call (owner_run_id, spawn_tool_call_id),
+    KEY idx_subagent_owner_tasks (tenant_id, owner_user_id, owner_session_id, created_at, task_id),
+    KEY idx_subagent_delivery (delivery_state, delivery_lease_until, owner_session_id),
+    KEY idx_subagent_expiry (expires_at, task_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='子 Agent 持久化任务与结果投递';
 
 -- ========== 用户表 ==========
 CREATE TABLE IF NOT EXISTS `users` (
@@ -126,7 +156,8 @@ CREATE TABLE IF NOT EXISTS internal_api_permission (
     id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY COMMENT 'Permission row ID',
     tenant_id VARCHAR(128) COLLATE utf8mb4_bin NOT NULL COMMENT 'Trusted tenant ID',
     identity VARCHAR(128) COLLATE utf8mb4_bin NOT NULL COMMENT 'Trusted business identity',
-    endpoint_key VARCHAR(128) COLLATE utf8mb4_bin NOT NULL COMMENT 'Allowed endpoint key',
+    endpoint_key VARCHAR(128) COLLATE utf8mb4_bin NOT NULL COMMENT 'Endpoint key',
+    disabled TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1 disables this endpoint, legacy grants remain 0',
     created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT 'Created time',
     updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) COMMENT 'Updated time',
     UNIQUE KEY uk_internal_api_scope (tenant_id, identity, endpoint_key),
@@ -302,7 +333,94 @@ CREATE TABLE IF NOT EXISTS `graph_space_bindings` (
     INDEX `idx_graph_binding_space` (`graph_id`, `schema_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='租户与图空间的访问绑定';
 
--- 兼容更早创建过、没有 description 列的表。幂等：列已存在时为空操作。
+-- ========== 旧库增量升级（不覆盖身份、权限或已有结果） ==========
+SET @schema_alter = (
+    SELECT CONCAT_WS(', ',
+        IF(SUM(column_name = 'tenant_id') = 0, 'ADD COLUMN tenant_id VARCHAR(128) DEFAULT NULL COMMENT ''可信租户 ID''', NULL),
+        IF(SUM(column_name = 'identity') = 0, 'ADD COLUMN identity VARCHAR(128) COLLATE utf8mb4_bin DEFAULT NULL COMMENT ''最近一次请求的可信身份''', NULL))
+    FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'sessions'
+);
+SET @schema_migration = IF(@schema_alter = '', 'SELECT 1', CONCAT('ALTER TABLE sessions ', @schema_alter));
+PREPARE schema_statement FROM @schema_migration;
+EXECUTE schema_statement;
+DEALLOCATE PREPARE schema_statement;
+
+SET @schema_alter = (
+    SELECT CONCAT_WS(', ',
+        IF(SUM(column_name = 'tenant_id') = 0, 'ADD COLUMN tenant_id VARCHAR(128) COLLATE utf8mb4_bin DEFAULT NULL COMMENT ''可信认证租户，须由管理侧配置''', NULL),
+        IF(SUM(column_name = 'identity') = 0, 'ADD COLUMN identity VARCHAR(128) COLLATE utf8mb4_bin DEFAULT NULL COMMENT ''可信认证身份，须由管理侧配置''', NULL))
+    FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'users'
+);
+SET @schema_migration = IF(@schema_alter = '', 'SELECT 1', CONCAT('ALTER TABLE users ', @schema_alter));
+PREPARE schema_statement FROM @schema_migration;
+EXECUTE schema_statement;
+DEALLOCATE PREPARE schema_statement;
+
+SET @schema_alter = (
+    SELECT CONCAT_WS(', ',
+        IF(SUM(column_name = 'trace_id') = 0, 'ADD COLUMN trace_id VARCHAR(64) DEFAULT NULL COMMENT ''请求 root Trace ID''', NULL),
+        IF(SUM(column_name = 'is_summary') = 0, 'ADD COLUMN is_summary TINYINT(1) NOT NULL DEFAULT 0 COMMENT ''是否为压缩摘要''', NULL),
+        IF(SUM(column_name = 'external_event_id') = 0, 'ADD COLUMN external_event_id VARCHAR(128) COLLATE utf8mb4_bin DEFAULT NULL COMMENT ''外部事件幂等标识''', NULL))
+    FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'messages'
+);
+SET @schema_migration = IF(@schema_alter = '', 'SELECT 1', CONCAT('ALTER TABLE messages ', @schema_alter));
+PREPARE schema_statement FROM @schema_migration;
+EXECUTE schema_statement;
+DEALLOCATE PREPARE schema_statement;
+
+-- 先在事务中保留旧文本，再改为 JSON；已是 JSON 的列与内容不变。
+SET @messages_content_is_json = (
+    SELECT data_type = 'json' FROM information_schema.columns
+    WHERE table_schema = DATABASE() AND table_name = 'messages' AND column_name = 'content'
+);
+SET @schema_migration = IF(@messages_content_is_json, 'SELECT 1',
+    'UPDATE messages SET content = JSON_ARRAY(JSON_OBJECT(''type'', ''TEXT'', ''text'', content)) WHERE CASE WHEN JSON_VALID(content) THEN JSON_TYPE(content) <> ''ARRAY'' ELSE TRUE END');
+START TRANSACTION;
+PREPARE schema_statement FROM @schema_migration;
+EXECUTE schema_statement;
+DEALLOCATE PREPARE schema_statement;
+COMMIT;
+SET @schema_migration = IF(@messages_content_is_json, 'SELECT 1',
+    'ALTER TABLE messages MODIFY COLUMN content JSON NOT NULL COMMENT ''结构化内容块数组（TEXT/ARTIFACT）''');
+PREPARE schema_statement FROM @schema_migration;
+EXECUTE schema_statement;
+DEALLOCATE PREPARE schema_statement;
+
+SET @schema_alter = (
+    SELECT CONCAT_WS(', ',
+        IF(SUM(index_name = 'idx_messages_session_summary') = 0, 'ADD INDEX idx_messages_session_summary (session_id, is_summary)', NULL),
+        IF(SUM(index_name = 'idx_message_session_trace') = 0, 'ADD INDEX idx_message_session_trace (session_id, trace_id, id)', NULL),
+        IF(SUM(index_name = 'uk_messages_external_event') = 0, 'ADD UNIQUE KEY uk_messages_external_event (session_id, external_event_id)', NULL))
+    FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = 'messages'
+);
+SET @schema_migration = IF(@schema_alter = '', 'SELECT 1', CONCAT('ALTER TABLE messages ', @schema_alter));
+PREPARE schema_statement FROM @schema_migration;
+EXECUTE schema_statement;
+DEALLOCATE PREPARE schema_statement;
+
+SET @schema_alter = (
+    SELECT CONCAT_WS(', ',
+        IF(SUM(index_name = 'idx_session_memory_scan') = 0, 'ADD INDEX idx_session_memory_scan (last_active, id)', NULL),
+        IF(SUM(index_name = 'idx_session_owner_active') = 0, 'ADD INDEX idx_session_owner_active (tenant_id, user_id, last_active, id)', NULL))
+    FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = 'sessions'
+);
+SET @schema_migration = IF(@schema_alter = '', 'SELECT 1', CONCAT('ALTER TABLE sessions ', @schema_alter));
+PREPARE schema_statement FROM @schema_migration;
+EXECUTE schema_statement;
+DEALLOCATE PREPARE schema_statement;
+
+SET @schema_alter = (
+    SELECT CONCAT_WS(', ',
+        IF(SUM(index_name = 'idx_trace_session_time') = 0, 'ADD INDEX idx_trace_session_time (session_id, timestamp, trace_id, user_id)', NULL),
+        IF(SUM(index_name = 'idx_trace_owner_time') = 0, 'ADD INDEX idx_trace_owner_time (user_id, timestamp, trace_id, session_id)', NULL))
+    FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = 'agent_traces'
+);
+SET @schema_migration = IF(@schema_alter = '', 'SELECT 1', CONCAT('ALTER TABLE agent_traces ', @schema_alter));
+PREPARE schema_statement FROM @schema_migration;
+EXECUTE schema_statement;
+DEALLOCATE PREPARE schema_statement;
+
+-- 兼容更早创建过、没有 description 列的图空间绑定表。
 SET @graph_binding_description_exists = (
     SELECT COUNT(*)
     FROM `information_schema`.`columns`
@@ -318,3 +436,17 @@ SET @graph_binding_description_migration = IF(
 PREPARE graph_binding_description_statement FROM @graph_binding_description_migration;
 EXECUTE graph_binding_description_statement;
 DEALLOCATE PREPARE graph_binding_description_statement;
+
+-- Existing allowlist rows must not become denials when upgrading.
+SET @internal_api_disabled_exists = (
+    SELECT COUNT(*) FROM information_schema.columns
+    WHERE table_schema = DATABASE() AND table_name = 'internal_api_permission' AND column_name = 'disabled'
+);
+SET @internal_api_disabled_migration = IF(
+    @internal_api_disabled_exists = 0,
+    'ALTER TABLE internal_api_permission ADD COLUMN disabled TINYINT(1) NOT NULL DEFAULT 0 COMMENT ''1 disables this endpoint, legacy grants remain 0'' AFTER endpoint_key',
+    'SELECT 1'
+);
+PREPARE internal_api_disabled_statement FROM @internal_api_disabled_migration;
+EXECUTE internal_api_disabled_statement;
+DEALLOCATE PREPARE internal_api_disabled_statement;

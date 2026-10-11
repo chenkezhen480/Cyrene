@@ -12,7 +12,7 @@ import java.util.List;
 
 /**
  * Shared parsing and validation logic for sub-agent tools.
- * Extracted to avoid duplication across AwaitSubAgentsTool, GetSubAgentsTool, CancelSubAgentsTool.
+ * Shared by submission, recall, cancellation, and runtime batch coordination.
  */
 final class SubAgentToolHelper {
 
@@ -27,13 +27,21 @@ final class SubAgentToolHelper {
         if (arguments.has("task_ids")) {
             JsonNode node = arguments.get("task_ids");
             if (node.isArray()) {
-                node.forEach(n -> taskIds.add(n.asText()));
+                node.forEach(n -> {
+                    if (!n.isTextual()) throw new IllegalArgumentException("task_ids entries must be strings");
+                    taskIds.add(n.asText());
+                });
             } else if (node.isTextual()) {
                 for (String id : node.asText().split(",")) {
                     String trimmed = id.trim();
                     if (!trimmed.isEmpty()) taskIds.add(trimmed);
                 }
+            } else {
+                throw new IllegalArgumentException("task_ids must be an array or comma-separated string");
             }
+        }
+        if (taskIds.size() > 100 || taskIds.stream().anyMatch(id -> id.isBlank() || id.length() > 64)) {
+            throw new IllegalArgumentException("Provide at most 100 non-empty task IDs of at most 64 characters");
         }
         return taskIds;
     }
@@ -84,7 +92,7 @@ final class SubAgentToolHelper {
 
     /**
      * Serialize a task result into a JSON node.
-     * Used by both GetSubAgentsTool and AwaitSubAgentsTool.
+     * Used by recall and runtime coordination.
      * Full ReAct steps stay in the linked sub-trace and are never copied here.
      */
     static void serializeResult(ObjectNode taskNode, SubAgentResult result, ObjectMapper mapper) {
@@ -159,7 +167,4 @@ final class SubAgentToolHelper {
                 mapper.writeValueAsString(payload), List.copyOf(artifacts.values()), null);
     }
 
-    static boolean consumeInline(SubAgentTaskRecord record) {
-        return record.consumeInline() || record.deliveryState().get() == ResultDeliveryState.INLINE_CONSUMED;
-    }
 }

@@ -37,7 +37,7 @@ public final class InternalApiPermissionService {
         if (endpoint.resourcePolicy() == GLOBAL_MANAGEMENT && !hasGlobalManagementScope(principal, managementTenantId)) {
             throw new SecurityException("Global management is restricted to the configured management tenant");
         }
-        if (!store.isAllowed(principal.tenantId(), principal.identity(), endpoint.endpointKey())) {
+        if (store.isDisabled(principal.tenantId(), principal.identity(), endpoint.endpointKey())) {
             throw new SecurityException("Internal API permission denied: " + endpoint.endpointKey());
         }
     }
@@ -58,7 +58,7 @@ public final class InternalApiPermissionService {
             throw new SecurityException("Callers cannot edit their own identity permissions");
         }
         new RequestPrincipal(null, tenantId, identity, SERVICE_TOKEN);
-        if (keys == null) throw new IllegalArgumentException("allowedEndpointKeys is required");
+        if (keys == null) throw new IllegalArgumentException("disabledEndpointKeys is required");
         Set<String> known = new java.util.HashSet<>();
         String cursor = null;
         do {

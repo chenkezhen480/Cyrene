@@ -78,9 +78,7 @@ import com.harness.core.model.ToolResult;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.ChatMessage;
-import dev.langchain4j.data.message.UserMessage;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.nio.file.Path;
@@ -106,7 +104,6 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
     static {
         // Register JDBC drivers for fat JAR (SPI discovery may fail)
         try { Class.forName("com.mysql.cj.jdbc.Driver"); } catch (ClassNotFoundException ignored) {}
-        try { Class.forName("org.sqlite.JDBC"); } catch (ClassNotFoundException ignored) {}
     }
 
     private final AgentRuntime runtime;
@@ -149,6 +146,8 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
     // Artifact subsystem
     private final ArtifactStore artifactStore;
     private final ArtifactStorageService artifactStorageService;
+    private com.harness.graph.build.GraphChangeDraftService graphChangeDraftService;
+    private com.harness.graph.build.GraphMutationSagaWorker graphMutationSagaWorker;
 
     // Fixed ASR/TTS pipeline for microphone turns
     private final VoiceConversationService voiceConversation;
@@ -160,7 +159,7 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
         // Database connections (主动建立，按需连接)
         if (MemoryStoreFactory.isMysqlEnabled()
                 || "mysql".equalsIgnoreCase(EnvConfig.get().getString(
-                EnvKey.AUDIT_STORE, "none"))) {
+                EnvKey.AUDIT_STORE, "mysql"))) {
             MysqlConnectionPool.init();
         }
         if (EnvConfig.get().getString(EnvKey.MEMORY_REDIS_URL) != null) {
@@ -253,19 +252,24 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
         this.replyAuditor = new ReplyAuditor();
 
         // Session inbox and resume dispatcher for sub-agent completion events
-        this.sessionInbox = new SessionInbox();
+        com.harness.agent.subagent.SubAgentTaskRepository taskRepository = MemoryStoreFactory.isMysqlEnabled()
+                ? new com.harness.agent.subagent.MysqlSubAgentTaskRepository(
+                        MysqlConnectionPool::getConnection, new ObjectMapper(),
+                        Duration.ofHours(EnvConfig.get().getLong(EnvKey.AGENT_TASK_RETENTION_HOURS, 168)))
+                : new com.harness.agent.subagent.DisabledSubAgentTaskRepository();
+        this.sessionInbox = new SessionInbox(taskRepository, Duration.ofSeconds(
+                EnvConfig.get().getLong(EnvKey.AGENT_DELIVERY_LEASE_SECONDS, 300)));
         this.resumeDispatcher = new SessionResumeDispatcher(sessionInbox, this::resumeSession);
 
         // Sub-agent manager (initialized before ReActEngine so spawn_subagent is available)
         this.subAgentManager = new SubAgentManager(
                 runtime.reActLoops(), runtime.traces(), toolExecutor,
                 artifactStore, sessionInbox, resumeDispatcher,
-                runtime.providers().chat());
-        toolRegistry.register(new com.harness.tool.ToolGroup("subagent",
+                runtime.providers().chat(), taskRepository);
+        if (MemoryStoreFactory.isMysqlEnabled()) toolRegistry.register(new com.harness.tool.ToolGroup("subagent",
                 "Manage delegated sub-agent tasks. "
                         + "Use help to load an action's parameters.",
                 Map.of("spawn", new SpawnSubAgentTool(subAgentManager),
-                        "await", new AwaitSubAgentsTool(subAgentManager),
                         "get", new GetSubAgentsTool(subAgentManager),
                         "cancel", new CancelSubAgentsTool(subAgentManager)),
                 EnvConfig.get().getCommaList(EnvKey.RISK_CONFIRM_TOOLS)));
@@ -280,6 +284,7 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
                 runtime.providers().chat(), runtime.providers().embedding(),
                 skillRegistry, toolRegistry, contextBuilder.vectorStore(), knowledgeVectorRuntime);
         registerUnifiedKnowledgeTools();
+        registerGraphDraftTools();
         this.runPreparer = new AgentRunPreparer(
                 runtime,
                 promptBuilder,
@@ -295,6 +300,7 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
                 toolRegistry,
                 toolExecutor,
                 subAgentManager,
+                resumeDispatcher,
                 replyAuditor,
                 lifecycleHooks);
 
@@ -307,6 +313,46 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
                 runtime.providers().smallTask().providerName(),
                 toolRegistry.size(),
                 memoryRuntime.enabled() ? "enabled" : "none");
+        subAgentManager.recoverPendingDeliveries();
+    }
+
+    private void registerGraphDraftTools() {
+        if (!knowledgeGraphToolEnabled || !MemoryStoreFactory.isMysqlEnabled()) return;
+        ObjectMapper mapper = new ObjectMapper();
+        var saga = new com.harness.graph.build.GraphMutationSagaService(
+                knowledgeGraphStore::applyChanges,
+                new com.harness.tool.knowledge.PersistentGraphSpaceWikiCompiler(
+                        memoryRuntime.knowledgeRepository(), graphSchemaRegistry),
+                new com.harness.tool.knowledge.authority.MysqlKnowledgeGraphMutationJobStore());
+        var access = new com.harness.graph.build.GraphDraftAccess() {
+            @Override public void requireReadable(com.harness.graph.build.GraphDraftScope scope,
+                                                   String graphId, String schemaId) {
+                graphSpaceAccessService.requireReadable(scope.tenantId(), graphId, schemaId);
+            }
+            @Override public void requireWritable(com.harness.graph.build.GraphDraftScope scope,
+                                                   String graphId, String schemaId) {
+                graphSpaceAccessService.requireWritable(scope.tenantId(), graphId, schemaId);
+            }
+        };
+        graphChangeDraftService = new com.harness.graph.build.GraphChangeDraftService(
+                artifactStorageService, knowledgeGraphStore, graphSchemaRegistry,
+                new com.harness.graph.build.CanonicalJsonGraphDataConverter(mapper), saga, access, mapper);
+        java.util.function.Supplier<com.harness.graph.build.GraphDraftScope> scope = () -> {
+            AgentRunContext current = SpawnSubAgentTool.getCurrentRunContext();
+            if (current == null || current.owner() == null) {
+                throw new SecurityException("Graph drafts require a trusted active run");
+            }
+            var graph = KnowledgeGraphTool.captureCurrentContext();
+            return new com.harness.graph.build.GraphDraftScope(
+                    current.owner().tenantId() == null ? AgentContext.DEFAULT_TENANT_ID : current.owner().tenantId(),
+                    current.owner().userId(), current.sessionId(),
+                    current.runId(), current.parentTraceId(), current.taskId(),
+                    graph == null ? null : graph.requestContext());
+        };
+        toolRegistry.register(new com.harness.agent.graph.PrepareGraphChangesTool(graphChangeDraftService, scope, mapper));
+        toolRegistry.register(new com.harness.agent.graph.ReadGraphDraftTool(graphChangeDraftService, scope, mapper));
+        graphMutationSagaWorker = new com.harness.graph.build.GraphMutationSagaWorker(saga);
+        graphMutationSagaWorker.start();
     }
 
     private void registerUnifiedKnowledgeTools() {
@@ -614,7 +660,7 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
                 trace.traceId(),
                 runToolCatalog,
                 turnId, owner);
-        subAgentManager.openScope(runId);
+        subAgentManager.openScope(runId, sessionId, event -> { });
         SpawnSubAgentTool.setCurrentRunContext(runContext);
         Map<String, String> metadata = new HashMap<>(trace.snapshot().metadata());
         metadata.put("run_id", runId);
@@ -695,6 +741,8 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
     private Set<String> detachedResumeUnavailableTools(AgentContext context) {
         Set<String> unavailable = new HashSet<>();
         unavailable.add(KnowledgeGraphTool.TOOL_NAME);
+        unavailable.add(com.harness.agent.graph.PrepareGraphChangesTool.TOOL_NAME);
+        unavailable.add(com.harness.agent.graph.ReadGraphDraftTool.TOOL_NAME);
         unavailable.add(FileReadTool.TOOL_NAME);
         if (Boolean.FALSE.equals(context.needsKnowledgeBase())) {
             unavailable.add(KnowledgeSearchTool.TOOL_NAME);
@@ -864,6 +912,7 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
     // Expose artifact subsystem
     public ArtifactStore artifactStore() { return artifactStore; }
     public ArtifactStorageService artifactStorageService() { return artifactStorageService; }
+    public com.harness.graph.build.GraphChangeDraftService graphChangeDraftService() { return graphChangeDraftService; }
 
 
     /**
@@ -907,19 +956,22 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
         try {
             // Load session history
             if (!memoryRuntime.enabled()) {
-                log.warn("[Orchestrator] Cannot resume session: memory not enabled");
-                return;
+                throw new IllegalStateException("Cannot resume session: memory not enabled");
             }
 
             var session = memoryRuntime.sessionStore()
                     .findByIdForInternalTask(sessionId).orElse(null);
             if (session == null) {
-                log.warn("[Orchestrator] Cannot resume session {}: session not found", sessionId);
-                return;
+                throw new IllegalStateException("Cannot resume missing session " + sessionId);
             }
             String userId = session.userId();
             String tenantId = session.tenantId();
-            AgentRunContext.Owner owner = resumeOwner(sessionId, userId, tenantId, events);
+            List<SessionInbox.SubAgentCompletedEvent> pendingEvents =
+                    memoryRuntime.pendingSubAgentResumeEvents(sessionId, events);
+            if (pendingEvents.isEmpty()) return;
+            AgentRunContext.Owner owner = resumeOwner(sessionId, userId, tenantId, pendingEvents);
+            AgentMemoryRuntime.withSessionWriteLock(sessionId, () ->
+                    memoryRuntime.persistSubAgentEvents(sessionId, userId, turnId, pendingEvents));
             List<MemoryMessage> shorttermMessages =
                     memoryRuntime.loadMessages(sessionId, userId);
 
@@ -928,7 +980,7 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
             eventMessage.append("[Runtime Event]\n\n");
             eventMessage.append("此前启动的子任务已经完成。\n\n");
 
-            for (SessionInbox.SubAgentCompletedEvent event : events) {
+            for (SessionInbox.SubAgentCompletedEvent event : pendingEvents) {
                 eventMessage.append("Task ID: ").append(event.taskId()).append("\n");
                 eventMessage.append("Original task: ").append(event.taskDescription()).append("\n");
                 eventMessage.append("Status: ").append(event.result().status()).append("\n");
@@ -967,6 +1019,7 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
             String resumeRunId = null;
 
             try {
+                resumeDispatcher.registerResumeToken(sessionId, cancellationToken);
                 // resume 跑在 session-resume-dispatcher 线程上，不经过 AgentRunPreparer，
                 // URL 授权作用域不会自动建立；从会话历史里持久化的 user 消息重建。
                 // clear() 保留：dispatcher 是单线程跨会话复用的，播种前先清干净，
@@ -998,7 +1051,6 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
 
                 // Convert messages and add runtime event
                 List<ChatMessage> historyChatMessages = memoryRuntime.toChatMessages(shorttermMessages);
-                historyChatMessages.add(UserMessage.from(eventMessage.toString()));
 
                 // Execute ReAct loop
                 ReActLoop reActLoop = createRequestReActLoop(runToolCatalog);
@@ -1010,7 +1062,7 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
                         null,
                         cancellationToken,
                         gapAnalysis.thinkingLevel(),
-                        null));
+                        null).withToolBatchCoordinator(new SubAgentBatchCoordinator(subAgentManager, resumeRunId)));
                 boolean completesTurn = !subAgentManager.hasDetachedTasks(resumeRunId);
                 ReActResult result = completesTurn
                         ? lifecycleHooks.beforeFinal(
@@ -1028,11 +1080,10 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
                     List<MessageBlock> asstBlocks = List.of(new MessageBlock(MessageBlock.BlockType.TEXT,
                             result.output() != null ? result.output() : "", null));
                     AgentMemoryRuntime.withSessionWriteLock(sessionId, () -> {
-                        memoryRuntime.persistSubAgentEvents(sessionId, userId, turnId, events);
                         memoryRuntime.persistToolMessages(result, sessionId, userId, turnId);
-                        memoryRuntime.persistAssistantMessage(
-                                sessionId, userId, turnId, asstBlocks, true, completesTurn);
                         memoryRuntime.awaitMessageWrites(turnId);
+                        memoryRuntime.persistSubAgentResumeAssistant(
+                                sessionId, userId, turnId, asstBlocks, completesTurn, pendingEvents);
                     });
                 }
                 trace.finish();
@@ -1041,6 +1092,7 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
                         result.output() != null ? result.output().length() : 0);
             } finally {
                 closeRunScope(resumeRunId);
+                resumeDispatcher.unregisterResumeToken(sessionId, cancellationToken);
             }
 
         } catch (Exception e) {
@@ -1052,6 +1104,7 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
     }
 
     public void shutdown() {
+        if (graphMutationSagaWorker != null) graphMutationSagaWorker.close();
         resumeDispatcher.shutdown();
         subAgentManager.shutdown();
         memoryRuntime.shutdown();

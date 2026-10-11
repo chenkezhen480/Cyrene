@@ -136,7 +136,7 @@ public class ReActEngine implements ReActLoop {
                 request.systemPrompt(), request.userMessage(), request.historyMessages(),
                 request.dynamicKnowledgeContext(), request.trace(),
                 request.listener(), request.cancellationToken(), request.thinkingLevel(),
-                request.confirmationContext(), request.finalOutputContract());
+                request.confirmationContext(), request.finalOutputContract(), request.toolBatchCoordinator());
     }
 
     /**
@@ -155,7 +155,8 @@ public class ReActEngine implements ReActLoop {
                                 com.harness.core.model.CancellationToken cancellationToken,
                                 ThinkingLevel thinkingLevel,
                                 ConfirmationExecutionContext confirmationContext,
-                                FinalOutputContract finalOutputContract) {
+                                FinalOutputContract finalOutputContract,
+                                com.harness.core.runtime.ToolBatchCoordinator batchCoordinator) {
         String sessionId = trace.snapshot().sessionId();
         long loopStart = System.currentTimeMillis();
         log.debug("[L3-ReAct] Starting ReAct loop: maxIterations={}, historyMessages={}, tools={}, thinking={}",
@@ -271,7 +272,8 @@ public class ReActEngine implements ReActLoop {
                 }
 
                 ToolExecutionOutput toolOutput = executeToolCalls(
-                        toolReqs, messages, allArtifacts, listener, cancellationToken, confirmationContext, sessionId);
+                        toolReqs, messages, allArtifacts, listener, cancellationToken, confirmationContext,
+                        sessionId, batchCoordinator);
 
                 if (structuredOutput && isStructuredOutputRound(toolReqs)) {
                     buildStructuredOutputStep(
@@ -374,7 +376,7 @@ public class ReActEngine implements ReActLoop {
                 request.systemPrompt(), request.userMessage(), request.historyMessages(),
                 request.dynamicKnowledgeContext(), request.trace(),
                 request.listener(), request.cancellationToken(), request.thinkingLevel(),
-                request.confirmationContext(), request.finalOutputContract());
+                request.confirmationContext(), request.finalOutputContract(), request.toolBatchCoordinator());
     }
 
     private ReActResult streamExecute(String systemPrompt, String userMessage, List<ChatMessage> historyMessages,
@@ -382,12 +384,13 @@ public class ReActEngine implements ReActLoop {
                                 com.harness.core.model.CancellationToken cancellationToken,
                                 ThinkingLevel thinkingLevel,
                                 ConfirmationExecutionContext confirmationContext,
-                                FinalOutputContract finalOutputContract) {
+                                FinalOutputContract finalOutputContract,
+                                com.harness.core.runtime.ToolBatchCoordinator batchCoordinator) {
         if (streamingChatModel == null) {
             log.warn("[L3-ReAct] Falling back to blocking mode (streaming unavailable)");
             return execute(systemPrompt, userMessage, historyMessages, dynamicKnowledgeContext, trace, listener,
                     cancellationToken, thinkingLevel, confirmationContext,
-                    new FinalOutputContract.Text());
+                    new FinalOutputContract.Text(), batchCoordinator);
         }
 
         String sessionId = trace.snapshot().sessionId();
@@ -537,7 +540,8 @@ public class ReActEngine implements ReActLoop {
                 log.debug("[L3-ReAct] Streaming: LLM requested {} tool calls", toolReqs.size());
 
                 ToolExecutionOutput toolOutput = executeToolCalls(
-                        toolReqs, messages, allArtifacts, listener, cancellationToken, confirmationContext, sessionId);
+                        toolReqs, messages, allArtifacts, listener, cancellationToken, confirmationContext,
+                        sessionId, batchCoordinator);
 
                 // Post-tool processing: inspection, hints, adaptive reflection
                 RoundOutcome outcome = processToolRound(i, aiMessage, toolReqs,
@@ -885,7 +889,8 @@ public class ReActEngine implements ReActLoop {
                                                  List<Artifact> allArtifacts,
                                                  ReActListener listener,
                                                  com.harness.core.model.CancellationToken cancellationToken,
-                                                 ConfirmationExecutionContext confirmationContext, String sessionId) {
+                                                 ConfirmationExecutionContext confirmationContext, String sessionId,
+                                                 com.harness.core.runtime.ToolBatchCoordinator batchCoordinator) {
         List<ToolCall> toolCalls = new ArrayList<>();
         List<ToolResult> toolResults = new ArrayList<>();
         List<PlannedToolCall> plannedCalls = toolReqs.stream()
@@ -905,7 +910,6 @@ public class ReActEngine implements ReActLoop {
 
         for (int callIndex = 0; callIndex < plannedCalls.size(); callIndex++) {
             PlannedToolCall plannedCall = plannedCalls.get(callIndex);
-            ToolExecutionRequest toolReq = plannedCall.request();
             ToolCall tc = plannedCall.toolCall();
             if (cancellationToken != null && cancellationToken.isCancelled()) {
                 emitCancelledCalls(plannedCalls.subList(callIndex, plannedCalls.size()), listener);
@@ -928,6 +932,34 @@ public class ReActEngine implements ReActLoop {
                             "Per-round tool call limit " + maxToolCallsPerRound
                                     + " exceeded; retry in a later round", 0);
             toolResults.add(result);
+
+            if (cancellationToken != null && cancellationToken.isCancelled()) {
+                emitCancelledCalls(plannedCalls, listener);
+                throw new CancellationException("Request cancelled");
+            }
+        }
+
+        try {
+            toolResults = List.copyOf(batchCoordinator.coordinate(
+                    List.copyOf(toolCalls), List.copyOf(toolResults), cancellationToken));
+            if (cancellationToken != null && cancellationToken.isCancelled()) {
+                throw new CancellationException("Request cancelled");
+            }
+        } catch (CancellationException cancelled) {
+            emitCancelledCalls(plannedCalls, listener);
+            throw cancelled;
+        }
+        if (toolResults.size() != toolCalls.size()) {
+            throw new IllegalStateException("Tool batch coordination changed the result count");
+        }
+        for (int callIndex = 0; callIndex < plannedCalls.size(); callIndex++) {
+            PlannedToolCall plannedCall = plannedCalls.get(callIndex);
+            ToolCall tc = plannedCall.toolCall();
+            ToolResult result = toolResults.get(callIndex);
+            if (!Objects.equals(tc.id(), result.toolCallId())
+                    || !Objects.equals(tc.toolName(), result.toolName())) {
+                throw new IllegalStateException("Tool batch coordination changed result correlation");
+            }
 
             if (result.success() && result.content() != null) {
                 if (listener != null && !result.content().isEmpty()) {
@@ -954,15 +986,7 @@ public class ReActEngine implements ReActLoop {
                         status == ToolCallStatus.SUCCEEDED ? "" : errorSummary(result));
             }
 
-            // Check cancellation after long-running tool execution
-            if (cancellationToken != null && cancellationToken.isCancelled()) {
-                log.info("[L3-ReAct] Cancellation detected after tool execution: {}", tc.toolName());
-                emitCancelledCalls(
-                        plannedCalls.subList(callIndex + 1, plannedCalls.size()), listener);
-                throw new CancellationException("Request cancelled");
-            }
-
-            messages.add(ToolExecutionResultMessage.from(toolReq,
+            messages.add(ToolExecutionResultMessage.from(plannedCall.request(),
                     result.success() ? result.output() : "ERROR: " + result.error()));
         }
 

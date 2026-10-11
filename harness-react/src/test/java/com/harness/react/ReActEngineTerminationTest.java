@@ -49,6 +49,60 @@ class ReActEngineTerminationTest {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void coordinatesWholeBatchBeforePublishingResultsAndNextModelCall(boolean streaming) {
+        var executions = new AtomicInteger();
+        var rounds = new AtomicInteger();
+        var completed = new ArrayList<String>();
+        java.util.function.Function<ChatRequest, ChatResponse> respond = request -> {
+            if (rounds.getAndIncrement() == 0) {
+                return ChatResponse.builder().aiMessage(AiMessage.from(List.of(
+                        ToolExecutionRequest.builder().id("a").name("test_tool").arguments("{}").build(),
+                        ToolExecutionRequest.builder().id("b").name("test_tool").arguments("{}").build())))
+                        .build();
+            }
+            assertThat(request.messages().stream().filter(ToolExecutionResultMessage.class::isInstance)
+                    .map(ToolExecutionResultMessage.class::cast).map(ToolExecutionResultMessage::text))
+                    .containsExactly("finished-a", "finished-b");
+            assertThat(completed).containsExactly("a", "b");
+            return ChatResponse.builder().aiMessage(AiMessage.from("combined answer")).build();
+        };
+        var chatModel = new ChatModel() {
+            @Override public ChatResponse doChat(ChatRequest request) { return respond.apply(request); }
+        };
+        var provider = provider(chatModel);
+        when(provider.streamingModel()).thenReturn(new StreamingChatModel() {
+            @Override public void doChat(ChatRequest request, StreamingChatResponseHandler handler) {
+                handler.onCompleteResponse(respond.apply(request));
+            }
+        });
+        var executor = mock(ToolExecutor.class);
+        when(executor.executeAuthorized(any(), any(), isNull(), any())).thenAnswer(invocation -> {
+            ToolCall call = invocation.getArgument(0);
+            executions.incrementAndGet();
+            return ToolResult.ok(call.id(), call.toolName(), "accepted", 1);
+        });
+        var listener = new ReActListener() {
+            @Override public void onStep(com.harness.core.model.ReActStep step) {}
+            @Override public void onToolCallDone(String id, String name,
+                    com.harness.core.model.ToolCallStatus status, long duration, String error) {
+                assertThat(executions).hasValue(2);
+                completed.add(id);
+            }
+        };
+        var request = new ReActRequest("system", "combine", List.of(), RunTrace.noop(),
+                listener, null, ThinkingLevel.OFF, null).withToolBatchCoordinator((calls, results, token) -> {
+            assertThat(executions).hasValue(2);
+            assertThat(completed).isEmpty();
+            return calls.stream().map(call -> ToolResult.ok(call.id(), call.toolName(),
+                    "finished-" + call.id(), 1)).toList();
+        });
+        var engine = new ReActEngine(provider, catalog(), executor, null, null, 3);
+        assertThat((streaming ? engine.streamExecute(request) : engine.execute(request)).output())
+                .isEqualTo("combined answer");
+    }
+
     @Test
     void dynamicKnowledgeIsAUserMessageAfterHistoryAndBeforeCurrentUser() {
         AtomicReference<ChatRequest> captured = new AtomicReference<>();

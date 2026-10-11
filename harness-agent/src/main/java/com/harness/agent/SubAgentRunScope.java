@@ -2,6 +2,7 @@ package com.harness.agent;
 
 import com.harness.core.model.CancellationToken;
 import com.harness.core.model.SubAgentLifecycleEvent;
+import com.harness.agent.subagent.SubAgentTaskRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -35,6 +36,7 @@ public class SubAgentRunScope {
     }
 
     private final String runId;
+    private final String sessionId;
     private final ConcurrentHashMap<String, SubAgentTaskRecord> tasks;
     private final AtomicInteger totalSpawns;
     private volatile Instant lastAccessedAt;
@@ -53,7 +55,13 @@ public class SubAgentRunScope {
             int maxTasksPerRun,
             Consumer<SubAgentLifecycleEvent> lifecycleListener
     ) {
+        this(runId, null, maxTasksPerRun, lifecycleListener);
+    }
+
+    public SubAgentRunScope(String runId, String sessionId, int maxTasksPerRun,
+                            Consumer<SubAgentLifecycleEvent> lifecycleListener) {
         this.runId = runId;
+        this.sessionId = sessionId;
         this.tasks = new ConcurrentHashMap<>();
         this.totalSpawns = new AtomicInteger(0);
         this.lastAccessedAt = Instant.now();
@@ -64,6 +72,7 @@ public class SubAgentRunScope {
     }
 
     public String runId() { return runId; }
+    public String sessionId() { return sessionId; }
     public Instant lastAccessedAt() { return lastAccessedAt; }
     public int taskCount() { return tasks.size(); }
     public ScopeState state() { return state.get(); }
@@ -123,8 +132,19 @@ public class SubAgentRunScope {
             SubAgentTask task, CancellationToken taskToken, String ownerSessionId,
             String ownerTurnId, AgentRunContext.Owner owner
     ) {
+        return registerTask(task, taskToken, ownerSessionId, ownerTurnId, owner, null, null, null);
+    }
+
+    public synchronized SubAgentTaskRecord registerTask(
+            SubAgentTask task, CancellationToken taskToken, String ownerSessionId,
+            String ownerTurnId, AgentRunContext.Owner owner, String toolCallId,
+            String rootTraceId, SubAgentTaskRepository repository
+    ) {
         lastAccessedAt = Instant.now();
 
+        if (sessionId != null && !sessionId.equals(ownerSessionId)) {
+            throw new IllegalArgumentException("Task session does not match its run scope");
+        }
         if (!isOpen()) {
             log.warn("[SubAgentScope] Cannot register task in non-open scope {}", runId);
             return null;
@@ -132,7 +152,8 @@ public class SubAgentRunScope {
 
         String taskId = task.taskId();
         SubAgentTaskRecord record = new SubAgentTaskRecord(
-                taskId, runId, ownerSessionId, ownerTurnId, task, taskToken, owner);
+                taskId, runId, ownerSessionId, ownerTurnId, task, taskToken, owner,
+                toolCallId, rootTraceId, repository);
 
         if (tasks.putIfAbsent(taskId, record) != null) {
             log.warn("[SubAgentScope] Duplicate taskId {} in run {}", taskId, runId);
@@ -146,6 +167,14 @@ public class SubAgentRunScope {
             totalSpawns.decrementAndGet();
             log.warn("[SubAgentScope] Spawn limit reached for run {}: {}", runId, maxTasksPerRun);
             return null;
+        }
+
+        try {
+            if (repository != null) repository.create(record);
+        } catch (RuntimeException e) {
+            tasks.remove(taskId, record);
+            totalSpawns.decrementAndGet();
+            throw e;
         }
 
         log.debug("[SubAgentScope] Registered task {} in run {} (total: {})", taskId, runId, newCount);
@@ -168,6 +197,8 @@ public class SubAgentRunScope {
         return Map.copyOf(tasks);
     }
 
+    List<SubAgentTaskRecord> taskRecords() { return List.copyOf(tasks.values()); }
+
     /**
      * Get tasks by status.
      */
@@ -183,11 +214,17 @@ public class SubAgentRunScope {
      */
     public void cancelAll() {
         lastAccessedAt = Instant.now();
+        tasks.values().forEach(record -> {
+            if (record.taskCancellationToken() != null) record.taskCancellationToken().cancel();
+        });
+        RuntimeException failure = null;
         for (SubAgentTaskRecord record : tasks.values()) {
             if (!record.isTerminal()) {
-                record.requestCancel();
+                try { record.requestCancel(); }
+                catch (RuntimeException e) { if (failure == null) failure = e; else failure.addSuppressed(e); }
             }
         }
+        if (failure != null) throw failure;
     }
 
     /**

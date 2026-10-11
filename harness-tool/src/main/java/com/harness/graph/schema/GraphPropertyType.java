@@ -23,7 +23,9 @@ public enum GraphPropertyType {
         return switch (this) {
             case STRING -> value instanceof String;
             case BOOLEAN -> value instanceof Boolean;
-            case INTEGER -> value instanceof Integer || value instanceof Short || value instanceof Byte;
+            // Neo4j returns every stored integer as Long, including 32-bit Schema properties.
+            case INTEGER -> value instanceof Integer || value instanceof Short || value instanceof Byte
+                    || value instanceof Long integer && integer >= Integer.MIN_VALUE && integer <= Integer.MAX_VALUE;
             case LONG -> value instanceof Long || value instanceof Integer || value instanceof Short || value instanceof Byte;
             case DOUBLE -> value instanceof Double || value instanceof Float;
             case NUMBER -> value instanceof Number;

@@ -56,6 +56,7 @@ public final class GraphChangeSetCodec {
         new TreeSet<>(changeSet.deleteNodeIds()).forEach(deleteNodeIds::add);
         ArrayNode deleteRelationIds = root.putArray("deleteRelationIds");
         new TreeSet<>(changeSet.deleteRelationIds()).forEach(deleteRelationIds::add);
+        if (changeSet.baseline() != null) root.set("baseline", com.harness.graph.model.GraphContentHash.canonical(changeSet.baseline(), objectMapper));
         String json = write(root);
         return new Encoded(json, KnowledgeIdentity.sha256(json));
     }

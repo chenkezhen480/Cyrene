@@ -37,7 +37,7 @@ public class GraphSchemaRegistry {
         return new GraphSchemaRegistry(providers);
     }
 
-    public void register(GraphSchemaDefinition definition) {
+    public synchronized void register(GraphSchemaDefinition definition) {
         if (definition == null) {
             throw new IllegalArgumentException("definition is required");
         }
@@ -47,7 +47,7 @@ public class GraphSchemaRegistry {
         }
     }
 
-    public GraphSchemaDefinition replace(GraphSchemaDefinition definition) {
+    public synchronized GraphSchemaDefinition replace(GraphSchemaDefinition definition) {
         if (definition == null) {
             throw new IllegalArgumentException("definition is required");
         }
@@ -58,7 +58,7 @@ public class GraphSchemaRegistry {
         return previous;
     }
 
-    public GraphSchemaDefinition unregister(String schemaId) {
+    public synchronized GraphSchemaDefinition unregister(String schemaId) {
         GraphSchemaDefinition removed = schemas.remove(schemaId);
         if (removed == null) {
             throw new IllegalStateException("Graph schema is not registered: " + schemaId);

@@ -14,8 +14,14 @@ public record GraphChangeSet(
         List<GraphNode> nodes,
         List<GraphRelation> relations,
         Set<String> deleteNodeIds,
-        Set<String> deleteRelationIds
+        Set<String> deleteRelationIds,
+        GraphMutationBaseline baseline
 ) {
+    public GraphChangeSet(String requestId, String graphId, String schemaId,
+                          List<GraphNode> nodes, List<GraphRelation> relations,
+                          Set<String> deleteNodeIds, Set<String> deleteRelationIds) {
+        this(requestId, graphId, schemaId, nodes, relations, deleteNodeIds, deleteRelationIds, null);
+    }
     public GraphChangeSet {
         requestId = GraphModelSupport.requireText(requestId, "requestId");
         graphId = GraphModelSupport.requireText(graphId, "graphId");

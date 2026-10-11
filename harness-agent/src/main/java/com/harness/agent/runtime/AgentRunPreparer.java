@@ -35,6 +35,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.HashSet;
+import java.util.function.Consumer;
 
 /** Converts an authenticated request into immutable input for one ReAct execution. */
 public final class AgentRunPreparer {
@@ -69,7 +70,7 @@ public final class AgentRunPreparer {
                 preferenceActivationBuilder, "preferenceActivationBuilder");
     }
 
-    public PreparedAgentRun prepare(AgentRunRequest request, RunTrace trace) {
+    public PreparedAgentRun prepare(AgentRunRequest request, RunTrace trace, Consumer<String> beforeHistoryLoad) {
         AgentContext agentContext = request.agentContext() != null
                 ? request.agentContext()
                 : AgentContext.empty();
@@ -92,7 +93,7 @@ public final class AgentRunPreparer {
 
         MemoryContext memoryContext = memoryRuntime.resolve(
                 input.userId(), agentContext.optionalTenantId().orElse(null),
-                request.requestedSessionId(), request.text(), trace);
+                request.requestedSessionId(), request.text(), trace, beforeHistoryLoad);
         trace.setSessionId(memoryContext.sessionId());
         String enhancedText = promptBuilder.enhanceUserText(
                 request.text(), input.message().attachments(), agentContext, memoryContext.sessionId());

@@ -25,7 +25,7 @@ import java.util.Set;
 final class SubAgentCompletionContractValidator {
 
     static final Set<String> ORCHESTRATION_TOOLS = Set.of(
-            "spawn_subagent", "await_subagents", "get_subagents", "cancel_subagents",
+            "spawn_subagent", "get_subagents", "cancel_subagents",
             "subagent", "subagent.spawn", "subagent.await", "subagent.get", "subagent.cancel", "subagent.help");
 
     private static final Set<String> SUPPORTED_SCHEMA_KEYWORDS = Set.of(

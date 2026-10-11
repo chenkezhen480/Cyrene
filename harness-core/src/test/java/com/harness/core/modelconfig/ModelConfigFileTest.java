@@ -44,7 +44,40 @@ class ModelConfigFileTest {
         assertThat(Files.readString(path))
                 .contains("chat.model=\"new model\"")
                 .contains("smallTask.provider=openai")
-                .doesNotContain("chat.apiKey");
+                .contains("chat.apiKey=");
+        assertThat(file.read().values()).doesNotContainKey(ModelConfigKey.CHAT_API_KEY);
+    }
+
+    @Test
+    void replacementIncludesEveryVisibleKeyAndOnlyConfiguredHiddenKeys() throws Exception {
+        ModelConfigFile file = new ModelConfigFile(temporaryDirectory.resolve("model.conf"));
+        file.replace(ModelConfig.of(Map.of(ModelConfigKey.CHAT_MODEL, "model",
+                ModelConfigKey.CHAT_THINKING_DIALECT, "qwen")));
+
+        var lines = Files.readAllLines(file.path());
+        for (var definition : ModelConfigKey.DEFINITIONS) {
+            if (!definition.hidden())
+                assertThat(lines).anyMatch(line -> line.startsWith(definition.key() + "="));
+        }
+        assertThat(lines).contains("routing.provider=", "routing.apiKey=", "routing.baseUrl=",
+                "routing.model=", "routing.timeoutSeconds=", "chat.thinkingDialect=qwen")
+                .doesNotContain("chat.thinking=", "chat.thinkingBudgets=", "chat.thinkingMaxLevel=");
+        assertThat(file.read().values()).containsExactlyInAnyOrderEntriesOf(Map.of(
+                ModelConfigKey.CHAT_MODEL, "model", ModelConfigKey.CHAT_THINKING_DIALECT, "qwen"));
+    }
+
+    @Test
+    void configuredJevSettingsRoundTripWithoutAddingBlankValuesToTheSnapshot() throws Exception {
+        ModelConfigFile file = new ModelConfigFile(temporaryDirectory.resolve("model.conf"));
+        Map<String, String> routing = Map.of(ModelConfigKey.ROUTING_PROVIDER, "jev",
+                ModelConfigKey.ROUTING_API_KEY, "unit test routing key", ModelConfigKey.ROUTING_BASE_URL,
+                "https://example.invalid/v1", ModelConfigKey.ROUTING_MODEL, "jev-test",
+                ModelConfigKey.ROUTING_TIMEOUT_SECONDS, "17");
+
+        file.replace(ModelConfig.of(routing));
+
+        assertThat(file.read().values()).containsExactlyInAnyOrderEntriesOf(routing);
+        assertThat(file.read().getInt(ModelConfigKey.ROUTING_TIMEOUT_SECONDS, 30)).isEqualTo(17);
     }
 
     @Test

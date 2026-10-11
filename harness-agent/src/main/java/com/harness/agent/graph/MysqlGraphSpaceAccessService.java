@@ -119,15 +119,25 @@ public final class MysqlGraphSpaceAccessService implements GraphSpaceAccessServi
             String graphId,
             String schemaId
     ) {
+        requirePermission(tenantId, graphId, schemaId, AUTHORIZE_SQL, "readable");
+    }
+
+    @Override
+    public void requireWritable(String tenantId, String graphId, String schemaId) {
+        requirePermission(tenantId, graphId, schemaId,
+                AUTHORIZE_SQL.replace("'read', 'write', 'admin'", "'write', 'admin'"), "writable");
+    }
+
+    private void requirePermission(String tenantId, String graphId, String schemaId, String sql, String permission) {
         tenantId = requireTenantId(tenantId);
         try (Connection connection = connectionProvider.getConnection();
-             PreparedStatement statement = connection.prepareStatement(AUTHORIZE_SQL)) {
+             PreparedStatement statement = connection.prepareStatement(sql)) {
             statement.setString(1, tenantId);
             statement.setString(2, graphId);
             statement.setString(3, schemaId);
             try (ResultSet resultSet = statement.executeQuery()) {
                 if (!resultSet.next()) {
-                    throw new SecurityException("Graph space is not readable by the current access scope");
+                    throw new SecurityException("Graph space is not " + permission + " by the current access scope");
                 }
             }
         } catch (SQLException e) {

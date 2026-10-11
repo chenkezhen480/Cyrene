@@ -1,6 +1,7 @@
 package com.harness.agent;
 
 import com.harness.core.model.CancellationToken;
+import com.harness.agent.subagent.SubAgentTaskRepository;
 
 import java.time.Instant;
 import java.util.concurrent.CompletableFuture;
@@ -19,6 +20,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public class SubAgentTaskRecord {
 
     private final String taskId;
+    private final String ownerRunId;
+    private final String spawnToolCallId;
+    private final String rootTraceId;
+    private final SubAgentTaskRepository repository;
     private final String ownerSessionId;
     private final String ownerTurnId;
     private final AgentRunContext.Owner owner;
@@ -29,9 +34,12 @@ public class SubAgentTaskRecord {
     private final Instant createdAt;
     private final CancellationToken taskCancellationToken;
     private final AtomicBoolean lifecycleTerminalPublished = new AtomicBoolean();
+    private final AtomicBoolean completionEventRequested = new AtomicBoolean();
 
     // Stored result for detached delivery (set by completion callback)
     private volatile SubAgentResult storedResult;
+    private volatile SubAgentResult pendingTerminalResult;
+    private volatile RuntimeException persistenceFailure;
 
     public SubAgentTaskRecord(String taskId, String ownerRunId, String ownerSessionId, SubAgentTask task, CancellationToken taskCancellationToken) {
         this(taskId, ownerRunId, ownerSessionId, ownerRunId, task, taskCancellationToken);
@@ -52,7 +60,19 @@ public class SubAgentTaskRecord {
             String taskId, String ownerRunId, String ownerSessionId, String ownerTurnId,
             SubAgentTask task, CancellationToken taskCancellationToken, AgentRunContext.Owner owner
     ) {
+        this(taskId, ownerRunId, ownerSessionId, ownerTurnId, task, taskCancellationToken, owner, null, null, null);
+    }
+
+    public SubAgentTaskRecord(
+            String taskId, String ownerRunId, String ownerSessionId, String ownerTurnId,
+            SubAgentTask task, CancellationToken taskCancellationToken, AgentRunContext.Owner owner,
+            String spawnToolCallId, String rootTraceId, SubAgentTaskRepository repository
+    ) {
         this.taskId = taskId;
+        this.ownerRunId = ownerRunId;
+        this.spawnToolCallId = spawnToolCallId;
+        this.rootTraceId = rootTraceId;
+        this.repository = repository;
         this.ownerSessionId = ownerSessionId;
         this.ownerTurnId = ownerTurnId;
         this.owner = owner;
@@ -60,11 +80,14 @@ public class SubAgentTaskRecord {
         this.completion = new CompletableFuture<>();
         this.status = new AtomicReference<>(SubAgentStatus.QUEUED);
         this.deliveryState = new AtomicReference<>(ResultDeliveryState.INLINE_PENDING);
-        this.createdAt = Instant.now();
+        this.createdAt = Instant.ofEpochMilli(System.currentTimeMillis());
         this.taskCancellationToken = taskCancellationToken;
     }
 
     public String taskId() { return taskId; }
+    public String ownerRunId() { return ownerRunId; }
+    public String spawnToolCallId() { return spawnToolCallId; }
+    public String rootTraceId() { return rootTraceId; }
     public String ownerSessionId() { return ownerSessionId; }
     public String ownerTurnId() { return ownerTurnId; }
     public AgentRunContext.Owner owner() { return owner; }
@@ -75,10 +98,14 @@ public class SubAgentTaskRecord {
     public Instant createdAt() { return createdAt; }
     public CancellationToken taskCancellationToken() { return taskCancellationToken; }
     public SubAgentResult storedResult() { return storedResult; }
+    public SubAgentResult pendingTerminalResult() { return pendingTerminalResult; }
+    public RuntimeException persistenceFailure() { return persistenceFailure; }
 
     public boolean markLifecycleTerminalPublished() {
         return lifecycleTerminalPublished.compareAndSet(false, true);
     }
+
+    public boolean markCompletionEventRequested() { return completionEventRequested.compareAndSet(false, true); }
 
     // Publish the result before its terminal status, and complete each task exactly once.
     public synchronized boolean start() {
@@ -86,7 +113,10 @@ public class SubAgentTaskRecord {
             markCancelled();
             return false;
         }
-        return status.compareAndSet(SubAgentStatus.QUEUED, SubAgentStatus.RUNNING);
+        if (status.get() != SubAgentStatus.QUEUED) return false;
+        if (repository != null && !repository.transition(taskId, SubAgentStatus.QUEUED, SubAgentStatus.RUNNING)) return false;
+        status.set(SubAgentStatus.RUNNING);
+        return true;
     }
 
     public synchronized void succeed(SubAgentResult result) {
@@ -113,13 +143,19 @@ public class SubAgentTaskRecord {
         }
     }
 
-    public synchronized boolean requestCancel() {
-        if (isTerminal()) return false;
-        boolean queued = status.get() == SubAgentStatus.QUEUED;
-        status.set(SubAgentStatus.CANCEL_REQUESTED);
-        if (queued) markCancelled();
+    public boolean requestCancel() {
         if (taskCancellationToken != null) taskCancellationToken.cancel();
-        return true;
+        synchronized (this) {
+            if (isTerminal()) return false;
+            if (pendingTerminalResult != null) return true;
+            if (status.get() == SubAgentStatus.QUEUED) {
+                markCancelled();
+                return true;
+            }
+            if (repository != null && !repository.transition(taskId, status.get(), SubAgentStatus.CANCEL_REQUESTED)) return false;
+            status.set(SubAgentStatus.CANCEL_REQUESTED);
+            return true;
+        }
     }
 
     public synchronized void markCancelled() {
@@ -139,9 +175,30 @@ public class SubAgentTaskRecord {
     private void finish(SubAgentStatus terminal, SubAgentResult result) {
         if (isTerminal()) return;
         if (result.status() != terminal) throw new IllegalArgumentException("Task result status mismatch");
-        storedResult = result;
-        status.set(terminal);
-        completion.complete(result);
+        if (pendingTerminalResult == null) pendingTerminalResult = result;
+        retryPendingCompletion();
+    }
+
+    /** Retry only persistence, never the model or tools that produced this result. */
+    public synchronized void retryPendingCompletion() {
+        SubAgentResult result = pendingTerminalResult;
+        if (result == null) return;
+        try {
+            if (repository != null && !repository.complete(taskId, result.status(), result)) {
+                result = repository.findAuthorized(owner, ownerSessionId, taskId)
+                        .filter(task -> task.status().isTerminal() && task.result() != null)
+                        .map(SubAgentTaskRepository.StoredTask::result)
+                        .orElseThrow(() -> new IllegalStateException("Task terminal result was not persisted: " + taskId));
+            }
+            storedResult = result;
+            status.set(result.status());
+            pendingTerminalResult = null;
+            persistenceFailure = null;
+            completion.complete(result);
+        } catch (RuntimeException failure) {
+            persistenceFailure = failure;
+            throw failure;
+        }
     }
 
     public boolean isTerminal() { return isTerminal(status.get()); }
@@ -150,27 +207,40 @@ public class SubAgentTaskRecord {
     // --- Delivery state transitions (CAS-based) ---
 
     /**
-     * Detach from inline delivery. Called when await_subagents times out.
+     * Detach from inline delivery. Called when the batch wait times out.
      * CAS: INLINE_PENDING → DETACHED
      */
-    public boolean detach() {
-        return deliveryState.compareAndSet(ResultDeliveryState.INLINE_PENDING, ResultDeliveryState.DETACHED);
+    public synchronized boolean detach() {
+        return changeDelivery(ResultDeliveryState.INLINE_PENDING, ResultDeliveryState.DETACHED);
     }
 
     /**
-     * Consume result inline. Called when await_subagents gets result before timeout.
+     * Consume result inline. Called when the batch result is delivered inline.
      * CAS: INLINE_PENDING → INLINE_CONSUMED
      */
-    public boolean consumeInline() {
-        return completion.isDone() && deliveryState.compareAndSet(ResultDeliveryState.INLINE_PENDING, ResultDeliveryState.INLINE_CONSUMED);
+    public synchronized boolean consumeInline() {
+        return completion.isDone() && changeDelivery(ResultDeliveryState.INLINE_PENDING, ResultDeliveryState.INLINE_CONSUMED);
     }
 
     /**
-     * Mark as session-resumed. Called when completion event is submitted to inbox.
+     * Mark as session-resumed. Used by the legacy ephemeral inbox after event submission.
      * CAS: DETACHED → SESSION_RESUMED
      */
-    public boolean markSessionResumed() {
-        return deliveryState.compareAndSet(ResultDeliveryState.DETACHED, ResultDeliveryState.SESSION_RESUMED);
+    public synchronized boolean markSessionResumed() {
+        return changeDelivery(ResultDeliveryState.DETACHED, ResultDeliveryState.SESSION_RESUMED);
+    }
+
+    public synchronized void suppressDelivery() {
+        if (repository != null) repository.suppressTask(taskId);
+        if (deliveryState.get() != ResultDeliveryState.INLINE_CONSUMED && deliveryState.get() != ResultDeliveryState.SESSION_RESUMED)
+            deliveryState.set(ResultDeliveryState.SUPPRESSED);
+    }
+
+    private boolean changeDelivery(ResultDeliveryState expected, ResultDeliveryState next) {
+        if (deliveryState.get() != expected) return false;
+        if (repository != null && !repository.changeDelivery(taskId, expected, next)) return false;
+        deliveryState.set(next);
+        return true;
     }
 
     /**
@@ -181,10 +251,6 @@ public class SubAgentTaskRecord {
     }
 
     private static boolean isTerminal(SubAgentStatus status) {
-        return status == SubAgentStatus.SUCCEEDED
-                || status == SubAgentStatus.INCOMPLETE
-                || status == SubAgentStatus.FAILED
-                || status == SubAgentStatus.CANCELLED
-                || status == SubAgentStatus.TIMED_OUT;
+        return status.isTerminal();
     }
 }

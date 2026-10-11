@@ -15,6 +15,27 @@ public interface MessageStore {
      */
     long save(MessageWrite message);
 
+    record EventMessage(MessageWrite message, String eventId) {
+        public EventMessage {
+            if (message == null || eventId == null || eventId.isBlank() || eventId.length() > 128) {
+                throw new IllegalArgumentException("Message and external event ID of at most 128 characters are required");
+            }
+        }
+    }
+
+    default long appendOnce(MessageWrite message, String eventId) {
+        return appendOnceBatch(List.of(new EventMessage(message, eventId))).getFirst();
+    }
+
+    /** Atomically persist a recovery reply and its event completion markers. */
+    default List<Long> appendOnceBatch(List<EventMessage> messages) {
+        throw new UnsupportedOperationException("Message store does not support durable event delivery");
+    }
+
+    default Optional<MemoryMessage> findByExternalEventId(String sessionId, String eventId) {
+        throw new UnsupportedOperationException("Message store does not support durable event delivery");
+    }
+
     List<Long> saveBatch(List<MessageWrite> messages);
 
     List<MemoryMessage> loadForContext(String sessionId);

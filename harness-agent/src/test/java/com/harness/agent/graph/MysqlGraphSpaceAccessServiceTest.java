@@ -17,6 +17,23 @@ import org.mockito.ArgumentCaptor;
 class MysqlGraphSpaceAccessServiceTest {
 
     @Test
+    void applicationRequiresWriteOrAdminRatherThanReadablePermission() throws Exception {
+        Connection connection = mock(Connection.class);
+        PreparedStatement statement = mock(PreparedStatement.class);
+        ResultSet resultSet = mock(ResultSet.class);
+        when(connection.prepareStatement(anyString())).thenReturn(statement);
+        when(statement.executeQuery()).thenReturn(resultSet);
+        when(resultSet.next()).thenReturn(false);
+        var service = new MysqlGraphSpaceAccessService(() -> connection);
+        assertThatThrownBy(() -> service.requireWritable("tenant", "graph", "schema"))
+                .isInstanceOf(SecurityException.class).hasMessageContaining("not writable");
+        ArgumentCaptor<String> sql = ArgumentCaptor.forClass(String.class);
+        verify(connection).prepareStatement(sql.capture());
+        assertThat(sql.getValue()).contains("permission IN ('write', 'admin')").doesNotContain("'read'");
+        verify(statement).setString(1, "tenant");
+    }
+
+    @Test
     void usesKeysetPaginationAndReturnsAnOpaqueCursor() throws Exception {
         Connection connection = mock(Connection.class);
         PreparedStatement statement = mock(PreparedStatement.class);

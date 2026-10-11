@@ -12,9 +12,8 @@ public final class TraceStoreFactory {
     private TraceStoreFactory() {}
 
     public static TraceStore create() {
-        String store = EnvConfig.get().getString(EnvKey.AUDIT_STORE, "sqlite");
+        String store = EnvConfig.get().getString(EnvKey.AUDIT_STORE, "mysql");
         return switch (store.toLowerCase()) {
-            case "sqlite" -> new SqliteTraceStore();
             case "mysql" -> new MysqlTraceStore();
             case "file" -> new FileTraceStore();
             case "none" -> new NoOpTraceStore();

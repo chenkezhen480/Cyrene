@@ -76,11 +76,31 @@ class ModelConfigurationServiceTest {
         assertThat(saved)
                 .contains("chat.model=\"new model\"")
                 .contains("chat.apiKey=secret-key")
-                .doesNotContain("chat.provider=");
+                .contains("chat.provider=");
+        assertThat(new ModelConfigFile(configPath()).read().values())
+                .doesNotContainKey(ModelConfigKey.CHAT_PROVIDER);
         assertThat(runtime.currentConfiguration().getString(ModelConfigKey.CHAT_MODEL))
                 .isEqualTo("new model");
         assertThat(response.runtimeSynchronized()).isTrue();
         assertThat(field(response, ModelConfigKey.CHAT_PROVIDER).configured()).isFalse();
+    }
+
+    @Test
+    void webSaveKeepsAllRoutingTemplateFieldsWhileBlankCredentialsRemainUnconfigured() throws Exception {
+        ModelConfig initial = ModelConfig.empty();
+        ModelConfigurationService service = service(initial, new TestRuntime(initial));
+
+        var response = service.update(new ModelConfigurationService.ModelConfigurationUpdateRequest(
+                Map.of(ModelConfigKey.CHAT_MODEL, "web-model"), List.of()));
+
+        assertThat(Files.readAllLines(configPath())).contains("routing.provider=", "routing.apiKey=",
+                "routing.baseUrl=", "routing.model=", "routing.timeoutSeconds=");
+        assertThat(new ModelConfigFile(configPath()).read().values())
+                .containsExactlyInAnyOrderEntriesOf(Map.of(ModelConfigKey.CHAT_MODEL, "web-model"));
+        assertThat(field(response, ModelConfigKey.ROUTING_PROVIDER).configured()).isFalse();
+        assertThat(field(response, ModelConfigKey.ROUTING_API_KEY).configured()).isFalse();
+        assertThat(field(response, ModelConfigKey.ROUTING_API_KEY).value()).isNull();
+        assertThat(response.runtimeSynchronized()).isTrue();
     }
 
     @Test

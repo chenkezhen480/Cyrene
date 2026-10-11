@@ -20,7 +20,7 @@ import java.util.Set;
 
 /**
  * Built-in tool that spawns a sub-agent for async task execution.
- * Returns immediately with a task handle; use await_subagents to wait for completion.
+ * Returns a task handle; the runtime coordinates completion of the submitted batch.
  *
  * The main agent's LLM is responsible for generating:
  * - persona: specific role/identity for the sub-agent
@@ -59,7 +59,7 @@ public class SpawnSubAgentTool implements Tool {
     }
 
     /**
-     * Get the current run context. Used by other tools (await, get, cancel).
+     * Get the current run context. Used by recall and cancellation tools.
      */
     public static AgentRunContext getCurrentRunContext() {
         return currentRunContext.get();
@@ -71,7 +71,7 @@ public class SpawnSubAgentTool implements Tool {
                 TOOL_NAME,
                 "Spawn a sub-agent to execute a specific task in parallel. " +
                         "Returns immediately with a task handle. " +
-                        "Use subagent with action=await to wait for completion and get results.\n\n" +
+                        "The runtime waits for the submitted batch; use subagent action=get to recall pending tasks by ID.\n\n" +
                         "You MUST provide:\n" +
                         "- persona: specific role/identity for this sub-agent\n" +
                         "- system_prompt: task-specific instructions including methodology, output format, constraints\n" +
@@ -222,7 +222,7 @@ public class SpawnSubAgentTool implements Tool {
             result.put("task_id", taskId);
             result.put("status", record.status().get().name());
             result.put("accepted", true);
-            result.put("message", "Task submitted. Use subagent with action=await to wait for completion.");
+            result.put("message", "Task submitted; the runtime will coordinate completion. Use subagent action=get for later recall.");
 
             log.info("[SpawnSubAgent] Task {} accepted, status={}", taskId, record.status().get());
             return ToolExecutionOutcome.succeeded(

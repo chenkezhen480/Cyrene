@@ -7,6 +7,8 @@ import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.time.Duration;
+import com.harness.agent.subagent.SubAgentTaskRepository;
 
 /**
  * Inbox for session-level events (e.g., sub-agent completion).
@@ -28,8 +30,14 @@ public class SessionInbox {
             SubAgentResult result,
             Instant timestamp,
             EventStatus status,
-            AgentRunContext.Owner owner
+            AgentRunContext.Owner owner,
+            String leaseToken
     ) {
+        public SubAgentCompletedEvent(String eventId, String sessionId, String taskId,
+                                     String taskDescription, String parentTurnId, SubAgentResult result,
+                                     Instant timestamp, EventStatus status, AgentRunContext.Owner owner) {
+            this(eventId, sessionId, taskId, taskDescription, parentTurnId, result, timestamp, status, owner, null);
+        }
         public enum EventStatus {
             PENDING,
             PROCESSING,
@@ -39,12 +47,36 @@ public class SessionInbox {
 
     // Per-session event queue
     private final ConcurrentHashMap<String, CopyOnWriteArrayList<SubAgentCompletedEvent>> inboxes = new ConcurrentHashMap<>();
+    private final SubAgentTaskRepository repository;
+    private final Duration lease;
+    private final ConcurrentHashMap<String, SubAgentCompletedEvent> claims = new ConcurrentHashMap<>();
+
+    public SessionInbox() { this(null, Duration.ofMinutes(1)); }
+
+    public SessionInbox(SubAgentTaskRepository repository, Duration lease) {
+        this.repository = repository;
+        if (lease == null || lease.isZero() || lease.isNegative()) throw new IllegalArgumentException("lease must be positive");
+        this.lease = lease;
+    }
+
+    public boolean isPersistent() { return repository != null; }
+    public Duration leaseDuration() { return lease; }
+    public void renewClaims() {
+        if (repository != null) claims.values().forEach(event -> repository.renewDelivery(event.eventId(), event.leaseToken(), lease));
+    }
+
+    public void suppressSession(String sessionId) {
+        if (repository != null) repository.suppressSession(sessionId);
+        inboxes.remove(sessionId);
+        claims.entrySet().removeIf(entry -> entry.getValue().sessionId().equals(sessionId));
+    }
 
     /**
      * Submit a sub-agent completion event to the session inbox.
      * Uses compute() for atomicity — no concurrent drain() can lose the event.
      */
     public void submit(SubAgentCompletedEvent event) {
+        if (repository != null) return; // Completion already registered its event in the task transaction.
         String sessionId = event.sessionId();
         inboxes.compute(sessionId, (key, list) -> {
             if (list == null) list = new CopyOnWriteArrayList<>();
@@ -61,6 +93,11 @@ public class SessionInbox {
      * Uses compute() for atomicity — no concurrent submit() can be lost.
      */
     public List<SubAgentCompletedEvent> drain(String sessionId) {
+        if (repository != null) {
+            var events = repository.claimDeliveries(sessionId, lease, 100);
+            events.forEach(event -> claims.put(event.eventId(), event));
+            return events;
+        }
         List<SubAgentCompletedEvent> pending = new ArrayList<>();
 
         inboxes.compute(sessionId, (key, inbox) -> {
@@ -94,6 +131,16 @@ public class SessionInbox {
      * Uses compute() for atomicity — no concurrent submit() can be lost.
      */
     public void markConsumed(String sessionId, List<String> eventIds) {
+        if (repository != null) {
+            for (String id : eventIds) {
+                var event = claims.get(id);
+                if (event != null && event.sessionId().equals(sessionId)) {
+                    repository.acknowledgeDelivery(id, event.leaseToken());
+                    claims.remove(id, event);
+                }
+            }
+            return;
+        }
         Set<String> consumedIds = new HashSet<>(eventIds);
 
         inboxes.compute(sessionId, (key, inbox) -> {
@@ -123,6 +170,9 @@ public class SessionInbox {
      * Check if a session has pending events.
      */
     public boolean hasPending(String sessionId) {
+        if (repository != null) {
+            return repository.hasPendingDelivery(sessionId);
+        }
         CopyOnWriteArrayList<SubAgentCompletedEvent> inbox = inboxes.get(sessionId);
         if (inbox == null) {
             return false;
@@ -135,6 +185,16 @@ public class SessionInbox {
      * Called when resumeSession fails so events can be retried.
      */
     public void resetToPending(String sessionId, List<String> eventIds) {
+        if (repository != null) {
+            for (String id : eventIds) {
+                var event = claims.get(id);
+                if (event != null && event.sessionId().equals(sessionId)) {
+                    repository.releaseDelivery(id, event.leaseToken());
+                    claims.remove(id, event);
+                }
+            }
+            return;
+        }
         Set<String> resetIds = new HashSet<>(eventIds);
 
         inboxes.compute(sessionId, (key, inbox) -> {

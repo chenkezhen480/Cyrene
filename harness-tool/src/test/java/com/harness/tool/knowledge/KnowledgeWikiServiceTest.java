@@ -38,6 +38,63 @@ class KnowledgeWikiServiceTest {
     }
 
     @Test
+    void wikiReadsAndPaginationRemainAvailableWithoutVectorCapability() {
+        var head = setup(KnowledgeConceptType.SOURCE_DOCUMENT);
+        var info = new PageInfo(1, "", false);
+        when(repository.findPageInNamespace(null, KnowledgeNamespaceType.COLLECTION, "manuals",
+                KnowledgeConceptType.SOURCE_DOCUMENT, KnowledgeStatus.STABLE, null, 1))
+                .thenReturn(new PageResponse<>(List.of(head.concept()), info));
+        var authorityOnly = new KnowledgeWikiService(repository, null);
+
+        assertThat(authorityOnly.get("doc-1", ignored -> true).revisionId()).isEqualTo("rev-1");
+        assertThat(authorityOnly.page(null, "alice", KnowledgeConceptType.SOURCE_DOCUMENT,
+                "manuals", null, 1, ignored -> true).items())
+                .extracting(KnowledgeWikiService.WikiCard::conceptId).containsExactly("doc-1");
+        verifyNoInteractions(vectors);
+    }
+
+    @Test
+    void graphCardUpdatesRemainAvailableWithoutVectorCapability() {
+        var authorityOnly = new KnowledgeWikiService(repository, null);
+        for (var type : List.of(KnowledgeConceptType.GRAPH_SCHEMA, KnowledgeConceptType.GRAPH_SPACE)) {
+            reset(repository);
+            setup(type);
+
+            var updated = authorityOnly.update("doc-1", "rev-1", "Edited title", "Edited summary",
+                    "alice", ignored -> true);
+
+            assertThat(updated.version()).isEqualTo(2);
+            verify(repository).commitChanges(any());
+        }
+        verifyNoInteractions(vectors);
+    }
+
+    @Test
+    void documentUpdateWithoutVectorsFailsBeforePublishingANewRevision() {
+        setup(KnowledgeConceptType.SOURCE_DOCUMENT);
+        var authorityOnly = new KnowledgeWikiService(repository, null);
+
+        assertThatThrownBy(() -> authorityOnly.update("doc-1", "rev-1", "Edited title",
+                "Edited summary", "alice", ignored -> true))
+                .isInstanceOf(UnsupportedOperationException.class)
+                .hasMessageContaining("Knowledge vector capability is disabled");
+
+        verify(repository, never()).commitChanges(any());
+        verifyNoInteractions(vectors);
+    }
+
+    @Test
+    void chunkEditWithoutVectorsFailsWithAnExplicitCapabilityError() {
+        var authorityOnly = new KnowledgeWikiService(repository, null);
+
+        assertThatThrownBy(() -> authorityOnly.editChunk("manuals", "chunk-1", "old", "new", "alice"))
+                .isInstanceOf(UnsupportedOperationException.class)
+                .hasMessageContaining("Knowledge vector capability is disabled");
+
+        verifyNoInteractions(repository, vectors);
+    }
+
+    @Test
     void chunkEditReembedsCopiedRevisionBeforePublishingAndCompensatesFailure() {
         setup(KnowledgeConceptType.SOURCE_DOCUMENT);
         var chunk = new VectorStore.Document("chunk-1", "old", "manual.md", 0,

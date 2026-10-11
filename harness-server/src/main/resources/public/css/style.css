@@ -531,6 +531,10 @@ h3 {
   color: var(--mist);
 }
 
+.header .mobile-nav-toggle {
+  display: none;
+}
+
 .header-actions {
   display: flex;
   align-items: center;
@@ -3834,19 +3838,19 @@ body:has(.knowledge-wiki-drawer[open]) { overflow: hidden; }
   }
 
   .sidebar-backdrop {
-    display: none;
+    display: block;
     position: fixed;
     inset: 0;
     background: rgba(13, 9, 21, 0.6);
     z-index: calc(var(--z-modal) - 1);
   }
 
-  .sidebar.open ~ .sidebar-backdrop {
-    display: block;
+  .header .mobile-nav-toggle {
+    display: inline-flex;
   }
 
-  .mobile-header {
-    display: flex;
+  .header {
+    padding-inline: var(--space-4);
   }
 
   .page-container {
@@ -3922,10 +3926,6 @@ body:has(.knowledge-wiki-drawer[open]) { overflow: hidden; }
 }
 
 @media (min-width: 769px) {
-  .mobile-header {
-    display: none;
-  }
-
   .sidebar-backdrop {
     display: none !important;
   }
@@ -3980,4 +3980,19 @@ body:has(.knowledge-wiki-drawer[open]) { overflow: hidden; }
   .fragment {
     display: none;
   }
+}
+.graph-draft-meta { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; }
+.graph-draft-meta > div { display: flex; flex-direction: column; gap: .45rem; min-width: 0; }
+.graph-draft-meta code { overflow-wrap: anywhere; font-size: .75rem; color: var(--ash); }
+.graph-draft-conflict { display: flex; flex-wrap: wrap; align-items: center; gap: .75rem; }
+.graph-draft-conflict code { overflow-wrap: anywhere; min-width: 0; }
+.graph-draft-topology { height: min(48vh, 480px); min-height: 260px; }
+.graph-draft-topology .graph-topology { height: 100%; }
+.graph-draft-change { padding: 1rem 0; border-bottom: 1px solid var(--gold-line); }
+.graph-draft-diff { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; margin-top: .75rem; }
+.graph-draft-diff pre { max-height: 260px; overflow: auto; font-size: .75rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+.graph-draft-fieldset { padding: 0; margin: 0; border: 0; min-width: 0; }
+@media (max-width: 760px) {
+  .graph-draft-meta, .graph-draft-diff { grid-template-columns: minmax(0, 1fr); }
+  .graph-draft-review .graph-submit-row, .graph-draft-change > .flex { flex-wrap: wrap; }
 }

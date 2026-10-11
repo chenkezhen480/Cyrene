@@ -7,6 +7,7 @@ import com.harness.graph.model.GraphDeleteMode;
 import com.harness.graph.model.GraphDeleteRequest;
 import com.harness.graph.model.GraphDeleteResult;
 import com.harness.graph.model.GraphChangeSet;
+import com.harness.graph.model.GraphContentHash;
 import com.harness.graph.model.GraphDeleteTarget;
 import com.harness.graph.model.GraphMutationBatch;
 import com.harness.graph.model.GraphMutationResult;
@@ -65,6 +66,8 @@ public final class Neo4jKnowledgeGraphStore implements KnowledgeGraphStore {
     private final GraphSchemaRegistry schemaRegistry;
     private final GraphSchemaValidator schemaValidator;
     private final Neo4jValueMapper valueMapper;
+    private final ObjectMapper objectMapper;
+    private final com.harness.graph.build.GraphChangeSetCodec changeSetCodec = new com.harness.graph.build.GraphChangeSetCodec();
     private final SessionConfig readSessionConfig;
     private final SessionConfig writeSessionConfig;
     private final TransactionConfig queryTransactionConfig;
@@ -81,6 +84,7 @@ public final class Neo4jKnowledgeGraphStore implements KnowledgeGraphStore {
         this.schemaRegistry = Objects.requireNonNull(schemaRegistry, "schemaRegistry");
         this.schemaValidator = new GraphSchemaValidator(schemaRegistry);
         this.valueMapper = new Neo4jValueMapper(Objects.requireNonNull(objectMapper, "objectMapper"));
+        this.objectMapper = objectMapper;
         this.readSessionConfig = SessionConfig.builder()
                 .withDatabase(settings.neo4jDatabase())
                 .withDefaultAccessMode(AccessMode.READ)
@@ -113,6 +117,12 @@ public final class Neo4jKnowledgeGraphStore implements KnowledgeGraphStore {
 
     @Override
     public GraphMutationResult applyChanges(GraphChangeSet changeSet) {
+        synchronized (schemaRegistry) {
+            return applyChangesWithSchema(changeSet);
+        }
+    }
+
+    private GraphMutationResult applyChangesWithSchema(GraphChangeSet changeSet) {
         GraphMutationBatch mutationBatch = changeSet.nodes().isEmpty()
                 && changeSet.relations().isEmpty()
                 ? null
@@ -132,15 +142,19 @@ public final class Neo4jKnowledgeGraphStore implements KnowledgeGraphStore {
 
         try (Session session = driver.session(writeSessionConfig)) {
             return session.executeWrite(transaction -> {
+                lockGraphSpace(transaction, changeSet.graphId(), changeSet.schemaId());
                 GraphMutationResult existing = findMutationResult(
                         transaction,
                         changeSet.requestId(),
                         changeSet.graphId(),
-                        changeSet.schemaId()
+                        changeSet.schemaId(),
+                        changeSetCodec.encode(changeSet).payloadHash()
                 );
                 if (existing != null) {
                     return existing;
                 }
+
+                verifyBaseline(transaction, changeSet);
 
                 deleteRelations(transaction, changeSet);
                 deleteNodes(transaction, changeSet);
@@ -166,7 +180,8 @@ public final class Neo4jKnowledgeGraphStore implements KnowledgeGraphStore {
                         changeSet.requestId(),
                         changeSet.graphId(),
                         changeSet.schemaId(),
-                        result
+                        result,
+                        changeSetCodec.encode(changeSet).payloadHash()
                 );
                 return result;
             }, writeTransactionConfig);
@@ -190,6 +205,38 @@ public final class Neo4jKnowledgeGraphStore implements KnowledgeGraphStore {
             }, queryTransactionConfig);
         } catch (Neo4jException e) {
             throw new GraphStoreException("Failed to get graph node: " + e.getMessage(), e);
+        }
+    }
+
+    @Override
+    public GraphRelation getRelation(String graphId, String schemaId, String relationId) {
+        schemaRegistry.require(schemaId);
+        try (Session session = driver.session(readSessionConfig)) {
+            return session.executeRead(transaction -> readRelation(transaction, graphId, schemaId, relationId), queryTransactionConfig);
+        } catch (Neo4jException e) {
+            throw new GraphStoreException("Failed to get graph relation: " + e.getMessage(), e);
+        }
+    }
+
+    @Override
+    public PageResponse<GraphRelation> listIncidentRelations(String graphId, String schemaId, Set<String> nodeIds, int limit, String cursor) {
+        schemaRegistry.require(schemaId);
+        int pageLimit = settings.capLimit(limit);
+        try (Session session = driver.session(readSessionConfig)) {
+            List<GraphRelation> fetched = session.executeRead(transaction -> transaction.run("""
+                    MATCH (source:HarnessGraphNode)-[relation]->(target:HarnessGraphNode)
+                    WHERE source.graphId = $graphId AND source.schemaId = $schemaId
+                      AND target.graphId = $graphId AND target.schemaId = $schemaId
+                      AND relation.graphId = $graphId AND relation.schemaId = $schemaId
+                      AND (source.nodeId IN $nodeIds OR target.nodeId IN $nodeIds)
+                      AND ($cursor = '' OR relation.relationId > $cursor)
+                    RETURN source, relation, target
+                    ORDER BY relation.relationId LIMIT $fetchLimit
+                    """, parameters("graphId", graphId, "schemaId", schemaId, "nodeIds", List.copyOf(nodeIds),
+                    "cursor", cursor == null ? "" : cursor, "fetchLimit", pageLimit + 1)).list(this::toGraphRelation), queryTransactionConfig);
+            return page(fetched, pageLimit, GraphRelation::relationId);
+        } catch (Neo4jException e) {
+            throw new GraphStoreException("Failed to list incident graph relations: " + e.getMessage(), e);
         }
     }
 
@@ -350,7 +397,9 @@ public final class Neo4jKnowledgeGraphStore implements KnowledgeGraphStore {
             // stopped removing nodes, an unbounded loop here would hammer the database forever.
             int maxBatches = nodeCount / DELETE_BATCH_SIZE + 2;
             for (int batch = 0; batch < maxBatches; batch++) {
-                int deleted = session.executeWrite(transaction -> transaction.run("""
+                int deleted = session.executeWrite(transaction -> {
+                    lockGraphSpace(transaction, graphSpaceKey.graphId(), graphSpaceKey.schemaId());
+                    return transaction.run("""
                         MATCH (node:HarnessGraphNode)
                         WHERE node.graphId = $graphId
                           AND node.schemaId = $schemaId
@@ -362,13 +411,15 @@ public final class Neo4jKnowledgeGraphStore implements KnowledgeGraphStore {
                         "graphId", graphSpaceKey.graphId(),
                         "schemaId", graphSpaceKey.schemaId(),
                         "batchSize", DELETE_BATCH_SIZE
-                )).single().get("deleted").asInt(), writeTransactionConfig);
+                )).single().get("deleted").asInt();
+                }, writeTransactionConfig);
                 if (deleted == 0) {
                     break;
                 }
             }
 
             session.executeWrite(transaction -> {
+                lockGraphSpace(transaction, graphSpaceKey.graphId(), graphSpaceKey.schemaId());
                 transaction.run("""
                         MATCH (mutation:HarnessGraphMutation)
                         WHERE mutation.graphId = $graphId
@@ -411,10 +462,13 @@ public final class Neo4jKnowledgeGraphStore implements KnowledgeGraphStore {
         // Schema that was disabled or deleted must still have its remaining data cleanable. An
         // unknown schemaId simply matches nothing.
         try (Session session = driver.session(writeSessionConfig)) {
-            return session.executeWrite(transaction -> switch (request.target()) {
-                case NODE -> deleteNode(transaction, request);
-                case RELATION -> deleteRelation(transaction, request);
-                case SOURCE -> deleteBySource(transaction, request);
+            return session.executeWrite(transaction -> {
+                lockGraphSpace(transaction, request.graphId(), request.schemaId());
+                return switch (request.target()) {
+                    case NODE -> deleteNode(transaction, request);
+                    case RELATION -> deleteRelation(transaction, request);
+                    case SOURCE -> deleteBySource(transaction, request);
+                };
             }, writeTransactionConfig);
         } catch (Neo4jException | GraphStoreException e) {
             throw new GraphStoreException("Knowledge graph delete failed: " + e.getMessage(), e);
@@ -436,6 +490,10 @@ public final class Neo4jKnowledgeGraphStore implements KnowledgeGraphStore {
                 """
                 CREATE CONSTRAINT harness_graph_node_key IF NOT EXISTS
                 FOR (node:HarnessGraphNode) REQUIRE node.storageKey IS UNIQUE
+                """,
+                """
+                CREATE CONSTRAINT harness_graph_space_lock_key IF NOT EXISTS
+                FOR (space:HarnessGraphSpaceLock) REQUIRE space.storageKey IS UNIQUE
                 """,
                 """
                 CREATE INDEX harness_graph_node_page IF NOT EXISTS
@@ -476,11 +534,13 @@ public final class Neo4jKnowledgeGraphStore implements KnowledgeGraphStore {
             org.neo4j.driver.TransactionContext transaction,
             String requestId,
             String graphId,
-            String schemaId
+            String schemaId,
+            String payloadHash
     ) {
         String cypher = """
                 MATCH (mutation:HarnessGraphMutation {storageKey: $storageKey})
-                RETURN mutation.nodeCount AS nodeCount, mutation.relationCount AS relationCount
+                RETURN mutation.nodeCount AS nodeCount, mutation.relationCount AS relationCount,
+                       mutation.payloadHash AS payloadHash
                 """;
         var result = transaction.run(cypher, parameters(
                 "storageKey", mutationStorageKey(graphId, schemaId, requestId)));
@@ -488,6 +548,9 @@ public final class Neo4jKnowledgeGraphStore implements KnowledgeGraphStore {
             return null;
         }
         Record record = result.single();
+        if (!record.get("payloadHash").isNull() && !payloadHash.equals(record.get("payloadHash").asString())) {
+            throw new IllegalStateException("Graph mutation requestId was reused with different content");
+        }
         return new GraphMutationResult(
                 requestId,
                 true,
@@ -679,7 +742,8 @@ public final class Neo4jKnowledgeGraphStore implements KnowledgeGraphStore {
             String requestId,
             String graphId,
             String schemaId,
-            GraphMutationResult result
+            GraphMutationResult result,
+            String payloadHash
     ) {
         String cypher = """
                 CREATE (mutation:HarnessGraphMutation {
@@ -689,6 +753,7 @@ public final class Neo4jKnowledgeGraphStore implements KnowledgeGraphStore {
                     schemaId: $schemaId,
                     nodeCount: $nodeCount,
                     relationCount: $relationCount,
+                    payloadHash: $payloadHash,
                     createdAt: datetime()
                 })
                 """;
@@ -698,7 +763,58 @@ public final class Neo4jKnowledgeGraphStore implements KnowledgeGraphStore {
                 "graphId", graphId,
                 "schemaId", schemaId,
                 "nodeCount", result.nodeCount(),
-                "relationCount", result.relationCount())).consume();
+                "relationCount", result.relationCount(),
+                "payloadHash", payloadHash)).consume();
+    }
+
+    private static void lockGraphSpace(org.neo4j.driver.TransactionContext transaction, String graphId, String schemaId) {
+        // Serialize managed writes before baseline reads, including additions whose IDs have no node to lock.
+        transaction.run("""
+                MERGE (space:HarnessGraphSpaceLock {storageKey: $storageKey})
+                SET space.revision = coalesce(space.revision, 0) + 1
+                """, parameters("storageKey", nodeStorageKey(graphId, schemaId, "graph-space-lock"))).consume();
+    }
+
+    private GraphRelation readRelation(org.neo4j.driver.TransactionContext transaction, String graphId, String schemaId, String id) {
+        var result = transaction.run("""
+                MATCH (source:HarnessGraphNode)-[relation]->(target:HarnessGraphNode)
+                WHERE relation.storageKey = $storageKey
+                  AND relation.graphId = $graphId AND relation.schemaId = $schemaId
+                  AND source.graphId = $graphId AND source.schemaId = $schemaId
+                  AND target.graphId = $graphId AND target.schemaId = $schemaId
+                RETURN source, relation, target
+                """, parameters("storageKey", relationStorageKey(graphId, schemaId, id), "graphId", graphId, "schemaId", schemaId));
+        return result.hasNext() ? toGraphRelation(result.single()) : null;
+    }
+
+    private void verifyBaseline(org.neo4j.driver.TransactionContext transaction, GraphChangeSet changeSet) {
+        var baseline = changeSet.baseline();
+        if (baseline == null) return;
+        if (!baseline.schemaHash().equals(GraphContentHash.of(schemaRegistry.require(changeSet.schemaId()), objectMapper)))
+            throw new IllegalStateException("Graph Schema baseline changed");
+        baseline.nodes().forEach((id, expected) -> {
+            var result = transaction.run("MATCH (n:HarnessGraphNode {storageKey: $storageKey}) RETURN n",
+                    parameters("storageKey", nodeStorageKey(changeSet.graphId(), changeSet.schemaId(), id)));
+            GraphNode actual = result.hasNext() ? toGraphNode(result.single().get("n").asNode()) : null;
+            if (!GraphContentHash.of(expected, objectMapper).equals(GraphContentHash.of(actual, objectMapper)))
+                throw new IllegalStateException("Node baseline changed: " + id);
+        });
+        baseline.relations().forEach((id, expected) -> {
+            GraphRelation actual = readRelation(transaction, changeSet.graphId(), changeSet.schemaId(), id);
+            if (!GraphContentHash.of(expected, objectMapper).equals(GraphContentHash.of(actual, objectMapper)))
+                throw new IllegalStateException("Relation baseline changed: " + id);
+        });
+        baseline.incidentRelationIds().forEach((id, expected) -> {
+            List<String> actual = transaction.run("""
+                    MATCH (node:HarnessGraphNode {storageKey: $storageKey})-[relation]-()
+                    WHERE relation.graphId = $graphId AND relation.schemaId = $schemaId
+                    RETURN DISTINCT relation.relationId AS relationId
+                    ORDER BY relationId LIMIT $limit
+                    """, parameters("storageKey", nodeStorageKey(changeSet.graphId(), changeSet.schemaId(), id),
+                    "graphId", changeSet.graphId(), "schemaId", changeSet.schemaId(), "limit", settings.contextMaxItems() + 1))
+                    .list(record -> record.get("relationId").asString());
+            if (!expected.equals(new LinkedHashSet<>(actual))) throw new IllegalStateException("Node relation baseline changed: " + id);
+        });
     }
 
     private GraphDeleteResult deleteNode(

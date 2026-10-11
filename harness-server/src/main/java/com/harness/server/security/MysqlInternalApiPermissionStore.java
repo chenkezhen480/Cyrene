@@ -8,7 +8,7 @@ import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.Set;
 
-/** No cache: revoked endpoint grants take effect on the next request. */
+/** Endpoint denylist; changes take effect on the next request without a cache. */
 public class MysqlInternalApiPermissionStore {
     private final SqlConnectionProvider connections;
 
@@ -16,10 +16,10 @@ public class MysqlInternalApiPermissionStore {
         this.connections = java.util.Objects.requireNonNull(connections, "connections");
     }
 
-    public boolean isAllowed(String tenantId, String identity, String endpointKey) {
+    public boolean isDisabled(String tenantId, String identity, String endpointKey) {
         try (var connection = connections.getConnection();
              var statement = connection.prepareStatement("SELECT 1 FROM internal_api_permission "
-                     + "WHERE tenant_id = ? AND identity = ? AND endpoint_key = ? LIMIT 1")) {
+                     + "WHERE tenant_id = ? AND identity = ? AND endpoint_key = ? AND disabled = 1 LIMIT 1")) {
             statement.setString(1, tenantId);
             statement.setString(2, identity);
             statement.setString(3, endpointKey);
@@ -33,7 +33,7 @@ public class MysqlInternalApiPermissionStore {
         if (cursor < 0 || limit < 1 || limit > 100) throw new IllegalArgumentException("Invalid permission page");
         try (var connection = connections.getConnection();
              var statement = connection.prepareStatement("SELECT id, identity, endpoint_key FROM internal_api_permission "
-                     + "WHERE tenant_id = ? " + (identity == null ? "" : "AND identity = ? ")
+                     + "WHERE tenant_id = ? AND disabled = 1 " + (identity == null ? "" : "AND identity = ? ")
                      + "AND id > ? ORDER BY id LIMIT ?")) {
             statement.setString(1, tenantId);
             int parameter = 2;
@@ -66,8 +66,8 @@ public class MysqlInternalApiPermissionStore {
                     delete.executeUpdate();
                 }
                 try (var insert = connection.prepareStatement("INSERT INTO internal_api_permission "
-                        + "(tenant_id, identity, endpoint_key) VALUES (?, ?, ?) "
-                        + "ON DUPLICATE KEY UPDATE endpoint_key = VALUES(endpoint_key)")) {
+                        + "(tenant_id, identity, endpoint_key, disabled) VALUES (?, ?, ?, 1) "
+                        + "ON DUPLICATE KEY UPDATE disabled = VALUES(disabled)")) {
                     for (String key : keys) {
                         insert.setString(1, tenantId);
                         insert.setString(2, identity);

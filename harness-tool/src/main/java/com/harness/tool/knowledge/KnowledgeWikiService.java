@@ -13,11 +13,17 @@ import java.util.function.Predicate;
 /** Management of discovery cards; authoritative versions and projection changes are committed together. */
 public final class KnowledgeWikiService {
     private final KnowledgeRepository repository;
-    private final VectorStore vectorStore;
+    private final Optional<VectorStore> vectorStore;
 
+    /** Vector capability is optional; source-document mutations require it explicitly. */
     public KnowledgeWikiService(KnowledgeRepository repository, VectorStore vectorStore) {
         this.repository = Objects.requireNonNull(repository);
-        this.vectorStore = Objects.requireNonNull(vectorStore);
+        this.vectorStore = Optional.ofNullable(vectorStore);
+    }
+
+    private VectorStore requireVectorStore() {
+        return vectorStore.orElseThrow(() -> new UnsupportedOperationException(
+                "Knowledge vector capability is disabled"));
     }
 
     public PageResponse<WikiCard> page(String tenantId, String userId, KnowledgeConceptType type,
@@ -59,10 +65,11 @@ public final class KnowledgeWikiService {
 
     public VectorStore.Document editChunk(String collection, String chunkId, String expectedContent,
             String content, String editor) {
+        var vectors = requireVectorStore();
         if (content == null || content.isBlank()
                 || content.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > 65_535)
             throw new IllegalArgumentException("Chunk content must contain 1..65535 UTF-8 bytes");
-        var chunk = vectorStore.getById(collection, chunkId);
+        var chunk = vectors.getById(collection, chunkId);
         if (chunk == null) throw new IllegalArgumentException("Knowledge chunk does not exist");
         if (!Objects.equals(expectedContent, chunk.content()))
             throw new IllegalStateException("Chunk has changed; reload it before saving");
@@ -73,7 +80,7 @@ public final class KnowledgeWikiService {
                 && head.concept().tenantId() == null;
         var card = get(conceptId, scope);
         var updated = update(conceptId, revisionId, card.title(), card.summary(), editor, scope, chunk, content);
-        return vectorStore.readDocumentWindow(collection, conceptId, updated.revisionId(), chunk.chunkIndex(), 0, 0)
+        return vectors.readDocumentWindow(collection, conceptId, updated.revisionId(), chunk.chunkIndex(), 0, 0)
                 .stream().findFirst().orElseThrow(() -> new IllegalStateException("Updated chunk is unavailable"));
     }
 
@@ -110,13 +117,14 @@ public final class KnowledgeWikiService {
                         conceptId, version, safeTitle, safeSummary, previous.body(),
                         "cyrene-wiki-editor/" + required(editor, "editor", 128), now, hash, metadata, now);
                 if (current.conceptType() == KnowledgeConceptType.SOURCE_DOCUMENT) {
+                    var vectors = requireVectorStore();
                     copiedRevision.set(revision.id());
                     copiedCollection.set(current.namespaceKey());
-                    vectorStore.copyDocumentRevision(current.namespaceKey(), conceptId, previous.id(), revision.id());
+                    vectors.copyDocumentRevision(current.namespaceKey(), conceptId, previous.id(), revision.id());
                     if (editedChunk != null) {
-                        var copied = vectorStore.readDocumentWindow(current.namespaceKey(), conceptId, revision.id(),
+                        var copied = vectors.readDocumentWindow(current.namespaceKey(), conceptId, revision.id(),
                                 editedChunk.chunkIndex(), 0, 0).stream().findFirst().orElseThrow();
-                        vectorStore.updateContent(current.namespaceKey(), copied.id(), content);
+                        vectors.updateContent(current.namespaceKey(), copied.id(), content);
                     }
                 }
                 var concept = new KnowledgeConcept(conceptId, current.tenantId(), current.userId(), current.namespaceType(),
@@ -133,7 +141,7 @@ public final class KnowledgeWikiService {
             return result.get();
         } catch (RuntimeException failure) {
             if (copiedRevision.get() != null) {
-                try { vectorStore.deleteDocumentRevision(copiedCollection.get(), conceptId, copiedRevision.get()); }
+                try { requireVectorStore().deleteDocumentRevision(copiedCollection.get(), conceptId, copiedRevision.get()); }
                 catch (RuntimeException cleanup) { failure.addSuppressed(cleanup); }
             }
             throw failure;

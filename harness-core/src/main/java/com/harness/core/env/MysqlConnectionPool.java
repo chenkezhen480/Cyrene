@@ -31,26 +31,33 @@ public class MysqlConnectionPool {
     }
 
     /** 启动时调用，主动建立连接池 */
-    public static void init() {
+    public static synchronized void init() {
+        if (dataSource != null) return;
         EnvConfig cfg = EnvConfig.get();
         String dbUrl = cfg.getString(EnvKey.AUDIT_DB_URL, "jdbc:mysql://localhost:3306/agent");
         String dbUser = cfg.getString(EnvKey.AUDIT_DB_USER, "root");
         String dbPass = cfg.getString(EnvKey.AUDIT_DB_PASS, "1234");
 
-        HikariConfig hikariConfig = new HikariConfig();
-        hikariConfig.setJdbcUrl(dbUrl);
-        hikariConfig.setUsername(dbUser);
-        hikariConfig.setPassword(dbPass);
-        EnvConfig.applyDefaultPoolSettings(hikariConfig, "harness-mysql");
-
-        dataSource = new HikariDataSource(hikariConfig);
-        log.info("[DB] HikariCP pool initialized: url={}, maxPool={}", dbUrl, hikariConfig.getMaximumPoolSize());
+        try {
+            HikariConfig hikariConfig = new HikariConfig();
+            hikariConfig.setJdbcUrl(dbUrl);
+            hikariConfig.setUsername(dbUser);
+            hikariConfig.setPassword(dbPass);
+            EnvConfig.applyDefaultPoolSettings(hikariConfig, "harness-mysql");
+            dataSource = new HikariDataSource(hikariConfig);
+            log.info("[DB] HikariCP pool initialized: endpoint={}, maxPool={}",
+                    MiddlewareConnectionDiagnostics.endpoint(dbUrl), hikariConfig.getMaximumPoolSize());
+        } catch (RuntimeException failure) {
+            throw new IllegalStateException(MiddlewareConnectionDiagnostics.failureMessage(
+                    MiddlewareConnectionDiagnostics.Service.MYSQL, dbUrl, failure), failure);
+        }
     }
 
-    public static void shutdown() {
+    public static synchronized void shutdown() {
         if (dataSource != null && !dataSource.isClosed()) {
             dataSource.close();
             log.info("[DB] HikariCP pool shut down");
         }
+        dataSource = null;
     }
 }

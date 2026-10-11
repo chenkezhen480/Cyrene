@@ -22,6 +22,9 @@ public interface KnowledgeGraphStore extends AutoCloseable {
     GraphMutationResult upsertBatch(GraphMutationBatch mutationBatch);
 
     default GraphMutationResult applyChanges(GraphChangeSet changeSet) {
+        if (changeSet.baseline() != null) {
+            throw new UnsupportedOperationException("The graph store does not support transactional draft baseline validation");
+        }
         if (!changeSet.deleteNodeIds().isEmpty() || !changeSet.deleteRelationIds().isEmpty()) {
             throw new UnsupportedOperationException(
                     "The knowledge graph store does not support transactional deletions");
@@ -36,6 +39,15 @@ public interface KnowledgeGraphStore extends AutoCloseable {
     }
 
     GraphNode getNode(GraphNodeKey nodeKey);
+
+    default GraphRelation getRelation(String graphId, String schemaId, String relationId) {
+        throw new UnsupportedOperationException("Graph relation identity reads are not supported");
+    }
+
+    default PageResponse<GraphRelation> listIncidentRelations(String graphId, String schemaId,
+            java.util.Set<String> nodeIds, int limit, String cursor) {
+        throw new UnsupportedOperationException("Graph incident relation reads are not supported");
+    }
 
     PageResponse<GraphNode> listNodes(GraphNodePageRequest request);
 

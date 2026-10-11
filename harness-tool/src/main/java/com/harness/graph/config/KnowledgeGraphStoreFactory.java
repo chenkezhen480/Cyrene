@@ -1,6 +1,7 @@
 package com.harness.graph.config;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.harness.core.env.MiddlewareConnectionDiagnostics;
 import com.harness.graph.neo4j.Neo4jKnowledgeGraphStore;
 import com.harness.graph.schema.GraphSchemaRegistry;
 import com.harness.graph.store.GraphStoreException;
@@ -52,8 +53,9 @@ public final class KnowledgeGraphStoreFactory {
             log.info("[KnowledgeGraph] connected to Neo4j database '{}'", settings.neo4jDatabase());
             return new Neo4jKnowledgeGraphStore(driver, settings, schemaRegistry, objectMapper);
         } catch (Exception e) {
-            driver.close();
-            throw new GraphStoreException("Neo4j connectivity verification failed: " + e.getMessage(), e);
+            try { driver.close(); } catch (RuntimeException closeFailure) { e.addSuppressed(closeFailure); }
+            throw new GraphStoreException(MiddlewareConnectionDiagnostics.failureMessage(
+                    MiddlewareConnectionDiagnostics.Service.NEO4J, settings.neo4jUri(), e), e);
         }
     }
 }

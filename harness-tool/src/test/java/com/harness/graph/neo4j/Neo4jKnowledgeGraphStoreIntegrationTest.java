@@ -44,6 +44,46 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class Neo4jKnowledgeGraphStoreIntegrationTest {
 
     @Test
+    void draftBaselineConflictsRollbackWholeMutationAndVersionReplayRemainsIdempotent() {
+        String uri = System.getProperty("graph.it.uri", "");
+        Assumptions.assumeFalse(uri.isBlank(), "Set -Dgraph.it.uri to run Neo4j integration tests");
+        String user = System.getProperty("graph.it.user", "neo4j");
+        String password = System.getProperty("graph.it.password", "test-password");
+        waitUntilReady(uri, user, password);
+        GraphSchemaRegistry registry = registry();
+        ObjectMapper mapper = new ObjectMapper();
+        String graphId = "draft-baseline-" + UUID.randomUUID();
+        Driver driver = GraphDatabase.driver(uri, AuthTokens.basic(user, password));
+        Neo4jKnowledgeGraphStore store = new Neo4jKnowledgeGraphStore(driver, settings(uri, user, password), registry, mapper);
+        try {
+            store.upsertBatch(mutation(graphId));
+            GraphNode original = store.getNode(new GraphNodeKey(graphId, "project-graph", "person-1"));
+            var baseline = new com.harness.graph.model.GraphMutationBaseline(
+                    com.harness.graph.model.GraphContentHash.of(registry.require("project-graph"), mapper),
+                    Map.of("person-1", original), Map.of(), Map.of());
+            store.applyChanges(new GraphChangeSet("external-change", graphId, "project-graph",
+                    List.of(new GraphNode("person-1", Set.of("Person"), Map.of("name", "External"))), List.of(), Set.of(), Set.of()));
+            GraphChangeSet stale = new GraphChangeSet("stale-draft", graphId, "project-graph",
+                    List.of(new GraphNode("person-1", Set.of("Person"), Map.of("name", "Draft"))), List.of(), Set.of("project-2"), Set.of(), baseline);
+            assertThatThrownBy(() -> store.applyChanges(stale)).isInstanceOf(IllegalStateException.class).hasMessageContaining("baseline");
+            assertThat(store.getNode(new GraphNodeKey(graphId, "project-graph", "project-2"))).isNotNull();
+            assertThat(store.getNode(new GraphNodeKey(graphId, "project-graph", "person-1")).properties()).containsEntry("name", "External");
+            GraphNode current = store.getNode(new GraphNodeKey(graphId, "project-graph", "person-1"));
+            GraphChangeSet fresh = new GraphChangeSet("fresh-draft", graphId, "project-graph",
+                    List.of(new GraphNode("person-1", Set.of("Person"), Map.of("name", "Approved"))), List.of(), Set.of(), Set.of(),
+                    new com.harness.graph.model.GraphMutationBaseline(baseline.schemaHash(), Map.of("person-1", current), Map.of(), Map.of()));
+            var result = store.applyChanges(fresh);
+            assertThat(store.applyChanges(fresh)).isEqualTo(result);
+            assertThatThrownBy(() -> store.applyChanges(new GraphChangeSet("fresh-draft", graphId, "project-graph",
+                    List.of(new GraphNode("person-1", Set.of("Person"), Map.of("name", "Different"))), List.of(), Set.of(), Set.of(), fresh.baseline())))
+                    .isInstanceOf(IllegalStateException.class).hasMessageContaining("different content");
+        } finally {
+            cleanupGraph(driver, graphId);
+            store.close();
+        }
+    }
+
+    @Test
     void shouldApplyJsonStyleUpdatesAndDeletionsInOneTransaction() {
         String uri = System.getProperty("graph.it.uri", "");
         Assumptions.assumeFalse(uri.isBlank(), "Set -Dgraph.it.uri to run Neo4j integration tests");

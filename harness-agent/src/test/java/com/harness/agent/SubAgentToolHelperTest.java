@@ -15,13 +15,8 @@ class SubAgentToolHelperTest {
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Test
-    void awaitToolSchemaConvertsWithoutNullProperties() {
-        var schema = new AwaitSubAgentsTool(null).spec().parameters();
-
-        assertThat(schema.path("properties").path("return_when").path("enum").isArray())
-                .isTrue();
-        assertThat(schema.path("properties").path("on_timeout").path("enum").isArray())
-                .isTrue();
+    void recallToolSchemaConvertsWithoutNullProperties() {
+        var schema = new GetSubAgentsTool(null).spec().parameters();
         assertThat(LangChainJsonSchemaMapper.toObjectSchema(schema)).isNotNull();
     }
 

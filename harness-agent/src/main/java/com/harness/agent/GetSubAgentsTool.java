@@ -13,6 +13,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.List;
+import com.harness.core.model.PageResponse;
+import com.harness.core.model.PageInfo;
+import com.harness.agent.subagent.SubAgentTaskRepository;
 
 /**
  * Tool to query sub-agent task status without blocking.
@@ -33,7 +36,8 @@ public class GetSubAgentsTool implements Tool {
         return new ToolSpec(
                 "get_subagents",
                 "Get the status of sub-agent tasks without blocking. " +
-                        "Returns task status, creation time, and results if completed.",
+                        "Query the current authorized session across runs. Repeated reads preserve delivery state. " +
+                        "Use bounded task_ids or cursor/limit to find tasks and completed results.",
                 mapper.createObjectNode()
                         .put("type", "object")
                         .<ObjectNode>set("properties",
@@ -41,9 +45,12 @@ public class GetSubAgentsTool implements Tool {
                                         .<ObjectNode>set("task_ids",
                                                 mapper.createObjectNode()
                                                         .put("type", "array")
-                                                        .put("description", "List of task IDs to query (empty for all tasks in current run)")
+                                                        .put("maxItems", 100)
+                                                        .put("description", "Exact task IDs in the authorized session; omit for a paginated directory")
                                                         .<ObjectNode>set("items",
-                                                                mapper.createObjectNode().put("type", "string"))))
+                                                                mapper.createObjectNode().put("type", "string")))
+                                        .<ObjectNode>set("limit", mapper.createObjectNode().put("type", "integer").put("minimum", 1).put("maximum", 100))
+                                        .<ObjectNode>set("cursor", mapper.createObjectNode().put("type", "string")))
                         .<ObjectNode>set("required", mapper.createArrayNode()),
                 com.harness.core.model.ToolCapability.ORCHESTRATION
         );
@@ -57,46 +64,43 @@ public class GetSubAgentsTool implements Tool {
     @Override
     public ToolExecutionOutcome executeOutcome(JsonNode arguments) {
         AgentRunContext runContext = SubAgentToolHelper.requireRunContext("get_subagents");
-        SubAgentRunScope scope = SubAgentToolHelper.requireScope(subAgentManager, runContext, "get_subagents");
-
         List<String> taskIds = SubAgentToolHelper.parseTaskIds(arguments);
 
         try {
             ObjectNode result = mapper.createObjectNode();
             ArrayNode tasksArray = mapper.createArrayNode();
-            List<SubAgentResult> delivered = new java.util.ArrayList<>();
+            int limit = arguments.has("limit") ? arguments.get("limit").intValue() : 50;
+            if (arguments.has("limit") && !arguments.get("limit").isIntegralNumber()) throw new IllegalArgumentException("limit must be an integer");
+            if (arguments.has("cursor") && !arguments.get("cursor").isTextual()) throw new IllegalArgumentException("cursor must be a string");
+            String cursor = arguments.path("cursor").asText("");
+            PageResponse<SubAgentTaskRepository.StoredTask> page = taskIds.isEmpty()
+                    ? subAgentManager.listTasks(runContext.owner(), runContext.sessionId(), cursor, limit)
+                    : new PageResponse<>(subAgentManager.findTasks(runContext.owner(), runContext.sessionId(), taskIds),
+                            new PageInfo(taskIds.size(), "", false));
+            List<SubAgentResult> results = new java.util.ArrayList<>();
 
-            List<SubAgentTaskRecord> tasks = taskIds.isEmpty()
-                    ? List.copyOf(scope.getAllTasks().values())
-                    : SubAgentToolHelper.resolveTaskRecords(
-                            scope, taskIds, "get_subagents");
-
-            for (SubAgentTaskRecord record : tasks) {
+            for (var record : page.items()) {
                 ObjectNode taskNode = mapper.createObjectNode();
-                taskNode.put("task_id", record.taskId());
-                taskNode.put("status", record.status().get().name());
-                taskNode.put("created_at", record.createdAt().toString());
+                taskNode.put("taskId", record.taskId());
+                taskNode.put("status", record.status().name());
+                taskNode.put("deliveryState", record.deliveryState().name());
+                taskNode.put("createdAt", record.createdAt().toString());
 
-                if (record.isTerminal()) {
-                    SubAgentResult subResult = record.completion().join();
-                    if (SubAgentToolHelper.consumeInline(record)) {
-                        delivered.add(subResult);
-                    } else {
-                        taskNode.put("delivery", "RESUME_SESSION");
-                    }
+                if (record.result() != null) {
+                    SubAgentResult subResult = record.result();
+                    results.add(subResult);
                     ObjectNode resultNode = taskNode.putObject("result");
                     SubAgentToolHelper.serializeResult(resultNode, subResult, mapper);
-                }
+                } else taskNode.putNull("result");
 
                 tasksArray.add(taskNode);
             }
 
-            result.set("tasks", tasksArray);
-            result.put("total", tasks.size());
-            result.put("scope_run_id", runContext.runId());
+            result.set("items", tasksArray);
+            result.set("pageInfo", mapper.valueToTree(page.pageInfo()));
 
             return ToolExecutionOutcome.succeeded(
-                    SubAgentToolHelper.output(result, delivered, mapper),
+                    SubAgentToolHelper.output(result, results, mapper),
                     ResultStatus.AVAILABLE);
 
         } catch (Exception e) {

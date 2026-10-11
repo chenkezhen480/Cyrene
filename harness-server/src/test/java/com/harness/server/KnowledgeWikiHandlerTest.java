@@ -37,6 +37,27 @@ import static org.mockito.Mockito.*;
 class KnowledgeWikiHandlerTest {
 
     @Test
+    void vectorDependentMutationReturnsExplicitCapabilityDisabledError() {
+        EnvConfig.init(Map.of(EnvKey.AUTH_MODE, "none"));
+        var service = mock(KnowledgeWikiService.class);
+        var context = mock(Context.class);
+        when(context.queryParam("userId")).thenReturn("alice");
+        when(context.pathParam("conceptId")).thenReturn("concept-1");
+        when(context.status(503)).thenReturn(context);
+        when(context.bodyAsClass(KnowledgeWikiHandler.WikiUpdate.class))
+                .thenReturn(new KnowledgeWikiHandler.WikiUpdate("revision-1", "title", "summary"));
+        when(service.update(eq("concept-1"), eq("revision-1"), eq("title"), eq("summary"), eq("alice"), any()))
+                .thenThrow(new UnsupportedOperationException("Knowledge vector capability is disabled"));
+
+        new KnowledgeWikiHandler(service, mock(GraphSpaceAccessService.class),
+                mock(KnowledgeGraphStore.class)).update(context);
+
+        var response = ArgumentCaptor.forClass(Object.class);
+        verify(context).json(response.capture());
+        assertThat(((ApiError) response.getValue()).code()).isEqualTo(ApiErrorCode.CAPABILITY_DISABLED);
+    }
+
+    @Test
     void mutationsKeepGlobalKnowledgeInTheManagementTenant() {
         EnvConfig.init(Map.of(EnvKey.AUTH_MODE, "none", EnvKey.INTERNAL_API_ADMIN_TENANT_ID, "management"));
         for (boolean update : List.of(true, false)) {

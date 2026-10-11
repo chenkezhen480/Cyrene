@@ -17,6 +17,9 @@ import com.harness.core.runtime.RunTrace;
 import com.harness.core.runtime.RunTraceFactory;
 import com.harness.core.env.EnvConfig;
 import com.harness.core.env.EnvKey;
+import com.harness.core.model.PageResponse;
+import com.harness.agent.subagent.SubAgentTaskRepository;
+import com.harness.agent.subagent.InMemorySubAgentTaskRepository;
 import com.harness.provider.ChatModelProvider;
 import com.harness.tool.RunToolCatalog;
 import com.harness.tool.HttpApiTool;
@@ -56,6 +59,7 @@ public class SubAgentManager {
     private final SessionInbox sessionInbox;
     private final SessionResumeDispatcher resumeDispatcher;
     private final SubAgentCompletionContractValidator completionContractValidator;
+    private final SubAgentTaskRepository taskRepository;
 
     // Configurable limits
     private final int maxConcurrent;
@@ -75,6 +79,8 @@ public class SubAgentManager {
     // Counter for active tasks (for monitoring)
     private final AtomicInteger activeTasks = new AtomicInteger(0);
 
+    /** Embedded compatibility only; production must inject its authoritative repository. */
+    @Deprecated
     public SubAgentManager(ReActLoopFactory reActLoopFactory,
                            RunTraceFactory traceFactory,
                            ToolExecutor toolExecutor,
@@ -82,11 +88,22 @@ public class SubAgentManager {
                            SessionInbox sessionInbox,
                            SessionResumeDispatcher resumeDispatcher,
                            ChatModelProvider chatModelProvider) {
+        this(reActLoopFactory, traceFactory, toolExecutor, artifactStore, sessionInbox,
+                resumeDispatcher, chatModelProvider,
+                new InMemorySubAgentTaskRepository(java.time.Duration.ofHours(
+                        EnvConfig.get().getLong(EnvKey.AGENT_TASK_RETENTION_HOURS, 168))));
+    }
+
+    public SubAgentManager(ReActLoopFactory reActLoopFactory, RunTraceFactory traceFactory,
+                           ToolExecutor toolExecutor, ArtifactStore artifactStore,
+                           SessionInbox sessionInbox, SessionResumeDispatcher resumeDispatcher,
+                           ChatModelProvider chatModelProvider, SubAgentTaskRepository taskRepository) {
         this.reActLoopFactory = java.util.Objects.requireNonNull(reActLoopFactory, "reActLoopFactory");
         this.traceFactory = java.util.Objects.requireNonNull(traceFactory, "traceFactory");
         this.toolExecutor = toolExecutor;
         this.sessionInbox = sessionInbox;
         this.resumeDispatcher = resumeDispatcher;
+        this.taskRepository = java.util.Objects.requireNonNull(taskRepository, "taskRepository");
         this.chatModelProvider = java.util.Objects.requireNonNull(
                 chatModelProvider, "chatModelProvider");
         this.completionContractValidator = new SubAgentCompletionContractValidator(
@@ -96,6 +113,9 @@ public class SubAgentManager {
         this.maxConcurrent = EnvConfig.get().getInt(EnvKey.AGENT_MAX_SUBAGENTS, 3);
         this.maxTasksPerRun = EnvConfig.get().getInt(EnvKey.AGENT_MAX_TASKS_PER_RUN, 16);
         this.scopeTtlMinutes = EnvConfig.get().getLong(EnvKey.AGENT_SCOPE_TTL_MINUTES, 30);
+        long recoverySeconds = EnvConfig.get().getLong(EnvKey.AGENT_DELIVERY_LEASE_SECONDS, 60);
+        if (recoverySeconds < 1) throw new IllegalArgumentException("Delivery lease seconds must be positive");
+        while (taskRepository.interruptUnfinished(100) == 100) { }
 
         // Schedule TTL cleanup every 5 minutes
         this.cleanupScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
@@ -103,7 +123,16 @@ public class SubAgentManager {
             t.setDaemon(true);
             return t;
         });
-        this.cleanupScheduler.scheduleAtFixedRate(this::cleanupExpiredScopes, 5, 5, TimeUnit.MINUTES);
+        this.cleanupScheduler.scheduleAtFixedRate(() -> {
+            try { cleanupExpiredScopes(); }
+            catch (RuntimeException e) { log.error("Sub-agent scope cleanup failed", e); }
+        }, 5, 5, TimeUnit.MINUTES);
+        this.cleanupScheduler.scheduleWithFixedDelay(() -> {
+            try {
+                taskRepository.deleteExpired(100);
+                recoverPendingDeliveries();
+            } catch (RuntimeException e) { log.error("Sub-agent recovery failed", e); }
+        }, recoverySeconds, recoverySeconds, TimeUnit.SECONDS);
 
         log.info("[SubAgentManager] Initialized: maxConcurrent={}, maxTasksPerRun={}, scopeTtlMinutes={}",
                 maxConcurrent, maxTasksPerRun, scopeTtlMinutes);
@@ -136,8 +165,13 @@ public class SubAgentManager {
             String runId,
             Consumer<SubAgentLifecycleEvent> lifecycleListener
     ) {
+        return openScope(runId, null, lifecycleListener);
+    }
+
+    public SubAgentRunScope openScope(String runId, String sessionId,
+                                     Consumer<SubAgentLifecycleEvent> lifecycleListener) {
         SubAgentRunScope scope = new SubAgentRunScope(
-                runId, maxTasksPerRun, lifecycleListener);
+                runId, sessionId, maxTasksPerRun, lifecycleListener);
         scopes.put(runId, scope);
         log.debug("[SubAgentManager] Opened scope for run {}", runId);
         return scope;
@@ -155,20 +189,24 @@ public class SubAgentManager {
         }
 
         scope.markOwnerFinished();
-        scope.getAllTasks().values().forEach(record -> {
-            if (parentCancelled(record)) record.requestCancel();
-            else detachTask(record);
-        });
-
-        // If all tasks are already terminal, clean up immediately
-        if (scope.allTasksTerminal()) {
-            scopes.remove(runId);
-            log.debug("[SubAgentManager] Scope {} cleaned up (all tasks terminal)", runId);
-        } else {
+        for (var record : scope.taskRecords()) {
+            try { finishOwnerTask(record); }
+            catch (RuntimeException e) { log.error("Sub-agent delivery persistence pending for " + record.taskId(), e); }
+        }
+        cleanupIfDone(runId);
+        if (scopes.containsKey(runId)) {
             int running = scope.getTasksByStatus(SubAgentStatus.RUNNING).size();
             int queued = scope.getTasksByStatus(SubAgentStatus.QUEUED).size();
             log.info("[SubAgentManager] Scope {} has {} running/{} queued tasks, will cleanup on TTL", runId, running, queued);
         }
+    }
+
+    private void finishOwnerTask(SubAgentTaskRecord record) {
+        if (parentCancelled(record)) {
+            record.suppressDelivery();
+            record.requestCancel();
+        }
+        else detachTask(record);
     }
 
     /** Subscribe after claiming delivery; already completed futures deliver immediately. */
@@ -176,6 +214,8 @@ public class SubAgentManager {
         if (record.ownerSessionId() == null || parentCancelled(record)) return;
         if (record.detach()) {
             record.completion().thenAccept(result -> submitCompletionEvent(record, result));
+        } else if (record.isDetached() && record.completion().isDone() && !record.completion().isCompletedExceptionally()) {
+            submitCompletionEvent(record, record.completion().join());
         }
     }
 
@@ -207,15 +247,102 @@ public class SubAgentManager {
         SubAgentRunScope scope = scopes.get(runId);
         return scope != null && scope.getAllTasks().values().stream()
                 .filter(record -> record.ownerSessionId() != null && !parentCancelled(record))
-                .map(record -> record.deliveryState().get())
-                .anyMatch(state -> state != ResultDeliveryState.INLINE_CONSUMED);
+                .map(this::deliveryState)
+                .anyMatch(state -> state != ResultDeliveryState.INLINE_CONSUMED
+                        && state != ResultDeliveryState.SESSION_RESUMED && state != ResultDeliveryState.SUPPRESSED);
     }
 
     /**
      * Generate a unique task ID.
      */
     public static String generateTaskId() {
-        return "sub-" + UUID.randomUUID().toString().substring(0, 8);
+        return "sub-" + UUID.randomUUID();
+    }
+
+    public SubAgentTaskRecord findTask(String runId, String toolCallId) {
+        SubAgentRunScope scope = scopes.get(runId);
+        return scope == null ? null : scope.getAllTasks().values().stream()
+                .filter(record -> java.util.Objects.equals(toolCallId, record.spawnToolCallId())).findFirst().orElse(null);
+    }
+
+    public List<String> pendingTaskIds(String runId) {
+        SubAgentRunScope scope = scopes.get(runId);
+        return scope == null ? List.of() : scope.getAllTasks().values().stream()
+                .filter(record -> {
+                    ResultDeliveryState delivery = deliveryState(record);
+                    return delivery != ResultDeliveryState.INLINE_CONSUMED && delivery != ResultDeliveryState.SESSION_RESUMED
+                            && delivery != ResultDeliveryState.SUPPRESSED;
+                }).map(SubAgentTaskRecord::taskId).sorted().toList();
+    }
+
+    private ResultDeliveryState deliveryState(SubAgentTaskRecord record) {
+        if (record.owner() == null || record.ownerSessionId() == null) return record.deliveryState().get();
+        return taskRepository.findAuthorized(record.owner(), record.ownerSessionId(), record.taskId())
+                .map(SubAgentTaskRepository.StoredTask::deliveryState).orElse(record.deliveryState().get());
+    }
+
+    public PageResponse<SubAgentTaskRepository.StoredTask> listTasks(
+            AgentRunContext.Owner owner, String sessionId, String cursor, int limit) {
+        return taskRepository.listAuthorized(owner, sessionId, cursor, limit);
+    }
+
+    public List<SubAgentTaskRepository.StoredTask> findTasks(
+            AgentRunContext.Owner owner, String sessionId, List<String> taskIds) {
+        if (taskIds == null || taskIds.isEmpty() || taskIds.size() > 100) throw new IllegalArgumentException("Provide between 1 and 100 task IDs");
+        return taskIds.stream().distinct().map(id -> taskRepository.findAuthorized(owner, sessionId, id)
+                .orElseThrow(() -> new IllegalArgumentException("Task not found in authorized session: " + id))).toList();
+    }
+
+    public boolean cancelSession(String sessionId) {
+        var records = scopes.values().stream().flatMap(scope -> scope.getAllTasks().values().stream())
+                .filter(record -> java.util.Objects.equals(sessionId, record.ownerSessionId())).toList();
+        boolean live = records.stream().anyMatch(record -> !record.isTerminal());
+        records.forEach(record -> {
+            if (record.taskCancellationToken() != null) record.taskCancellationToken().cancel();
+        });
+        RuntimeException failure = null;
+        boolean resumed = false;
+        boolean suppressed = false;
+        try { resumed = resumeDispatcher.cancelSession(sessionId); }
+        catch (RuntimeException e) { failure = e; }
+        try { suppressed = taskRepository.suppressSession(sessionId) > 0; }
+        catch (RuntimeException e) { if (failure == null) failure = e; else failure.addSuppressed(e); }
+        for (var record : records) {
+            try { record.requestCancel(); }
+            catch (RuntimeException e) { if (failure == null) failure = e; else failure.addSuppressed(e); }
+        }
+        if (failure != null) throw failure;
+        return live || resumed || suppressed;
+    }
+
+    public void registerResumeToken(String sessionId, CancellationToken token) { resumeDispatcher.registerResumeToken(sessionId, token); }
+    public void unregisterResumeToken(String sessionId, CancellationToken token) { resumeDispatcher.unregisterResumeToken(sessionId, token); }
+
+    public void recoverPendingDeliveries() {
+        resumeDispatcher.retryPendingSuppressions();
+        for (var scope : scopes.values()) {
+            for (var record : scope.taskRecords()) {
+                try {
+                    if (record.pendingTerminalResult() != null) record.retryPendingCompletion();
+                    if (scope.state() == SubAgentRunScope.ScopeState.OWNER_FINISHED) finishOwnerTask(record);
+                } catch (RuntimeException e) { log.error("Sub-agent completion persistence pending for " + record.taskId(), e); }
+            }
+            cleanupIfDone(scope.runId());
+        }
+        String cursor = "";
+        while (true) {
+            var page = taskRepository.pendingSessions(cursor, 100);
+            page.items().stream().filter(sessionId -> !hasOpenSessionScope(sessionId))
+                    .forEach(resumeDispatcher::requestResume);
+            if (!page.pageInfo().hasMore()) return;
+            cursor = page.pageInfo().nextCursor();
+        }
+    }
+
+    private boolean hasOpenSessionScope(String sessionId) {
+        return scopes.values().stream().anyMatch(scope -> scope.state() == SubAgentRunScope.ScopeState.OPEN
+                && (sessionId.equals(scope.sessionId()) || scope.sessionId() == null
+                && scope.taskRecords().stream().anyMatch(record -> sessionId.equals(record.ownerSessionId()))));
     }
 
     /**
@@ -252,14 +379,16 @@ public class SubAgentManager {
         // Create task-level cancellation token (linked to parent)
         CancellationToken parentToken = runContext.cancellationToken();
         CancellationToken taskToken = CancellationToken.createChild(parentToken);
+        if (parentToken.isCancelled()) throw new CancellationException("Request cancelled");
+        if (sessionId != null) resumeDispatcher.allowSession(sessionId);
 
         // Register task in scope
         SubAgentTaskRecord record = scope.registerTask(
-                task, taskToken, sessionId, runContext.turnId(), runContext.owner());
+                task, taskToken, sessionId, runContext.turnId(), runContext.owner(),
+                toolCallId, runContext.parentTraceId(), taskRepository);
         if (record == null) {
             return null;  // Scope not open, spawn limit reached, or duplicate
         }
-
         record.completion().thenAccept(result -> {
             publishTerminal(scope, toolCallId, record, result);
             cleanupIfDone(runId);
@@ -310,7 +439,7 @@ public class SubAgentManager {
             activeTasks.incrementAndGet();
 
             try {
-                if (!record.start()) return record.completion().join();
+                if (!record.start()) return record.storedResult();
                 publishLifecycle(scope, toolCallId, record,
                         SubAgentLifecycleEvent.Status.RUNNING, "");
 
@@ -334,6 +463,9 @@ public class SubAgentManager {
                     trace.putMetadata("identity", record.owner().identity());
                 }
                 trace.recordLlmMeta("sub-agent", "sub-agent");
+                SpawnSubAgentTool.setCurrentRunContext(new AgentRunContext(
+                        runContext.runId(), runContext.sessionId(), taskToken, trace.traceId(),
+                        subAgentToolCatalog, runContext.turnId(), runContext.owner(), record.taskId()));
                 KnowledgeToolRuntimeContext.restoreForCatalog(
                         unifiedKnowledgeContext, subAgentToolCatalog, trace);
 
@@ -374,16 +506,20 @@ public class SubAgentManager {
                             taskId, result.output(), evaluation, duration, subTraceId);
                     record.markIncomplete(subResult);
                 }
-                return record.completion().join();
+                return record.storedResult();
 
             } catch (Exception e) {
                 long duration = System.currentTimeMillis() - start;
+                if (record.pendingTerminalResult() != null) {
+                    log.error("Sub-agent completion persistence pending for " + record.taskId(), e);
+                    return record.pendingTerminalResult();
+                }
 
                 // Check if this was a cancellation
                 if (record.isCancelRequested() || taskToken.isCancelled()) {
                     log.info("[SubAgentManager] Task {} cancelled after {}ms", taskId, duration);
                     record.markCancelled();
-                    return record.completion().join();
+                    return record.storedResult();
                 }
 
                 log.error("[SubAgentManager] Task {} failed in {}ms: {}", taskId, duration, e.getMessage());
@@ -391,9 +527,10 @@ public class SubAgentManager {
                         taskId, e.getMessage(), duration,
                         record.task().completionContract() != null);
                 record.fail(failResult);
-                return record.completion().join();
+                return record.storedResult();
 
             } finally {
+                SpawnSubAgentTool.clearCurrentRunContext();
                 HttpApiTool.clearCurrentCredentials();
                 KnowledgeGraphTool.clearCurrentContext();
                 KnowledgeAccessService.clearCurrentContext();
@@ -415,18 +552,20 @@ public class SubAgentManager {
                   .exceptionally(ex -> {
                       if (ex instanceof TimeoutException) {
                           log.warn("[SubAgentManager] Task {} timed out after {}s", record.taskId(), taskTimeoutSeconds);
-                          record.markTimedOut();
                           record.taskCancellationToken().cancel();
-
+                          try { record.markTimedOut(); }
+                          catch (RuntimeException e) { log.error("Sub-agent timeout persistence pending for " + record.taskId(), e); }
                       }
                       return null;
                   });
         }
 
         future.whenComplete((result, error) -> {
-            if (error != null && !(error instanceof TimeoutException)) {
-                record.fail(SubAgentResult.failure(record.taskId(), error.getMessage(), 0,
-                        record.task().completionContract() != null));
+            if (error != null && !(error instanceof TimeoutException) && record.pendingTerminalResult() == null) {
+                try {
+                    record.fail(SubAgentResult.failure(record.taskId(), error.getMessage(), 0,
+                            record.task().completionContract() != null));
+                } catch (RuntimeException e) { log.error("Sub-agent completion persistence pending for " + record.taskId(), e); }
             }
         });
     }
@@ -480,18 +619,22 @@ public class SubAgentManager {
 
     /**
      * Submit a completion event to the session inbox and trigger resume.
-     * Uses CAS to ensure each task only submits one event (DETACHED → SESSION_RESUMED).
+     * Durable inboxes claim the already registered event; legacy inboxes claim it in memory.
      */
     private void submitCompletionEvent(SubAgentTaskRecord record, SubAgentResult result) {
         if (parentCancelled(record)) return;
-        // CAS: DETACHED → SESSION_RESUMED. Prevents duplicate submission.
-        if (!record.markSessionResumed()) {
+        SubAgentRunScope scope = scopes.get(record.ownerRunId());
+        if (scope != null && scope.state() == SubAgentRunScope.ScopeState.OPEN) return;
+        if (sessionInbox.isPersistent() && deliveryState(record) != ResultDeliveryState.DETACHED) return;
+        if (!record.markCompletionEventRequested()) return;
+        // Durable state is acknowledged only after the callback writes the session messages.
+        if (!sessionInbox.isPersistent() && !record.markSessionResumed()) {
             log.debug("[SubAgentManager] Task {} already session-resumed, skipping duplicate event", record.taskId());
             return;
         }
 
         String sessionId = record.ownerSessionId();
-        String eventId = UUID.randomUUID().toString();
+        String eventId = "subagent:" + record.taskId();
 
         SessionInbox.SubAgentCompletedEvent event = new SessionInbox.SubAgentCompletedEvent(
                 eventId,
@@ -509,7 +652,7 @@ public class SubAgentManager {
         log.debug("[SubAgentManager] Completion event submitted: sessionId={}, taskId={}", sessionId, record.taskId());
 
         // Trigger session resume
-        resumeDispatcher.requestResume(sessionId);
+        if (!sessionInbox.isPersistent() || !hasOpenSessionScope(sessionId)) resumeDispatcher.requestResume(sessionId);
     }
 
     /**
@@ -518,7 +661,18 @@ public class SubAgentManager {
     private void cleanupIfDone(String runId) {
         SubAgentRunScope scope = scopes.get(runId);
         if (scope != null && scope.state() == SubAgentRunScope.ScopeState.OWNER_FINISHED && scope.allTasksTerminal()) {
-            scopes.remove(runId);
+            try {
+                if (scope.taskRecords().stream().anyMatch(record -> {
+                    ResultDeliveryState delivery = deliveryState(record);
+                    return record.ownerSessionId() != null && (delivery == ResultDeliveryState.INLINE_PENDING
+                            || parentCancelled(record) && delivery != ResultDeliveryState.SUPPRESSED
+                            && delivery != ResultDeliveryState.INLINE_CONSUMED && delivery != ResultDeliveryState.SESSION_RESUMED);
+                })) return;
+            } catch (RuntimeException e) {
+                log.error("Sub-agent delivery state pending for run " + runId, e);
+                return;
+            }
+            scopes.remove(runId, scope);
             log.debug("[SubAgentManager] Scope {} cleaned up (all tasks terminal after owner finished)", runId);
         }
     }
@@ -696,7 +850,6 @@ public class SubAgentManager {
      */
     private void cleanupExpiredScopes() {
         java.time.Instant now = java.time.Instant.now();
-        int cleaned = 0;
 
         for (Map.Entry<String, SubAgentRunScope> entry : scopes.entrySet()) {
             SubAgentRunScope scope = entry.getValue();
@@ -704,26 +857,22 @@ public class SubAgentManager {
                 long elapsedMinutes = java.time.Duration.between(scope.lastAccessedAt(), now).toMinutes();
                 if (elapsedMinutes >= scopeTtlMinutes) {
                     // Cancel remaining tasks and submit timeout events
-                    for (SubAgentTaskRecord record : scope.getAllTasks().values()) {
-                        if (!record.isTerminal()) {
-                            record.markTimedOut();
-                            record.taskCancellationToken().cancel();
-                            if (record.ownerSessionId() != null) {
-                                SubAgentResult timeoutResult = SubAgentResult.failure(
-                                        record.taskId(), "Task timed out (scope TTL expired)", 0,
-                                        record.task().completionContract() != null);
-                                submitCompletionEvent(record, timeoutResult);
+                    for (SubAgentTaskRecord record : scope.taskRecords()) {
+                        try {
+                            if (!record.isTerminal()) {
+                                if (record.pendingTerminalResult() != null) record.retryPendingCompletion();
+                                else {
+                                    record.taskCancellationToken().cancel();
+                                    record.markTimedOut();
+                                }
                             }
-                        }
+                            finishOwnerTask(record);
+                        } catch (RuntimeException e) { log.error("Sub-agent scope cleanup pending for " + record.taskId(), e); }
                     }
-                    scopes.remove(entry.getKey());
-                    cleaned++;
+                    cleanupIfDone(entry.getKey());
                 }
             }
         }
 
-        if (cleaned > 0) {
-            log.info("[SubAgentManager] Cleaned up {} expired scopes", cleaned);
-        }
     }
 }

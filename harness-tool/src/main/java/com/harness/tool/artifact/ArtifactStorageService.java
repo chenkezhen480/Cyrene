@@ -9,8 +9,13 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
+import java.nio.file.StandardOpenOption;
 import java.time.Instant;
 import java.util.UUID;
+import java.util.Optional;
+import java.util.NoSuchElementException;
 
 /**
  * High-level artifact storage service.
@@ -82,6 +87,94 @@ public class ArtifactStorageService {
         } catch (IOException e) {
             throw new RuntimeException("Failed to store artifact from path: " + source, e);
         }
+    }
+
+    /** Internal payloads never receive metadata in the public ArtifactStore. */
+    public byte[] readGraphDraftPayload(String id) {
+        requireUuid(id);
+        try {
+            Path payload = graphDraftPayloads().resolve(id + ".json");
+            if (!Files.exists(payload)) throw new NoSuchElementException("Graph draft payload not found: " + id);
+            return readBounded(confined(payload));
+        } catch (IOException e) {
+            throw new IllegalStateException("Failed to read graph draft payload", e);
+        }
+    }
+
+    public void writeGraphDraftPayload(String id, byte[] content) {
+        publishGraphDraftFile(id, content, true);
+    }
+
+    public Optional<byte[]> readGraphDraftReference(String id) {
+        requireUuid(id);
+        try {
+            Path reference = graphDraftReferences().resolve(id + ".json");
+            return Files.exists(reference) ? Optional.of(readBounded(confined(reference))) : Optional.empty();
+        } catch (IOException e) {
+            throw new IllegalStateException("Failed to read graph draft reference", e);
+        }
+    }
+
+    /** Publish one small current/version reference only after its immutable payload is durable. */
+    public void writeGraphDraftReference(String id, byte[] content) {
+        publishGraphDraftFile(id, content, false);
+    }
+
+    private void publishGraphDraftFile(String id, byte[] content, boolean immutablePayload) {
+        requireUuid(id);
+        if (content.length > maxSizeBytes) throw new IllegalArgumentException("Graph draft exceeds artifact limit");
+        Path temporary = null;
+        try {
+            Path directory = immutablePayload ? graphDraftPayloads() : graphDraftReferences();
+            Path target = directory.resolve(id + ".json");
+            if (immutablePayload && Files.exists(target)) throw new IllegalStateException("Graph draft payload already exists: " + id);
+            temporary = Files.createTempFile(directory, ".draft-", ".tmp");
+            try (FileChannel channel = FileChannel.open(temporary, StandardOpenOption.WRITE)) {
+                ByteBuffer buffer = ByteBuffer.wrap(content);
+                while (buffer.hasRemaining()) channel.write(buffer);
+                channel.force(true);
+            }
+            if (immutablePayload) Files.move(temporary, target, StandardCopyOption.ATOMIC_MOVE);
+            else Files.move(temporary, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+        } catch (IOException e) {
+            throw new IllegalStateException("Failed to publish graph draft " + (immutablePayload ? "payload" : "reference"), e);
+        } finally {
+            if (temporary != null) {
+                try { Files.deleteIfExists(temporary); }
+                catch (IOException e) { log.warn("Failed to remove temporary draft reference: {}", temporary, e); }
+            }
+        }
+    }
+
+    private Path graphDraftReferences() throws IOException {
+        Path directory = artifactDir.toAbsolutePath().normalize().resolve("graph-drafts");
+        Files.createDirectories(directory);
+        return confined(directory);
+    }
+
+    private Path graphDraftPayloads() throws IOException {
+        Path directory = graphDraftReferences().resolve("payloads");
+        Files.createDirectories(directory);
+        return confined(directory);
+    }
+
+    private Path confined(Path path) throws IOException {
+        Path real = path.toRealPath();
+        if (!real.startsWith(artifactDir.toRealPath())) throw new SecurityException("Draft reference escapes artifact root");
+        return real;
+    }
+
+    private byte[] readBounded(Path file) throws IOException {
+        if (Files.size(file) > maxSizeBytes) throw new IllegalStateException("Graph draft exceeds artifact limit");
+        try (var input = Files.newInputStream(file)) {
+            byte[] data = input.readNBytes(Math.toIntExact(Math.min(maxSizeBytes + 1, Integer.MAX_VALUE)));
+            if (data.length > maxSizeBytes) throw new IllegalStateException("Graph draft exceeds artifact limit");
+            return data;
+        }
+    }
+
+    private static void requireUuid(String id) {
+        if (id == null || !UUID.fromString(id).toString().equals(id)) throw new IllegalArgumentException("Invalid draft artifact identifier");
     }
 
     private static void validateName(String name) {

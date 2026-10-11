@@ -15,7 +15,7 @@ test('group denials affect children and action permissions survive a save and re
     { name: 'web.read', groupName: 'web' },
     { name: 'web.external', groupName: null },
   ];
-  const state = runInNewContext(page + '\nToolPermissionPage.setup();', {
+  const state = runInNewContext(page + '\nToolPermissionPage.setup({ internalApi: false });', {
     EmptyState: {}, ref: value => ({ value }),
     computed: getter => ({ get value() { return getter(); } }),
     inject: key => key === 't' ? value => value : {}, onMounted() {}, showToast() {},

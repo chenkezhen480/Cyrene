@@ -24,6 +24,7 @@ import static org.mockito.Mockito.*;
 
 import java.util.List;
 import java.util.Map;
+import java.util.function.Consumer;
 
 
 class AgentRunPreparerTest {
@@ -38,7 +39,7 @@ class AgentRunPreparerTest {
         var trace = mock(RunTrace.class);
         when(trace.snapshot()).thenReturn(AgentTrace.builder().build());
         var memory = mock(AgentMemoryRuntime.class);
-        when(memory.resolve(any(), any(), any(), any(), any())).thenAnswer(call ->
+        when(memory.resolve(any(), any(), any(), any(), any(), any())).thenAnswer(call ->
                 new AgentMemoryRuntime.MemoryContext("session", call.getArgument(0), call.getArgument(1), List.of()));
         var prompt = mock(AgentPromptBuilder.class);
         when(prompt.enhanceUserText(any(), any(), any(), any())).thenReturn("hello");
@@ -48,16 +49,17 @@ class AgentRunPreparerTest {
                 mock(PreferenceActivationContextBuilder.class));
         var principal = new RequestPrincipal("verified-user", "tenant-a", "reader", RequestPrincipal.AuthenticationType.SERVICE_TOKEN);
         var context = new AgentContext(Map.of("userId", "forged-user", "tenantId", "tenant-a"), principal);
+        Consumer<String> beforeHistoryLoad = mock(Consumer.class);
         var prepared = preparer.prepare(new AgentRunPreparer.AgentRunRequest(
-                "service-token", "hello", List.of(), null, null, "forged-user", context, false), trace);
+                "service-token", "hello", List.of(), null, null, "forged-user", context, false), trace, beforeHistoryLoad);
         assertThat(prepared.userId()).isEqualTo("verified-user");
-        verify(memory).resolve("verified-user", "tenant-a", null, "hello", trace);
+        verify(memory).resolve("verified-user", "tenant-a", null, "hello", trace, beforeHistoryLoad);
         verify(trace).recordInput("verified-user", "hello", List.of());
         verify(trace).setSessionId("session");
         assertThat(context.withToolDenylist(java.util.Set.of("web.search")).principal()).isSameAs(principal);
         var sdkInput = preparer.prepare(new AgentRunPreparer.AgentRunRequest(
                 "service-token", "hello", List.of(), null, null, "forged-user",
-                AgentContext.of(Map.of("userId", "forged-user", "tenantId", "tenant-a")), false), trace);
+                AgentContext.of(Map.of("userId", "forged-user", "tenantId", "tenant-a")), false), trace, beforeHistoryLoad);
         assertThat(sdkInput.userId()).isEqualTo("token-user");
     }
 

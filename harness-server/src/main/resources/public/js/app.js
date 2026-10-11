@@ -2,7 +2,7 @@
  * Cyrene Web UI — Vue 3 SPA
  * 在时间的涟漪中，记录与被记住
  */
-const { createApp, ref, reactive, computed, watch, onMounted, onUnmounted, nextTick, provide, inject } = Vue;
+const { createApp, ref, reactive, computed, watch, onMounted, onUnmounted, onDeactivated, nextTick, provide, inject } = Vue;
 
 // ── Markdown Renderer ──
 marked.setOptions({
@@ -439,6 +439,8 @@ const ChatPage = {
     const messages = ref([]);
     const inputText = ref('');
     const isStreaming = ref(false);
+    const pendingCancellations = ref(new Map());
+    const isCancellingSession = computed(() => pendingCancellations.value.has(currentSessionId.value));
     // The run whose events this page still accepts. A new message supersedes the old run, and
     // anything the old run emits afterwards is discarded rather than written into the new answer.
     const currentRunId = ref(null);
@@ -481,6 +483,7 @@ const ChatPage = {
     let voiceNextStart = 0;
     let voiceSources = [];
     let voiceDecoding = false;
+    let voicePlaybackGeneration = 0;
     let voiceContext = null;
 
     function voiceAudioContext() {
@@ -510,6 +513,7 @@ const ChatPage = {
     async function decodeAheadVoiceSegments() {
       if (voiceDecoding) return;
       voiceDecoding = true;
+      const generation = voicePlaybackGeneration;
       try {
         while (voiceUrlQueue.length > 0) {
           const { seq, url } = voiceUrlQueue.shift();
@@ -518,6 +522,7 @@ const ChatPage = {
             const context = voiceAudioContext();
             const bytes = await (await fetch(url)).arrayBuffer();
             const decoded = await context.decodeAudioData(bytes);
+            if (generation !== voicePlaybackGeneration) return;
             voiceStats.decoded++;
             console.log(`[Voice] decoded seq=${seq} bytes=${bytes.byteLength}`
               + ` duration=${decoded.duration.toFixed(2)}s`
@@ -525,6 +530,7 @@ const ChatPage = {
             voiceBuffers.push({ seq, decoded });
             voiceBufferedSeconds += decoded.duration;
           } catch (e) {
+            if (generation !== voicePlaybackGeneration) return;
             // 这一段彻底丢了。之前这里只弹个 toast，等于把「整段音频缺失」伪装成
             // 「TTS 有点卡」——必须留下可对齐的证据。
             voiceStats.decodeFailed++;
@@ -535,6 +541,7 @@ const ChatPage = {
         scheduleVoiceSegments();
       } finally {
         voiceDecoding = false;
+        if (voiceUrlQueue.length && generation !== voicePlaybackGeneration) decodeAheadVoiceSegments();
       }
     }
 
@@ -580,6 +587,7 @@ const ChatPage = {
     }
 
     function stopVoicePlayback() {
+      voicePlaybackGeneration++;
       voiceUrlQueue = [];
       voiceBuffers = [];
       voiceBufferedSeconds = 0;
@@ -658,7 +666,7 @@ const ChatPage = {
     }
 
     async function toggleVoiceInput() {
-      if (isUploadingVoice.value || isStreaming.value) return;
+      if (isUploadingVoice.value || isStreaming.value || isCancellingSession.value) return;
       if (isRecording.value) {
         mediaRecorder?.stop();
         return;
@@ -840,6 +848,7 @@ const ChatPage = {
     }
 
     async function selectSession(sid) {
+      if (activeRun) activeRun.abort();
       // 上一轮回答的音频不属于用户现在看的这页。
       stopVoicePlayback();
       currentSessionId.value = sid;
@@ -850,14 +859,16 @@ const ChatPage = {
             && typeof message?.role === 'string',
           t('invalidMessagePageResponse')
         );
+        if (currentSessionId.value !== sid) return;
         messages.value = page.items;
         scrollToBottom();
       } catch (e) {
-        console.error('Failed to load messages:', e);
+        if (currentSessionId.value === sid) showToast(e.message, 'error');
       }
     }
 
     async function newSession() {
+      if (activeRun) activeRun.abort();
       stopVoicePlayback();
       currentSessionId.value = null;
       messages.value = [];
@@ -872,6 +883,7 @@ const ChatPage = {
       const removedMessages = clearedCurrent ? messages.value : null;
       if (sessionIndex >= 0) sessions.value.splice(sessionIndex, 1);
       if (clearedCurrent) {
+        if (activeRun) activeRun.abort();
         currentSessionId.value = null;
         messages.value = [];
       }
@@ -894,13 +906,20 @@ const ChatPage = {
       // End the local stream first so the button responds immediately, then tell the server:
       // a tool already in flight only actually stops when the run's token is cancelled.
       // `stop()` rather than `abort()` so the cut-short stream reads as a cancel, not a failure.
+      const sessionId = activeRun ? activeRun.sessionId : currentSessionId.value;
       if (activeRun) activeRun.stop();
-      if (!currentSessionId.value) return;
-      try {
-        await CyreneAPI.cancelChat(currentSessionId.value);
-      } catch (e) {
-        // Ignore — stream may have already ended
-      }
+      if (!sessionId) return;
+      const pending = pendingCancellations.value.get(sessionId);
+      if (pending) return pending;
+      // A local abort cannot stop a late session-scoped DELETE from cancelling the next run.
+      const cancellation = Promise.resolve().then(() => CyreneAPI.cancelChat(sessionId))
+        .catch(e => {
+          if (!(e.status === 404 && e.code === 'CHAT_RUN_NOT_ACTIVE')) showToast(e.message, 'error');
+        }).finally(() => {
+          if (pendingCancellations.value.get(sessionId) === cancellation) pendingCancellations.value.delete(sessionId);
+        });
+      pendingCancellations.value.set(sessionId, cancellation);
+      return cancellation;
     }
 
     async function approvePendingConfirmation() {
@@ -940,6 +959,7 @@ const ChatPage = {
     }
 
     async function sendMessage(options = {}) {
+      if (isStreaming.value || pendingCancellations.value.has(currentSessionId.value)) return;
       const text = inputText.value.trim();
       if (!text && attachedFiles.value.length === 0) return;
 
@@ -1005,6 +1025,13 @@ const ChatPage = {
         compressions: [],
       });
       const msgIdx = messages.value.length - 1;
+      const assistantMessage = messages.value[msgIdx];
+      const userMessage = messages.value[userMsgIdx];
+      const controller = new AbortController();
+      const interrupted = new Promise((_, reject) => {
+        controller.signal.addEventListener('abort', () => reject(controller.signal.reason), { once: true });
+      });
+      const whileActive = promise => Promise.race([promise, interrupted]);
       let reader = null;
       let idleTimer = null;
       let terminalEvent = null;
@@ -1017,10 +1044,19 @@ const ChatPage = {
       // Lets a later send (or the Stop button) stop this run's reader and settle its pending
       // render frame; without the resolve, this invocation's `await waitForStreamDrain()`
       // could never return.
-      let stopRequested = false;
       const tearDown = () => {
         // 只在被抢占或用户点停时静音；正常结束时不能停，最后一段还要播完。
         stopVoicePlayback();
+        controller.abort();
+        pendingText = '';
+        clearTimeout(idleTimer);
+        if (renderFrame !== null) cancelAnimationFrame(renderFrame);
+        renderFrame = null;
+        if (activeRun === thisRun) {
+          isStreaming.value = false;
+          pendingConfirmation.value = null;
+          confirmationAcknowledged.value = false;
+        }
         if (streamDrainResolve) {
           const resolve = streamDrainResolve;
           streamDrainResolve = null;
@@ -1029,11 +1065,11 @@ const ChatPage = {
         if (reader) reader.cancel().catch(() => {});
       };
       const thisRun = {
+        sessionId: currentSessionId.value,
         // Superseded: a newer message replaced this run, so its stream just disappears.
         abort: tearDown,
         // Stopped: the user asked for it, so the cut-short stream is a cancel, not a failure.
         stop() {
-          stopRequested = true;
           tearDown();
         },
       };
@@ -1041,10 +1077,11 @@ const ChatPage = {
 
       const flushStreamFrame = () => {
         renderFrame = null;
+        if (controller.signal.aborted || activeRun !== thisRun) return;
         if (pendingText) {
           let end = Math.min(STREAM_CHARS_PER_FRAME, pendingText.length);
           if (end < pendingText.length && /[\uD800-\uDBFF]/.test(pendingText[end - 1])) end--;
-          appendAssistantText(messages.value[msgIdx], pendingText.slice(0, end));
+          appendAssistantText(assistantMessage, pendingText.slice(0, end));
           pendingText = pendingText.slice(end);
         }
         scrollToBottom();
@@ -1068,6 +1105,17 @@ const ChatPage = {
       };
 
       try {
+        if (!thisRun.sessionId) {
+          const session = await whileActive(CyreneAPI.createSession(userId.value, undefined, controller.signal));
+          if (controller.signal.aborted) return;
+          if (typeof session?.id !== 'string' || !session.id) throw new Error(t('invalidSessionResponse'));
+          thisRun.sessionId = session.id;
+          currentSessionId.value = session.id;
+        }
+        if (pendingCancellations.value.has(thisRun.sessionId)) {
+          thisRun.stop();
+          return;
+        }
         // Build context with file URLs
         const context = {
           userId: userId.value,
@@ -1085,13 +1133,20 @@ const ChatPage = {
           context.VoiceInput = voiceFile.url;
         }
 
-        const resp = await CyreneAPI.chat(
-          currentSessionId.value, text, context, [], interactionMode);
+        const response = CyreneAPI.chat(
+          thisRun.sessionId, text, context, [], interactionMode, controller.signal).then(resp => {
+          if (controller.signal.aborted) {
+            resp.body.getReader().cancel().catch(() => {});
+            throw controller.signal.reason;
+          }
+          return resp;
+        });
+        const resp = await whileActive(response);
 
         reader = resp.body.getReader();
         const decoder = new TextDecoder();
         const sseParser = CyreneSSE.createParser(({ type, data }) => {
-          if (terminalEvent) return;
+          if (terminalEvent || controller.signal.aborted || activeRun !== thisRun) return;
           let parsed;
           try {
             parsed = JSON.parse(data);
@@ -1124,8 +1179,8 @@ const ChatPage = {
                     break;
                   case 'token':
                     // Remove thinking placeholder on first token (text response, not tool call)
-                    if (typeof messages.value[msgIdx].content === 'string' && messages.value[msgIdx].content.includes('thinking-placeholder')) {
-                      messages.value[msgIdx].content = '';
+                    if (typeof assistantMessage.content === 'string' && assistantMessage.content.includes('thinking-placeholder')) {
+                      assistantMessage.content = '';
                     }
                     if (parsed.text) {
                       pendingText += parsed.text;
@@ -1136,36 +1191,36 @@ const ChatPage = {
                     if (Number.isInteger(parsed.characters) && parsed.characters >= 0) {
                       const fromPending = Math.min(parsed.characters, pendingText.length);
                       pendingText = pendingText.slice(0, pendingText.length - fromPending);
-                      rollbackAssistantText(messages.value[msgIdx], parsed.characters - fromPending);
+                      rollbackAssistantText(assistantMessage, parsed.characters - fromPending);
                       receivedText = false;
                     }
                     break;
                   case 'tool_call_created':
                   case 'tool_call_start':
                   case 'tool_call_done':
-                    upsertToolCall(messages.value[msgIdx], parsed);
+                    upsertToolCall(assistantMessage, parsed);
                     break;
                   case 'subagent_status':
-                    upsertSubAgent(messages.value[msgIdx], parsed);
+                    upsertSubAgent(assistantMessage, parsed);
                     break;
                   case 'tool_output':
-                    upsertToolCall(messages.value[msgIdx], parsed);
+                    upsertToolCall(assistantMessage, parsed);
                     if (Array.isArray(parsed.artifacts)) {
                       parsed.artifacts.forEach(artifact =>
-                        appendArtifact(messages.value[msgIdx], artifact));
+                        appendArtifact(assistantMessage, artifact));
                     }
                     if (parsed.data !== null && parsed.data !== undefined) {
-                      appendStructuredData(messages.value[msgIdx], parsed.data);
+                      appendStructuredData(assistantMessage, parsed.data);
                     }
                     break;
                   case 'confirmation_required':
                     pendingConfirmation.value = parsed;
                     confirmationAcknowledged.value = false;
-                    upsertToolCall(messages.value[msgIdx], parsed);
+                    upsertToolCall(assistantMessage, parsed);
                     break;
                   case 'confirmation_resolved':
                     {
-                      upsertToolCall(messages.value[msgIdx], parsed);
+                      upsertToolCall(assistantMessage, parsed);
                       if (pendingConfirmation.value?.requestId === parsed.requestId) {
                         pendingConfirmation.value = null;
                         confirmationAcknowledged.value = false;
@@ -1173,12 +1228,12 @@ const ChatPage = {
                     }
                     break;
                   case 'compress':
-                    messages.value[msgIdx].compressions.push(parsed);
+                    assistantMessage.compressions.push(parsed);
                     break;
                   case 'voice_transcript':
                     // The user's actual words, recognized server-side. Replaces the placeholder.
                     if (typeof parsed.text === 'string' && parsed.text) {
-                      messages.value[userMsgIdx].content = parsed.text;
+                      userMessage.content = parsed.text;
                     }
                     break;
                   case 'voice_segment':
@@ -1187,7 +1242,7 @@ const ChatPage = {
                     enqueueVoiceSegment(parsed.seq, parsed.downloadUrl);
                     break;
                   case 'voice_output':
-                    appendArtifact(messages.value[msgIdx], parsed);
+                    appendArtifact(assistantMessage, parsed);
                     // streamedSegments > 0 表示这段回答刚才已经边生成边念过了，
                     // 这里只留一个可整段重听的播放器，不再重念一遍。
                     // 非流式路径没有分段，保持原行为：整段合成后自动播放。
@@ -1220,7 +1275,7 @@ const ChatPage = {
                     if (renderFrame !== null) cancelAnimationFrame(renderFrame);
                     renderFrame = null;
                     pendingText = '';
-                    messages.value[msgIdx].content = `⚠️ Error: ${parsed.error || t('unknownError')}`;
+                    assistantMessage.content = `⚠️ Error: ${parsed.error || t('unknownError')}`;
                     showToast(parsed.error || t('requestFailed'), 'error');
                     terminalEvent = type;
                     break;
@@ -1236,7 +1291,7 @@ const ChatPage = {
         });
 
         while (!terminalEvent) {
-          const { done, value } = await Promise.race([reader.read(), idleTimeout()]);
+          const { done, value } = await whileActive(Promise.race([reader.read(), idleTimeout()]));
           clearTimeout(idleTimer);
           idleTimer = null;
           if (done) break;
@@ -1247,12 +1302,60 @@ const ChatPage = {
         sseParser.finish();
         if (!terminalEvent) throw new Error(t('streamInterrupted'));
         if (terminalEvent !== 'error') await waitForStreamDrain();
-        if (terminalEvent === 'done') {
+        if (terminalEvent === 'done' && !controller.signal.aborted && activeRun === thisRun) {
           if (terminalPayload.sessionId) {
             currentSessionId.value = terminalPayload.sessionId;
           }
           if (Array.isArray(terminalPayload.blocks)) {
-            messages.value[msgIdx].content = terminalPayload.blocks;
+            assistantMessage.content = terminalPayload.blocks;
+          }
+          if (terminalPayload.pendingTaskIds !== undefined) {
+            if (!Array.isArray(terminalPayload.pendingTaskIds)
+                || !terminalPayload.pendingTaskIds.every(id => typeof id === 'string' && id)) {
+              throw new Error(t('invalidTaskPageResponse'));
+            }
+            const pendingIds = new Set(terminalPayload.pendingTaskIds);
+            if (pendingIds.size) {
+              reader.cancel().catch(() => {});
+              assistantMessage.waitingForTasks = true;
+              while (pendingIds.size) {
+                let cursor = '';
+                const visitedCursors = new Set();
+                do {
+                  const page = requirePageResponse(
+                    await whileActive(CyreneAPI.getSessionTasks(thisRun.sessionId, userId.value, {
+                      limit: 50, cursor, signal: controller.signal,
+                    })),
+                    task => typeof task?.taskId === 'string'
+                      && typeof task?.status === 'string'
+                      && typeof task?.deliveryState === 'string',
+                    t('invalidTaskPageResponse')
+                  );
+                  page.items.forEach(task => {
+                    if (['INLINE_CONSUMED', 'SESSION_RESUMED', 'CANCELLED', 'SUPPRESSED'].includes(task.deliveryState)
+                        || task.status === 'CANCELLED' || task.result?.status === 'CANCELLED') {
+                      pendingIds.delete(task.taskId);
+                    }
+                  });
+                  cursor = page.pageInfo.hasMore ? page.pageInfo.nextCursor : '';
+                  if (cursor && visitedCursors.has(cursor)) throw new Error(t('invalidTaskPageResponse'));
+                  visitedCursors.add(cursor);
+                } while (cursor && pendingIds.size);
+                if (pendingIds.size) {
+                  await whileActive(new Promise(resolve => { idleTimer = setTimeout(resolve, 1000); }));
+                  idleTimer = null;
+                }
+              }
+              const history = requirePageResponse(
+                await whileActive(CyreneAPI.getMessages(thisRun.sessionId, userId.value, {
+                  limit: 50, direction: 'desc', signal: controller.signal,
+                })),
+                message => typeof message?.id === 'number' && typeof message?.role === 'string',
+                t('invalidMessagePageResponse')
+              );
+              if (!controller.signal.aborted && activeRun === thisRun
+                  && currentSessionId.value === thisRun.sessionId) messages.value = history.items;
+            }
           }
         }
 
@@ -1261,8 +1364,9 @@ const ChatPage = {
       } catch (e) {
         // A superseded or stopped run is cut short on purpose; its error is noise, not a
         // failure to report.
-        if (activeRun === thisRun && !stopRequested) {
-          messages.value[msgIdx].content = `⚠️ Error: ${e.message}`;
+        if (activeRun === thisRun && !controller.signal.aborted) {
+          if (terminalEvent === 'done') appendAssistantText(assistantMessage, `\n\n⚠️ Error: ${e.message}`);
+          else assistantMessage.content = `⚠️ Error: ${e.message}`;
           showToast(e.message, 'error');
         }
       } finally {
@@ -1272,10 +1376,12 @@ const ChatPage = {
           reader.cancel().catch(() => {});
         }
         const superseded = activeRun !== thisRun;
-        const abandoned = superseded || stopRequested || terminalEvent === 'cancelled';
-        messages.value[msgIdx].toolCalls.forEach(toolCall => {
+        const abandoned = superseded || controller.signal.aborted || terminalEvent === 'cancelled';
+        assistantMessage.stopped = abandoned;
+        assistantMessage.waitingForTasks = false;
+        assistantMessage.toolCalls.forEach(toolCall => {
           if (['CREATED', 'RUNNING', 'AWAITING_CONFIRMATION'].includes(toolCall.status)) {
-            upsertToolCall(messages.value[msgIdx], {
+            upsertToolCall(assistantMessage, {
               toolCallId: toolCall.id,
               status: abandoned ? 'CANCELLED' : 'FAILED',
               errorSummary: abandoned ? '' : t('streamInterrupted'),
@@ -1290,7 +1396,7 @@ const ChatPage = {
           pendingConfirmation.value = null;
           confirmationAcknowledged.value = false;
         }
-        scrollToBottom();
+        if (!superseded) scrollToBottom();
       }
     }
 
@@ -1317,12 +1423,14 @@ const ChatPage = {
     });
 
     onUnmounted(() => {
+      if (activeRun) activeRun.abort();
       if (isRecording.value) {
         try { mediaRecorder?.stop(); } catch (_) { /* recorder already stopped */ }
       }
       releaseMicrophone();
       stopVoicePlayback();
     });
+    onDeactivated(() => { if (activeRun) activeRun.abort(); });
 
     // Artifact helpers
     function getArtifactUrl(id) { return CyreneAPI.getArtifactUrl(id); }
@@ -1335,7 +1443,7 @@ const ChatPage = {
     }
 
     return {
-      Icons, t, sessions, currentSessionId, messages, inputText, isStreaming, currentRunId,
+      Icons, t, sessions, currentSessionId, messages, inputText, isStreaming, isCancellingSession, currentRunId,
       messagesEl, userId, renderMarkdown, stripArtifactLinks,
       pendingConfirmation, confirmationAcknowledged, confirmationSubmitting,
       isRecording, isUploadingVoice,
@@ -1346,7 +1454,7 @@ const ChatPage = {
       toggleVoiceInput,
       approvePendingConfirmation, rejectPendingConfirmation, formatConfirmationArguments,
       getArtifactUrl, getArtifactPreviewUrl, formatSize,
-      formatToolArguments, formatStructuredData,
+      formatToolArguments, formatStructuredData, graphDraftToolLink,
     };
   },
   template: `
@@ -1444,7 +1552,10 @@ const ChatPage = {
                                style="width:100%;height:38px;margin:8px 0;color-scheme:dark;border-radius:19px;"></audio>
                         <a v-else :href="getArtifactUrl(block.artifactId)">📎 {{ (block.metadata && block.metadata.name) || 'file' }}</a>
                       </span>
-                      <pre v-else-if="block.type === 'STRUCTURED_DATA'" class="structured-data-block"><code>{{ formatStructuredData(block.metadata && block.metadata.data) }}</code></pre>
+                      <span v-else-if="block.type === 'STRUCTURED_DATA'">
+                        <a v-if="graphDraftToolLink(block.metadata?.data)" :href="graphDraftToolLink(block.metadata.data)" class="btn btn-secondary btn-sm">{{ t('graphViewDraft') }}</a>
+                        <pre class="structured-data-block"><code>{{ formatStructuredData(block.metadata && block.metadata.data) }}</code></pre>
+                      </span>
                     </template>
                   </div>
                   <div v-else-if="typeof msg.content === 'string' && msg.content" class="md-body" v-html="renderMarkdown(msg.content)"></div>
@@ -1455,7 +1566,8 @@ const ChatPage = {
                       <span class="compress-detail">{{ compression.detail }}</span>
                     </div>
                   </div>
-                  <div v-if="!msg.content && !(msg.compressions && msg.compressions.length)"
+                  <div v-if="msg.waitingForTasks" class="text-xs text-ash mt-2" role="status">{{ t('waitingForSessionTasks') }}</div>
+                  <div v-if="isStreaming && !msg.stopped && !msg.content && !(msg.compressions && msg.compressions.length)"
                        class="loading-dots" v-meteor><span></span><span></span><span></span></div>
                 </div>
               </div>
@@ -1487,6 +1599,7 @@ const ChatPage = {
               <span v-if="isRecording" class="voice-recording-dot"></span>
               <span>{{ isRecording ? t('recordingVoice') : t('uploadingVoice') }}</span>
             </div>
+            <div v-if="isCancellingSession" class="text-xs text-ash" role="status">{{ t('cancellingSession') }}</div>
             <div class="chat-input-wrapper">
               <textarea class="chat-input" v-model="inputText"
                         :placeholder="t('chatPlaceholder')"
@@ -1505,7 +1618,7 @@ const ChatPage = {
                 </button>
                 <button :class="['chat-action-btn', isRecording ? 'recording' : '']"
                         :title="isRecording ? t('recordingVoice') : t('voiceInput')"
-                        @click="toggleVoiceInput" :disabled="isUploadingVoice || isStreaming">
+                        @click="toggleVoiceInput" :disabled="isUploadingVoice || isStreaming || isCancellingSession">
                   <span v-html="Icons.mic" style="width:18px;height:18px;"></span>
                 </button>
                 <button v-if="isStreaming" class="chat-cancel-btn" @click="cancelOutput" :title="t('cancelOutput')">
@@ -1513,9 +1626,8 @@ const ChatPage = {
                     <rect x="6" y="6" width="12" height="12" rx="2"/>
                   </svg>
                 </button>
-                <!-- Kept visible while streaming so a new message can interrupt the current run. -->
                 <button v-if="!isStreaming || inputText.trim() || attachedFiles.length" class="chat-send-btn" @click="sendMessage"
-                        :disabled="isRecording || isUploadingVoice || (!inputText.trim() && attachedFiles.length === 0)" :title="t('send')">
+                        :disabled="isStreaming || isCancellingSession || isRecording || isUploadingVoice || (!inputText.trim() && attachedFiles.length === 0)" :title="isCancellingSession ? t('cancellingSession') : t('send')">
                   <span v-html="Icons.send" style="width:16px;height:16px;"></span>
                 </button>
               </div>
@@ -2123,8 +2235,90 @@ function requireGraphRelationPage(page, t) {
 }
 
 // ── Graph Page ──
+function requireGraphDraftView(view, t) {
+  if (!view || !['draftId', 'rootDraftId', 'contentHash', 'graphId', 'schemaId'].every(
+      field => typeof view[field] === 'string' && view[field])
+      || !['PENDING', 'APPLYING', 'APPLIED', 'FAILED'].includes(view.status)
+      || view.status === 'FAILED' && (typeof view.failure?.message !== 'string' || !view.failure.message
+        || typeof view.failure.graphCommitted !== 'boolean')
+      || !['nodeCount', 'relationCount', 'deleteNodeCount', 'deleteRelationCount'].every(
+        field => Number.isInteger(view[field]) && view[field] >= 0)) {
+    throw new Error(t('graphInvalidDraftResponse'));
+  }
+  return view;
+}
+
+function graphDraftLink(data) {
+  if (typeof data?.draftId !== 'string' || !data.draftId
+      || typeof data?.contentHash !== 'string' || !data.contentHash) return '';
+  return `#graph?draftId=${encodeURIComponent(data.draftId)}&contentHash=${encodeURIComponent(data.contentHash)}`;
+}
+
+function graphDraftToolLink(envelope) {
+  return envelope?.status === 'SUCCESS' && envelope.meta?.viewType === 'DRAFT_PREVIEW'
+      && envelope.meta?.requiresHumanConfirmation === true
+      && typeof envelope.data?.graphId === 'string' && typeof envelope.data?.schemaId === 'string'
+      ? graphDraftLink(envelope.data) : '';
+}
+
+function requireGraphDraftChangePage(page, view, t) {
+  return requirePageResponse(page, change => {
+    const validEntity = entity => entity === null || (entity && typeof entity === 'object'
+      && entity.properties && typeof entity.properties === 'object' && !Array.isArray(entity.properties)
+      && (change.entityType === 'NODE'
+        ? typeof entity.nodeId === 'string' && Array.isArray(entity.labels)
+        : typeof entity.relationId === 'string' && typeof entity.sourceNodeId === 'string'
+          && typeof entity.targetNodeId === 'string' && typeof entity.relationType === 'string'));
+    return change?.viewType === 'DRAFT_PREVIEW' && change.draftId === view.draftId
+      && change.contentHash === view.contentHash && typeof change.changeId === 'string'
+      && ['NODE', 'RELATION'].includes(change.entityType)
+      && ['ADD', 'UPDATE', 'DELETE', 'CONTEXT'].includes(change.operation)
+      && validEntity(change.before) && validEntity(change.after)
+      && (change.before !== null || change.after !== null);
+  }, t('graphInvalidDraftResponse'));
+}
+
+function graphJsonValuesEqual(left, right) {
+  if (left === right) return true;
+  if (!left || !right || typeof left !== 'object' || typeof right !== 'object'
+      || Array.isArray(left) !== Array.isArray(right)) return false;
+  const keys = Object.keys(left);
+  return keys.length === Object.keys(right).length
+    && keys.every(key => Object.hasOwn(right, key) && graphJsonValuesEqual(left[key], right[key]));
+}
+
+function graphDraftContinuationPayload(view, changes, source, userId) {
+  const payload = {
+    userId, sessionId: view.sessionId, graphId: view.graphId, schemaId: view.schemaId,
+    sourceDraftId: view.draftId, expectedSourceContentHash: view.contentHash,
+    nodes: [], relations: [], deleteNodeIds: [], deleteRelationIds: [], discardChangeIds: [],
+  };
+  for (const [entityType, field, idField, deleteField] of [
+    ['NODE', 'nodes', 'nodeId', 'deleteNodeIds'],
+    ['RELATION', 'relations', 'relationId', 'deleteRelationIds'],
+  ]) {
+    const originals = new Map(changes.filter(change => change.entityType === entityType && change.after)
+      .map(change => [change.after[idField], change.after]));
+    const desiredIds = new Set(source[field].map(entity => entity[idField]));
+    originals.forEach((entity, id) => { if (!desiredIds.has(id)) payload[deleteField].push(id); });
+    source[field].forEach(entity => {
+      const original = originals.get(entity[idField]);
+      const identityFields = entityType === 'NODE' ? ['labels'] : ['sourceNodeId', 'targetNodeId', 'relationType'];
+      if (original && identityFields.every(key => graphJsonValuesEqual(original[key], entity[key]))
+          && graphJsonValuesEqual(original.properties, entity.properties)) return;
+      const properties = { ...entity.properties };
+      if (original) Object.keys(original.properties).forEach(key => {
+        if (!Object.hasOwn(properties, key)) properties[key] = null;
+      });
+      payload[field].push({ ...entity, properties });
+    });
+  }
+  return payload;
+}
+
 const GraphBuildPage = {
-  setup() {
+  props: { draftId: { type: String, default: '' }, draftContentHash: { type: String, default: '' } },
+  setup(props) {
     const Icons = inject('Icons');
     const t = inject('t');
     const status = ref({ provider: 'none', enabled: false, schemaCount: 0 });
@@ -2161,6 +2355,279 @@ const GraphBuildPage = {
     const submitting = ref(false);
     const parsingNaturalLanguage = ref(false);
     const error = ref('');
+    const userId = inject('userId');
+    const draftView = ref(null);
+    const draftSchema = ref(null);
+    const draftChanges = ref([]);
+    const draftPageInfo = ref({ limit: 50, nextCursor: '', hasMore: false });
+    const draftLoading = ref(false);
+    const draftBusy = ref(false);
+    const draftReady = ref(false);
+    const draftConflict = ref(null);
+    const draftError = ref('');
+    const draftVisualError = ref('');
+    const draftDesignerModel = ref(createEmptyGraphDataDesigner());
+    const draftEditorView = ref('visual');
+    const draftSourceText = ref('');
+    const draftPreviewMode = ref('after');
+    let draftController = null;
+    let draftLoadVersion = 0;
+    const draftEditable = computed(() => (draftView.value?.status === 'PENDING'
+      || draftView.value?.status === 'FAILED' && draftView.value.failure.graphCommitted === false)
+      && draftReady.value && !draftLoading.value && !draftBusy.value && !draftConflict.value);
+    const draftEditorSource = computed(() => draftSchema.value
+      ? graphDataDesignerToSource(draftDesignerModel.value, draftSchema.value)
+      : { nodes: [], relations: [] });
+    const draftHasEdits = computed(() => {
+      if (!draftView.value || !draftSchema.value) return false;
+      try {
+        const source = draftEditorView.value === 'source' ? JSON.parse(draftSourceText.value) : draftEditorSource.value;
+        const payload = graphDraftContinuationPayload(draftView.value, draftChanges.value, source, userId.value);
+        return ['nodes', 'relations', 'deleteNodeIds', 'deleteRelationIds'].some(key => payload[key].length);
+      } catch { return true; }
+    });
+    const draftHasChanges = computed(() => draftView.value &&
+      ['nodeCount', 'relationCount', 'deleteNodeCount', 'deleteRelationCount'].some(key => draftView.value[key] > 0));
+    const draftCanApply = computed(() => draftReady.value && draftHasChanges.value
+      && ['PENDING', 'APPLYING'].includes(draftView.value?.status)
+      && !draftLoading.value && !draftBusy.value && !draftConflict.value
+      && !draftHasEdits.value && !draftPageInfo.value.hasMore);
+    const draftPreviewGraph = computed(() => {
+      const graph = { nodes: [], relations: [] };
+      draftChanges.value.forEach(change => {
+        const entity = draftPreviewMode.value === 'before' ? change.before : (change.after || change.before);
+        if (!entity) return;
+        const item = { ...entity, changeOperation: draftPreviewMode.value === 'after' ? change.operation : 'CONTEXT' };
+        graph[change.entityType === 'NODE' ? 'nodes' : 'relations'].push(item);
+      });
+      const nodeIds = new Set(graph.nodes.map(node => node.nodeId));
+      graph.relations.forEach(relation => [relation.sourceNodeId, relation.targetNodeId].forEach(nodeId => {
+        if (!nodeIds.has(nodeId)) {
+          nodeIds.add(nodeId);
+          graph.nodes.push({ nodeId, labels: [], properties: {}, changeOperation: 'CONTEXT' });
+        }
+      }));
+      return graph;
+    });
+
+    function syncDraftDesigner(changes, append = false) {
+      const source = { nodes: [], relations: [] };
+      changes.forEach(change => {
+        if (change.after) source[change.entityType === 'NODE' ? 'nodes' : 'relations'].push(change.after);
+      });
+      const previousSource = append ? JSON.parse(draftSourceText.value) : { nodes: [], relations: [] };
+      const completeSource = { nodes: [...previousSource.nodes, ...source.nodes], relations: [...previousSource.relations, ...source.relations] };
+      draftSourceText.value = JSON.stringify(completeSource, null, 2);
+      let model;
+      try {
+        model = graphSourceToDataDesigner(source, draftSchema.value, t);
+        draftVisualError.value = '';
+      } catch (e) {
+        draftVisualError.value = e.message;
+        draftEditorView.value = 'source';
+        return;
+      }
+      const baselineNodes = changes.filter(change => change.entityType === 'NODE' && change.before).map(change => change.before);
+      const baselineRelations = changes.filter(change => change.entityType === 'RELATION' && change.before).map(change => change.before);
+      markPersistedGraphDrafts(model, baselineNodes, baselineRelations);
+      if (append) {
+        draftDesignerModel.value = {
+          nodes: [...draftDesignerModel.value.nodes, ...model.nodes],
+          relations: [...draftDesignerModel.value.relations, ...model.relations],
+        };
+      } else draftDesignerModel.value = model;
+      if (draftEditorView.value === 'visual') draftSourceText.value = JSON.stringify(graphDataDesignerToSource(draftDesignerModel.value, draftSchema.value), null, 2);
+    }
+
+    function isCurrentDraft(version, controller) {
+      return version === draftLoadVersion && controller === draftController && !controller.signal.aborted;
+    }
+
+    function resetDraftEditor() {
+      draftReady.value = false;
+      draftSchema.value = null;
+      draftChanges.value = [];
+      draftPageInfo.value = { limit: 50, nextCursor: '', hasMore: false };
+      draftDesignerModel.value = createEmptyGraphDataDesigner();
+      draftSourceText.value = '';
+      draftEditorView.value = 'visual';
+      draftPreviewMode.value = 'after';
+      draftVisualError.value = '';
+    }
+
+    function recordDraftError(error) {
+      draftError.value = error.message;
+      if (error.status === 409) {
+        const details = error.details;
+        draftConflict.value = typeof details?.currentDraftId === 'string' && details.currentDraftId
+          && typeof details.currentContentHash === 'string' && details.currentContentHash
+          ? { currentDraftId: details.currentDraftId, currentContentHash: details.currentContentHash } : {};
+      }
+    }
+
+    async function loadDraftChanges({ append = false } = {}) {
+      const view = draftView.value;
+      const version = draftLoadVersion;
+      const controller = draftController;
+      const response = await CyreneAPI.getGraphDraftChanges(view.draftId, userId.value, {
+        expectedContentHash: view.contentHash, limit: draftPageInfo.value.limit,
+        cursor: append ? draftPageInfo.value.nextCursor : '', signal: controller.signal,
+      });
+      if (!isCurrentDraft(version, controller)) return;
+      const page = requireGraphDraftChangePage(response, view, t);
+      const existingIds = new Set(append ? draftChanges.value.map(change => change.changeId) : []);
+      page.items.forEach(change => {
+        if (existingIds.has(change.changeId)) throw new Error(t('graphInvalidDraftResponse'));
+        existingIds.add(change.changeId);
+      });
+      draftChanges.value = append ? [...draftChanges.value, ...page.items] : page.items;
+      draftPageInfo.value = page.pageInfo;
+      syncDraftDesigner(page.items, append);
+      draftReady.value = true;
+    }
+
+    async function openDraft(draftId = props.draftId, expectedContentHash = props.draftContentHash) {
+      draftController?.abort();
+      const controller = new AbortController();
+      draftController = controller;
+      const version = ++draftLoadVersion;
+      resetDraftEditor();
+      draftLoading.value = true;
+      draftBusy.value = false;
+      draftError.value = '';
+      draftConflict.value = null;
+      draftView.value = null;
+      try {
+        const response = await CyreneAPI.getGraphDraft(draftId, userId.value, {
+          expectedContentHash, signal: controller.signal,
+        });
+        if (!isCurrentDraft(version, controller)) return;
+        const view = requireGraphDraftView(response, t);
+        draftView.value = view;
+        const schema = await CyreneAPI.getGraphSchema(view.schemaId);
+        if (!isCurrentDraft(version, controller)) return;
+        if (schema?.schemaId !== view.schemaId || !schema.nodeTypes || !schema.relationTypes) throw new Error(t('graphInvalidSchemaPageResponse'));
+        draftSchema.value = schema;
+        draftEditorView.value = 'visual';
+        await loadDraftChanges();
+      } catch (e) {
+        if (isCurrentDraft(version, controller)) {
+          resetDraftEditor();
+          recordDraftError(e);
+        }
+      } finally {
+        if (isCurrentDraft(version, controller)) draftLoading.value = false;
+      }
+    }
+
+    async function loadMoreDraftChanges() {
+      if (!draftReady.value || draftConflict.value || draftLoading.value || draftBusy.value || !draftPageInfo.value.hasMore) return;
+      if (draftHasEdits.value) { draftError.value = t('graphDraftSaveBeforeMore'); return; }
+      const version = draftLoadVersion;
+      const controller = draftController;
+      draftLoading.value = true;
+      draftError.value = '';
+      try { await loadDraftChanges({ append: true }); }
+      catch (e) { if (isCurrentDraft(version, controller)) recordDraftError(e); }
+      finally { if (isCurrentDraft(version, controller)) draftLoading.value = false; }
+    }
+
+    function setDraftEditorView(mode) {
+      if (!draftReady.value || draftBusy.value || draftLoading.value || mode === draftEditorView.value) return;
+      try {
+        if (mode === 'visual') {
+          const model = graphSourceToDataDesigner(JSON.parse(draftSourceText.value), draftSchema.value, t);
+          markPersistedGraphDrafts(model,
+            draftChanges.value.filter(change => change.entityType === 'NODE' && change.before).map(change => change.before),
+            draftChanges.value.filter(change => change.entityType === 'RELATION' && change.before).map(change => change.before));
+          draftDesignerModel.value = model;
+        } else draftSourceText.value = JSON.stringify(draftEditorSource.value, null, 2);
+        draftEditorView.value = mode;
+        if (!draftConflict.value) draftError.value = '';
+      } catch (e) { draftError.value = e.message; }
+    }
+
+    async function saveDraft(discardChangeIds = []) {
+      if (!draftEditable.value) return;
+      const view = draftView.value;
+      const version = draftLoadVersion;
+      const controller = draftController;
+      draftBusy.value = true;
+      draftError.value = '';
+      try {
+        const source = draftEditorView.value === 'source' ? JSON.parse(draftSourceText.value) : draftEditorSource.value;
+        if (draftEditorView.value === 'visual') graphSourceToDataDesigner(source, draftSchema.value, t);
+        else {
+          requireArrayResponse(source.nodes, node => typeof node?.nodeId === 'string' && Array.isArray(node.labels), t('graphNodesArrayRequired'));
+          requireArrayResponse(source.relations, relation => typeof relation?.relationId === 'string'
+            && typeof relation.sourceNodeId === 'string' && typeof relation.targetNodeId === 'string'
+            && typeof relation.relationType === 'string', t('graphRelationsArrayRequired'));
+        }
+        const payload = graphDraftContinuationPayload(view, draftChanges.value, source, userId.value);
+        payload.discardChangeIds = discardChangeIds;
+        if (discardChangeIds.length) {
+          // Discard uses the saved draft; first save edits so another action cannot silently drop them.
+          if (draftHasEdits.value) throw new Error(t('graphDraftSaveBeforeMore'));
+        }
+        const response = await CyreneAPI.saveGraphDraft(payload, controller.signal);
+        if (!isCurrentDraft(version, controller)) return;
+        const saved = requireGraphDraftView(response, t);
+        window.location.hash = graphDraftLink(saved);
+        await openDraft(saved.draftId, saved.contentHash);
+      } catch (e) { if (isCurrentDraft(version, controller)) recordDraftError(e); }
+      finally { if (isCurrentDraft(version, controller)) draftBusy.value = false; }
+    }
+
+    async function applyDraft() {
+      if (!draftCanApply.value) return;
+      const view = draftView.value;
+      const version = draftLoadVersion;
+      const controller = draftController;
+      if (!confirm(`${t('graphDraftApplyConfirm')}\n${view.graphId} / ${view.schemaId}\n${view.draftId}\n${view.contentHash}`)) return;
+      draftBusy.value = true;
+      draftError.value = '';
+      try {
+        const result = await CyreneAPI.applyGraphDraft(view.draftId, userId.value, view.contentHash);
+        if (!isCurrentDraft(version, controller)) return;
+        if (result?.committed !== true) throw new Error(t('graphInvalidDraftResponse'));
+        showToast(t('graphDraftApplied'), 'success');
+        await openDraft(view.draftId, view.contentHash);
+      } catch (e) {
+        if (!isCurrentDraft(version, controller)) return;
+        recordDraftError(e);
+        try {
+          const response = await CyreneAPI.getGraphDraft(view.draftId, userId.value, {
+            expectedContentHash: view.contentHash, sessionId: view.sessionId, signal: controller.signal,
+          });
+          if (!isCurrentDraft(version, controller)) return;
+          const refreshed = requireGraphDraftView(response, t);
+          if (refreshed.draftId !== view.draftId || refreshed.contentHash !== view.contentHash) {
+            throw new Error(t('graphInvalidDraftResponse'));
+          }
+          draftView.value = refreshed;
+          if (refreshed.status === 'FAILED' && refreshed.failure?.graphCommitted === false
+              && !draftConflict.value?.currentDraftId) {
+            draftConflict.value = null;
+          }
+        } catch (refreshError) { if (isCurrentDraft(version, controller)) recordDraftError(refreshError); }
+      }
+      finally { if (isCurrentDraft(version, controller)) draftBusy.value = false; }
+    }
+
+    async function openCurrentDraft() {
+      const conflict = draftConflict.value;
+      if (!conflict?.currentDraftId || draftBusy.value || draftLoading.value) return;
+      if (draftHasEdits.value && !confirm(t('graphDraftOpenCurrentConfirm'))) return;
+      window.location.hash = graphDraftLink({ draftId: conflict.currentDraftId, contentHash: conflict.currentContentHash });
+      await openDraft(conflict.currentDraftId, conflict.currentContentHash);
+    }
+
+    function abandonDraft() {
+      if (draftBusy.value || !confirm(t('graphDraftAbandonConfirm'))) return;
+      draftController?.abort();
+      draftLoadVersion++;
+      window.location.hash = 'graph';
+    }
     let existingGraphQueryVersion = 0;
 
     const selectedSchema = computed(() =>
@@ -2711,7 +3178,12 @@ const GraphBuildPage = {
         naturalLanguageDraftReady.value = false;
       }
     });
-    onMounted(refreshGraph);
+    onMounted(() => props.draftId ? openDraft() : refreshGraph());
+    watch(() => [props.draftId, props.draftContentHash], () => {
+      if (props.draftId) openDraft();
+      else { draftController?.abort(); draftLoadVersion++; refreshGraph(); }
+    });
+    onUnmounted(() => { draftController?.abort(); draftLoadVersion++; });
 
     return {
       Icons, t, status, schemas, schemaPageInfo, graphSpaces, graphSpacePageInfo,
@@ -2733,10 +3205,78 @@ const GraphBuildPage = {
       selectGraphSpaceMode, useExistingGraphSpace,
       setBuildSourceMode, setBuildEditorView, updateSourceText,
       parseNaturalLanguage, submitGraph,
+      draftView, draftSchema, draftChanges, draftPageInfo, draftLoading, draftBusy, draftReady, draftConflict, draftError, draftVisualError,
+      draftEditable, draftDesignerModel, draftEditorView, draftSourceText, draftPreviewMode,
+      draftPreviewGraph, draftHasEdits, draftHasChanges, draftCanApply, openDraft, openCurrentDraft, loadMoreDraftChanges, setDraftEditorView,
+      saveDraft, applyDraft, abandonDraft, formatStructuredData,
     };
   },
   template: `
     <div class="graph-page">
+      <template v-if="draftId">
+        <div class="card graph-draft-review">
+          <div class="card-header graph-card-header">
+            <div class="card-title">{{ t('graphDraftReview') }}</div>
+            <div class="flex gap-2">
+              <button class="btn btn-ghost btn-sm" @click="openDraft()" :disabled="draftLoading || draftBusy">{{ t('reload') }}</button>
+              <button class="btn btn-ghost btn-sm" @click="abandonDraft" :disabled="draftBusy">{{ t('graphDraftAbandon') }}</button>
+            </div>
+          </div>
+          <div class="card-body">
+            <div v-if="draftError" class="alert alert-error" role="alert">{{ draftError }}</div>
+            <div v-if="draftConflict?.currentDraftId" class="graph-draft-conflict mt-4">
+              <button class="btn btn-secondary" :disabled="draftLoading || draftBusy" @click="openCurrentDraft">{{ t('graphDraftOpenCurrent') }}</button>
+              <code class="text-xs text-ash">{{ draftConflict.currentDraftId }}</code>
+            </div>
+            <div v-if="draftLoading" class="text-xs text-ash" role="status">{{ t('loading') }}</div>
+            <template v-if="draftView">
+              <div v-if="draftView.failure" class="alert alert-error" role="alert">{{ draftView.failure.message }}<p>{{ t(draftView.failure.graphCommitted ? 'graphDraftFailureCommitted' : 'graphDraftFailureEditable') }}</p></div>
+              <div class="graph-draft-meta">
+                <div><span>{{ t('graphSpaceTarget') }}</span><strong>{{ draftView.graphId }}</strong><code>graphId: {{ draftView.graphId }} · schemaId: {{ draftView.schemaId }}</code></div>
+                <div><span>{{ t('graphDraftSource') }}</span><code>{{ draftView.userId }} · {{ draftView.sessionId }}<br>{{ draftView.taskId }} · {{ draftView.runId }} · {{ draftView.traceId }}</code></div>
+                <div><span>{{ t('status') }}</span><strong>{{ t('graphDraftStatus' + draftView.status) }}</strong><code>{{ draftView.draftId }}<br>{{ draftView.contentHash }}</code></div>
+              </div>
+              <div class="graph-chip-list mt-4">
+                <span class="tag tag-gold">{{ t('graphNodes') }}: {{ draftView.nodeCount }}</span>
+                <span class="tag tag-iris">{{ t('graphRelations') }}: {{ draftView.relationCount }}</span>
+                <span class="tag tag-rose">{{ t('delete') }}: {{ draftView.deleteNodeCount }} {{ t('graphNodes') }} / {{ draftView.deleteRelationCount }} {{ t('graphRelations') }}</span>
+              </div>
+              <p class="text-xs text-ash">{{ t('graphDraftBoundedHint') }}</p>
+              <div class="graph-schema-view-switch" role="group" :aria-label="t('graphDataPreview')">
+                <button class="graph-schema-view-button" :class="{active: draftPreviewMode === 'before'}" @click="draftPreviewMode = 'before'">{{ t('graphDraftBefore') }}</button>
+                <button class="graph-schema-view-button" :class="{active: draftPreviewMode === 'after'}" @click="draftPreviewMode = 'after'">{{ t('graphDraftAfter') }}</button>
+              </div>
+              <div class="graph-draft-topology mt-4"><GraphTopology :nodes="draftPreviewGraph.nodes" :relations="draftPreviewGraph.relations" :loading="draftLoading" /></div>
+              <div class="graph-draft-changes mt-4">
+                <article v-for="change in draftChanges" :key="change.changeId" class="graph-draft-change">
+                  <div class="flex justify-between items-center gap-2"><strong>{{ change.changeId }}</strong><span class="tag tag-iris">{{ t('graphDraftOperation' + change.operation) }}</span>
+                    <button v-if="change.operation !== 'CONTEXT'" class="btn btn-ghost btn-sm" :disabled="!draftEditable || draftHasEdits" @click="saveDraft([change.changeId])">{{ t('graphDraftDiscardChange') }}</button>
+                  </div>
+                  <div class="graph-draft-diff"><div><span>{{ t('graphDraftBefore') }}</span><pre>{{ formatStructuredData(change.before) }}</pre></div><div><span>{{ t('graphDraftAfter') }}</span><pre>{{ formatStructuredData(change.after) }}</pre></div></div>
+                </article>
+              </div>
+              <button v-if="draftPageInfo.hasMore" class="btn btn-ghost btn-sm w-full mt-4" :disabled="draftLoading || draftBusy || draftHasEdits || Boolean(draftConflict)" @click="loadMoreDraftChanges">{{ t('graphLoadMore') }}</button>
+              <div v-if="draftReady" class="graph-data-editor-shell mt-4">
+                <div v-if="draftVisualError" class="text-xs text-ash" role="status">{{ t('graphDraftSourceRequired') }}: {{ draftVisualError }}</div>
+                <div class="graph-data-editor-header"><strong>{{ t('graphDraftEdit') }}</strong><div class="graph-schema-view-switch">
+                  <button class="graph-schema-view-button" :class="{active: draftEditorView === 'visual'}" @click="setDraftEditorView('visual')">{{ t('graphDataVisualMode') }}</button>
+                  <button class="graph-schema-view-button" :class="{active: draftEditorView === 'source'}" @click="setDraftEditorView('source')">{{ t('graphDataJsonMode') }}</button>
+                </div></div>
+                <fieldset :disabled="!draftEditable" class="graph-draft-fieldset">
+                  <GraphDataDesigner v-if="draftEditorView === 'visual'" v-model="draftDesignerModel" :schema="draftSchema" :editable="draftEditable" :draft-mode="true" />
+                  <textarea v-else class="input graph-source-editor" v-model="draftSourceText" spellcheck="false" :aria-label="t('graphSourceData')"></textarea>
+                </fieldset>
+              </div>
+              <div class="graph-submit-row flex justify-between items-center mt-4 gap-2">
+                <span class="text-xs text-ash">{{ t(draftHasChanges ? 'graphDraftConfirmHint' : 'graphDraftNoChanges') }}</span>
+                <button class="btn btn-secondary" @click="saveDraft()" :disabled="!draftEditable || !draftHasEdits">{{ draftBusy ? t('saving') : t('graphDraftSave') }}</button>
+                <button class="btn btn-primary" @click="applyDraft" :disabled="!draftCanApply">{{ draftView.status === 'APPLYING' ? t('graphDraftRetryApply') : t('graphDraftApply') }}</button>
+              </div>
+            </template>
+          </div>
+        </div>
+      </template>
+      <template v-else>
       <div class="card card-gold mb-4">
         <div class="card-header graph-card-header">
           <div>
@@ -3019,6 +3559,7 @@ const GraphBuildPage = {
           <div><span>{{ t('graphRelations') }}</span><strong>{{ buildResult.relationCount }}</strong></div>
         </div>
       </div>
+      </template>
     </div>
   `
 };
@@ -3050,10 +3591,12 @@ const GraphTopology = {
     function nodeDisplayName(node) {
       const properties = node.properties || {};
       const preferredValue = properties.name || properties.title || properties.displayName;
+      const operation = node.changeOperation && node.changeOperation !== 'CONTEXT'
+        ? `[${t('graphDraftOperation' + node.changeOperation)}] ` : '';
       if (typeof preferredValue === 'string' && preferredValue.trim()) {
-        return preferredValue;
+        return operation + preferredValue;
       }
-      return node.nodeId;
+      return operation + node.nodeId;
     }
 
     function nodeColor(node) {
@@ -3080,7 +3623,9 @@ const GraphTopology = {
           id: `relation:${relation.relationId}`,
           source: `node:${relation.sourceNodeId}`,
           target: `node:${relation.targetNodeId}`,
-          label: relation.relationType,
+          label: relation.changeOperation && relation.changeOperation !== 'CONTEXT'
+            ? `[${t('graphDraftOperation' + relation.changeOperation)}] ${relation.relationType}`
+            : relation.relationType,
           item: relation,
           ...(relation.readOnly ? { readOnly: true } : {}),
         },
@@ -3256,7 +3801,7 @@ const GraphTopology = {
     }
 
     function renderGraph() {
-      if (!available || !canvas.value) {
+      if (!available || !canvas.value?.isConnected) {
         emit('rendered');
         return;
       }
@@ -4020,6 +4565,8 @@ const GraphDataDesigner = {
     existingDataLoading: { type: Boolean, default: false },
     existingDataHasMore: { type: Boolean, default: false },
     existingOperationPending: { type: Boolean, default: false },
+    editable: { type: Boolean, default: true },
+    draftMode: { type: Boolean, default: false },
   },
   emits: [
     'update:modelValue',
@@ -4194,6 +4741,7 @@ const GraphDataDesigner = {
     });
 
     function commit(mutator) {
+      if (!props.editable) return;
       const nextModel = cloneGraphSchemaDesigner(props.modelValue);
       mutator(nextModel);
       emit('update:modelValue', nextModel);
@@ -4632,6 +5180,7 @@ const GraphDataDesigner = {
     }
 
     function deleteSelectedNode() {
+      if (!props.editable) return;
       const nodeId = selectedNode.value?.nodeId || '';
       const nextModel = cloneGraphSchemaDesigner(props.modelValue);
       nextModel.nodes = nextModel.nodes.filter(node => node.id !== selectedId.value);
@@ -4647,6 +5196,7 @@ const GraphDataDesigner = {
     }
 
     function deleteSelectedRelation() {
+      if (!props.editable) return;
       const nextModel = cloneGraphSchemaDesigner(props.modelValue);
       nextModel.relations = nextModel.relations
         .filter(relation => relation.id !== selectedId.value);
@@ -4933,7 +5483,7 @@ const GraphDataDesigner = {
                 <strong>{{ selectedNode.nodeId || t('graphDataUnnamedNode') }}</strong>
               </div>
               <button class="btn btn-danger btn-sm" @click="deleteSelectedNode">
-                {{ selectedNode.persisted ? t('graphDataCancelEdit') : t('delete') }}
+                {{ selectedNode.persisted && !draftMode ? t('graphDataCancelEdit') : t('delete') }}
               </button>
             </div>
             <div class="input-group">
@@ -4976,7 +5526,7 @@ const GraphDataDesigner = {
                 <strong>{{ selectedRelation.relationId || t('graphDataUnnamedRelation') }}</strong>
               </div>
               <button class="btn btn-danger btn-sm" @click="deleteSelectedRelation">
-                {{ selectedRelation.persisted ? t('graphDataCancelEdit') : t('delete') }}
+                {{ selectedRelation.persisted && !draftMode ? t('graphDataCancelEdit') : t('delete') }}
               </button>
             </div>
             <div class="input-group">
@@ -7026,7 +7576,19 @@ const GraphPage = {
   setup() {
     const t = inject('t');
     const activeGraphTab = ref('browse');
-    return { t, activeGraphTab };
+    const draftId = ref('');
+    const draftContentHash = ref('');
+    function readDraftRoute() {
+      const [page, query] = window.location.hash.slice(1).split('?');
+      if (page !== 'graph') return;
+      const params = new URLSearchParams(query);
+      draftId.value = params.get('draftId') || '';
+      draftContentHash.value = params.get('contentHash') || '';
+      if (draftId.value) activeGraphTab.value = 'build';
+    }
+    onMounted(() => { readDraftRoute(); window.addEventListener('hashchange', readDraftRoute); });
+    onUnmounted(() => window.removeEventListener('hashchange', readDraftRoute));
+    return { t, activeGraphTab, draftId, draftContentHash };
   },
   template: `
     <div class="graph-shell">
@@ -7051,7 +7613,7 @@ const GraphPage = {
         </button>
       </div>
       <GraphBrowsePage v-if="activeGraphTab === 'browse'" />
-      <GraphBuildPage v-else-if="activeGraphTab === 'build'" />
+      <GraphBuildPage v-else-if="activeGraphTab === 'build'" :draft-id="draftId" :draft-content-hash="draftContentHash" />
       <GraphSchemaPage v-else />
     </div>
   `,
@@ -7545,8 +8107,8 @@ const ModelConfigPage = {
   `
 };
 
-// ── Config Page ──
-const ConfigPage = {
+// ── Project API configuration ──
+const ProjectApiConfigPage = {
   components: { EmptyState },
   setup() {
     const Icons = inject('Icons');
@@ -7699,10 +8261,11 @@ const ConfigPage = {
   `
 };
 
-// ── Tenant / identity tool permissions ──
+// ── Tenant / identity permissions ──
 const ToolPermissionPage = {
   components: { EmptyState },
-  setup() {
+  props: { internalApi: Boolean },
+  setup(props) {
     const Icons = inject('Icons');
     const t = inject('t');
     // The framework default tenant; the server validates the selected scope.
@@ -7718,9 +8281,9 @@ const ToolPermissionPage = {
     const saving = ref(false);
     const error = ref('');
     const restricted = ref(false);
-    const permissionTab = ref('tools');
+    const internalApi = props.internalApi;
     const endpoints = ref([]);
-    const allowedEndpointKeys = ref(new Set());
+    const disabledEndpointKeys = ref(new Set());
     const endpointCursor = ref('');
     const hasMoreEndpoints = ref(false);
     const loadedScope = ref('');
@@ -7746,19 +8309,19 @@ const ToolPermissionPage = {
 
     async function loadApiPermissions() {
       const scope = scopeKey();
-      const grants = [];
+      const disabledKeys = [];
       let cursor = '';
       do {
         const page = requirePageResponse(await CyreneAPI.getInternalApiPermissions(
           tenantId.value.trim(), identity.value.trim(), cursor),
           row => row && typeof row.endpointKey === 'string', t('invalidPermissionResponse'));
-        grants.push(...page.items.map(row => row.endpointKey));
+        disabledKeys.push(...page.items.map(row => row.endpointKey));
         cursor = page.pageInfo.hasMore ? page.pageInfo.nextCursor : '';
       } while (cursor);
       const page = requirePageResponse(await CyreneAPI.getInternalApiEndpoints(),
         row => row && typeof row.endpointKey === 'string', t('invalidPermissionResponse'));
       if (scope !== scopeKey()) throw new Error(t('permissionScopeChanged'));
-      allowedEndpointKeys.value = new Set(grants);
+      disabledEndpointKeys.value = new Set(disabledKeys);
       endpoints.value = page.items;
       endpointCursor.value = page.pageInfo.nextCursor;
       hasMoreEndpoints.value = page.pageInfo.hasMore;
@@ -7779,10 +8342,10 @@ const ToolPermissionPage = {
     }
 
     function toggleEndpoint(key) {
-      const next = new Set(allowedEndpointKeys.value);
+      const next = new Set(disabledEndpointKeys.value);
       if (next.has(key)) next.delete(key);
       else next.add(key);
-      allowedEndpointKeys.value = next;
+      disabledEndpointKeys.value = next;
     }
 
     function applyView(data) {
@@ -7803,7 +8366,7 @@ const ToolPermissionPage = {
       loadedScope.value = '';
       try {
         const scope = scopeKey();
-        if (permissionTab.value === 'internalApi') await loadApiPermissions();
+        if (internalApi) await loadApiPermissions();
         else {
           await loadIdentities();
           const view = await CyreneAPI.getToolPermissions(tenantId.value.trim(), identity.value.trim() || 'DEFAULT');
@@ -7848,9 +8411,9 @@ const ToolPermissionPage = {
       error.value = '';
       try {
         if (loadedScope.value !== scopeKey()) throw new Error(t('permissionScopeChanged'));
-        if (permissionTab.value === 'internalApi') {
+        if (internalApi) {
           await CyreneAPI.saveInternalApiPermissions({ tenantId: tenantId.value.trim(),
-            identity: identity.value.trim(), allowedEndpointKeys: [...allowedEndpointKeys.value].sort() });
+            identity: identity.value.trim(), disabledEndpointKeys: [...disabledEndpointKeys.value].sort() });
         } else {
           await CyreneAPI.saveToolPermissions({ tenantId: tenantId.value.trim(),
             identity: identity.value.trim(), disabledTools: [...disabled.value] });
@@ -7869,7 +8432,7 @@ const ToolPermissionPage = {
       Icons, t, tenantId, identity, profiles, tenants,
       tools, disabled, loading, saving, error, restricted,
       load, toggleTool, disableAll, clearAll, save, inheritedDenial, isDisabled, disabledCount,
-      permissionTab, endpoints, allowedEndpointKeys, toggleEndpoint, hasMoreEndpoints,
+      internalApi, endpoints, disabledEndpointKeys, toggleEndpoint, hasMoreEndpoints,
       loadMoreEndpoints, loadedScope, scopeKey, hasMoreIdentities, loadMoreIdentities,
     };
   },
@@ -7877,15 +8440,7 @@ const ToolPermissionPage = {
     <div>
       <div class="card">
         <div class="card-header" style="flex-wrap: wrap; gap: var(--space-2);">
-          <div class="card-title">{{ t('toolPermissions') }}</div>
-          <div class="graph-tabs" role="tablist">
-            <button class="graph-tab" :class="{ active: permissionTab === 'tools' }" role="tab"
-              :aria-selected="permissionTab === 'tools'" :disabled="loading || saving"
-              @click="permissionTab = 'tools'; loadedScope = ''">{{ t('toolPermissions') }}</button>
-            <button class="graph-tab" :class="{ active: permissionTab === 'internalApi' }" role="tab"
-              :aria-selected="permissionTab === 'internalApi'" :disabled="loading || saving"
-              @click="permissionTab = 'internalApi'; loadedScope = ''">{{ t('internalApiPermissions') }}</button>
-          </div>
+          <div class="card-title">{{ t(internalApi ? 'internalApiPermissions' : 'toolPermissions') }}</div>
         </div>
         <div class="card-body">
           <div style="display: flex; flex-wrap: wrap; gap: var(--space-3); align-items: end;">
@@ -7910,12 +8465,12 @@ const ToolPermissionPage = {
             </button>
             <button v-if="hasMoreIdentities" class="btn btn-input" @click="loadMoreIdentities" :disabled="loading || saving">{{ t('loadMore') }}</button>
           </div>
-          <div class="text-xs text-ash mt-2">{{ t(permissionTab === 'tools' ? 'toolPermissionHint' : 'internalApiPermissionHint') }}</div>
+          <div class="text-xs text-ash mt-2">{{ t(internalApi ? 'internalApiPermissionHint' : 'toolPermissionHint') }}</div>
           <div v-if="error" class="text-sm mt-2" style="color: var(--error);">{{ error }}</div>
         </div>
       </div>
 
-      <div v-if="permissionTab === 'tools'" class="card mt-4">
+      <div v-if="!internalApi" class="card mt-4">
         <div class="card-header" style="flex-wrap: wrap; gap: var(--space-2);">
           <div class="card-title">
             {{ t('registeredTools') }} ({{ t('disabledCount') }} {{ disabledCount }}/{{ tools.length }})
@@ -7969,9 +8524,9 @@ const ToolPermissionPage = {
         </div>
         <div class="card-body">
           <div class="table-container"><table>
-            <thead><tr><th>{{ t('allowedColumn') }}</th><th>{{ t('apiEndpoint') }}</th><th>{{ t('apiModule') }}</th></tr></thead>
+            <thead><tr><th>{{ t('disabledColumn') }}</th><th>{{ t('apiEndpoint') }}</th><th>{{ t('apiModule') }}</th></tr></thead>
             <tbody><tr v-for="endpoint in endpoints" :key="endpoint.endpointKey">
-              <td><input type="checkbox" :checked="allowedEndpointKeys.has(endpoint.endpointKey)"
+              <td><input type="checkbox" :checked="disabledEndpointKeys.has(endpoint.endpointKey)"
                 :aria-label="endpoint.endpointKey" :disabled="loading || saving"
                 @change="toggleEndpoint(endpoint.endpointKey)" /></td>
               <td class="permission-api-path"><strong>{{ endpoint.method }}</strong> {{ endpoint.pathTemplate }}
@@ -7983,6 +8538,32 @@ const ToolPermissionPage = {
             :disabled="loading || saving">{{ loading ? t('loading') : t('loadMore') }}</button>
         </div>
       </div>
+    </div>
+  `
+};
+
+// ── Interface configuration ──
+const ConfigPage = {
+  components: { ProjectApiConfigPage, ToolPermissionPage },
+  setup() {
+    const t = inject('t');
+    const activeTab = ref('projectApis');
+    return { t, activeTab };
+  },
+  template: `
+    <div>
+      <div class="graph-tabs" role="tablist" :aria-label="t('config')">
+        <button class="graph-tab" :class="{ active: activeTab === 'projectApis' }" role="tab"
+          :aria-selected="activeTab === 'projectApis'"
+          @click="activeTab = 'projectApis'">{{ t('projectApis') }}</button>
+        <button class="graph-tab" :class="{ active: activeTab === 'internalApi' }" role="tab"
+          :aria-selected="activeTab === 'internalApi'"
+          @click="activeTab = 'internalApi'">{{ t('internalApiPermissions') }}</button>
+      </div>
+      <keep-alive>
+        <project-api-config-page v-if="activeTab === 'projectApis'" />
+        <tool-permission-page v-else internal-api />
+      </keep-alive>
     </div>
   `
 };
@@ -8196,7 +8777,7 @@ const app = createApp({
 
     // Handle hash routing
     function handleHash() {
-      const hash = window.location.hash.slice(1) || 'chat';
+      const hash = window.location.hash.slice(1).split('?')[0] || 'chat';
       if (navItems.value.find(n => n.id === hash)) {
         currentPage.value = hash;
       }
@@ -8271,14 +8852,6 @@ const app = createApp({
       <pre-config-modal :visible="showPreConfig" @complete="onPreConfigComplete" @close="onPreConfigClose" />
 
       <div style="display: flex; height: 100vh; position: relative; z-index: 1;">
-        <!-- Mobile header -->
-        <div class="mobile-header" style="position: fixed; top: 0; left: 0; right: 0; z-index: 110;">
-          <button class="btn btn-ghost" @click="toggleSidebar">
-            <span v-html="Icons.menu" style="width:20px;height:20px;"></span>
-          </button>
-          <span style="font-family: var(--font-display); font-weight: 600;">Cyrene</span>
-        </div>
-
         <!-- Sidebar backdrop (mobile) -->
         <div :class="['sidebar-backdrop', sidebarOpen ? '' : 'hidden']" @click="sidebarOpen = false"></div>
 
@@ -8312,6 +8885,10 @@ const app = createApp({
         <!-- Main content -->
         <main class="main-content">
           <header class="header">
+            <button class="btn btn-ghost mobile-nav-toggle" @click="toggleSidebar"
+                    :aria-label="t('expandSidebar')" :aria-expanded="sidebarOpen">
+              <span v-html="Icons.menu" style="width:20px;height:20px;"></span>
+            </button>
             <h2 class="header-title">{{ pageTitle }}</h2>
             <div class="header-actions">
               <!-- Realtime omni-modal test dock -->
@@ -8372,6 +8949,7 @@ app.directive('meteor', {
 
 // Register Icons as global property so all components can access it
 app.component('GraphDataDesigner', GraphDataDesigner);
+app.component('GraphTopology', GraphTopology);
 app.config.globalProperties.Icons = Icons;
 app.provide('Icons', Icons);
 app.mount('#app');

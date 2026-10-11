@@ -4,6 +4,7 @@ import com.harness.core.model.CancellationToken;
 import com.harness.core.model.FinalOutputContract;
 import com.harness.core.model.ThinkingLevel;
 import com.harness.core.runtime.RunTrace;
+import com.harness.core.runtime.ToolBatchCoordinator;
 import com.harness.tool.confirmation.ConfirmationExecutionContext;
 import dev.langchain4j.data.message.ChatMessage;
 
@@ -21,7 +22,8 @@ public record ReActRequest(
         CancellationToken cancellationToken,
         ThinkingLevel thinkingLevel,
         ConfirmationExecutionContext confirmationContext,
-        FinalOutputContract finalOutputContract
+        FinalOutputContract finalOutputContract,
+        ToolBatchCoordinator toolBatchCoordinator
 ) {
     public ReActRequest {
         Objects.requireNonNull(systemPrompt, "systemPrompt");
@@ -35,6 +37,23 @@ public record ReActRequest(
         finalOutputContract = finalOutputContract != null
                 ? finalOutputContract
                 : new FinalOutputContract.Text();
+        toolBatchCoordinator = toolBatchCoordinator != null
+                ? toolBatchCoordinator : ToolBatchCoordinator.passthrough();
+    }
+
+    public ReActRequest(String systemPrompt, String userMessage, List<ChatMessage> historyMessages,
+                        String dynamicKnowledgeContext, RunTrace trace, ReActListener listener,
+                        CancellationToken cancellationToken, ThinkingLevel thinkingLevel,
+                        ConfirmationExecutionContext confirmationContext,
+                        FinalOutputContract finalOutputContract) {
+        this(systemPrompt, userMessage, historyMessages, dynamicKnowledgeContext, trace, listener,
+                cancellationToken, thinkingLevel, confirmationContext, finalOutputContract, null);
+    }
+
+    public ReActRequest withToolBatchCoordinator(ToolBatchCoordinator coordinator) {
+        return new ReActRequest(systemPrompt, userMessage, historyMessages, dynamicKnowledgeContext,
+                trace, listener, cancellationToken, thinkingLevel, confirmationContext,
+                finalOutputContract, coordinator);
     }
 
     public ReActRequest(
