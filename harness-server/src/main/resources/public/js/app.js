@@ -2,7 +2,7 @@
  * Cyrene Web UI — Vue 3 SPA
  * 在时间的涟漪中，记录与被记住
  */
-const { createApp, ref, reactive, computed, watch, onMounted, onUnmounted, onDeactivated, nextTick, provide, inject } = Vue;
+const { createApp, ref, reactive, computed, watch, onMounted, onUnmounted, onActivated, onDeactivated, nextTick, provide, inject } = Vue;
 
 // ── Markdown Renderer ──
 marked.setOptions({
@@ -1860,7 +1860,7 @@ const KnowledgePage = {
       const collection = uploadCollection.value.trim();
       if (!collection || !selectedFiles.value.length || uploading.value) return;
       uploading.value = true;
-      uploadQueue.value = selectedFiles.value.map(file => ({ file, name: file.name, status: 'waiting', message: '' }));
+      uploadQueue.value = selectedFiles.value.map(file => ({ file, name: file.name, status: 'waiting', message: '', explanation: '' }));
       try {
         for (const item of uploadQueue.value) {
           item.status = 'uploading';
@@ -1870,7 +1870,24 @@ const KnowledgePage = {
               throw new Error(t('invalidKnowledgeUploadResponse'));
             }
             item.status = result.status;
-          } catch (e) { item.status = 'failed'; item.message = e.message; }
+          } catch (e) {
+            item.status = 'failed';
+            item.message = e.message;
+            if (e.code === 'DOCUMENT_PARSE_FAILED') {
+              const reasonKeys = {
+                UNSUPPORTED_MEDIA_TYPE: 'knowledgeParseUnsupported',
+                DOCUMENT_CONVERSION_FAILED: 'knowledgeParseInvalidFile',
+                EMPTY_DOCUMENT_CONTENT: 'knowledgeParseEmpty',
+                DOCUMENT_CONVERSION_TIMEOUT: 'knowledgeParseTimeout',
+                DOCUMENT_PARSER_REQUEST_TIMEOUT: 'knowledgeParseTimeout',
+                DOCUMENT_UPLOAD_TIMEOUT: 'knowledgeParseTimeout',
+                VISION_REQUEST_FAILED: 'knowledgeParseVisionFailed',
+                DOCUMENT_TOO_LARGE: 'knowledgeParseTooLarge',
+                DOCUMENT_PARSER_BUSY: 'knowledgeParseBusy',
+              };
+              item.explanation = t(reasonKeys[e.details.parserCode] || 'knowledgeParseFailed');
+            }
+          }
         }
         selectedFiles.value = [];
         if (fileInput.value) fileInput.value.value = '';
@@ -2048,7 +2065,13 @@ const KnowledgePage = {
             <div class="knowledge-upload-form">
               <div class="input-group">
                 <label class="input-label" for="knowledgeUploadCollection">{{ t('collectionName') }}</label>
-                <input id="knowledgeUploadCollection" class="input" v-model="uploadCollection" list="knowledgeCollections" :disabled="uploading" :placeholder="t('collectionInputPlaceholder')" />
+                <div class="knowledge-collection-picker">
+                  <select class="input" :value="collections.includes(uploadCollection) ? uploadCollection : ''" @change="uploadCollection = $event.target.value" :disabled="uploading || loadingCollections || !collections.length" :aria-label="t('selectExistingCollection')">
+                    <option value="" disabled>{{ t('selectExistingCollection') }}</option>
+                    <option v-for="collection in collections" :key="collection" :value="collection">{{ collection }}</option>
+                  </select>
+                  <input id="knowledgeUploadCollection" class="input" v-model="uploadCollection" :disabled="uploading" :placeholder="t('collectionInputPlaceholder')" aria-describedby="knowledgeCreateHint" />
+                </div>
               </div>
               <div class="input-group">
                 <label class="input-label" for="knowledgeUploadFiles">{{ t('chooseFiles') }}</label>
@@ -2058,12 +2081,15 @@ const KnowledgePage = {
                 {{ uploading ? t('uploading') : t('upload') }}<span v-if="selectedFiles.length"> ({{ selectedFiles.length }})</span>
               </button>
             </div>
+            <p id="knowledgeCreateHint" class="text-xs text-ash mt-4">{{ t('collectionCreateHint') }}</p>
+            <button v-if="collectionPageInfo.hasMore" class="btn btn-ghost btn-sm mt-4" @click="loadCollections({ append: true, cursor: collectionPageInfo.nextCursor })" :disabled="uploading || loadingCollections">{{ loadingCollections ? t('loading') : t('loadMoreCollections') }}</button>
             <p class="text-xs text-ash mt-4">{{ t('multiFileHint') }}</p>
             <div v-if="uploadQueue.length" class="knowledge-upload-results" aria-live="polite">
               <div class="text-sm">{{ t('uploadProcessed') }} {{ uploadedCount }}/{{ uploadQueue.length }}</div>
               <div v-for="(item, index) in uploadQueue" :key="index" class="knowledge-upload-result">
                 <span class="text-sm">{{ item.name }}</span>
                 <span class="text-xs" :class="{ 'knowledge-list-error': item.status === 'failed' }">{{ t('uploadState_' + item.status) }}</span>
+                <div v-if="item.explanation" class="text-sm knowledge-upload-message" role="alert">{{ item.explanation }}</div>
                 <div v-if="item.message" class="text-xs knowledge-upload-message">{{ item.message }}</div>
               </div>
             </div>
@@ -2078,11 +2104,16 @@ const KnowledgePage = {
             <form class="knowledge-collection-form" @submit.prevent="applyCollection()">
               <label class="input-label" for="knowledgeCollectionName">{{ t('collectionName') }}</label>
               <div class="knowledge-file-filter">
-                <input id="knowledgeCollectionName" class="input" v-model="collectionInput" list="knowledgeCollections" :placeholder="t('collectionInputPlaceholder')" :disabled="wikiSaving" />
+                <div class="knowledge-collection-picker">
+                  <select class="input" :value="collections.includes(collectionInput) ? collectionInput : ''" @change="collectionInput = $event.target.value" :disabled="wikiSaving || loadingCollections || !collections.length" :aria-label="t('selectExistingCollection')">
+                    <option value="" disabled>{{ t('selectExistingCollection') }}</option>
+                    <option v-for="collection in collections" :key="collection" :value="collection">{{ collection }}</option>
+                  </select>
+                  <input id="knowledgeCollectionName" class="input" v-model="collectionInput" :placeholder="t('collectionBrowsePlaceholder')" :disabled="wikiSaving" />
+                </div>
                 <button type="submit" class="btn btn-primary btn-sm" :disabled="wikiSaving">{{ t('browse') }}</button>
               </div>
             </form>
-            <datalist id="knowledgeCollections"><option v-for="collection in collections" :key="collection" :value="collection"></option></datalist>
             <div v-if="!selectedCollection" class="knowledge-collections">
               <button v-for="collection in collections" :key="collection" class="btn btn-ghost btn-sm" @click="applyCollection(collection)">{{ collection }}</button>
               <button v-if="collectionPageInfo.hasMore" class="btn btn-ghost btn-sm" @click="loadCollections({ append: true, cursor: collectionPageInfo.nextCursor })" :disabled="loadingCollections">{{ t('loadMoreCollections') }}</button>
@@ -2248,10 +2279,10 @@ function requireGraphDraftView(view, t) {
   return view;
 }
 
-function graphDraftLink(data) {
+function graphDraftLink(data, review = false) {
   if (typeof data?.draftId !== 'string' || !data.draftId
       || typeof data?.contentHash !== 'string' || !data.contentHash) return '';
-  return `#graph?draftId=${encodeURIComponent(data.draftId)}&contentHash=${encodeURIComponent(data.contentHash)}`;
+  return `${review ? '#audit?tab=graphReview&' : '#graph?'}draftId=${encodeURIComponent(data.draftId)}&contentHash=${encodeURIComponent(data.contentHash)}`;
 }
 
 function graphDraftToolLink(envelope) {
@@ -2317,7 +2348,7 @@ function graphDraftContinuationPayload(view, changes, source, userId) {
 }
 
 const GraphBuildPage = {
-  props: { draftId: { type: String, default: '' }, draftContentHash: { type: String, default: '' } },
+  props: { draftId: { type: String, default: '' }, draftContentHash: { type: String, default: '' }, reviewMode: { type: Boolean, default: false } },
   setup(props) {
     const Icons = inject('Icons');
     const t = inject('t');
@@ -2471,7 +2502,7 @@ const GraphBuildPage = {
       const controller = draftController;
       const response = await CyreneAPI.getGraphDraftChanges(view.draftId, userId.value, {
         expectedContentHash: view.contentHash, limit: draftPageInfo.value.limit,
-        cursor: append ? draftPageInfo.value.nextCursor : '', signal: controller.signal,
+        cursor: append ? draftPageInfo.value.nextCursor : '', signal: controller.signal, review: props.reviewMode,
       });
       if (!isCurrentDraft(version, controller)) return;
       const page = requireGraphDraftChangePage(response, view, t);
@@ -2499,12 +2530,12 @@ const GraphBuildPage = {
       draftView.value = null;
       try {
         const response = await CyreneAPI.getGraphDraft(draftId, userId.value, {
-          expectedContentHash, signal: controller.signal,
+          expectedContentHash, signal: controller.signal, review: props.reviewMode,
         });
         if (!isCurrentDraft(version, controller)) return;
-        const view = requireGraphDraftView(response, t);
+        const view = requireGraphDraftView(props.reviewMode ? response.draft : response, t);
         draftView.value = view;
-        const schema = await CyreneAPI.getGraphSchema(view.schemaId);
+        const schema = props.reviewMode ? response.schema : await CyreneAPI.getGraphSchema(view.schemaId);
         if (!isCurrentDraft(version, controller)) return;
         if (schema?.schemaId !== view.schemaId || !schema.nodeTypes || !schema.relationTypes) throw new Error(t('graphInvalidSchemaPageResponse'));
         draftSchema.value = schema;
@@ -2569,10 +2600,10 @@ const GraphBuildPage = {
           // Discard uses the saved draft; first save edits so another action cannot silently drop them.
           if (draftHasEdits.value) throw new Error(t('graphDraftSaveBeforeMore'));
         }
-        const response = await CyreneAPI.saveGraphDraft(payload, controller.signal);
+        const response = await CyreneAPI.saveGraphDraft(payload, controller.signal, props.reviewMode);
         if (!isCurrentDraft(version, controller)) return;
         const saved = requireGraphDraftView(response, t);
-        window.location.hash = graphDraftLink(saved);
+        window.location.hash = graphDraftLink(saved, props.reviewMode);
         await openDraft(saved.draftId, saved.contentHash);
       } catch (e) { if (isCurrentDraft(version, controller)) recordDraftError(e); }
       finally { if (isCurrentDraft(version, controller)) draftBusy.value = false; }
@@ -2587,7 +2618,7 @@ const GraphBuildPage = {
       draftBusy.value = true;
       draftError.value = '';
       try {
-        const result = await CyreneAPI.applyGraphDraft(view.draftId, userId.value, view.contentHash);
+        const result = await CyreneAPI.applyGraphDraft(view.draftId, userId.value, view.contentHash, props.reviewMode);
         if (!isCurrentDraft(version, controller)) return;
         if (result?.committed !== true) throw new Error(t('graphInvalidDraftResponse'));
         showToast(t('graphDraftApplied'), 'success');
@@ -2597,10 +2628,10 @@ const GraphBuildPage = {
         recordDraftError(e);
         try {
           const response = await CyreneAPI.getGraphDraft(view.draftId, userId.value, {
-            expectedContentHash: view.contentHash, sessionId: view.sessionId, signal: controller.signal,
+            expectedContentHash: view.contentHash, sessionId: view.sessionId, signal: controller.signal, review: props.reviewMode,
           });
           if (!isCurrentDraft(version, controller)) return;
-          const refreshed = requireGraphDraftView(response, t);
+          const refreshed = requireGraphDraftView(props.reviewMode ? response.draft : response, t);
           if (refreshed.draftId !== view.draftId || refreshed.contentHash !== view.contentHash) {
             throw new Error(t('graphInvalidDraftResponse'));
           }
@@ -2618,7 +2649,7 @@ const GraphBuildPage = {
       const conflict = draftConflict.value;
       if (!conflict?.currentDraftId || draftBusy.value || draftLoading.value) return;
       if (draftHasEdits.value && !confirm(t('graphDraftOpenCurrentConfirm'))) return;
-      window.location.hash = graphDraftLink({ draftId: conflict.currentDraftId, contentHash: conflict.currentContentHash });
+      window.location.hash = graphDraftLink({ draftId: conflict.currentDraftId, contentHash: conflict.currentContentHash }, props.reviewMode);
       await openDraft(conflict.currentDraftId, conflict.currentContentHash);
     }
 
@@ -2626,7 +2657,7 @@ const GraphBuildPage = {
       if (draftBusy.value || !confirm(t('graphDraftAbandonConfirm'))) return;
       draftController?.abort();
       draftLoadVersion++;
-      window.location.hash = 'graph';
+      window.location.hash = props.reviewMode ? 'audit?tab=graphReview' : 'graph';
     }
     let existingGraphQueryVersion = 0;
 
@@ -3216,7 +3247,7 @@ const GraphBuildPage = {
       <template v-if="draftId">
         <div class="card graph-draft-review">
           <div class="card-header graph-card-header">
-            <div class="card-title">{{ t('graphDraftReview') }}</div>
+            <div class="card-title">{{ t(reviewMode ? 'graphReviewTab' : 'graphDraftReview') }}</div>
             <div class="flex gap-2">
               <button class="btn btn-ghost btn-sm" @click="openDraft()" :disabled="draftLoading || draftBusy">{{ t('reload') }}</button>
               <button class="btn btn-ghost btn-sm" @click="abandonDraft" :disabled="draftBusy">{{ t('graphDraftAbandon') }}</button>
@@ -3234,6 +3265,7 @@ const GraphBuildPage = {
               <div class="graph-draft-meta">
                 <div><span>{{ t('graphSpaceTarget') }}</span><strong>{{ draftView.graphId }}</strong><code>graphId: {{ draftView.graphId }} · schemaId: {{ draftView.schemaId }}</code></div>
                 <div><span>{{ t('graphDraftSource') }}</span><code>{{ draftView.userId }} · {{ draftView.sessionId }}<br>{{ draftView.taskId }} · {{ draftView.runId }} · {{ draftView.traceId }}</code></div>
+                <div v-if="draftView.reviewerUserId"><span>{{ t('graphReviewReviewer') }}</span><strong>{{ draftView.reviewerUserId }}</strong><code>{{ draftView.reviewedAt }}</code></div>
                 <div><span>{{ t('status') }}</span><strong>{{ t('graphDraftStatus' + draftView.status) }}</strong><code>{{ draftView.draftId }}<br>{{ draftView.contentHash }}</code></div>
               </div>
               <div class="graph-chip-list mt-4">
@@ -7619,7 +7651,222 @@ const GraphPage = {
   `,
 };
 
-const AuditPage = {
+const GraphDraftReviewPage = {
+  components: { GraphBuildPage, EmptyState },
+  props: { draftId: { type: String, default: '' }, draftContentHash: { type: String, default: '' } },
+  setup(props) {
+    const t = inject('t');
+    const Icons = inject('Icons');
+    const userId = inject('userId');
+    const drafts = ref([]);
+    const selectedStatus = ref('PENDING');
+    const loading = ref(false);
+    const error = ref('');
+    const enabled = ref(true);
+    const nextCursor = ref('');
+    const hasMore = ref(false);
+    let loadVersion = 0;
+    let controller;
+
+    async function loadDrafts(append = false) {
+      controller?.abort();
+      const request = new AbortController();
+      controller = request;
+      const version = ++loadVersion;
+      loading.value = true;
+      error.value = '';
+      if (!append) { drafts.value = []; nextCursor.value = ''; hasMore.value = false; }
+      try {
+        const result = await CyreneAPI.listGraphReviews(userId.value, {
+          limit: 50, cursor: append ? nextCursor.value : '', status: selectedStatus.value, signal: request.signal,
+        });
+        if (version !== loadVersion) return;
+        enabled.value = true;
+        const page = requirePageResponse(result, item => {
+          requireGraphDraftView(item, t);
+          return typeof item.userId === 'string' && typeof item.createdAt === 'string';
+        }, t('graphInvalidDraftResponse'));
+        const existing = new Set(append ? drafts.value.map(item => item.rootDraftId) : []);
+        for (const item of page.items) {
+          if (existing.has(item.rootDraftId)) throw new Error(t('graphInvalidDraftResponse'));
+          existing.add(item.rootDraftId);
+        }
+        drafts.value = append ? [...drafts.value, ...page.items] : page.items;
+        nextCursor.value = page.pageInfo.nextCursor;
+        hasMore.value = page.pageInfo.hasMore;
+      } catch (e) {
+        if (version === loadVersion) {
+          if (e.status === 404) enabled.value = false;
+          error.value = e.status === 404 ? t('graphProviderDisabledHint') : e.message;
+        }
+      } finally { if (version === loadVersion) loading.value = false; }
+    }
+
+    function cancelLoading() { loadVersion++; controller?.abort(); loading.value = false; }
+    watch(() => props.draftId, id => { if (id) cancelLoading(); else loadDrafts(); });
+    onMounted(() => { if (!props.draftId) loadDrafts(); });
+    onUnmounted(cancelLoading);
+    return { t, Icons, drafts, selectedStatus, loading, error, enabled, hasMore, loadDrafts, graphDraftLink };
+  },
+  template: `
+    <GraphBuildPage v-if="draftId" :draft-id="draftId" :draft-content-hash="draftContentHash" :review-mode="true" />
+    <section v-else class="card">
+      <div class="card-header graph-review-header">
+        <div class="card-title">{{ t('graphReviewTab') }}</div>
+        <div class="graph-review-controls">
+          <label for="graph-review-status" class="text-sm">{{ t('status') }}</label>
+          <select id="graph-review-status" class="input" v-model="selectedStatus" @change="loadDrafts(false)">
+            <option value="">{{ t('graphReviewAllStatuses') }}</option>
+            <option v-for="status in ['PENDING', 'APPLYING', 'APPLIED', 'FAILED']" :key="status" :value="status">{{ t('graphDraftStatus' + status) }}</option>
+          </select>
+          <button class="btn btn-ghost btn-sm" @click="loadDrafts(false)" :disabled="loading">{{ t('refresh') }}</button>
+        </div>
+      </div>
+      <div class="card-body">
+        <p class="text-sm text-ash mb-3">{{ t('graphReviewHint') }} <a href="#config?tab=internalApi">{{ t('internalApiPermissions') }}</a></p>
+        <p v-if="error" class="text-sm mb-3" role="alert" style="color:var(--error)">{{ error }}</p>
+        <p v-if="loading" class="text-sm" role="status">{{ t('loading') }}</p>
+        <div v-if="drafts.length" class="table-container">
+          <table>
+            <thead><tr><th>{{ t('graphSpaceTarget') }}</th><th>{{ t('graphReviewSubmitter') }}</th><th>{{ t('status') }}</th><th>{{ t('graphReviewChanges') }}</th><th>{{ t('time') }}</th><th>{{ t('operation') }}</th></tr></thead>
+            <tbody><tr v-for="draft in drafts" :key="draft.rootDraftId">
+              <td><strong>{{ draft.graphId }}</strong><div class="text-xs text-ash">{{ draft.schemaId }}</div></td>
+              <td>{{ draft.userId }}<div class="text-xs text-ash">{{ draft.sessionId }}</div></td>
+              <td><span class="tag tag-iris">{{ t('graphDraftStatus' + draft.status) }}</span><div v-if="draft.reviewerUserId" class="text-xs text-ash">{{ t('graphReviewReviewer') }}: {{ draft.reviewerUserId }}</div></td>
+              <td class="text-xs">{{ t('graphNodes') }}: {{ draft.nodeCount }} · {{ t('graphRelations') }}: {{ draft.relationCount }}<br>{{ t('delete') }}: {{ draft.deleteNodeCount }} / {{ draft.deleteRelationCount }}</td>
+              <td class="text-xs text-ash">{{ draft.createdAt }}</td>
+              <td><a class="btn btn-ghost btn-sm" :href="graphDraftLink(draft, true)">{{ t('graphReviewOpen') }}</a></td>
+            </tr></tbody>
+          </table>
+        </div>
+        <button v-if="hasMore" class="btn btn-ghost mt-3" :disabled="loading" @click="loadDrafts(true)">{{ t('loadMore') }}</button>
+        <empty-state v-if="enabled && !loading && !error && !drafts.length" :icon="Icons.graph" :title="t('graphReviewEmpty')" :hint="t('graphReviewEmptyHint')" />
+      </div>
+    </section>
+  `,
+};
+
+const GuidePage = {
+  setup() {
+    const t = inject('t');
+    const userId = inject('userId');
+    const authMode = inject('authMode');
+    const loading = ref(false);
+    const statuses = ref({});
+    let loadVersion = 0;
+    const steps = [
+      { id: 'user', title: 'guideUser', hint: 'guideUserHint', required: true },
+      { id: 'chat', title: 'guideChat', hint: 'guideChatHint', required: true, href: '#model-config' },
+      { id: 'embedding', title: 'guideEmbedding', hint: 'guideEmbeddingHint', required: true, href: '#model-config' },
+      { id: 'project', title: 'guideProject', hint: 'guideProjectHint', href: '#config?tab=projectApis' },
+      { id: 'knowledge', title: 'guideKnowledge', hint: 'guideKnowledgeHint', href: '#knowledge' },
+      { id: 'graph', title: 'guideGraph', hint: 'guideGraphHint', href: '#graph' },
+      { id: 'graphReview', title: 'graphReviewTab', hint: 'guideGraphReviewHint', href: '#audit?tab=graphReview' },
+      { id: 'tools', title: 'toolPermissions', hint: 'guideToolsHint', href: '#tool-permission' },
+      { id: 'apis', title: 'internalApiPermissions', hint: 'guideApisHint', href: '#config?tab=internalApi' },
+      { id: 'audit', title: 'guideAudit', hint: 'guideAuditHint', href: '#audit' },
+    ];
+
+    function modelStatus(data, sectionId) {
+      if (!data || !Array.isArray(data.sections)) throw new Error(t('invalidModelConfigResponse'));
+      const section = data.sections.find(section => section.id === sectionId);
+      if (!section || !Array.isArray(section.fields)) throw new Error(t('invalidModelConfigResponse'));
+      const fields = ['provider', 'model'].map(name => section.fields.find(field => field.key === sectionId + '.' + name));
+      if (fields.some(field => !field || typeof field.configured !== 'boolean' || typeof field.runtimeSynchronized !== 'boolean')) {
+        throw new Error(t('invalidModelConfigResponse'));
+      }
+      if (fields[0].value === 'none') return { state: 'disabled', message: '' };
+      return { state: fields.every(field => field.configured && field.runtimeSynchronized) ? 'saved' : 'pending', message: '' };
+    }
+
+    async function loadStatus() {
+      const version = ++loadVersion;
+      loading.value = true;
+      statuses.value = {};
+      async function check(id, action) {
+        try {
+          const status = await action();
+          if (version === loadVersion) statuses.value[id] = status;
+        } catch (e) {
+          if (version === loadVersion) statuses.value[id] = { state: 'unknown', message: e.message };
+        }
+      }
+      const models = CyreneAPI.getModelConfiguration();
+      const knowledge = CyreneAPI.getKnowledgeStatus().then(data => requireKnowledgeStatus(data, t));
+      await Promise.all([
+        check('chat', async () => modelStatus(await models, 'chat')),
+        check('embedding', async () => {
+          const model = modelStatus(await models, 'embedding');
+          const status = await knowledge;
+          return status.state === 'ready' ? model : { state: status.state === 'disabled' ? 'disabled' : 'pending', message: status.message };
+        }),
+        check('project', async () => {
+          try {
+            const data = await CyreneAPI.getConfig();
+            if (!data.config || !Array.isArray(data.config.endpoints)) throw new Error(t('invalidApiConfigResponse'));
+            return { state: data.config.endpoints.length ? 'ready' : 'pending', message: '' };
+          } catch (e) {
+            if (e.code === 'NOT_FOUND' && e.status === 404) return { state: 'pending', message: '' };
+            throw e;
+          }
+        }),
+        check('knowledge', async () => {
+          const status = await knowledge;
+          if (status.state !== 'ready') return { state: status.state === 'disabled' ? 'disabled' : 'pending', message: status.message };
+          const page = requirePageResponse(await CyreneAPI.listCollections({ limit: 1 }), item => typeof item === 'string', t('invalidCollectionListResponse'));
+          return { state: page.items.length ? 'ready' : 'pending', message: '' };
+        }),
+        check('graph', async () => {
+          const status = await CyreneAPI.getGraphStatus();
+          if (typeof status.enabled !== 'boolean') throw new Error(t('invalidGraphStatusResponse'));
+          if (!status.enabled) return { state: 'disabled', message: '' };
+          const page = requirePageResponse(await CyreneAPI.listGraphSpaces({ limit: 1 }), item => typeof item.graphId === 'string' && typeof item.schemaId === 'string', t('invalidGraphSpaceListResponse'));
+          return { state: page.items.length ? 'ready' : 'pending', message: '' };
+        }),
+      ]);
+      if (version === loadVersion) loading.value = false;
+    }
+
+    onActivated(loadStatus);
+    onDeactivated(() => { loadVersion++; loading.value = false; });
+    return { t, userId, authMode, steps, statuses, loading, loadStatus };
+  },
+  template: `
+    <div class="guide-workspace">
+      <section class="card card-gold">
+        <div class="card-header"><div class="card-title">{{ t('setupGuide') }}</div>
+          <button class="btn btn-ghost btn-sm" @click="loadStatus" :disabled="loading">{{ t('refresh') }}</button>
+        </div>
+        <div class="card-body">
+          <p class="text-sm">{{ t('guideIntro') }}</p>
+          <p class="text-xs text-ash mt-3">{{ t('guideStatusHint') }}</p>
+        </div>
+      </section>
+      <ol class="guide-steps">
+        <li v-for="(step, index) in steps" :key="step.id" class="card">
+          <div class="card-body guide-step">
+            <span class="guide-step-number" aria-hidden="true">{{ index + 1 }}</span>
+            <div class="guide-step-content">
+              <div class="guide-step-heading"><h3>{{ t(step.title) }}</h3><span v-if="step.required" class="tag tag-gold">{{ t('guideRequired') }}</span>
+                <span v-if="step.id === 'user'" class="tag tag-iris">{{ userId }}</span>
+                <span v-else-if="statuses[step.id]" class="tag" :class="statuses[step.id].state === 'unknown' ? 'tag-rose' : 'tag-iris'">{{ t('guideState_' + statuses[step.id].state) }}</span>
+                <span v-else-if="['chat', 'embedding', 'project', 'knowledge', 'graph'].includes(step.id)" class="text-xs text-ash">{{ t('loading') }}</span>
+              </div>
+              <p class="text-sm text-ash mt-2">{{ t(step.hint) }}</p>
+              <p v-if="step.id === 'user'" class="text-sm mt-2">{{ t(authMode === 'none' ? 'guideSingleUserHint' : authMode === 'jwt' ? 'guideJwtHint' : 'guideTokenHint') }}</p>
+              <details v-if="step.id === 'user'" class="mt-3"><summary>{{ t('guideJwtSwitch') }}</summary><p class="text-sm text-ash mt-2">{{ t('guideJwtSwitchHint') }}</p></details>
+              <p v-if="statuses[step.id]?.message" class="text-sm mt-2" role="status">{{ statuses[step.id].message }}</p>
+              <a v-if="step.href" class="btn btn-ghost btn-sm mt-3" :href="step.href">{{ t('guideOpen') }} {{ t(step.title) }}</a>
+            </div>
+          </div>
+        </li>
+      </ol>
+      <a class="btn btn-primary" href="#chat">{{ t('guideStartChat') }}</a>
+    </div>
+  `
+};
+
+const TraceAuditPage = {
   components: { EmptyState },
   setup() {
     const Icons = inject('Icons');
@@ -7645,6 +7892,10 @@ const AuditPage = {
           trace => trace && typeof trace === 'object',
           t('invalidTraceListResponse')
         );
+        if (!statsData || !Number.isInteger(statsData.count) || statsData.count < 0
+            || !Number.isInteger(statsData.retentionDays) || statsData.retentionDays < 0) {
+          throw new Error(t('invalidTraceListResponse'));
+        }
         traces.value = append ? [...traces.value, ...page.items] : page.items;
         nextCursor.value = page.pageInfo.nextCursor;
         hasMore.value = page.pageInfo.hasMore;
@@ -7679,7 +7930,7 @@ const AuditPage = {
     }
 
     function formatDuration(ms) {
-      if (!ms) return '-';
+      if (ms == null) return '-';
       if (ms < 1000) return ms + 'ms';
       return (ms / 1000).toFixed(1) + 's';
     }
@@ -7700,13 +7951,13 @@ const AuditPage = {
       <div v-if="stats" style="display: flex; gap: var(--space-4); margin-bottom: var(--space-6);">
         <div class="card" style="flex: 1;">
           <div class="card-body" style="text-align: center;">
-            <div style="font-family: var(--font-display); font-size: var(--text-2xl); color: var(--rose);">{{ stats.count || 0 }}</div>
+            <div style="font-family: var(--font-display); font-size: var(--text-2xl); color: var(--rose);">{{ stats.count }}</div>
             <div class="text-sm text-ash">{{ t('totalRecords') }}</div>
           </div>
         </div>
         <div class="card" style="flex: 1;">
           <div class="card-body" style="text-align: center;">
-            <div style="font-family: var(--font-display); font-size: var(--text-2xl); color: var(--gold);">{{ stats.retentionDays || 30 }}</div>
+            <div style="font-family: var(--font-display); font-size: var(--text-2xl); color: var(--gold);">{{ stats.retentionDays === 0 ? t('traceRetentionDisabled') : stats.retentionDays }}</div>
             <div class="text-sm text-ash">{{ t('retentionDays') }}</div>
           </div>
         </div>
@@ -7717,10 +7968,10 @@ const AuditPage = {
         <div class="card-header">
           <div class="card-title">{{ t('auditRecords') }}</div>
           <div style="display: flex; gap: var(--space-2);">
-            <button class="btn btn-ghost btn-sm" @click="loadTraces(false)" :disabled="loading">
+            <button class="btn btn-ghost btn-sm" @click="loadTraces(false)" :disabled="loading" :aria-label="t('refresh')">
               <span v-html="Icons.refresh" style="width:14px;height:14px;"></span>
             </button>
-            <button class="btn btn-danger btn-sm" @click="cleanupTraces" :disabled="loading">{{ t('cleanupExpired') }}</button>
+            <button class="btn btn-danger btn-sm" @click="cleanupTraces" :disabled="loading || !stats || stats.retentionDays === 0">{{ t('cleanupExpired') }}</button>
           </div>
         </div>
         <div class="card-body">
@@ -7750,7 +8001,7 @@ const AuditPage = {
                     <td class="text-ash">{{ formatDuration(tr.totalDurationMs) }}</td>
                     <td class="text-xs text-dusk">{{ formatTime(tr.timestamp) }}</td>
                     <td>
-                      <button class="btn btn-ghost btn-sm" @click="deleteTrace(tr.traceId)">
+                      <button class="btn btn-ghost btn-sm" @click="deleteTrace(tr.traceId)" :disabled="loading" :aria-label="t('deleteTraceLabel') + ' ' + tr.traceId">
                         <span v-html="Icons.trash" style="width:14px;height:14px;"></span>
                       </button>
                     </td>
@@ -7769,6 +8020,40 @@ const AuditPage = {
       </div>
     </div>
   `
+};
+
+const AuditPage = {
+  components: { TraceAuditPage, GraphDraftReviewPage },
+  setup() {
+    const t = inject('t');
+    const activeTab = ref('traces');
+    const draftId = ref('');
+    const draftContentHash = ref('');
+    function readRoute() {
+      const [page, query] = window.location.hash.slice(1).split('?');
+      if (page !== 'audit') return;
+      const params = new URLSearchParams(query);
+      activeTab.value = params.get('tab') === 'graphReview' ? 'graphReview' : 'traces';
+      draftId.value = activeTab.value === 'graphReview' ? params.get('draftId') || '' : '';
+      draftContentHash.value = activeTab.value === 'graphReview' ? params.get('contentHash') || '' : '';
+    }
+    function selectTab(tab) { window.location.hash = tab === 'graphReview' ? 'audit?tab=graphReview' : 'audit'; readRoute(); }
+    readRoute();
+    onActivated(readRoute);
+    onMounted(() => window.addEventListener('hashchange', readRoute));
+    onUnmounted(() => window.removeEventListener('hashchange', readRoute));
+    return { t, activeTab, draftId, draftContentHash, selectTab };
+  },
+  template: `
+    <div class="graph-shell">
+      <div class="graph-tabs" role="tablist" :aria-label="t('audit')">
+        <button class="graph-tab" :class="{ active: activeTab === 'traces' }" role="tab" :aria-selected="activeTab === 'traces'" @click="selectTab('traces')">{{ t('auditRecords') }}</button>
+        <button class="graph-tab" :class="{ active: activeTab === 'graphReview' }" role="tab" :aria-selected="activeTab === 'graphReview'" @click="selectTab('graphReview')">{{ t('graphReviewTab') }}</button>
+      </div>
+      <GraphDraftReviewPage v-if="activeTab === 'graphReview'" :draft-id="draftId" :draft-content-hash="draftContentHash" />
+      <TraceAuditPage v-else />
+    </div>
+  `,
 };
 
 // ── Model Configuration Page ──
@@ -7838,7 +8123,8 @@ const ModelConfigPage = {
           if (field.sensitive) {
             credentialValues[field.key] = '';
           } else {
-            const value = field.value == null ? '' : String(field.value);
+            let value = field.value == null ? '' : String(field.value);
+            if (field.key === 'chat.apiFormat' && !value) value = 'chat_completions';
             draftValues[field.key] = value;
             originalValues[field.key] = value;
           }
@@ -7863,6 +8149,9 @@ const ModelConfigPage = {
       try {
         const data = await CyreneAPI.getModelConfiguration();
         applyConfiguration(data);
+        if (Object.hasOwn(draftValues, 'chat.capabilities') && !draftValues['chat.capabilities']) {
+          draftValues['chat.capabilities'] = 'TEXT,IMAGE_INPUT';
+        }
         knowledgeStatus.value = requireKnowledgeStatus(await CyreneAPI.getKnowledgeStatus(), t);
       } catch (e) {
         error.value = e.message;
@@ -7937,6 +8226,18 @@ const ModelConfigPage = {
       return sliderStops(field)[sliderIndex(field)] || t('modelConfigDefaultStop');
     }
 
+    function selectedOptions(field) {
+      return String(draftValues[field.key] ?? '').split(',')
+        .map(value => value.trim().toUpperCase()).filter(Boolean);
+    }
+
+    function toggleOption(field, option, checked) {
+      const selected = new Set(selectedOptions(field));
+      if (checked) selected.add(option);
+      else selected.delete(option);
+      draftValues[field.key] = field.options.filter(value => selected.has(value)).join(',');
+    }
+
     const activeSection = computed(() => sections.value.find(
       section => section.id === activeSectionId.value
     ) || null);
@@ -7985,6 +8286,8 @@ const ModelConfigPage = {
       sliderIndex,
       setSliderValue,
       sliderValueLabel,
+      selectedOptions,
+      toggleOption,
     };
   },
   template: `
@@ -8049,9 +8352,9 @@ const ModelConfigPage = {
             </div>
           </div>
           <div class="model-config-form-grid">
-            <label v-for="field in activeSection.fields" :key="field.key" class="model-config-control">
+            <div v-for="field in activeSection.fields" :key="field.key" class="model-config-control">
               <span class="model-config-key-row">
-                <span class="model-config-label">{{ field.label }}</span>
+                <label :for="'model-' + field.key" class="model-config-label">{{ field.label }}</label>
                 <span v-if="!field.runtimeSynchronized" class="tag tag-gold">
                   {{ t('configurationOutOfSync') }}
                 </span>
@@ -8060,7 +8363,7 @@ const ModelConfigPage = {
 
               <template v-if="field.sensitive">
                 <div class="model-config-input-row">
-                  <input class="input" type="password" v-model="credentialValues[field.key]"
+                  <input :id="'model-' + field.key" class="input" type="password" v-model="credentialValues[field.key]"
                          :disabled="clearKeys.includes(field.key)"
                          :placeholder="field.configured ? t('credentialPlaceholder') : t('enterCredential')" />
                   <button v-if="field.configured" type="button" class="btn btn-ghost btn-sm"
@@ -8071,7 +8374,7 @@ const ModelConfigPage = {
               </template>
               <template v-else-if="field.control === 'slider'">
                 <div class="model-config-slider-row">
-                  <input class="model-config-slider" type="range"
+                  <input :id="'model-' + field.key" class="model-config-slider" type="range"
                          min="0" :max="field.options.length" step="1"
                          :value="sliderIndex(field)"
                          @input="setSliderValue(field, $event.target.value)" />
@@ -8084,22 +8387,33 @@ const ModelConfigPage = {
                 </div>
               </template>
               <template v-else-if="field.control === 'select'">
-                <select class="input" :value="draftValues[field.key] || ''"
+                <select :id="'model-' + field.key" class="input" :value="draftValues[field.key] || ''"
                         @change="draftValues[field.key] = $event.target.value">
-                  <option value="">{{ t('modelConfigDefaultStop') }}</option>
+                  <option v-if="field.key !== 'chat.apiFormat'" value="">{{ t('modelConfigDefaultStop') }}</option>
                   <option v-for="option in field.options" :key="option" :value="option">{{ option }}</option>
                 </select>
               </template>
-              <input v-else class="input" v-model="draftValues[field.key]"
+              <template v-else-if="field.control === 'multiselect'">
+                <div class="model-config-options" role="group" :aria-label="field.label">
+                  <label v-for="option in field.options" :key="option" class="model-config-option">
+                    <input type="checkbox" :checked="selectedOptions(field).includes(option)"
+                           :disabled="saving" @change="toggleOption(field, option, $event.target.checked)" />
+                    <span><strong>{{ t('modelCapabilityName_' + option) }}</strong> <code>{{ option }}</code> — {{ t('modelCapability_' + option) }}</span>
+                  </label>
+                </div>
+                <span class="text-xs text-ash">{{ t('modelCapabilitiesHint') }}</span>
+              </template>
+              <input v-else :id="'model-' + field.key" class="input" v-model="draftValues[field.key]"
                      :type="field.key === 'chat.contextWindow' ? 'number' : 'text'"
                      :min="field.key === 'chat.contextWindow' ? 1 : undefined"
                      :step="field.key === 'chat.contextWindow' ? 1 : undefined"
                      :placeholder="t('notConfigured')" />
+              <span v-if="field.key === 'chat.apiFormat'" class="text-xs text-ash">{{ t('modelApiFormatHint') }}</span>
 
               <span v-if="field.sensitive && field.configured" class="model-config-control-meta">
                 <span>{{ t('credentialConfigured') }}</span>
               </span>
-            </label>
+            </div>
           </div>
         </section>
       </div>
@@ -8109,7 +8423,7 @@ const ModelConfigPage = {
 
 // ── Project API configuration ──
 const ProjectApiConfigPage = {
-  components: { EmptyState },
+  components: { EmptyState, PreConfigModal },
   setup() {
     const Icons = inject('Icons');
     const t = inject('t');
@@ -8118,24 +8432,30 @@ const ProjectApiConfigPage = {
     const loading = ref(false);
     const saving = ref(false);
     const error = ref('');
+    const showPreConfig = ref(false);
+    let loadVersion = 0;
 
     async function loadConfig() {
+      const version = ++loadVersion;
       loading.value = true;
       error.value = '';
       try {
         const data = await CyreneAPI.getConfig();
-        // Server returns { path, config } — extract the config object
-        const config = data.config || data;
+        if (version !== loadVersion) return;
+        const config = data.config;
         configObj.value = config;
         configText.value = JSON.stringify(config, null, 2);
       } catch (e) {
-        if (e.message.includes('not found') || e.message.includes('404')) {
+        if (version !== loadVersion) return;
+        if (e.code === 'NOT_FOUND' && e.status === 404) {
+          configObj.value = null;
+          showPreConfig.value = true;
           configText.value = '{\n  "discoveredAt": "",\n  "projectDescription": "",\n  "baseUrl": "",\n  "projectRoot": "",\n  "endpoints": []\n}';
         } else {
           error.value = e.message;
         }
       } finally {
-        loading.value = false;
+        if (version === loadVersion) loading.value = false;
       }
     }
 
@@ -8180,13 +8500,22 @@ const ProjectApiConfigPage = {
       }
     }
 
-    onMounted(loadConfig);
+    function onPreConfigComplete() {
+      showPreConfig.value = false;
+      return loadConfig();
+    }
+    onActivated(loadConfig);
+    onDeactivated(() => {
+      loadVersion++;
+      showPreConfig.value = false;
+    });
 
-    return { Icons, t, configText, configObj, loading, saving, error, loadConfig, saveConfig, reloadConfig, handleKeydown };
+    return { Icons, t, configText, configObj, loading, saving, error, showPreConfig, onPreConfigComplete, loadConfig, saveConfig, reloadConfig, handleKeydown };
   },
   template: `
     <div>
       <!-- Config editor -->
+      <pre-config-modal v-if="showPreConfig" :visible="true" @complete="onPreConfigComplete" @close="showPreConfig = false" />
       <div class="card card-gold">
         <div class="card-header">
           <div class="card-title">project-apis.json</div>
@@ -8505,8 +8834,8 @@ const ToolPermissionPage = {
                          @change="toggleTool(tool.name)" />
                 </td>
                 <td style="font-family: monospace;">{{ tool.name }}</td>
-                <td><span class="tag tag-iris" style="font-size: 11px;">{{ tool.capability }}</span></td>
-                <td class="text-xs text-ash">{{ tool.description }}</td>
+                <td><span class="tag tag-iris" style="font-size: 11px;">{{ t('toolCapability.' + tool.capability, tool.capability) }}</span></td>
+                <td class="text-xs text-ash">{{ t('toolDescription.' + tool.name, tool.description) }}</td>
               </tr>
             </tbody>
           </table></div>
@@ -8524,14 +8853,18 @@ const ToolPermissionPage = {
         </div>
         <div class="card-body">
           <div class="table-container"><table>
-            <thead><tr><th>{{ t('disabledColumn') }}</th><th>{{ t('apiEndpoint') }}</th><th>{{ t('apiModule') }}</th></tr></thead>
+            <thead><tr><th>{{ t('disabledColumn') }}</th><th>{{ t('apiEndpoint') }}</th><th>{{ t('apiModule') }}</th><th>{{ t('apiDescription') }}</th></tr></thead>
             <tbody><tr v-for="endpoint in endpoints" :key="endpoint.endpointKey">
               <td><input type="checkbox" :checked="disabledEndpointKeys.has(endpoint.endpointKey)"
                 :aria-label="endpoint.endpointKey" :disabled="loading || saving"
                 @change="toggleEndpoint(endpoint.endpointKey)" /></td>
               <td class="permission-api-path"><strong>{{ endpoint.method }}</strong> {{ endpoint.pathTemplate }}
                 <div class="text-xs text-ash">{{ endpoint.name }}</div></td>
-              <td>{{ endpoint.module }}</td>
+              <td>{{ t('apiModule.' + endpoint.module, endpoint.module) }}</td>
+              <td class="permission-api-description text-xs text-ash">
+                <div>{{ t('apiDescription.' + endpoint.endpointKey, endpoint.name) }}</div>
+                <div class="mt-2">{{ t('apiPolicy.' + endpoint.resourcePolicy, endpoint.resourcePolicy) }}</div>
+              </td>
             </tr></tbody>
           </table></div>
           <button v-if="hasMoreEndpoints" class="btn btn-ghost mt-2" @click="loadMoreEndpoints"
@@ -8547,7 +8880,11 @@ const ConfigPage = {
   components: { ProjectApiConfigPage, ToolPermissionPage },
   setup() {
     const t = inject('t');
-    const activeTab = ref('projectApis');
+    const activeTab = ref('internalApi');
+    onActivated(() => {
+      const tab = new URLSearchParams(window.location.hash.split('?')[1]).get('tab');
+      activeTab.value = ['internalApi', 'projectApis'].includes(tab) ? tab : 'internalApi';
+    });
     return { t, activeTab };
   },
   template: `
@@ -8641,11 +8978,11 @@ const app = createApp({
   components: {
     ToastContainer,
     StarsBackground,
-    PreConfigModal,
     ChatPage,
     KnowledgePage,
     GraphPage,
     AuditPage,
+    GuidePage,
     ModelConfigPage,
     ConfigPage,
     ToolPermissionPage,
@@ -8657,8 +8994,6 @@ const app = createApp({
     const sidebarOpen = ref(false);
     const sidebarCollapsed = ref(false);
     const testDockOpen = ref(false);
-    const showPreConfig = ref(false);
-    const configExists = ref(true);
 
     // ── Global userId (persisted in localStorage) ──
     const userId = ref(localStorage.getItem('cyrene_user') || '');
@@ -8667,6 +9002,7 @@ const app = createApp({
     const authError = ref('');
     const authSecret = ref('');
     const authVersion = ref(0);
+    const showGuideHint = ref(false);
     CyreneAPI.setToken(sessionStorage.getItem('cyrene_token'));
     CyreneAPI.onTokenRefresh(token => sessionStorage.setItem('cyrene_token', token));
     const showWelcome = ref(!userId.value);
@@ -8674,6 +9010,7 @@ const app = createApp({
     const editUserId = ref('');
 
     provide('userId', userId);
+    provide('authMode', authMode);
     const locale = CyreneI18n.init(ref, watch);
     const t = CyreneI18n.t.bind(CyreneI18n);
     provide('t', t);
@@ -8681,7 +9018,7 @@ const app = createApp({
 
     async function confirmUserId() {
       const val = editUserId.value.trim();
-      if (!val || authLoading.value) return;
+      if (!val || !authSecret.value.trim() || authLoading.value) return;
       authLoading.value = true;
       authError.value = '';
       try {
@@ -8696,6 +9033,10 @@ const app = createApp({
           if (!authSecret.value.trim()) throw new Error(t('tokenRequired'));
           CyreneAPI.setToken(authSecret.value.trim());
           sessionStorage.setItem('cyrene_token', authSecret.value.trim());
+        } else if (authMode.value === 'none') {
+          const result = await CyreneAPI.setupSingleUser(val, authSecret.value);
+          if (result.status !== 'saved' || typeof result.userId !== 'string') throw new Error(t('invalidAuthResponse'));
+          verifiedUserId = result.userId;
         }
         userId.value = verifiedUserId;
         localStorage.setItem('cyrene_user', verifiedUserId);
@@ -8703,6 +9044,7 @@ const app = createApp({
         showWelcome.value = false;
         editingUser.value = false;
         authVersion.value++;
+        showFirstGuide();
       } catch (e) {
         authError.value = e.message;
       } finally { authLoading.value = false; }
@@ -8716,17 +9058,22 @@ const app = createApp({
           sessionStorage.removeItem('cyrene_token');
           localStorage.removeItem('cyrene_user');
           userId.value = '';
+          showGuideHint.value = false;
           showWelcome.value = true;
           authVersion.value++;
         } catch (e) { showToast(e.message, 'error'); }
         return;
       }
       editUserId.value = userId.value;
+      authSecret.value = '';
+      authError.value = '';
       editingUser.value = true;
     }
 
     function cancelEditUser() {
       editingUser.value = false;
+      authSecret.value = '';
+      authError.value = '';
     }
 
     const navItems = computed(() => [
@@ -8740,6 +9087,7 @@ const app = createApp({
     ]);
 
     const pageTitle = computed(() => {
+      if (currentPage.value === 'guide') return t('setupGuide');
       const item = navItems.value.find(n => n.id === currentPage.value);
       return item ? item.label : 'Cyrene';
     });
@@ -8750,35 +9098,28 @@ const app = createApp({
       window.location.hash = page;
     }
 
-    function toggleSidebar() {
-      sidebarOpen.value = !sidebarOpen.value;
-    }
-
-    async function checkConfig() {
-      try {
-        await CyreneAPI.getConfig();
-        configExists.value = true;
-      } catch (e) {
-        if (e.code === 'NOT_FOUND') {
-          configExists.value = false;
-          showPreConfig.value = true;
-        } else { showToast(e.message, 'error'); }
+    function showFirstGuide() {
+      const key = 'cyrene_guide_seen:' + authMode.value + ':' + userId.value;
+      showGuideHint.value = false;
+      if (!localStorage.getItem(key)) {
+        localStorage.setItem(key, '1');
+        showGuideHint.value = currentPage.value !== 'guide';
       }
     }
 
-    function onPreConfigComplete() {
-      showPreConfig.value = false;
-      configExists.value = true;
+    function openGuide() {
+      showGuideHint.value = false;
+      navigate('guide');
     }
 
-    function onPreConfigClose() {
-      showPreConfig.value = false;
+    function toggleSidebar() {
+      sidebarOpen.value = !sidebarOpen.value;
     }
 
     // Handle hash routing
     function handleHash() {
       const hash = window.location.hash.slice(1).split('?')[0] || 'chat';
-      if (navItems.value.find(n => n.id === hash)) {
+      if (hash === 'guide' || navItems.value.find(n => n.id === hash)) {
         currentPage.value = hash;
       }
     }
@@ -8791,7 +9132,7 @@ const app = createApp({
         if (!['none', 'jwt', 'token'].includes(status.authMode)) throw new Error(t('invalidAuthResponse'));
         authMode.value = status.authMode;
         if (status.authMode !== 'none' && !CyreneAPI.getToken()) showWelcome.value = true;
-        if (!showWelcome.value) await checkConfig();
+        if (userId.value && !showWelcome.value) showFirstGuide();
       } catch (e) { authError.value = e.message; showWelcome.value = true; }
       finally { authLoading.value = false; }
     });
@@ -8802,13 +9143,12 @@ const app = createApp({
 
     return {
       Icons, currentPage, sidebarOpen, sidebarCollapsed, testDockOpen,
-      showPreConfig, configExists,
       navItems, pageTitle, t, locale,
       userId, showWelcome, editingUser, editUserId,
       authMode, authLoading, authError, authSecret,
       authVersion,
       confirmUserId, startEditUser, cancelEditUser,
-      navigate, toggleSidebar, onPreConfigComplete, onPreConfigClose,
+      navigate, toggleSidebar, showGuideHint, openGuide,
     };
   },
   template: `
@@ -8833,23 +9173,21 @@ const app = createApp({
                 {{ t(authMode === 'none' ? 'userIdHint' : 'verifiedUserHint') }}
               </div>
             </div>
-            <div v-if="authMode !== 'none' && authMode" class="input-group mt-3">
-              <label class="input-label" for="login-secret">{{ t(authMode === 'jwt' ? 'password' : 'apiToken') }}</label>
+            <div v-if="authMode" class="input-group mt-3">
+              <label class="input-label" for="login-secret">{{ t(authMode === 'token' ? 'apiToken' : 'password') }}</label>
               <input id="login-secret" class="input" type="password" v-model="authSecret" :disabled="authLoading"
-                     :autocomplete="authMode === 'jwt' ? 'current-password' : 'off'" @keydown.enter="confirmUserId" />
+                     :autocomplete="authMode === 'token' ? 'off' : 'current-password'" @keydown.enter="confirmUserId" />
+              <p v-if="authMode === 'none'" class="text-xs text-ash mt-2">{{ t('singleUserPasswordHint') }}</p>
             </div>
             <div v-if="authError" class="text-sm mt-2" role="alert" style="color: var(--error);">{{ authError }}</div>
           </div>
           <div class="modal-footer">
-            <button class="btn btn-primary" @click="confirmUserId" :disabled="authLoading || !editUserId.trim()">
+            <button class="btn btn-primary" @click="confirmUserId" :disabled="authLoading || !editUserId.trim() || !authSecret.trim()">
               {{ t(authLoading ? 'loading' : 'enterCyrene') }}
             </button>
           </div>
         </div>
       </div>
-
-      <!-- Pre-config modal -->
-      <pre-config-modal :visible="showPreConfig" @complete="onPreConfigComplete" @close="onPreConfigClose" />
 
       <div style="display: flex; height: 100vh; position: relative; z-index: 1;">
         <!-- Sidebar backdrop (mobile) -->
@@ -8904,18 +9242,28 @@ const app = createApp({
                 <span class="user-dot"></span>
                 <span>{{ userId || t('unset') }}</span>
               </button>
+              <div class="guide-entry">
+                <button class="btn btn-ghost btn-sm" @click="openGuide" :aria-label="t('setupGuide')" :aria-describedby="showGuideHint ? 'guide-first-login-hint' : undefined">{{ t('setupGuide') }}</button>
+                <div v-if="showGuideHint" id="guide-first-login-hint" class="guide-nudge" role="status">
+                  <span class="guide-nudge-hand" aria-hidden="true">👆</span>
+                  <span>{{ t('guideFirstLoginHint') }}</span>
+                  <button class="btn btn-ghost btn-sm" @click="showGuideHint = false" :aria-label="t('guideDismissHint')">×</button>
+                </div>
+              </div>
             </div>
           </header>
 
           <!-- Inline user ID editor -->
           <div v-if="editingUser" style="padding: 0 var(--space-6); background: var(--surface); border-bottom: 1px solid var(--gold-line);">
-            <div style="display: flex; gap: var(--space-3); align-items: center; padding: var(--space-3) 0;">
+            <div style="display: flex; flex-wrap: wrap; gap: var(--space-3); align-items: center; padding: var(--space-3) 0;">
               <input class="input" v-model="editUserId" :placeholder="t('userId')"
-                     style="flex: 1; max-width: 300px;"
-                     @keydown.enter="confirmUserId" @keydown.escape="cancelEditUser" />
-              <button class="btn btn-primary btn-sm" @click="confirmUserId" :disabled="!editUserId.trim()">{{ t('confirm') }}</button>
-              <button class="btn btn-ghost btn-sm" @click="cancelEditUser">{{ t('cancel') }}</button>
+                     style="flex: 1 1 180px; min-width: 0; max-width: 300px;"
+                     :disabled="authLoading" @keydown.enter="confirmUserId" @keydown.escape="cancelEditUser" />
+              <input class="input" type="password" v-model="authSecret" :placeholder="t('password')" :aria-label="t('password')" style="flex: 1 1 180px; min-width: 0; max-width: 300px;" :disabled="authLoading" autocomplete="current-password" @keydown.enter="confirmUserId" />
+              <button class="btn btn-primary btn-sm" @click="confirmUserId" :disabled="authLoading || !editUserId.trim() || !authSecret.trim()">{{ t('confirm') }}</button>
+              <button class="btn btn-ghost btn-sm" @click="cancelEditUser" :disabled="authLoading">{{ t('cancel') }}</button>
             </div>
+            <p v-if="authError" class="text-sm mb-3" role="alert" style="color: var(--error);">{{ authError }}</p>
           </div>
 
           <div class="page-container">

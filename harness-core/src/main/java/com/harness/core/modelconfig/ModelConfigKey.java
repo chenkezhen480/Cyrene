@@ -93,7 +93,7 @@ public final class ModelConfigKey {
             d(API_MAX_CONCURRENT, "global", "模型接口最大并发数"),
             d(CHAT_PROVIDER, "chat", "对话模型服务商"), d(CHAT_API_KEY, "chat", "对话模型密钥", true),
             d(CHAT_BASE_URL, "chat", "对话模型接口地址"), d(CHAT_MODEL, "chat", "对话模型名称"),
-            d(CHAT_API_FORMAT, "chat", "对话接口格式"), d(CHAT_MAX_TOKENS, "chat", "最大输出 Token"),
+            d(CHAT_API_FORMAT, "chat", "对话接口格式", "select", List.of("chat_completions", "responses")), d(CHAT_MAX_TOKENS, "chat", "最大输出 Token"),
             d(CHAT_TEMPERATURE, "chat", "生成温度"),
             hidden(d(CHAT_THINKING, "chat", "默认启用思考（已废弃，改用思考强度）")),
             d(CHAT_THINKING_LEVEL, "chat", "思考强度", "slider", List.of("off", "low", "medium", "high", "xhigh")),
@@ -102,7 +102,7 @@ public final class ModelConfigKey {
             hidden(d(CHAT_THINKING_MAX_LEVEL, "chat", "思考强度上限", "select", List.of("off", "low", "medium", "high", "xhigh"))),
             hidden(d(CHAT_THINKING_XHIGH_VALUE, "chat", "xhigh 档下发值（Ollama 兼容口填 max）")),
             d(CHAT_TIMEOUT_SECONDS, "chat", "请求超时秒数"), d(CHAT_CONTEXT_WINDOW, "chat", "上下文容量（Token）"),
-            d(CHAT_CAPABILITIES, "chat", "多模态能力声明"),
+            d(CHAT_CAPABILITIES, "chat", "多模态能力声明", "multiselect", List.of("TEXT", "IMAGE_INPUT", "AUDIO_INPUT", "VIDEO_INPUT")),
             d(VISION_PROVIDER, "vision", "视觉模型服务商"), d(VISION_API_KEY, "vision", "视觉模型密钥", true),
             d(VISION_BASE_URL, "vision", "视觉模型接口地址"), d(VISION_MODEL, "vision", "视觉模型名称"),
             d(VOICE_PROVIDER, "voice", "语音模型服务商"), d(VOICE_API_KEY, "voice", "语音模型密钥", true),
@@ -172,7 +172,8 @@ public final class ModelConfigKey {
     /**
      * {@code control} describes how configuration UIs should render the field:
      * {@code text} (free input, default), {@code slider} (ordered stops from
-     * {@code options}), or {@code select} (dropdown from {@code options}).
+     * {@code options}), {@code select} (dropdown from {@code options}), or
+     * {@code multiselect} (checkboxes serialized as comma-separated values).
      */
     public record Definition(
             String key,

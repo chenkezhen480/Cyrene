@@ -16,7 +16,7 @@ class PrepareGraphChangesToolTest {
 
     @Test void ordinaryChatCanProposeSelectedTargetWithTrustedScopeAndReviewLink() throws Exception {
         GraphDraftView view = new GraphDraftView("root", "draft", null, "hash", "graph", "schema", "tenant", "user", "session", "run", "trace", null,
-                "request", "PENDING", 1, 0, 0, 0, "now", "/api/graph/change-drafts/draft", null);
+                "request", "PENDING", 1, 0, 0, 0, "now", "/api/graph/change-drafts/draft", null, null, null);
         when(service.prepare(eq(scope), any())).thenReturn(view);
         var output = tool.executeOutput(mapper.readTree("""
                 {"graphId":"graph","schemaId":"schema","nodes":[{"nodeId":"new","labels":["Person"],"properties":{"name":"new"}}]}

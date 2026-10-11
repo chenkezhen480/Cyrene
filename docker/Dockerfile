@@ -18,6 +18,7 @@ RUN mvn clean package -DskipTests -B
 
 # Stage 2: Runtime
 FROM eclipse-temurin:21-jre
+RUN groupadd --gid 10001 cyrene-model
 WORKDIR /app
 COPY --from=builder /build/harness-server/target/harness-server.jar app.jar
 # Expose HTTP port

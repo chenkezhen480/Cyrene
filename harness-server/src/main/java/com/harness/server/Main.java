@@ -10,6 +10,7 @@ import com.harness.core.model.AgentContext;
 import com.harness.core.model.CancellationToken;
 import com.harness.core.env.EnvConfig;
 import com.harness.core.env.EnvKey;
+import com.harness.core.env.MysqlConnectionPool;
 import com.harness.core.modelconfig.ModelConfigFile;
 import com.harness.graph.build.GraphBuildService;
 import com.harness.graph.build.GraphMutationCommitter;
@@ -207,13 +208,20 @@ public class Main {
             ctx.removeCookie(RequestPrincipalResolver.MEDIA_COOKIE);
             ctx.json(Map.of("status", "signedOut"));
         });
+        UserAccountService userAccounts = new UserAccountService(
+                new MysqlUserAccountStore(MysqlConnectionPool::getConnection),
+                new com.harness.server.security.PasswordHasher(new java.security.SecureRandom()));
+        SingleUserAccountHandler singleUserAccounts = new SingleUserAccountHandler(userAccounts, EnvConfig.get());
+        apiRoutes.route(app, "POST", "/api/auth/single-user", "auth.setupSingleUser", "auth", GLOBAL_MANAGEMENT,
+                singleUserAccounts::setup);
 
         ModelConfigurationHandler modelConfigurationHandler = new ModelConfigurationHandler(
                 new ModelConfigurationService(
                         new ModelConfigFile(Path.of(
                                 EnvConfig.get().getString(
                                         EnvKey.CONFIG_MODEL_FILE,
-                                        "./data/model.conf"))),
+                                        "./data/model.conf")),
+                                EnvConfig.get().getString(EnvKey.CONFIG_MODEL_READ_GROUP, "")),
                         agent));
         apiRoutes.route(app, "GET", "/api/model-config", "modelConfig.read", "model", GLOBAL_MANAGEMENT, modelConfigurationHandler::get);
         apiRoutes.route(app, "PUT", "/api/model-config", "modelConfig.update", "model", GLOBAL_MANAGEMENT, modelConfigurationHandler::update);
@@ -222,7 +230,7 @@ public class Main {
 
         // Auth token endpoint
         if ("jwt".equals(authMode)) {
-            AuthHandler authHandler = new AuthHandler();
+            AuthHandler authHandler = new AuthHandler(new com.harness.input.auth.JwtUtil(), userAccounts::verify);
             apiRoutes.route(app, "POST", "/api/auth/token", "auth.login", "auth", PUBLIC, authHandler::handle);
         }
 
@@ -303,12 +311,19 @@ public class Main {
         GraphBuildHandler graphBuildHandler =
                 new GraphBuildHandler(graphBuildService, graphRequestExecutor);
         if (agent.graphChangeDraftService() != null) {
+            GraphDraftScopeResolver draftScopes = new GraphDraftScopeResolver(agent.sessionStore(), mapper);
             GraphChangeDraftHandler drafts = new GraphChangeDraftHandler(agent.graphChangeDraftService(),
-                    new GraphDraftScopeResolver(agent.sessionStore(), mapper));
+                    draftScopes);
             apiRoutes.route(app, "GET", "/api/graph/change-drafts/{draftId}", "graph.draft.read", "graph", USER, drafts::read);
             apiRoutes.route(app, "GET", "/api/graph/change-drafts/{draftId}/changes", "graph.draft.changes", "graph", USER, drafts::changes);
             apiRoutes.route(app, "POST", "/api/graph/change-drafts", "graph.draft.prepare", "graph", USER, drafts::prepare);
             apiRoutes.route(app, "POST", "/api/graph/change-drafts/{draftId}/apply", "graph.draft.apply", "graph", USER, drafts::apply);
+            GraphDraftReviewHandler reviews = new GraphDraftReviewHandler(agent.graphChangeDraftService(), draftScopes::review, graphRequestExecutor);
+            apiRoutes.route(app, "GET", "/api/graph/change-reviews", "graph.review.list", "graphReview", TENANT, reviews::list);
+            apiRoutes.route(app, "GET", "/api/graph/change-reviews/{draftId}", "graph.review.read", "graphReview", TENANT, reviews::read);
+            apiRoutes.route(app, "GET", "/api/graph/change-reviews/{draftId}/changes", "graph.review.changes", "graphReview", TENANT, reviews::changes);
+            apiRoutes.route(app, "POST", "/api/graph/change-reviews", "graph.review.prepare", "graphReview", TENANT, reviews::prepare);
+            apiRoutes.route(app, "POST", "/api/graph/change-reviews/{draftId}/apply", "graph.review.apply", "graphReview", TENANT, reviews::apply);
         }
         GraphSchemaManagementHandler graphSchemaHandler = new GraphSchemaManagementHandler(
                 agent.graphSchemaManagementService(),

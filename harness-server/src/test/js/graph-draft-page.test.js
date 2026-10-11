@@ -83,7 +83,7 @@ test('draft change pagination rejects a different version/hash', () => {
   assert.throws(() => requireGraphDraftChangePage(page, view, key => key), /graphInvalidDraftResponse/);
 });
 
-function setupPage(apiOverrides = {}, uiOverrides = {}) {
+function setupPage(apiOverrides = {}, uiOverrides = {}, reviewMode = false) {
   const graphPage = source.slice(source.indexOf('const GraphBuildPage = {'), source.indexOf('// ── Audit Page ──', source.indexOf('const GraphBuildPage = {')));
   const dataHelpers = source.slice(source.indexOf('const GRAPH_DATA_NUMBER_TYPES'), source.indexOf('const GraphDataPropertyEditor = {'));
   const contract = source.slice(source.indexOf('function requirePageResponse'), source.indexOf('// ── Graph Page ──'));
@@ -100,7 +100,8 @@ function setupPage(apiOverrides = {}, uiOverrides = {}) {
     async buildGraph() { assert.fail('draft mode must use hash-confirmed draft apply'); },
     ...apiOverrides,
   };
-  const state = runInNewContext(contract + helpers + dataHelpers + graphPage + '\nGraphBuildPage.setup({draftId:"v1",draftContentHash:"hash"});', {
+  const state = runInNewContext(contract + helpers + dataHelpers + graphPage + '\nGraphBuildPage.setup({draftId:"v1",draftContentHash:"hash",reviewMode});', {
+    reviewMode,
     CyreneAPI: api, AbortController,
     ref: value => ({ value }), computed: getter => ({ get value() { return getter(); } }),
     inject: key => key === 't' ? value => value : key === 'userId' ? { value: 'alice' } : {},
@@ -111,6 +112,31 @@ function setupPage(apiOverrides = {}, uiOverrides = {}) {
   });
   return { state, calls };
 }
+
+test('review editor uses management reads, continuations and hash-confirmed apply', async () => {
+  const calls = []; const location = { hash: '#audit?tab=graphReview&draftId=v1' };
+  const { state } = setupPage({
+    async getGraphDraft(id, user, options) {
+      calls.push(['read', user, options.review]);
+      return { draft: { ...view, draftId: id, contentHash: id === 'v1' ? 'hash' : 'hash2' }, schema: { schemaId: 'schema', nodeTypes: {}, relationTypes: {} } };
+    },
+    async getGraphSchema() { assert.fail('Tenant review must use the authorized draft schema'); },
+    async getGraphDraftChanges(id, user, options) {
+      calls.push(['changes', user, options.review]);
+      return { items: changes.map(change => ({ ...change, viewType: 'DRAFT_PREVIEW', draftId: id, contentHash: 'hash' })), pageInfo: { limit: 50, nextCursor: '', hasMore: false } };
+    },
+    async saveGraphDraft(payload, signal, review) { calls.push(['save', payload.userId, review]); return { ...view, draftId: 'v2', contentHash: 'hash2' }; },
+    async applyGraphDraft(id, user, hash, review) { calls.push(['apply', user, review]); return { committed: true }; },
+  }, { window: { location } }, true);
+  await state.openDraft();
+  await state.applyDraft();
+  await state.saveDraft();
+  assert.ok(calls.length >= 4);
+  assert.ok(calls.every(call => call[1] === 'alice' && call[2] === true));
+  assert.ok(calls.some(call => call[0] === 'save'));
+  assert.ok(calls.some(call => call[0] === 'apply'));
+  assert.equal(location.hash, '#audit?tab=graphReview&draftId=v2&contentHash=hash2');
+});
 
 test('draft page loads only affected changes and saves deletion as an immutable continuation', async () => {
   const { state, calls } = setupPage({
@@ -138,7 +164,7 @@ test('draft application submits the viewed hash and blocks unsaved edits', async
   await state.openDraft();
   assert.equal(state.draftHasEdits.value, false);
   await state.applyDraft();
-  assert.deepEqual(calls.find(call => call[0] === 'apply'), ['apply', 'v1', 'alice', 'hash']);
+  assert.deepEqual(calls.find(call => call[0] === 'apply'), ['apply', 'v1', 'alice', 'hash', false]);
   state.draftDesignerModel.value.nodes = [];
   await state.applyDraft();
   assert.equal(calls.filter(call => call[0] === 'apply').length, 1);
@@ -341,7 +367,7 @@ test('APPLYING is read only but permits an explicitly confirmed retry of the sam
   await state.saveDraft();
   assert.equal(calls.some(call => call[0] === 'save'), false);
   await state.applyDraft();
-  assert.deepEqual(calls.find(call => call[0] === 'apply'), ['apply', 'v1', 'alice', 'hash']);
+  assert.deepEqual(calls.find(call => call[0] === 'apply'), ['apply', 'v1', 'alice', 'hash', false]);
 });
 
 test('a failed apply remains retryable after a complete preview without reloading', async () => {

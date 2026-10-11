@@ -7,5 +7,6 @@ public enum ModalCapability {
     TEXT,
     IMAGE_INPUT,
     AUDIO_INPUT,
+    VIDEO_INPUT,
     PDF_INPUT
 }

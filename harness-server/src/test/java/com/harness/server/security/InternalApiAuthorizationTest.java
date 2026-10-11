@@ -12,6 +12,21 @@ import static org.assertj.core.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 class InternalApiAuthorizationTest {
+    @Test void allGraphReviewManagementOperationsRespectIdentityDisableSettings() {
+        var store = mock(MysqlInternalApiPermissionStore.class);
+        var service = new InternalApiPermissionService(store, new InternalApiRouteRegistry(), true);
+        var ordinary = new RequestPrincipal("u1", "tenant", "business", JWT);
+        var administrator = new RequestPrincipal("admin", "tenant", "manager", JWT);
+        for (String action : java.util.List.of("list", "read", "changes", "prepare", "apply")) {
+            String key = "graph.review." + action;
+            var endpoint = endpoint(key, "GET", "/api/graph/change-reviews", TENANT);
+            when(store.isDisabled("tenant", "business", key)).thenReturn(true);
+            assertThatThrownBy(() -> service.authorize(ordinary, endpoint)).isInstanceOf(SecurityException.class);
+            assertThatCode(() -> service.authorize(administrator, endpoint)).doesNotThrowAnyException();
+            when(store.isDisabled("tenant", "manager", key)).thenReturn(true);
+            assertThatThrownBy(() -> service.authorize(administrator, endpoint)).isInstanceOf(SecurityException.class);
+        }
+    }
     @Test
     void absenceAllowsAndDisablingOrEnablingTakesEffectOnTheNextRequest() {
         var store = mock(MysqlInternalApiPermissionStore.class);

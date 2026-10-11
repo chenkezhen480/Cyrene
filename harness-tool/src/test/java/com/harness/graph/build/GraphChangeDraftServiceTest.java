@@ -59,6 +59,70 @@ class GraphChangeDraftServiceTest {
                 mapper.readTree(nodes), mapper.readTree(relations), deleted, Set.of(), discarded);
     }
 
+    @Test void tenantReviewKeepsSubmitterAndSessionWhileRecordingReviewerAndIdempotentApply() throws Exception {
+        var reviewer = new GraphDraftScope("000000", "admin", null, "admin-run", "admin-trace", null, null);
+        var original = service.prepare(scope, request(null, null,
+                "[{\"nodeId\":\"old\",\"properties\":{\"name\":\"submitted\"}}]", "[]", Set.of(), Set.of()));
+        assertThatThrownBy(() -> service.read(reviewer, original.draftId(), original.contentHash())).isInstanceOf(SecurityException.class);
+        assertThat(service.readDetailsForReview(reviewer, original.draftId(), original.contentHash()).draft().userId()).isEqualTo("user");
+        assertThat(service.readDetailsForReview(reviewer, original.draftId(), original.contentHash()).schema().schemaId()).isEqualTo("schema");
+        assertThat(service.readPreviewForReview(reviewer, original.draftId(), original.contentHash(), 1, "").items()).hasSize(1);
+        var edited = service.prepareForReview(reviewer, request(original.draftId(), original.contentHash(),
+                "[{\"nodeId\":\"old\",\"properties\":{\"name\":\"reviewed\"}}]", "[]", Set.of(), Set.of()));
+        assertThat(edited.userId()).isEqualTo(scope.userId());
+        assertThat(edited.sessionId()).isEqualTo(scope.sessionId());
+        assertThat(edited.runId()).isEqualTo(scope.runId());
+        assertThat(edited.reviewerUserId()).isEqualTo("admin");
+        assertThat(edited.reviewedAt()).isNotBlank();
+        verify(committer, never()).commit(any());
+        var restarted = createService();
+        assertThat(restarted.applyForReview(reviewer, edited.draftId(), edited.contentHash()).committed()).isTrue();
+        assertThat(restarted.applyForReview(reviewer, edited.draftId(), edited.contentHash()).committed()).isTrue();
+        assertThat(createService().readDetailsForReview(reviewer, edited.draftId(), edited.contentHash()).draft().status()).isEqualTo("APPLIED");
+        verify(committer, times(1)).commit(any());
+        doThrow(new SecurityException("write revoked")).when(access).requireWritable(reviewer, "graph", "schema");
+        assertThatThrownBy(() -> service.applyForReview(reviewer, edited.draftId(), edited.contentHash())).isInstanceOf(SecurityException.class);
+    }
+
+    @Test void reviewListIsTenantScopedPagedAndContainsOnlyCurrentVersions() throws Exception {
+        var reviewer = new GraphDraftScope("000000", "admin", null, "run", "trace", null, null);
+        var first = service.prepare(scope, request(null, null, "[]", "[]", Set.of("old"), Set.of()));
+        var second = service.prepare(new GraphDraftScope("000000", "other", "other-session", "run", "trace", null, null),
+                request(null, null, "[]", "[]", Set.of("old"), Set.of()));
+        var current = service.prepare(scope, request(first.draftId(), first.contentHash(), "[]", "[]", Set.of(), Set.of()));
+        var foreign = service.prepare(new GraphDraftScope("other-tenant", "other", "session", "run", "trace", null, null),
+                request(null, null, "[]", "[]", Set.of("old"), Set.of()));
+        var page = service.listForReview(reviewer, 1, "", "PENDING");
+        assertThat(page.items()).hasSize(1);
+        assertThat(page.pageInfo().hasMore()).isTrue();
+        var next = service.listForReview(reviewer, 1, page.pageInfo().nextCursor(), "PENDING");
+        assertThat(next.pageInfo().hasMore()).isFalse();
+        assertThat(java.util.stream.Stream.concat(page.items().stream(), next.items().stream()).map(GraphDraftView::draftId).toList())
+                .containsExactlyInAnyOrder(current.draftId(), second.draftId());
+        assertThatThrownBy(() -> service.readDetailsForReview(reviewer, foreign.draftId(), foreign.contentHash())).isInstanceOf(SecurityException.class);
+        assertThat(service.listForReview(reviewer, 10, "", "APPLIED").items()).isEmpty();
+        assertThatThrownBy(() -> service.listForReview(reviewer, 1, "invalid", "PENDING")).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> service.listForReview(reviewer, 1, "", "UNKNOWN")).isInstanceOf(IllegalArgumentException.class);
+        doThrow(new SecurityException("space revoked")).when(access).requireReadable(reviewer, "graph", "schema");
+        assertThat(service.listForReview(reviewer, 1, "", "").items()).isEmpty();
+        doThrow(new IllegalStateException("database down")).when(access).requireReadable(reviewer, "graph", "schema");
+        assertThatThrownBy(() -> service.listForReview(reviewer, 1, "", "")).hasMessage("database down");
+    }
+
+    @Test void existingReferencesWithoutReviewerFieldsRemainReadable() throws Exception {
+        var draft = service.prepare(scope, request(null, null, "[]", "[]", Set.of("old"), Set.of()));
+        for (String id : List.of(draft.draftId(), draft.rootDraftId())) {
+            var reference = (com.fasterxml.jackson.databind.node.ObjectNode) mapper.readTree(artifacts.readGraphDraftReference(id).orElseThrow());
+            reference.remove(List.of("reviewerUserId", "reviewedAt"));
+            artifacts.writeGraphDraftReference(id, mapper.writeValueAsBytes(reference));
+        }
+        var reviewer = new GraphDraftScope("000000", "admin", null, "run", "trace", null, null);
+        assertThat(createService().read(scope, draft.draftId(), draft.contentHash()).reviewerUserId()).isNull();
+        assertThat(createService().listForReview(reviewer, 10, "", "PENDING").items()).hasSize(1);
+        assertThatThrownBy(() -> service.prepareForReview(reviewer, request(null, null, "[]", "[]", Set.of(), Set.of())))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("existing draft");
+    }
+
     @Test void unchangedIntegerReadBackFromNeo4jSurvivesDraftPrepareReloadAndApply() throws Exception {
         Object age = org.neo4j.driver.Values.value(10).asObject();
         assertThat(age).isInstanceOf(Long.class);

@@ -6,4 +6,5 @@ public record GraphDraftView(String rootDraftId, String draftId, String sourceDr
                             String traceId, String taskId, String requestId, String status,
                             int nodeCount, int relationCount, int deleteNodeCount,
                             int deleteRelationCount, String createdAt, String viewUrl,
-                            GraphMutationCommitter.Failure failure) { }
+                            GraphMutationCommitter.Failure failure,
+                            String reviewerUserId, String reviewedAt) { }

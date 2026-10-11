@@ -5,10 +5,13 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.attribute.PosixFileAttributeView;
+import java.nio.file.attribute.PosixFilePermission;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -18,9 +21,15 @@ public final class ModelConfigFile {
     private static final Pattern ASSIGNMENT = Pattern.compile(
             "^\\s*([A-Za-z][A-Za-z0-9.]*)\\s*=\\s*(.*)$");
     private final Path path;
+    private final String readGroup;
 
     public ModelConfigFile(Path path) {
+        this(path, "");
+    }
+
+    public ModelConfigFile(Path path, String readGroup) {
         this.path = Objects.requireNonNull(path, "path").toAbsolutePath().normalize();
+        this.readGroup = Objects.requireNonNull(readGroup, "readGroup").trim();
     }
 
     public synchronized ModelConfig read() throws IOException {
@@ -63,6 +72,7 @@ public final class ModelConfigFile {
     }
 
     synchronized void completeVisibleKeys() throws IOException {
+        applyReadPermissions(path);
         String content = Files.readString(path, StandardCharsets.UTF_8);
         Map<String, String> assignments = readAssignments(content);
         List<String> missing = ModelConfigKey.DEFINITIONS.stream()
@@ -81,11 +91,23 @@ public final class ModelConfigFile {
         Path temporaryFile = Files.createTempFile(parent, ".model-config-", ".tmp");
         try {
             Files.writeString(temporaryFile, content, StandardCharsets.UTF_8);
+            applyReadPermissions(temporaryFile);
             Files.move(temporaryFile, path, StandardCopyOption.ATOMIC_MOVE,
                     StandardCopyOption.REPLACE_EXISTING);
         } finally {
             Files.deleteIfExists(temporaryFile);
         }
+    }
+
+    private void applyReadPermissions(Path file) throws IOException {
+        if (readGroup.isEmpty()) return;
+        PosixFileAttributeView attributes = Files.getFileAttributeView(file, PosixFileAttributeView.class);
+        if (attributes == null) throw new IOException(
+                "Model configuration read group requires a POSIX filesystem: " + path);
+        attributes.setGroup(path.getFileSystem().getUserPrincipalLookupService()
+                .lookupPrincipalByGroupName(readGroup));
+        attributes.setPermissions(Set.of(PosixFilePermission.OWNER_READ,
+                PosixFilePermission.OWNER_WRITE, PosixFilePermission.GROUP_READ));
     }
 
     public Path path() { return path; }

@@ -598,7 +598,8 @@ public class AgentOrchestrator implements ModelConfigurationRuntime {
         Path path = Path.of(EnvConfig.get().getString(
                 EnvKey.CONFIG_MODEL_FILE, "./data/model.conf"));
         try {
-            ModelConfigFile configFile = new ModelConfigFile(path);
+            ModelConfigFile configFile = new ModelConfigFile(path,
+                    EnvConfig.get().getString(EnvKey.CONFIG_MODEL_READ_GROUP, ""));
             ModelConfigInitializer.InitializationResult initialization =
                     ModelConfigInitializer.initializeIfMissing(
                             configFile, EnvConfig.get().all());

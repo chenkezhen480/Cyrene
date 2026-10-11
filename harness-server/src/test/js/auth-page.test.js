@@ -19,7 +19,7 @@ test('login uses the verified user and logout clears both the token and previous
   const sessionStorage = storage();
   const components = Object.fromEntries([
     'ToastContainer', 'StarsBackground', 'PreConfigModal', 'ChatPage', 'KnowledgePage', 'GraphPage',
-    'AuditPage', 'ConfigPage', 'ModelConfigPage', 'ModelConfigurationPage', 'ToolPermissionPage', 'RealtimeTestDock',
+    'AuditPage', 'GuidePage', 'ConfigPage', 'ModelConfigPage', 'ModelConfigurationPage', 'ToolPermissionPage', 'RealtimeTestDock',
   ].map(name => [name, {}]));
   const state = runInNewContext(root + '\napp.setup();', {
     ...components, createApp: value => value, ref: value => ({ value }),
@@ -36,6 +36,10 @@ test('login uses the verified user and logout clears both the token and previous
         return { token: 'verified-token', userId: 'canonical-user' };
       },
       async logout() {},
+      async setupSingleUser(user, password) {
+        assert.equal(user, 'local-user'); assert.equal(password, 'future-jwt-password');
+        return { userId: user, status: 'saved' };
+      },
     },
   });
   await mounted();
@@ -50,9 +54,40 @@ test('login uses the verified user and logout clears both the token and previous
   assert.equal(sessionStorage.getItem('cyrene_token'), 'verified-token');
   assert.equal(state.authSecret.value, '');
   assert.equal(state.showWelcome.value, false);
+  assert.equal(state.currentPage.value, 'chat');
+  assert.equal(state.showGuideHint.value, true);
+  assert.equal(state.navItems.value.some(item => item.id === 'guide'), false);
+  state.openGuide();
+  assert.equal(state.currentPage.value, 'guide');
+  assert.equal(state.showGuideHint.value, false);
+  assert.equal(localStorage.getItem('cyrene_guide_seen:jwt:canonical-user'), '1');
   await state.startEditUser();
   assert.equal(token, null);
   assert.equal(sessionStorage.getItem('cyrene_token'), undefined);
   assert.equal(state.userId.value, '');
   assert.equal(state.showWelcome.value, true);
+  state.authMode.value = 'none';
+  state.editUserId.value = 'local-user'; state.authSecret.value = 'future-jwt-password';
+  await state.confirmUserId();
+  assert.equal(state.userId.value, 'local-user');
+  assert.equal(state.authSecret.value, '');
+  assert.equal(localStorage.getItem('cyrene_guide_seen:none:local-user'), '1');
+  assert.equal(localStorage.getItem('cyrene_token'), undefined);
+  assert.equal(localStorage.getItem('password'), undefined);
+  state.navigate('chat');
+  state.authSecret.value = 'future-jwt-password';
+  await state.confirmUserId();
+  assert.equal(state.currentPage.value, 'chat');
+  assert.equal(state.showGuideHint.value, false);
+  state.authError.value = 'Previous failure';
+  await state.startEditUser();
+  assert.equal(state.editingUser.value, true);
+  assert.equal(state.authSecret.value, '');
+  assert.equal(state.authError.value, '');
+  state.authSecret.value = 'draft password';
+  state.authError.value = 'Invalid credentials';
+  state.cancelEditUser();
+  assert.equal(state.editingUser.value, false);
+  assert.equal(state.authSecret.value, '');
+  assert.equal(state.authError.value, '');
 });

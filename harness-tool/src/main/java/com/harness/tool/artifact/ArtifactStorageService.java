@@ -120,6 +120,19 @@ public class ArtifactStorageService {
         publishGraphDraftFile(id, content, false);
     }
 
+    public void forEachGraphDraftReference(java.util.function.BiConsumer<String, byte[]> visitor) {
+        try (var files = Files.newDirectoryStream(graphDraftReferences(), "*.json")) {
+            for (Path file : files) {
+                String name = file.getFileName().toString();
+                String id = name.substring(0, name.length() - 5);
+                requireUuid(id);
+                visitor.accept(id, readBounded(confined(file)));
+            }
+        } catch (IOException e) {
+            throw new IllegalStateException("Failed to list graph draft references", e);
+        }
+    }
+
     private void publishGraphDraftFile(String id, byte[] content, boolean immutablePayload) {
         requireUuid(id);
         if (content.length > maxSizeBytes) throw new IllegalArgumentException("Graph draft exceeds artifact limit");

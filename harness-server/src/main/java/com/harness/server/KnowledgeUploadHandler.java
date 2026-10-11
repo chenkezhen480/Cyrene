@@ -17,6 +17,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.io.InputStream;
+import java.io.InterruptedIOException;
 
 public class KnowledgeUploadHandler {
 
@@ -114,7 +115,13 @@ public class KnowledgeUploadHandler {
                     ? 400
                     : 503;
             log.warn("[Server] Knowledge document conversion failed: {}", e.getMessage());
-            ApiResponses.error(ctx, status, ApiErrorCode.fromHttpStatus(status), e.getMessage());
+            String parserCode = e.errorCode();
+            if (parserCode == null) {
+                parserCode = e.getCause() instanceof InterruptedIOException
+                        ? "DOCUMENT_PARSER_REQUEST_TIMEOUT" : "DOCUMENT_PARSER_REQUEST_FAILED";
+            }
+            ApiResponses.error(ctx, status, ApiErrorCode.DOCUMENT_PARSE_FAILED, e.getMessage(),
+                    Map.of("parserCode", parserCode, "parserStatus", workerStatus));
         } catch (IllegalArgumentException e) {
             log.warn("[Server] Knowledge upload validation failed: {}", e.getMessage());
             ApiResponses.error(ctx, 400, ApiErrorCode.INVALID_REQUEST, e.getMessage());

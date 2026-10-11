@@ -16,6 +16,7 @@ public final class EnvKey {
 
     /** 独立模型配置文件路径；文件内容不参与环境变量覆盖。 */
     public static final String CONFIG_MODEL_FILE = "HARNESS_CONFIG_MODEL_FILE";
+    public static final String CONFIG_MODEL_READ_GROUP = "HARNESS_CONFIG_MODEL_READ_GROUP";
 
     // ==================== Gap Analysis / 动态路由 ====================
     /**

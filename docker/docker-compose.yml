@@ -35,6 +35,8 @@ services:
       # Docker socket（沙盒容器需要）
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
+      # GID 10001 matches the non-root document-parser account.
+      - HARNESS_CONFIG_MODEL_READ_GROUP=cyrene-model
       # 覆盖容器内部的服务地址（使用 Docker 网络内的服务名）
       - HARNESS_RAG_URL=http://milvus:19530
       - HARNESS_AUDIT_DB_URL=jdbc:mysql://mysql:3306/agent?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai

@@ -47,6 +47,32 @@ test('one upload processes every selected file, including a failure and an unsup
   assert.equal(state.selectedCollection.value, 'arbitraryTable');
 });
 
+test('document parse failures show a reason and keep the original backend message', async () => {
+  const emptyPage = { items: [], pageInfo: { limit: 20, nextCursor: '', hasMore: false } };
+  const codes = ['UNSUPPORTED_MEDIA_TYPE', 'DOCUMENT_CONVERSION_FAILED', 'EMPTY_DOCUMENT_CONTENT', 'DOCUMENT_PARSER_REQUEST_TIMEOUT', 'VISION_REQUEST_FAILED'];
+  const state = runInNewContext(page + contract + '\nKnowledgePage.setup();', {
+    EmptyState: {}, CyreneAPI: {
+      async uploadKnowledge(file) {
+        throw Object.assign(new Error('original parser failure: ' + file.name), {
+          code: 'DOCUMENT_PARSE_FAILED', details: { parserCode: file.name },
+        });
+      },
+      async listCollections() { return emptyPage; }, async listKnowledge() { return emptyPage; }, async listWiki() { return emptyPage; },
+    },
+    ref: value => ({ value }), computed: getter => ({ get value() { return getter(); } }),
+    inject: key => key === 't' ? value => value : key === 'userId' ? { value: 'test-user' } : {},
+    watch() {}, onMounted() {}, onUnmounted() {}, showToast() {}, clearTimeout, setTimeout,
+  });
+  state.uploadCollection.value = 'docs';
+  state.selectedFiles.value = codes.map(name => ({ name }));
+  await state.uploadFiles();
+  assert.deepEqual(Array.from(state.uploadQueue.value, item => item.explanation), [
+    'knowledgeParseUnsupported', 'knowledgeParseInvalidFile', 'knowledgeParseEmpty', 'knowledgeParseTimeout', 'knowledgeParseVisionFailed',
+  ]);
+  assert.equal(state.uploadQueue.value[0].message, 'original parser failure: UNSUPPORTED_MEDIA_TYPE');
+  assert.equal(state.uploading.value, false);
+});
+
 
 test('global Wiki drawer preserves drafts on cancelled close and exports without table filters', async () => {
   const exported = [];

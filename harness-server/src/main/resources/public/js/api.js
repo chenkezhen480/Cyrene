@@ -69,6 +69,10 @@ const CyreneAPI = (() => {
     return request('POST', '/api/auth/token', { userId, password });
   }
 
+  function setupSingleUser(userId, password) {
+    return request('POST', '/api/auth/single-user', { userId, password });
+  }
+
   // ── Chat (SSE) ──
   function chat(sessionId, text, context = {}, attachments = [], interactionMode = 'TEXT', signal) {
     const headers = { 'Content-Type': 'application/json' };
@@ -376,24 +380,35 @@ const CyreneAPI = (() => {
     return request('POST', '/api/graph/build', payload);
   }
 
-  function getGraphDraft(draftId, userId, { expectedContentHash, signal } = {}) {
+  function graphDraftEndpoint(review) {
+    return review ? '/api/graph/change-reviews' : '/api/graph/change-drafts';
+  }
+
+  function listGraphReviews(userId, { limit = 50, cursor, status, signal } = {}) {
+    const params = new URLSearchParams({ userId, limit: String(limit) });
+    if (cursor) params.set('cursor', cursor);
+    if (status) params.set('status', status);
+    return request('GET', `/api/graph/change-reviews?${params}`, null, signal);
+  }
+
+  function getGraphDraft(draftId, userId, { expectedContentHash, signal, review = false } = {}) {
     const params = new URLSearchParams({ userId });
     if (expectedContentHash) params.set('expectedContentHash', expectedContentHash);
-    return request('GET', `/api/graph/change-drafts/${encodeURIComponent(draftId)}?${params}`, null, signal);
+    return request('GET', `${graphDraftEndpoint(review)}/${encodeURIComponent(draftId)}?${params}`, null, signal);
   }
 
-  function getGraphDraftChanges(draftId, userId, { expectedContentHash, limit = 50, cursor, signal } = {}) {
+  function getGraphDraftChanges(draftId, userId, { expectedContentHash, limit = 50, cursor, signal, review = false } = {}) {
     const params = new URLSearchParams({ userId, expectedContentHash, limit: String(limit) });
     if (cursor) params.set('cursor', cursor);
-    return request('GET', `/api/graph/change-drafts/${encodeURIComponent(draftId)}/changes?${params}`, null, signal);
+    return request('GET', `${graphDraftEndpoint(review)}/${encodeURIComponent(draftId)}/changes?${params}`, null, signal);
   }
 
-  function saveGraphDraft(payload, signal) {
-    return request('POST', '/api/graph/change-drafts', payload, signal);
+  function saveGraphDraft(payload, signal, review = false) {
+    return request('POST', graphDraftEndpoint(review), payload, signal);
   }
 
-  function applyGraphDraft(draftId, userId, expectedContentHash) {
-    return request('POST', `/api/graph/change-drafts/${encodeURIComponent(draftId)}/apply`, { userId, expectedContentHash });
+  function applyGraphDraft(draftId, userId, expectedContentHash, review = false) {
+    return request('POST', `${graphDraftEndpoint(review)}/${encodeURIComponent(draftId)}/apply`, { userId, expectedContentHash });
   }
 
   function previewNaturalLanguageGraph(payload) {
@@ -476,13 +491,13 @@ const CyreneAPI = (() => {
 
   return {
     setToken, getToken, onTokenRefresh,
-    login, logout,
+    login, logout, setupSingleUser,
     chat, cancelChat, approveConfirmation, rejectConfirmation, uploadFile,
     getToolPermissions, saveToolPermissions, getPermissionIdentities,
     getInternalApiEndpoints, getInternalApiPermissions, saveInternalApiPermissions,
     getModelConfiguration, updateModelConfiguration, getKnowledgeStatus,
     createSession, listSessions, getSession, getMessages, getSessionTasks, getSessionStats, closeSession,
-    getGraphDraft, getGraphDraftChanges, saveGraphDraft, applyGraphDraft,
+    getGraphDraft, getGraphDraftChanges, saveGraphDraft, applyGraphDraft, listGraphReviews,
     listCollections, uploadKnowledge, listKnowledge, getKnowledgeChunk, updateKnowledgeChunk, listWiki, getWiki, updateWiki, deleteWiki, exportWiki, exportAllWiki,
     getGraphStatus, listGraphSchemas, getGraphSchema,
     listGraphSchemaConfigs, getGraphSchemaConfig, createGraphSchemaConfig, updateGraphSchemaConfig,

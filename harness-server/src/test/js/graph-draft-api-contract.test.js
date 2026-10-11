@@ -21,7 +21,18 @@ test('all draft client operations target routes registered by the server', async
   await api.getGraphDraftChanges('draft-1', 'user', { expectedContentHash: 'hash', cursor: 'cursor' });
   await api.saveGraphDraft({ sourceDraftId: 'draft-1', expectedSourceContentHash: 'hash' });
   await api.applyGraphDraft('draft-1', 'user', 'hash');
-  assert.equal(calls.length, 4);
+  await api.listGraphReviews('admin', { status: 'PENDING', limit: 1, cursor: 'next' });
+  await api.getGraphDraft('draft-1', 'admin', { expectedContentHash: 'hash', review: true });
+  await api.getGraphDraftChanges('draft-1', 'admin', { expectedContentHash: 'hash', review: true });
+  await api.saveGraphDraft({ userId: 'admin', sourceDraftId: 'draft-1', expectedSourceContentHash: 'hash' }, undefined, true);
+  await api.applyGraphDraft('draft-1', 'admin', 'hash', true);
+  assert.equal(calls.length, 9);
+  const list = new URL(calls[4].path, 'http://localhost');
+  assert.equal(list.pathname, '/api/graph/change-reviews');
+  assert.equal(list.searchParams.get('userId'), 'admin');
+  assert.equal(list.searchParams.get('limit'), '1');
+  assert.equal(list.searchParams.get('cursor'), 'next');
+  assert.equal(list.searchParams.get('status'), 'PENDING');
   for (const call of calls) {
     const path = new URL(call.path, 'http://localhost').pathname.replace('draft-1', '{draftId}');
     assert.ok(routes.has(`${call.method} ${path}`), `Client route is not registered: ${call.method} ${path}`);

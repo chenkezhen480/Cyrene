@@ -5,15 +5,59 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.PosixFileAttributeView;
 import java.util.Map;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 class ModelConfigFileTest {
 
     @TempDir
     Path temporaryDirectory;
+
+    @Test
+    void sharedReaderGroupSurvivesEveryAtomicReplacement() throws Exception {
+        var attributes = Files.getFileAttributeView(temporaryDirectory, PosixFileAttributeView.class);
+        assumeTrue(attributes != null);
+        var group = attributes.readAttributes().group();
+        Path path = temporaryDirectory.resolve("shared.conf");
+        ModelConfigFile file = new ModelConfigFile(path, group.getName());
+        for (int version = 0; version < 3; version++) {
+            file.replace(ModelConfig.of(Map.of(ModelConfigKey.CHAT_MODEL, "model-" + version)));
+            var saved = Files.readAttributes(path, java.nio.file.attribute.PosixFileAttributes.class);
+            assertThat(saved.group()).isEqualTo(group);
+            assertThat(java.nio.file.attribute.PosixFilePermissions.toString(saved.permissions())).isEqualTo("rw-r-----");
+            assertThat(file.read().values()).containsEntry(ModelConfigKey.CHAT_MODEL, "model-" + version);
+        }
+    }
+
+    @Test
+    void existingCompleteTemplateReceivesReaderPermissionsOnStartup() throws Exception {
+        var attributes = Files.getFileAttributeView(temporaryDirectory, PosixFileAttributeView.class);
+        assumeTrue(attributes != null);
+        Path path = temporaryDirectory.resolve("existing.conf");
+        new ModelConfigFile(path).replace(ModelConfig.empty());
+        Files.setPosixFilePermissions(path, java.nio.file.attribute.PosixFilePermissions.fromString("rw-------"));
+        new ModelConfigFile(path, attributes.readAttributes().group().getName()).completeVisibleKeys();
+        assertThat(java.nio.file.attribute.PosixFilePermissions.toString(Files.getPosixFilePermissions(path)))
+                .isEqualTo("rw-r-----");
+    }
+
+    @Test
+    void invalidReaderGroupCannotReplaceThePreviousConfiguration() throws Exception {
+        Path path = temporaryDirectory.resolve("previous.conf");
+        ModelConfigFile original = new ModelConfigFile(path);
+        original.replace(ModelConfig.of(Map.of(ModelConfigKey.CHAT_MODEL, "previous")));
+        ModelConfigFile invalid = new ModelConfigFile(path, "missing-" + UUID.randomUUID());
+        assertThatThrownBy(() -> invalid.replace(ModelConfig.empty())).isInstanceOf(java.io.IOException.class);
+        assertThat(original.read().values()).containsEntry(ModelConfigKey.CHAT_MODEL, "previous");
+        try (var entries = Files.list(temporaryDirectory)) {
+            assertThat(entries.toList()).containsExactly(path);
+        }
+    }
 
     @Test
     void missingFileIsEmptyAndFirstAdministrativeSaveCreatesIt() throws Exception {

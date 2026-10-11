@@ -43,13 +43,22 @@ public final class GraphChangeDraftService {
     }
 
     public synchronized GraphDraftView prepare(GraphDraftScope scope, GraphDraftPrepareRequest request) {
+        return prepare(scope, request, false);
+    }
+
+    public synchronized GraphDraftView prepareForReview(GraphDraftScope reviewer, GraphDraftPrepareRequest request) {
+        if (request == null || request.sourceDraftId() == null) throw new IllegalArgumentException("Review edits require an existing draft");
+        return prepare(reviewer, request, true);
+    }
+
+    private GraphDraftView prepare(GraphDraftScope scope, GraphDraftPrepareRequest request, boolean review) {
         Objects.requireNonNull(request, "request");
         Draft previous = null;
         String graphId = request.graphId();
         String schemaId = request.schemaId();
         String rootDraftId = UUID.randomUUID().toString();
         if (request.sourceDraftId() != null) {
-            Loaded loaded = load(scope, request.sourceDraftId(), request.expectedSourceContentHash(), true);
+            Loaded loaded = load(scope, request.sourceDraftId(), request.expectedSourceContentHash(), true, review);
             if (!editable(loaded.current)) throw conflict("Draft cannot be edited during or after application");
             previous = loaded.draft;
             assertBaseline(previous);
@@ -61,7 +70,7 @@ public final class GraphChangeDraftService {
         }
         GraphDraftScope.require(graphId, "graphId");
         GraphDraftScope.require(schemaId, "schemaId");
-        GraphDraftScope.require(scope.sessionId(), "sessionId");
+        GraphDraftScope.require(review ? previous.owner.sessionId() : scope.sessionId(), "sessionId");
         GraphDraftScope.require(scope.runId(), "runId");
         GraphDraftScope.require(scope.traceId(), "traceId");
         requireTarget(scope, graphId, schemaId);
@@ -192,7 +201,8 @@ public final class GraphChangeDraftService {
         byte[] content = write(draft);
         String hash = GraphContentHash.bytes(content);
         artifacts.writeGraphDraftPayload(draftId, content);
-        Reference version = new Reference(rootDraftId, draftId, draftId, hash, scope.sessionId(), "PENDING", null, null);
+        Reference version = new Reference(rootDraftId, draftId, draftId, hash, draft.owner.sessionId(), "PENDING", null, null,
+                review ? scope.userId() : null, review ? Instant.now().toString() : null);
         artifacts.writeGraphDraftReference(draftId, write(version));
         artifacts.writeGraphDraftReference(rootDraftId, write(version));
         return view(draft, version);
@@ -203,9 +213,46 @@ public final class GraphChangeDraftService {
         return view(loaded.draft, loaded.current);
     }
 
+    public synchronized GraphDraftReviewDetails readDetailsForReview(GraphDraftScope reviewer, String draftId, String expectedContentHash) {
+        Loaded loaded = load(reviewer, draftId, expectedContentHash, false, true);
+        return new GraphDraftReviewDetails(view(loaded.draft, loaded.current), schemas.require(loaded.draft.schemaId));
+    }
+
+    public synchronized PageResponse<GraphDraftView> listForReview(GraphDraftScope reviewer, int limit, String cursor, String status) {
+        int pageLimit = settings.capLimit(limit);
+        if (cursor != null && !cursor.isBlank() && !UUID.fromString(cursor).toString().equals(cursor)) throw new IllegalArgumentException("Invalid draft list cursor");
+        if (status != null && !status.isBlank() && !Set.of("PENDING", "APPLYING", "APPLIED", "FAILED").contains(status)) throw new IllegalArgumentException("Invalid draft status");
+        var selected = new TreeMap<String, GraphDraftView>();
+        // shortcut: file-backed drafts scan references per page; add a database catalog if volume requires indexed lookup.
+        artifacts.forEachGraphDraftReference((id, content) -> {
+            if (cursor != null && id.compareTo(cursor) <= 0) return;
+            Reference reference = read(content, Reference.class);
+            if (!id.equals(reference.rootDraftId)) return;
+            Draft draft = readDraft(reference);
+            if (!reviewer.tenantId().equals(draft.owner.tenantId())) return;
+            try { authorize(reviewer, draft, true); }
+            catch (SecurityException inaccessible) { return; }
+            if (reference.status.equals("APPLYING")) reference = reconcile(draft, reference);
+            if (status != null && !status.isBlank() && !status.equals(reference.status)) return;
+            selected.put(id, view(draft, reference));
+            if (selected.size() > pageLimit + 1) selected.pollLastEntry();
+        });
+        return PageResponse.fromFetched(new ArrayList<>(selected.values()), pageLimit, GraphDraftView::rootDraftId);
+    }
+
     public synchronized PageResponse<GraphDraftPreviewItem> readPreview(GraphDraftScope scope,
             String draftId, String expectedContentHash, int limit, String cursor) {
-        Loaded loaded = load(scope, draftId, expectedContentHash, true);
+        return readPreview(scope, draftId, expectedContentHash, limit, cursor, false);
+    }
+
+    public synchronized PageResponse<GraphDraftPreviewItem> readPreviewForReview(GraphDraftScope reviewer,
+            String draftId, String expectedContentHash, int limit, String cursor) {
+        return readPreview(reviewer, draftId, expectedContentHash, limit, cursor, true);
+    }
+
+    private PageResponse<GraphDraftPreviewItem> readPreview(GraphDraftScope scope,
+            String draftId, String expectedContentHash, int limit, String cursor, boolean review) {
+        Loaded loaded = load(scope, draftId, expectedContentHash, true, review);
         if (loaded.current.status.equals("PENDING")) assertBaseline(loaded.draft);
         int pageLimit = settings.capLimit(limit);
         String last = "";
@@ -226,7 +273,15 @@ public final class GraphChangeDraftService {
     }
 
     public synchronized GraphMutationResult apply(GraphDraftScope reviewer, String draftId, String expectedContentHash) {
-        Loaded loaded = load(reviewer, draftId, expectedContentHash, true);
+        return apply(reviewer, draftId, expectedContentHash, false);
+    }
+
+    public synchronized GraphMutationResult applyForReview(GraphDraftScope reviewer, String draftId, String expectedContentHash) {
+        return apply(reviewer, draftId, expectedContentHash, true);
+    }
+
+    private GraphMutationResult apply(GraphDraftScope reviewer, String draftId, String expectedContentHash, boolean review) {
+        Loaded loaded = load(reviewer, draftId, expectedContentHash, true, review);
         access.requireWritable(reviewer, loaded.draft.graphId, loaded.draft.schemaId);
         if (loaded.current.status.equals("APPLIED")) return loaded.current.result;
         if (loaded.current.status.equals("FAILED")) throw new IllegalStateException(loaded.current.failure.message());
@@ -235,7 +290,7 @@ public final class GraphChangeDraftService {
                 List.copyOf(draft.nodes.values()), List.copyOf(draft.relations.values()),
                 draft.deleteNodeIds, draft.deleteRelationIds, draft.baseline);
         if (loaded.current.status.equals("PENDING")) assertBaseline(draft);
-        Reference applying = loaded.current.withStatus("APPLYING", null);
+        Reference applying = loaded.current.withReviewer(reviewer.userId()).withStatus("APPLYING", null);
         artifacts.writeGraphDraftReference(draft.rootDraftId, write(applying));
         GraphMutationResult result;
         try { result = committer.commit(change); }
@@ -250,15 +305,19 @@ public final class GraphChangeDraftService {
     }
 
     private Loaded load(GraphDraftScope scope, String draftId, String expectedHash, boolean requireHash) {
+        return load(scope, draftId, expectedHash, requireHash, false);
+    }
+
+    private Loaded load(GraphDraftScope scope, String draftId, String expectedHash, boolean requireHash, boolean review) {
         if (requireHash) GraphDraftScope.require(expectedHash, "expectedContentHash");
         Reference version = reference(draftId);
         Draft draft = readDraft(version);
         if (!draft.draftId.equals(draftId)) throw conflict("Draft reference mismatch");
-        authorize(scope, draft);
+        authorize(scope, draft, review);
         Reference current = reference(draft.rootDraftId);
         if (!current.rootDraftId.equals(draft.rootDraftId)) throw conflict("Draft current reference mismatch");
         if (!current.draftId.equals(draftId) || !current.contentHash.equals(version.contentHash)) {
-            authorize(scope, readDraft(current));
+            authorize(scope, readDraft(current), review);
             throw new GraphDraftConflictException("Draft version is no longer current", current.draftId, current.contentHash);
         }
         if (expectedHash != null && !version.contentHash.equals(expectedHash))
@@ -293,8 +352,8 @@ public final class GraphChangeDraftService {
         return draft;
     }
 
-    private void authorize(GraphDraftScope scope, Draft draft) {
-        if (!Objects.equals(scope.userId(), draft.owner.userId()) || !Objects.equals(scope.tenantId(), draft.owner.tenantId()))
+    private void authorize(GraphDraftScope scope, Draft draft, boolean review) {
+        if (!Objects.equals(scope.tenantId(), draft.owner.tenantId()) || !review && !Objects.equals(scope.userId(), draft.owner.userId()))
             throw new SecurityException("Draft belongs to another user or tenant");
         if (scope.sessionId() != null && !Objects.equals(scope.sessionId(), draft.owner.sessionId()))
             throw new SecurityException("Draft belongs to another session");
@@ -481,7 +540,7 @@ public final class GraphChangeDraftService {
         return new GraphDraftView(draft.rootDraftId, draft.draftId, draft.sourceDraftId, reference.contentHash,
                 draft.graphId, draft.schemaId, owner.tenantId(), owner.userId(), owner.sessionId(), owner.runId(), owner.traceId(), owner.taskId(),
                 draft.requestId, reference.status, draft.nodes.size(), draft.relations.size(), draft.deleteNodeIds.size(), draft.deleteRelationIds.size(),
-                draft.createdAt, "/api/graph/change-drafts/" + draft.draftId, reference.failure);
+                draft.createdAt, "/api/graph/change-drafts/" + draft.draftId, reference.failure, reference.reviewerUserId, reference.reviewedAt);
     }
     private record Draft(String rootDraftId, String draftId, String sourceDraftId, String requestId, String graphId,
                          String schemaId, GraphDraftScope owner, String createdAt, Map<String, GraphNode> nodes,
@@ -489,12 +548,16 @@ public final class GraphChangeDraftService {
                          Set<String> explicitDeleteRelationIds,
                          GraphMutationBaseline baseline) { }
     private record Reference(String rootDraftId, String draftId, String payloadId, String contentHash,
-                             String sessionId, String status, GraphMutationResult result, GraphMutationCommitter.Failure failure) {
+                             String sessionId, String status, GraphMutationResult result, GraphMutationCommitter.Failure failure,
+                             String reviewerUserId, String reviewedAt) {
         Reference withStatus(String status, GraphMutationResult result) {
-            return new Reference(rootDraftId, draftId, payloadId, contentHash, sessionId, status, result, null);
+            return new Reference(rootDraftId, draftId, payloadId, contentHash, sessionId, status, result, null, reviewerUserId, reviewedAt);
         }
         Reference withFailure(GraphMutationCommitter.Failure failure) {
-            return new Reference(rootDraftId, draftId, payloadId, contentHash, sessionId, "FAILED", null, failure);
+            return new Reference(rootDraftId, draftId, payloadId, contentHash, sessionId, "FAILED", null, failure, reviewerUserId, reviewedAt);
+        }
+        Reference withReviewer(String userId) {
+            return new Reference(rootDraftId, draftId, payloadId, contentHash, sessionId, status, result, failure, userId, Instant.now().toString());
         }
     }
     private record Loaded(Draft draft, Reference current) { }
