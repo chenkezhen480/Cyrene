@@ -1,0 +1,54 @@
+{
+  "schemaVersion": 1,
+  "repetitions": 3,
+  "smoke": false,
+  "taskCount": 11,
+  "orderPolicy": "Alternate first framework per repetition; tasks sequential in each framework block; API cache warmth not fully controlled",
+  "blocks": [
+    {
+      "id": "round-1-cyrene_business",
+      "repetition": 1,
+      "condition": "cyrene_business",
+      "exitCode": 0,
+      "processElapsedMs": 58313
+    },
+    {
+      "id": "round-1-alibaba_react",
+      "repetition": 1,
+      "condition": "alibaba_react",
+      "exitCode": 0,
+      "processElapsedMs": 35359
+    },
+    {
+      "id": "round-2-alibaba_react",
+      "repetition": 2,
+      "condition": "alibaba_react",
+      "exitCode": 0,
+      "processElapsedMs": 35500
+    },
+    {
+      "id": "round-2-cyrene_business",
+      "repetition": 2,
+      "condition": "cyrene_business",
+      "exitCode": 0,
+      "processElapsedMs": 55297
+    },
+    {
+      "id": "round-3-cyrene_business",
+      "repetition": 3,
+      "condition": "cyrene_business",
+      "exitCode": 0,
+      "processElapsedMs": 54203
+    },
+    {
+      "id": "round-3-alibaba_react",
+      "repetition": 3,
+      "condition": "alibaba_react",
+      "exitCode": 0,
+      "processElapsedMs": 32766
+    }
+  ],
+  "rawSha256": "f912ac7eabadf1f4c31618e9a226188189c6227e753eeeaea17a6dcb94878530",
+  "trials": 66,
+  "status": "completed"
+}

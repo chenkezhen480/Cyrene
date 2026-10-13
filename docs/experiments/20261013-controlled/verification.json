@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "rawSha256": "7b0d5063eda6c19caf71e61bd1e3d3582e9eab2233d487223e9b50ee4ee103b7",
+  "trialCount": 48,
+  "distinctSessions": 48,
+  "sameInitialFixtureState": true,
+  "sourceFilesMatchedBeforeArgumentFix": 41,
+  "sourceMismatches": [],
+  "allTrialsCompleted": true
+}

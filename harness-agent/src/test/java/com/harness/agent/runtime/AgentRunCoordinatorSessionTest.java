@@ -5,6 +5,7 @@ import com.harness.agent.lifecycle.AgentLifecycleHooks;
 import com.harness.agent.memory.AgentMemoryRuntime;
 import com.harness.core.model.AgentContext;
 import com.harness.core.model.CancellationToken;
+import com.harness.core.model.FinalOutputContract;
 import com.harness.core.runtime.RunTrace;
 import com.harness.tool.ToolExecutor;
 import com.harness.tool.ToolRegistry;
@@ -20,6 +21,39 @@ import static org.assertj.core.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 class AgentRunCoordinatorSessionTest {
+    @Test void omittedCancellationCreatesAnIndependentRunScopeAndCancelsItsChildren() {
+        var command = new AgentRunCoordinator.AgentRunCommand(null, "hello", List.of(), null, null,
+                null, null, "user", AgentContext.empty());
+        var other = new AgentRunCoordinator.AgentRunCommand(null, "hello", List.of(), null, null,
+                null, null, "user", AgentContext.empty());
+        var scope = new AgentRunContext("run", "session", command.cancellationToken(), null,
+                new ToolRegistry().snapshot());
+        var child = CancellationToken.createChild(scope.cancellationToken());
+        scope.cancellationToken().cancel();
+        assertThat(child.isCancelled()).isTrue();
+        assertThat(other.cancellationToken().isCancelled()).isFalse();
+    }
+
+    @Test void explicitCancelledTokenKeepsItsIdentityAndState() {
+        var token = new CancellationToken();
+        token.cancel();
+        var command = new AgentRunCoordinator.AgentRunCommand(null, "hello", List.of(), null, null,
+                token, null, "user", AgentContext.empty());
+        assertThat(command.cancellationToken()).isSameAs(token);
+        assertThat(command.cancellationToken().isCancelled()).isTrue();
+    }
+
+    @Test void structuredRunWithOmittedCancellationAlsoEntersAStrictRunScope() {
+        var contract = new FinalOutputContract.JsonSchema("answer",
+                new com.fasterxml.jackson.databind.ObjectMapper().createObjectNode().put("type", "object"), true);
+        var command = new AgentRunCoordinator.AgentRunCommand(null, "hello", List.of(), null, null,
+                null, null, "user", AgentContext.empty(), contract);
+        var scope = new AgentRunContext("run", "session", command.cancellationToken(), null,
+                new ToolRegistry().snapshot());
+        assertThat(scope.cancellationToken().isCancelled()).isFalse();
+        assertThat(command.finalOutputContract()).isSameAs(contract);
+    }
+
     @Test void blockingRequestCanBeCancelledBeforePreparingAnOccupiedSession() throws Exception { occupiedSession(false); }
     @Test void streamingRequestCanBeCancelledBeforePreparingAnOccupiedSession() throws Exception { occupiedSession(true); }
 

@@ -1,0 +1,102 @@
+services:
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: ${EXPERIMENT_MYSQL_PASSWORD:?required}
+      MYSQL_DATABASE: agent
+    ports: ["127.0.0.1::3306"]
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ../sql/schema-mysql.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "MYSQL_PWD=$$MYSQL_ROOT_PASSWORD mysqladmin ping -h127.0.0.1 -uroot --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 40
+    mem_limit: 768m
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.18
+    command: ["etcd", "--advertise-client-urls=http://etcd:2379", "--listen-client-urls=http://0.0.0.0:2379", "--data-dir=/etcd"]
+    environment:
+      ETCD_AUTO_COMPACTION_MODE: revision
+      ETCD_AUTO_COMPACTION_RETENTION: "1000"
+      ETCD_QUOTA_BACKEND_BYTES: "4294967296"
+    volumes: ["etcd-data:/etcd"]
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    mem_limit: 256m
+  minio:
+    image: minio/minio:RELEASE.2023-03-20T20-16-18Z
+    command: ["minio", "server", "/data"]
+    environment:
+      MINIO_ROOT_USER: ${EXPERIMENT_MINIO_USER:?required}
+      MINIO_ROOT_PASSWORD: ${EXPERIMENT_MINIO_PASSWORD:?required}
+    volumes: ["minio-data:/data"]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    mem_limit: 256m
+  milvus:
+    image: milvusdb/milvus:v2.5.13
+    command: ["milvus", "run", "standalone"]
+    environment:
+      ETCD_ENDPOINTS: etcd:2379
+      MINIO_ADDRESS: minio:9000
+      MINIO_ACCESS_KEY_ID: ${EXPERIMENT_MINIO_USER:?required}
+      MINIO_SECRET_ACCESS_KEY: ${EXPERIMENT_MINIO_PASSWORD:?required}
+    ports: ["127.0.0.1::19530"]
+    volumes: ["milvus-data:/var/lib/milvus"]
+    depends_on:
+      etcd: {condition: service_healthy}
+      minio: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
+      interval: 5s
+      timeout: 5s
+      retries: 40
+      start_period: 20s
+    mem_limit: 3g
+  redis:
+    image: redis:7-alpine
+    ports: ["127.0.0.1::6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    mem_limit: 128m
+  document-parser:
+    build:
+      context: ../docker/document-parser
+      dockerfile: Dockerfile
+    volumes:
+      - ${EXPERIMENT_RUNTIME_DIR:?required}/model.conf:/app/data/model.conf:ro
+    environment:
+      HARNESS_CONFIG_MODEL_FILE: /app/data/model.conf
+      HARNESS_DOCUMENT_PARSER_TOKEN: ${EXPERIMENT_DOCUMENT_PARSER_TOKEN:?required}
+    ports: ["127.0.0.1::8082"]
+    mem_limit: 1g
+  business:
+    image: python:3.12.11-slim-bookworm
+    command: ["python", "/experiment/business_fixture.py", "--host", "0.0.0.0", "--port", "8080", "--database", "/private/business.sqlite3", "--tokens-file", "/fixture-tokens.json"]
+    volumes:
+      - ./business_fixture.py:/experiment/business_fixture.py:ro
+      - ${EXPERIMENT_RUNTIME_DIR:?required}/fixture:/private
+      - ${EXPERIMENT_RUNTIME_DIR:?required}/fixture-tokens.json:/fixture-tokens.json:ro
+    ports: ["127.0.0.1::8080"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=2).read()"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    mem_limit: 128m
+volumes:
+  mysql-data:
+  etcd-data:
+  minio-data:
+  milvus-data:

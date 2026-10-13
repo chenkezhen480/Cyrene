@@ -1,0 +1,44 @@
+{
+  "runId": "20261013-business-compare",
+  "sourceCommit": "5eecc542c92c0e017a156588f6739ccacf9e1f54",
+  "sourceModelConfigSha256": "828e0ce95dc5763300ac9519aa4d2ac8a62ebc946c2eae4864491481ca981f6f",
+  "experimentModelConfigSha256": "59b6b0d5f7d6a189104172db16ee969b7b9f3ef066b9081e598a2f54aa255846",
+  "models": {
+    "chatProvider": "openai",
+    "chatModel": "deepseek-flash",
+    "chatTemperature": "0.7",
+    "chatMaxTokens": "16384",
+    "chatApiFormat": "",
+    "embeddingProvider": "openai",
+    "embeddingModel": "embedding-3",
+    "embeddingDimension": "1024",
+    "rerankProvider": "",
+    "rerankModel": "",
+    "routingProvider": "jev",
+    "routingModel": "jev-latest"
+  },
+  "dockerProject": "cyrene-experiment-20261013-business-compare",
+  "repetitions": 3,
+  "maxTasks": 11,
+  "conditions": [
+    "cyrene_business",
+    "alibaba_react"
+  ],
+  "jevBenchmark": false,
+  "status": "completed_engine_unavailable",
+  "originalModelFileChangedByPreparation": false,
+  "ports": {
+    "mysql": 64520,
+    "milvus": 64546,
+    "redis": 64519,
+    "document-parser": 64522,
+    "business": 64521
+  },
+  "trials": 66,
+  "preparationSnapshot": "environment-preparation.json",
+  "modelNormalization": "Cyrene initializer added blank visible keys during excluded smoke run; effective settings unchanged. All six measured blocks used one identical normalized private configuration hash.",
+  "routingPolicy": "Explicit complete business context; Jev configured but never called.",
+  "knowledgePolicy": "Business-only: no ingestion, knowledge tools absent from allowed catalog. Containers provisioned by shared preparation script remain common infrastructure; Alibaba callback path uses fixture only.",
+  "containerStopConfirmed": false,
+  "storageDeletedOrMigrated": false
+}

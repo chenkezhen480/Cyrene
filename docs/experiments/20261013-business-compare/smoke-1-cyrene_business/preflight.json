@@ -1,0 +1,12 @@
+{
+  "fixtureUrl" : "http://127.0.0.1:64521",
+  "durationMs" : 142,
+  "benchmarkDate" : "2026-10-12",
+  "customerCount" : 10,
+  "taskCount" : 3,
+  "health" : {
+    "status" : "ok",
+    "fixture" : "cyrene-synthetic-crm-v1",
+    "benchmarkDate" : "2026-10-12"
+  }
+}

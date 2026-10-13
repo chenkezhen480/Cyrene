@@ -792,6 +792,7 @@ public final class AgentRunCoordinator {
             FinalOutputContract finalOutputContract
     ) {
         public AgentRunCommand {
+            if (cancellationToken == null) cancellationToken = new CancellationToken();
             finalOutputContract = finalOutputContract != null
                     ? finalOutputContract
                     : new FinalOutputContract.Text();

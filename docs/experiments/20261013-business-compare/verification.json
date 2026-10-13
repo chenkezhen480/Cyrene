@@ -1,0 +1,20 @@
+{
+  "trials": 66,
+  "uniqueSessions": 66,
+  "identicalInitialFixture": true,
+  "frozenSourceFiles": 37,
+  "changedFrozenSourceFiles": [],
+  "changedSourceConfigs": [],
+  "rawSha256": "f912ac7eabadf1f4c31618e9a226188189c6227e753eeeaea17a6dcb94878530",
+  "paginationTrials": 18,
+  "idempotenceTrials": 6,
+  "rejectedArgumentCalls": 14,
+  "rejectedArgumentTrials": 8,
+  "mergedRowsMatchOriginal": true,
+  "analysisRecomputedExactly": true,
+  "publicResultSecretScanPassed": true,
+  "pythonChecks": 28,
+  "alibabaJavaChecks": 10,
+  "independentReview": "Original row integrity, source, task, state, usage verified; two audit/metadata issues corrected after measurement without model rerun.",
+  "containerStopConfirmed": false
+}

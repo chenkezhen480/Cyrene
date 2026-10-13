@@ -1,0 +1,26 @@
+{
+  "sourceCommit": "5eecc542c92c0e017a156588f6739ccacf9e1f54",
+  "containsUncommittedHttpAndOpenApiFixes": true,
+  "files": {
+    "harness-tool/src/main/java/com/harness/tool/HttpApiTool.java": "4b1fdc6b1316c7fdfe5bae19912c8dff561db1a312f21b2c2eebff4bd8d63f64",
+    "harness-tool/src/main/java/com/harness/tool/discovery/OpenApiSpecParser.java": "395e9d7bb73910a66fe3f5e4ea1606777908667587ff4df95b8b328974101664",
+    "harness-react/src/main/java/com/harness/react/ReActEngine.java": "885002e89c7181d31166669f82c65c03910981f578b614a586521e8a0672f0a6",
+    "harness-agent/src/main/java/com/harness/agent/AgentOrchestrator.java": "e2837bcba29ee3bdf240ab66382a11c0f65c7452e5bfcfbd974eae8f3d323ee7",
+    "experiments/tasks.json": "21336bb08adb25d02babbb7f130b2e51de4ae167c446edbd36933aabb1b8b1c8",
+    "experiments/business_fixture.py": "c22d8d53242e4f81582e41c854bdc3f1fdf1209b68636c98208db9db5def9b4f",
+    "experiments/corpus/01-renewal-policy-legacy.md": "9ffa323f2cfcddae2d58bfeb3b8bce35cbf6028902538f566370444c957dec40",
+    "experiments/corpus/02-renewal-policy-current.md": "ba71c202c0470cc82b24ee0077fed0ae40ad284d5618ef95847f866c44d72d8f",
+    "experiments/corpus/03-west-hold-exceptions.md": "3971707551be26b74b4e03718cd5f4c64e4d392b503b25943587975ff2b771bc",
+    "experiments/corpus/04-support-policy-current.md": "a61bc46057e884e3a6f8f236b009ff9de8842403471b5d70ab7093dca909c89f",
+    "harness-agent/src/test/java/com/harness/agent/experiment/CyreneExperimentIT.java": "142c072bdd48244b97efaada071858645b33fd46f931761a4e6b8c08e275e638",
+    "harness-agent/src/test/java/com/harness/agent/experiment/ExperimentEvaluation.java": "45cdac1e449b6acd1ba39e24f83fc780c51fb57507d13808f0ecc6e88b2a1277",
+    "harness-agent/src/test/java/com/harness/agent/experiment/ExperimentEvaluationTest.java": "d8e9dee677ade9bfa235ce4b471f89c3c057cb728da4206c3bf01f5c1f495922",
+    "harness-agent/src/test/java/com/harness/agent/experiment/ExperimentPreflightTest.java": "39ef1f351c022320611f3e777c2a6ddc532a0aad5632db7ecbbb5b3b55e85da6",
+    "harness-agent/src/test/java/com/harness/agent/experiment/NativeLangChain4jExperiment.java": "654d43ae47278ca05a933d1d8b72ee7295c573acd239e79da8c3eeb25a59f4df",
+    "harness-agent/src/test/java/com/harness/agent/experiment/NativeLangChain4jExperimentTest.java": "e628bf7016de7798f1766accce54b41eba298b6a6f377ee0110745cd0bf25537",
+    "harness-agent/src/test/java/com/harness/agent/experiment/RawChunkKnowledgeSearch.java": "dacc48ceabf12b2eaa0a09e708b822a17a8c17ac070668b4eeffbc567e72d070",
+    "harness-agent/src/test/java/com/harness/agent/experiment/RawChunkKnowledgeSearchTest.java": "c2d519ed9531372bed492b24c5f6beb58dd8c0fa078b1e39dd3bcb0170caeebe",
+    "harness-agent/src/test/java/com/harness/agent/experiment/SourceDocumentSearch.java": "f1783cb97a774ca961eac2b371595e692fd0d46552dc5a42239c011dddd81885",
+    "harness-agent/src/test/java/com/harness/agent/experiment/SourceDocumentSearchTest.java": "ff17ae3c17cf43cedcffeeba8217cb548877b50cf49ac02850febcb7122a0d45"
+  }
+}

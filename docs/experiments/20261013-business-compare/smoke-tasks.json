@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "benchmarkDate": "2026-10-12",
+  "defaultPrincipal": "ownerAlpha",
+  "resetBeforeEachTask": true,
+  "tasks": [
+    {
+      "id": "business-read-customer-detail",
+      "category": "businessRead",
+      "principal": "ownerAlpha",
+      "prompt": "读取我的客户C103。返回客户名、tier原始字段值和YYYY-MM-DD格式的合同到期日；不修改任何记录。",
+      "expectations": {
+        "answerContainsAll": [
+          "蓝榫物流C36",
+          "platinum",
+          "2026-11-15"
+        ],
+        "state": {
+          "unchanged": true
+        }
+      }
+    }
+  ]
+}

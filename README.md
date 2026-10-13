@@ -2,6 +2,16 @@
 
 # Cyrene Agent — 面向已有项目的专用 Agent 开发框架
 
+## 实验对比
+
+![Cyrene 与 Spring AI Alibaba 的业务接入对照，以及 Wiki 开关的纯知识题消融结果](docs/experiments/assets/experiment-comparison-zh.png)
+
+**已有系统业务接入：** 在同一合成 CRM 和相同模型下，Cyrene 与独立 Spring AI Alibaba ReactAgent 各执行 11 题 × 3 轮。两组业务目标均为 **33/33**；完整回复事实复核分别为 **31/33、32/33**。平均耗时为 **3.50 秒、2.92 秒**，平均输入为 **5746、3486 Token**。本轮 Alibaba 耗时更低、输入更少；Cyrene 通过现有 OpenAPI 导入、可信凭证传递和工具执行器接入宿主，本轮未测量一般开发者的接入工时收益。[完整对照、原始记录与复核](docs/experiments/2026-10-13-alibaba-results.md)。
+
+**Wiki 消融：** 四份合成文档、四道纯知识题、每组一次运行；Wiki 开启/关闭均为 **4/4**，平均输入分别为 **15987、17503 Token**，开启后少 **8.7%**；平均耗时为 **4.96 秒、4.53 秒**，本轮未观察到提速。原生 LangChain4j 条件共享 Cyrene 的工具与授权，只作为循环基线。[Wiki 实验与边界](docs/experiments/2026-10-13-results.md)。
+
+上述两项实验的样本、重复次数与功能范围分别解释；模型缓存未完全受控，LLM 输入 Token 不代表系统总费用。数据不支持生产泛化或跨产品全面优胜；Jev 未做独立测速。
+
 > 将已有业务系统、领域知识和权限体系接入自主 ReAct Agent，而不是重新开发一套孤立的 AI 应用。
 
 Cyrene Agent 是一个使用 Java 21 构建的 Agent 开发框架。它面向垂直领域开发者，帮助已有系统快速获得自然语言入口、项目接口调用、企业知识检索、关系数据检索、可校验结构化输出、子 Agent 协作和全链路 Trace 能力。

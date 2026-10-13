@@ -1,0 +1,23 @@
+{
+  "schemaVersion" : 1,
+  "trials" : 31,
+  "failureCount" : 12,
+  "allPassed" : false,
+  "conditions" : {
+    "wiki_on" : {
+      "failed" : 6,
+      "trials" : 10,
+      "passed" : 4
+    },
+    "wiki_off" : {
+      "failed" : 6,
+      "trials" : 10,
+      "passed" : 4
+    },
+    "bare_langchain4j" : {
+      "failed" : 0,
+      "trials" : 11,
+      "passed" : 11
+    }
+  }
+}

@@ -2,6 +2,16 @@
 
 # Cyrene Agent — A Dedicated Agent Framework for Existing Projects
 
+## Experimental Comparisons
+
+![Business API comparison with Spring AI Alibaba and knowledge-only Wiki ablation](docs/experiments/assets/experiment-comparison-en.png)
+
+**Business API integration:** Cyrene and an independent Spring AI Alibaba ReactAgent each ran 11 tasks × 3 repeats against the same synthetic CRM and model. Both achieved **33/33 business outcomes**; full-answer factual review passed **31/33 and 32/33**, respectively. Mean latency was **3.50 s versus 2.92 s**, and mean input usage was **5,746 versus 3,486 tokens**. Alibaba had lower latency and input usage in this sample. Cyrene reused its OpenAPI importer, trusted credential propagation, and tool executor; developer onboarding time savings were not measured. [Full comparison, raw records, and review](docs/experiments/2026-10-13-alibaba-results.md).
+
+**Wiki ablation:** Four synthetic documents, four knowledge-only tasks, and one repeat per condition. Wiki on/off both passed **4/4**, with mean input usage of **15,987 versus 17,503 tokens**, an **8.7% reduction** with Wiki on. Mean latency was **4.96 s versus 4.53 s**; no speedup was observed. The native LangChain4j condition shares Cyrene tools and authorization and serves only as a loop baseline. [Wiki experiment and limitations](docs/experiments/2026-10-13-results.md).
+
+These experiments have separate cohorts, repetition counts, and feature scopes. Provider cache warmth was not fully controlled, and LLM input tokens do not represent total system cost. The results do not establish production generalization or product-wide superiority. Jev was not independently benchmarked.
+
 > Add an autonomous ReAct Agent to an existing business system, its domain knowledge, and its authorization model instead of building an isolated AI application from scratch.
 
 Cyrene Agent is an Agent development framework built with Java 21. It is designed for vertical-domain developers who need to give an existing system a natural-language interface, project API control, enterprise knowledge retrieval, relational-data retrieval, validated structured output, sub-agent collaboration, and end-to-end tracing.

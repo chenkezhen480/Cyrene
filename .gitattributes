@@ -1,0 +1,3 @@
+# Preserve immutable experiment records and diagnostic evidence verbatim.
+docs/experiments/**/*.jsonl -text whitespace=cr-at-eol
+docs/experiments/regressions/** binary

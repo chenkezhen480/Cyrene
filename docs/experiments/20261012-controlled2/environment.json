@@ -1,0 +1,39 @@
+{
+  "runId": "20261012-controlled2",
+  "sourceCommit": "5eecc542c92c0e017a156588f6739ccacf9e1f54",
+  "sourceModelConfigSha256": "828e0ce95dc5763300ac9519aa4d2ac8a62ebc946c2eae4864491481ca981f6f",
+  "experimentModelConfigSha256": "ed9c91f46c2eb41311dbbdead6ec13377db1e5d5d4c76d754b20eb9dd07e4907",
+  "models": {
+    "chatProvider": "openai",
+    "chatModel": "deepseek-flash",
+    "chatTemperature": "0.7",
+    "chatMaxTokens": "16384",
+    "chatApiFormat": "",
+    "embeddingProvider": "openai",
+    "embeddingModel": "embedding-3",
+    "embeddingDimension": "1024",
+    "rerankProvider": "",
+    "rerankModel": "",
+    "routingProvider": "jev",
+    "routingModel": "jev-latest"
+  },
+  "dockerProject": "cyrene-experiment-20261012-controlled2",
+  "repetitions": 1,
+  "maxTasks": 0,
+  "conditions": [
+    "wiki_on",
+    "wiki_off",
+    "bare_langchain4j"
+  ],
+  "jevBenchmark": false,
+  "status": "containers_healthy",
+  "originalModelFileChangedByPreparation": false,
+  "ports": {
+    "mysql": 50063,
+    "milvus": 50072,
+    "redis": 50062,
+    "document-parser": 50064,
+    "business": 50065
+  },
+  "resumedAtUtc": "2026-10-12T23:32:25.172265+00:00"
+}
