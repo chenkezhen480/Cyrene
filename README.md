@@ -6,6 +6,8 @@
 
 **Cyrene 主打为已有业务系统迅速构建专用 Agent。** 它基于 LangChain4j，将接口发现、通用 HTTP 工具、可信凭证传递、自主 ReAct、会话和 Trace 集成在同一服务中。已有后端提供可调用的 HTTP API 后，开发者可以复用这套能力，主要完成模型配置、接口审核和身份映射，减少为每个项目重复编写 Agent 适配与运行管理代码。
 
+![Cyrene 复用现成接入能力，与本次 Alibaba 原生工具接入路线的对照；完整人工接入工时尚未测量](docs/experiments/assets/integration-overview-zh.png)
+
 ### 迅速接入已有系统，具体省在哪里
 
 ```mermaid
@@ -32,6 +34,11 @@ flowchart LR
 
 ### 接入后的任务表现与 Wiki 消融
 
+两组均完成 **33/33 个业务目标**；完整回复事实复核分别为 Cyrene **31/33**、Alibaba **32/33**。本样本 Alibaba 平均耗时和输入 Token 更低。当前证据支持 Cyrene 已封装上述接入能力；完整人工接入工时及其节省比例仍需单独实验。
+
+<details>
+<summary>展开运行性能、Wiki 消融图和实验边界</summary>
+
 ![Cyrene 与 Spring AI Alibaba 的业务接入对照，以及 Wiki 开关的纯知识题消融结果](docs/experiments/assets/experiment-comparison-zh.png)
 
 **已有系统业务接入：** 在同一合成 CRM 和相同模型下，Cyrene 与独立 Spring AI Alibaba ReactAgent 各执行 11 题 × 3 轮。两组业务目标均为 **33/33**；完整回复事实复核分别为 **31/33、32/33**。平均耗时为 **3.50 秒、2.92 秒**，平均输入为 **5746、3486 Token**。本轮 Alibaba 耗时更低、输入更少；Cyrene 通过现有 OpenAPI 导入、可信凭证传递和工具执行器接入宿主，本轮未测量一般开发者的接入工时收益。[完整对照、原始记录与复核](docs/experiments/2026-10-13-alibaba-results.md)。
@@ -39,6 +46,8 @@ flowchart LR
 **Wiki 消融：** 四份合成文档、四道纯知识题、每组一次运行；Wiki 开启/关闭均为 **4/4**，平均输入分别为 **15987、17503 Token**，开启后少 **8.7%**；平均耗时为 **4.96 秒、4.53 秒**，本轮未观察到提速。原生 LangChain4j 条件共享 Cyrene 的工具与授权，只作为循环基线。[Wiki 实验与边界](docs/experiments/2026-10-13-results.md)。
 
 上述两项实验的样本、重复次数与功能范围分别解释；模型缓存未完全受控，LLM 输入 Token 不代表系统总费用。数据不支持生产泛化或跨产品全面优胜；Jev 未做独立测速。
+
+</details>
 
 > 将已有业务系统、领域知识和权限体系接入自主 ReAct Agent，而不是重新开发一套孤立的 AI 应用。
 
