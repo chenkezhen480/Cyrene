@@ -24,6 +24,8 @@ import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.output.FinishReason;
 import dev.langchain4j.model.output.TokenUsage;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import java.time.Duration;
 import java.util.Map;
 import java.util.Set;
@@ -32,8 +34,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 
 class NativeLangChain4jExperimentTest {
-    @Test
-    void nativeLoopActivatesTrustedScopeForCallbacksAndAccountsAllModelCalls() throws Exception {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void nativeLoopActivatesTrustedScopeForCallbacksAndAccountsAllModelCalls(boolean existingAccessScope) throws Exception {
         EnvConfig.init(Map.of("HARNESS_RISK_CONFIRM_TOOLS", ""));
         var mapper = new ObjectMapper();
         var registry = new ToolRegistry();
@@ -66,6 +69,14 @@ class NativeLangChain4jExperimentTest {
         var context = new AgentContext(Map.of(AgentContext.KEY_CREDENTIALS, Map.of("fixtureToken", "synthetic-token"),
                 AgentContext.KEY_KNOWLEDGE_REQUEST_CONTEXT, Map.of("collection", "isolated_docs", "allowedDocumentIds", Set.of())),
                 new RequestPrincipal("ownerAlpha", "fixtureTenant", "OWNER", RequestPrincipal.AuthenticationType.JWT));
+        var outerAccess = KnowledgeAccessService.captureCurrentContext();
+        var outerCredentials = HttpApiTool.getCurrentCredentialsSnapshot();
+        if (existingAccessScope) {
+            KnowledgeAccessService.setCurrentContext("outer-tenant", new KnowledgeRequestContext("outer_docs", Set.of("outer-document")));
+        } else {
+            KnowledgeAccessService.clearCurrentContext();
+        }
+        var previousAccess = KnowledgeAccessService.captureCurrentContext();
         HttpApiTool.setCurrentCredentials(Map.of("previous", "sentinel"));
         try {
             var result = NativeLangChain4jExperiment.run(provider, registry.snapshot(),
@@ -77,8 +88,12 @@ class NativeLangChain4jExperimentTest {
             assertThat(result.steps()).hasSize(1);
             assertThat(HttpApiTool.getCurrentCredentialsSnapshot()).containsExactlyEntriesOf(Map.of("previous", "sentinel"));
             assertThat(KnowledgeToolRuntimeContext.captureCurrent()).isNull();
-            assertThat(KnowledgeAccessService.captureCurrentContext()).isNull();
-        } finally { HttpApiTool.clearCurrentCredentials(); }
+            assertThat(KnowledgeAccessService.captureCurrentContext()).isEqualTo(previousAccess);
+        } finally {
+            if (outerCredentials.isEmpty()) HttpApiTool.clearCurrentCredentials();
+            else HttpApiTool.setCurrentCredentials(outerCredentials);
+            KnowledgeAccessService.restoreCurrentContext(outerAccess);
+        }
     }
 
     @Test

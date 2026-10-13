@@ -79,6 +79,12 @@ Cyrene 路线为获取 OpenAPI→现有生产解析器→审核五个允许的�
 
 ## 原始记录与适用范围
 
+### 后续 PR 的测试上下文修正
+
+[PR #3 的首次 CI](https://github.com/chenkezhen480/Cyrene/actions/runs/38351200784)在新增的 `NativeLangChain4jExperimentTest` 失败：测试假设执行完知识访问上下文必须为空，但原生实验回调的契约是恢复调用前的上下文。完整套件中此前的测试已经设置上下文，恢复成功仍被错误断言判为失败。
+
+本地显式设置外层 tenant/collection/document scope 后复现原断言失败；测试现分别覆盖初始上下文为空及非空，验证内层只读取本次授权范围、执行后准确恢复外层，并在 finally 还原测试前的 HTTP 凭证与知识上下文。相关 12 项定向检查通过；设置 `CYRENE_REQUIRE_RG=true` 后，本地完整 `mvn -B verify` 通过，汇总 1243 项测试，0 失败、0 错误、21 项跳过。此修正只调整测试契约和隔离，不改变生产代码、实验运行器、原始结果或性能数据；远程 CI 结果以 PR 检查为准。
+
 目录：[20261013-business-compare](20261013-business-compare/)。合并原始行 SHA-256：`f912ac7eabadf1f4c31618e9a226188189c6227e753eeeaea17a6dcb94878530`。
 
 - raw.jsonl：66 行，带源 block 文件/行号；各 block 原始行保留，合并只新增定位元数据。
