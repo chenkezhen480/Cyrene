@@ -2,6 +2,22 @@
 
 # Cyrene Agent — A Dedicated Agent Framework for Existing Projects
 
+> Add an autonomous ReAct Agent to an existing business system, its domain knowledge, and its authorization model instead of building an isolated AI application from scratch.
+
+Cyrene Agent is an Agent development framework built with Java 21. It is designed for vertical-domain developers who need to give an existing system a natural-language interface, project API control, enterprise knowledge retrieval, relational-data retrieval, validated structured output, sub-agent collaboration, and end-to-end tracing.
+
+## Why Cyrene Agent
+
+Unlike agents such as Codex and Claude Code, Cyrene Agent addresses a different question: **how do you build a dedicated Agent for an existing system?**
+
+Use case 1:
+<table>
+  <tr>
+    <td><img src="docs/assets/图片1.png" height="560" alt="Scenario 1"></td>
+    <td><img src="docs/assets/图片2.png" height="560" alt="Scenario 2"></td>
+  </tr>
+</table>
+
 ## Rapid Integration and Experimental Comparisons
 
 **Cyrene focuses on rapidly building dedicated Agents for existing business systems.** Built on LangChain4j, it integrates API discovery, generic HTTP tools, trusted credential propagation, autonomous ReAct, sessions, and tracing in one service. Once the existing backend exposes callable HTTP APIs, developers can reuse these capabilities and focus on model configuration, endpoint review, and identity mapping, reducing repeated integration and runtime-management work across projects.
@@ -48,22 +64,6 @@ Both groups achieved **33/33 business outcomes**. Full-answer factual review pas
 These experiments have separate cohorts, repetition counts, and feature scopes. Provider cache warmth was not fully controlled, and LLM input tokens do not represent total system cost. The results do not establish production generalization or product-wide superiority. Jev was not independently benchmarked.
 
 </details>
-
-> Add an autonomous ReAct Agent to an existing business system, its domain knowledge, and its authorization model instead of building an isolated AI application from scratch.
-
-Cyrene Agent is an Agent development framework built with Java 21. It is designed for vertical-domain developers who need to give an existing system a natural-language interface, project API control, enterprise knowledge retrieval, relational-data retrieval, validated structured output, sub-agent collaboration, and end-to-end tracing.
-
-## Why Cyrene Agent
-
-Cyrene Agent addresses a different question: **how do you build a dedicated Agent for an existing system?**
-
-Use case 1:
-<table>
-  <tr>
-    <td><img src="docs/assets/图片1.png" height="560" alt="Scenario 1"></td>
-    <td><img src="docs/assets/图片2.png" height="560" alt="Scenario 2"></td>
-  </tr>
-</table>
 
 ## Quick Start
 

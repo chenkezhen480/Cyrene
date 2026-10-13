@@ -2,6 +2,22 @@
 
 # Cyrene Agent — 面向已有项目的专用 Agent 开发框架
 
+> 将已有业务系统、领域知识和权限体系接入自主 ReAct Agent，而不是重新开发一套孤立的 AI 应用。
+
+Cyrene Agent 是一个使用 Java 21 构建的 Agent 开发框架。它面向垂直领域开发者，帮助已有系统快速获得自然语言入口、项目接口调用、企业知识检索、关系数据检索、可校验结构化输出、子 Agent 协作和全链路 Trace 能力。
+
+## 为什么需要 Cyrene Agent
+
+不同于 codex，claude code 等 Agent，Cyrene Agent 解决的是另一类问题：**如何为已有系统构建专用 Agent**。
+
+使用案例1：
+<table>
+  <tr>
+    <td><img src="docs/assets/图片1.png" height="560" alt="场景1"></td>
+    <td><img src="docs/assets/图片2.png" height="560" alt="场景2"></td>
+  </tr>
+</table>
+
 ## 快速接入与实验对比
 
 **Cyrene 主打为已有业务系统迅速构建专用 Agent。** 它基于 LangChain4j，将接口发现、通用 HTTP 工具、可信凭证传递、自主 ReAct、会话和 Trace 集成在同一服务中。已有后端提供可调用的 HTTP API 后，开发者可以复用这套能力，主要完成模型配置、接口审核和身份映射，减少为每个项目重复编写 Agent 适配与运行管理代码。
@@ -48,22 +64,6 @@ flowchart LR
 上述两项实验的样本、重复次数与功能范围分别解释；模型缓存未完全受控，LLM 输入 Token 不代表系统总费用。数据不支持生产泛化或跨产品全面优胜；Jev 未做独立测速。
 
 </details>
-
-> 将已有业务系统、领域知识和权限体系接入自主 ReAct Agent，而不是重新开发一套孤立的 AI 应用。
-
-Cyrene Agent 是一个使用 Java 21 构建的 Agent 开发框架。它面向垂直领域开发者，帮助已有系统快速获得自然语言入口、项目接口调用、企业知识检索、关系数据检索、可校验结构化输出、子 Agent 协作和全链路 Trace 能力。
-
-## 为什么需要 Cyrene Agent
-
-Cyrene Agent 解决的是另一类问题：**如何为已有系统构建专用 Agent**。
-
-使用案例1：
-<table>
-  <tr>
-    <td><img src="docs/assets/图片1.png" height="560" alt="场景1"></td>
-    <td><img src="docs/assets/图片2.png" height="560" alt="场景2"></td>
-  </tr>
-</table>
 
 ## 快速开始
 
