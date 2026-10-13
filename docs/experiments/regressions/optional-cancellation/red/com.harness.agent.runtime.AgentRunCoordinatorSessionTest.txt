@@ -1,0 +1,26 @@
+-------------------------------------------------------------------------------
+Test set: com.harness.agent.runtime.AgentRunCoordinatorSessionTest
+-------------------------------------------------------------------------------
+Tests run: 7, Failures: 0, Errors: 2, Skipped: 0, Time elapsed: 3.798 s <<< FAILURE! -- in com.harness.agent.runtime.AgentRunCoordinatorSessionTest
+com.harness.agent.runtime.AgentRunCoordinatorSessionTest.omittedCancellationCreatesAnIndependentRunScopeAndCancelsItsChildren -- Time elapsed: 0.029 s <<< ERROR!
+java.lang.IllegalArgumentException: cancellationToken cannot be null
+	at com.harness.agent.AgentRunContext.<init>(AgentRunContext.java:67)
+	at com.harness.agent.AgentRunContext.<init>(AgentRunContext.java:23)
+	at com.harness.agent.AgentRunContext.<init>(AgentRunContext.java:51)
+	at com.harness.agent.AgentRunContext.<init>(AgentRunContext.java:61)
+	at com.harness.agent.runtime.AgentRunCoordinatorSessionTest.omittedCancellationCreatesAnIndependentRunScopeAndCancelsItsChildren(AgentRunCoordinatorSessionTest.java:30)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+
+com.harness.agent.runtime.AgentRunCoordinatorSessionTest.structuredRunWithOmittedCancellationAlsoEntersAStrictRunScope -- Time elapsed: 0.011 s <<< ERROR!
+java.lang.IllegalArgumentException: cancellationToken cannot be null
+	at com.harness.agent.AgentRunContext.<init>(AgentRunContext.java:67)
+	at com.harness.agent.AgentRunContext.<init>(AgentRunContext.java:23)
+	at com.harness.agent.AgentRunContext.<init>(AgentRunContext.java:51)
+	at com.harness.agent.AgentRunContext.<init>(AgentRunContext.java:61)
+	at com.harness.agent.runtime.AgentRunCoordinatorSessionTest.structuredRunWithOmittedCancellationAlsoEntersAStrictRunScope(AgentRunCoordinatorSessionTest.java:52)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+

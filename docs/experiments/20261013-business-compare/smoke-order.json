@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "repetitions": 1,
+  "smoke": true,
+  "taskCount": 1,
+  "orderPolicy": "Alternate first framework per repetition; tasks sequential in each framework block; API cache warmth not fully controlled",
+  "blocks": [
+    {
+      "id": "smoke-1-cyrene_business",
+      "repetition": 1,
+      "condition": "cyrene_business",
+      "exitCode": 0,
+      "processElapsedMs": 32531
+    },
+    {
+      "id": "smoke-1-alibaba_react",
+      "repetition": 1,
+      "condition": "alibaba_react",
+      "exitCode": 0,
+      "processElapsedMs": 4375
+    }
+  ],
+  "rawSha256": "7a6b7ca85f9fd04ef362cf8f5ba23d702439a1e34f9d51ee88992df20933b2ca",
+  "trials": 2,
+  "status": "completed"
+}

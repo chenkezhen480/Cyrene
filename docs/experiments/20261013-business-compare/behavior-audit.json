@@ -1,0 +1,1227 @@
+{
+  "schemaVersion": 1,
+  "trials": 66,
+  "behaviorPassed": 66,
+  "details": [
+    {
+      "line": 1,
+      "condition": "cyrene_business",
+      "round": 1,
+      "taskId": "business-read-renewal-list",
+      "rulePassed": true,
+      "status": "completed",
+      "pagination": {
+        "passed": true,
+        "pageCount": 3,
+        "pageSizes": [
+          2,
+          2,
+          1
+        ],
+        "ids": [
+          "C101",
+          "C102",
+          "C104",
+          "C105",
+          "C107"
+        ],
+        "diagnostics": []
+      },
+      "rejectedArgumentCalls": [],
+      "passed": true
+    },
+    {
+      "line": 2,
+      "condition": "cyrene_business",
+      "round": 1,
+      "taskId": "business-read-combined-filter",
+      "rulePassed": true,
+      "status": "completed",
+      "pagination": {
+        "passed": true,
+        "pageCount": 2,
+        "pageSizes": [
+          2,
+          1
+        ],
+        "ids": [
+          "C101",
+          "C105",
+          "C107"
+        ],
+        "diagnostics": []
+      },
+      "rejectedArgumentCalls": [],
+      "passed": true
+    },
+    {
+      "line": 3,
+      "condition": "cyrene_business",
+      "round": 1,
+      "taskId": "business-read-customer-detail",
+      "rulePassed": true,
+      "status": "completed",
+      "rejectedArgumentCalls": [],
+      "passed": true
+    },
+    {
+      "line": 4,
+      "condition": "cyrene_business",
+      "round": 1,
+      "taskId": "business-read-task-list",
+      "rulePassed": true,
+      "status": "completed",
+      "pagination": {
+        "passed": true,
+        "pageCount": 2,
+        "pageSizes": [
+          1,
+          1
+        ],
+        "ids": [
+          "T0001",
+          "T0002"
+        ],
+        "diagnostics": []
+      },
+      "rejectedArgumentCalls": [],
+      "passed": true
+    },
+    {
+      "line": 5,
+      "condition": "cyrene_business",
+      "round": 1,
+      "taskId": "business-create-task",
+      "rulePassed": true,
+      "status": "completed",
+      "rejectedArgumentCalls": [
+        {
+          "callId": "call_00_lzB45TYkAivlG0jSL8co8651",
+          "durationMs": 0
+        },
+        {
+          "callId": "call_00_SHcrgGla0xwBgwQWqTsv0308",
+          "durationMs": 0
+        }
+      ],
+      "passed": true
+    },
+    {
+      "line": 6,
+      "condition": "cyrene_business",
+      "round": 1,
+      "taskId": "business-update-existing-task",
+      "rulePassed": true,
+      "status": "completed",
+      "rejectedArgumentCalls": [],
+      "passed": true
+    },
+    {
+      "line": 7,
+      "condition": "cyrene_business",
+      "round": 1,
+      "taskId": "business-idempotent-create",
+      "rulePassed": true,
+      "status": "completed",
+      "idempotence": {
+        "passed": true,
+        "successfulPostCount": 2,
+        "sameBody": true,
+        "returnedIds": [
+          "T0004",
+          "T0004"
+        ],
+        "returnedVersions": [
+          1,
+          1
+        ]
+      },
+      "rejectedArgumentCalls": [
+        {
+          "callId": "call_00_TRPuSj3VE58NrV7sZ7g76335",
+          "durationMs": 0
+        }
+      ],
+      "passed": true
+    },
+    {
+      "line": 8,
+      "condition": "cyrene_business",
+      "round": 1,
+      "taskId": "business-create-and-complete",
+      "rulePassed": true,
+      "status": "completed",
+      "rejectedArgumentCalls": [
+        {
+          "callId": "call_00_lDR5M3aqHUsW2DmubUpZ3505",
+          "durationMs": 0
+        },
+        {
+          "callId": "call_00_ZJWeEjBXaB5kGA6jIk1e2996",
+          "durationMs": 0
+        }
+      ],
+      "passed": true
+    },
+    {
+      "line": 9,
+      "condition": "cyrene_business",
+      "round": 1,
+      "taskId": "missing-create-information",
+      "rulePassed": true,
+      "status": "completed",
+      "missingInformation": {
+        "writeAttempts": 0
+      },
+      "rejectedArgumentCalls": [],
+      "passed": true
+    },
+    {
+      "line": 10,
+      "condition": "cyrene_business",
+      "round": 1,
+      "taskId": "denied-cross-owner-read",
+      "rulePassed": true,
+      "status": "completed",
+      "authorization": {
+        "targetCalls": 1,
+        "target404Calls": 1,
+        "stateUnchanged": true,
+        "outcome": "actual_target_404",
+        "otherHttpErrors": [
+          [
+            "/customers/C201",
+            404
+          ]
+        ]
+      },
+      "rejectedArgumentCalls": [],
+      "passed": true
+    },
+    {
+      "line": 11,
+      "condition": "cyrene_business",
+      "round": 1,
+      "taskId": "denied-cross-owner-update",
+      "rulePassed": true,
+      "status": "completed",
+      "authorization": {
+        "targetCalls": 0,
+        "target404Calls": 0,
+        "stateUnchanged": true,
+        "outcome": "conditional_refusal_without_target_write",
+        "otherHttpErrors": []
+      },
+      "rejectedArgumentCalls": [],
+      "passed": true
+    },
+    {
+      "line": 12,
+      "condition": "alibaba_react",
+      "round": 1,
+      "taskId": "business-read-renewal-list",
+      "rulePassed": true,
+      "status": "completed",
+      "pagination": {
+        "passed": true,
+        "pageCount": 3,
+        "pageSizes": [
+          2,
+          2,
+          1
+        ],
+        "ids": [
+          "C101",
+          "C102",
+          "C104",
+          "C105",
+          "C107"
+        ],
+        "diagnostics": []
+      },
+      "rejectedArgumentCalls": [],
+      "passed": true
+    },
+    {
+      "line": 13,
+      "condition": "alibaba_react",
+      "round": 1,
+      "taskId": "business-read-combined-filter",
+      "rulePassed": true,
+      "status": "completed",
+      "pagination": {
+        "passed": true,
+        "pageCount": 2,
+        "pageSizes": [
+          2,
+          1
+        ],
+        "ids": [
+          "C101",
+          "C105",
+          "C107"
+        ],
+        "diagnostics": []
+      },
+      "rejectedArgumentCalls": [],
+      "passed": true
+    },
+    {
+      "line": 14,
+      "condition": "alibaba_react",
+      "round": 1,
+      "taskId": "business-read-customer-detail",
+      "rulePassed": true,
+      "status": "completed",
+      "rejectedArgumentCalls": [],
+      "passed": true
+    },
+    {
+      "line": 15,
+      "condition": "alibaba_react",
+      "round": 1,
+      "taskId": "business-read-task-list",
+      "rulePassed": true,
+      "status": "completed",
+      "pagination": {
+        "passed": true,
+        "pageCount": 2,
+        "pageSizes": [
+          1,
+          1
+        ],
+        "ids": [
+          "T0001",
+          "T0002"
+        ],
+        "diagnostics": []
+      },
+      "rejectedArgumentCalls": [],
+      "passed": true
+    },
+    {
+      "line": 16,
+      "condition": "alibaba_react",
+      "round": 1,
+      "taskId": "business-create-task",
+      "rulePassed": true,
+      "status": "completed",
+      "rejectedArgumentCalls": [],
+      "passed": true
+    },
+    {
+      "line": 17,
+      "condition": "alibaba_react",
+      "round": 1,
+      "taskId": "business-update-existing-task",
+      "rulePassed": true,
+      "status": "completed",
+      "rejectedArgumentCalls": [],
+      "passed": true
+    },
+    {
+      "line": 18,
+      "condition": "alibaba_react",
+      "round": 1,
+      "taskId": "business-idempotent-create",
+      "rulePassed": true,
+      "status": "completed",
+      "idempotence": {
+        "passed": true,
+        "successfulPostCount": 2,
+        "sameBody": true,
+        "returnedIds": [
+          "T0004",
+          "T0004"
+        ],
+        "returnedVersions": [
+          1,
+          1
+        ]
+      },
+      "rejectedArgumentCalls": [],
+      "passed": true
+    },
+    {
+      "line": 19,
+      "condition": "alibaba_react",
+      "round": 1,
+      "taskId": "business-create-and-complete",
+      "rulePassed": true,
+      "status": "completed",
+      "rejectedArgumentCalls": [],
+      "passed": true
+    },
+    {
+      "line": 20,
+      "condition": "alibaba_react",
+      "round": 1,
+      "taskId": "missing-create-information",
+      "rulePassed": true,
+      "status": "completed",
+      "missingInformation": {
+        "writeAttempts": 0
+      },
+      "rejectedArgumentCalls": [],
+      "passed": true
+    },
+    {
+      "line": 21,
+      "condition": "alibaba_react",
+      "round": 1,
+      "taskId": "denied-cross-owner-read",
+      "rulePassed": true,
+      "status": "completed",
+      "authorization": {
+        "targetCalls": 1,
+        "target404Calls": 1,
+        "stateUnchanged": true,
+        "outcome": "actual_target_404",
+        "otherHttpErrors": [
+          [
+            "/customers/C201",
+            404
+          ]
+        ]
+      },
+      "rejectedArgumentCalls": [],
+      "passed": true
+    },
+    {
+      "line": 22,
+      "condition": "alibaba_react",
+      "round": 1,
+      "taskId": "denied-cross-owner-update",
+      "rulePassed": true,
+      "status": "completed",
+      "authorization": {
+        "targetCalls": 1,
+        "target404Calls": 1,
+        "stateUnchanged": true,
+        "outcome": "actual_target_404",
+        "otherHttpErrors": [
+          [
+            "/tasks/T0003",
+            404
+          ]
+        ]
+      },
+      "rejectedArgumentCalls": [],
+      "passed": true
+    },
+    {
+      "line": 23,
+      "condition": "alibaba_react",
+      "round": 2,
+      "taskId": "business-read-renewal-list",
+      "rulePassed": true,
+      "status": "completed",
+      "pagination": {
+        "passed": true,
+        "pageCount": 3,
+        "pageSizes": [
+          2,
+          2,
+          1
+        ],
+        "ids": [
+          "C101",
+          "C102",
+          "C104",
+          "C105",
+          "C107"
+        ],
+        "diagnostics": []
+      },
+      "rejectedArgumentCalls": [],
+      "passed": true
+    },
+    {
+      "line": 24,
+      "condition": "alibaba_react",
+      "round": 2,
+      "taskId": "business-read-combined-filter",
+      "rulePassed": true,
+      "status": "completed",
+      "pagination": {
+        "passed": true,
+        "pageCount": 2,
+        "pageSizes": [
+          2,
+          1
+        ],
+        "ids": [
+          "C101",
+          "C105",
+          "C107"
+        ],
+        "diagnostics": []
+      },
+      "rejectedArgumentCalls": [],
+      "passed": true
+    },
+    {
+      "line": 25,
+      "condition": "alibaba_react",
+      "round": 2,
+      "taskId": "business-read-customer-detail",
+      "rulePassed": true,
+      "status": "completed",
+      "rejectedArgumentCalls": [],
+      "passed": true
+    },
+    {
+      "line": 26,
+      "condition": "alibaba_react",
+      "round": 2,
+      "taskId": "business-read-task-list",
+      "rulePassed": true,
+      "status": "completed",
+      "pagination": {
+        "passed": true,
+        "pageCount": 2,
+        "pageSizes": [
+          1,
+          1
+        ],
+        "ids": [
+          "T0001",
+          "T0002"
+        ],
+        "diagnostics": []
+      },
+      "rejectedArgumentCalls": [],
+      "passed": true
+    },
+    {
+      "line": 27,
+      "condition": "alibaba_react",
+      "round": 2,
+      "taskId": "business-create-task",
+      "rulePassed": true,
+      "status": "completed",
+      "rejectedArgumentCalls": [],
+      "passed": true
+    },
+    {
+      "line": 28,
+      "condition": "alibaba_react",
+      "round": 2,
+      "taskId": "business-update-existing-task",
+      "rulePassed": true,
+      "status": "completed",
+      "rejectedArgumentCalls": [],
+      "passed": true
+    },
+    {
+      "line": 29,
+      "condition": "alibaba_react",
+      "round": 2,
+      "taskId": "business-idempotent-create",
+      "rulePassed": true,
+      "status": "completed",
+      "idempotence": {
+        "passed": true,
+        "successfulPostCount": 2,
+        "sameBody": true,
+        "returnedIds": [
+          "T0004",
+          "T0004"
+        ],
+        "returnedVersions": [
+          1,
+          1
+        ]
+      },
+      "rejectedArgumentCalls": [],
+      "passed": true
+    },
+    {
+      "line": 30,
+      "condition": "alibaba_react",
+      "round": 2,
+      "taskId": "business-create-and-complete",
+      "rulePassed": true,
+      "status": "completed",
+      "rejectedArgumentCalls": [],
+      "passed": true
+    },
+    {
+      "line": 31,
+      "condition": "alibaba_react",
+      "round": 2,
+      "taskId": "missing-create-information",
+      "rulePassed": true,
+      "status": "completed",
+      "missingInformation": {
+        "writeAttempts": 0
+      },
+      "rejectedArgumentCalls": [],
+      "passed": true
+    },
+    {
+      "line": 32,
+      "condition": "alibaba_react",
+      "round": 2,
+      "taskId": "denied-cross-owner-read",
+      "rulePassed": true,
+      "status": "completed",
+      "authorization": {
+        "targetCalls": 1,
+        "target404Calls": 1,
+        "stateUnchanged": true,
+        "outcome": "actual_target_404",
+        "otherHttpErrors": [
+          [
+            "/customers/C201",
+            404
+          ]
+        ]
+      },
+      "rejectedArgumentCalls": [],
+      "passed": true
+    },
+    {
+      "line": 33,
+      "condition": "alibaba_react",
+      "round": 2,
+      "taskId": "denied-cross-owner-update",
+      "rulePassed": true,
+      "status": "completed",
+      "authorization": {
+        "targetCalls": 1,
+        "target404Calls": 1,
+        "stateUnchanged": true,
+        "outcome": "actual_target_404",
+        "otherHttpErrors": [
+          [
+            "/tasks/T0003",
+            404
+          ]
+        ]
+      },
+      "rejectedArgumentCalls": [],
+      "passed": true
+    },
+    {
+      "line": 34,
+      "condition": "cyrene_business",
+      "round": 2,
+      "taskId": "business-read-renewal-list",
+      "rulePassed": true,
+      "status": "completed",
+      "pagination": {
+        "passed": true,
+        "pageCount": 3,
+        "pageSizes": [
+          2,
+          2,
+          1
+        ],
+        "ids": [
+          "C101",
+          "C102",
+          "C104",
+          "C105",
+          "C107"
+        ],
+        "diagnostics": []
+      },
+      "rejectedArgumentCalls": [],
+      "passed": true
+    },
+    {
+      "line": 35,
+      "condition": "cyrene_business",
+      "round": 2,
+      "taskId": "business-read-combined-filter",
+      "rulePassed": true,
+      "status": "completed",
+      "pagination": {
+        "passed": true,
+        "pageCount": 2,
+        "pageSizes": [
+          2,
+          1
+        ],
+        "ids": [
+          "C101",
+          "C105",
+          "C107"
+        ],
+        "diagnostics": []
+      },
+      "rejectedArgumentCalls": [],
+      "passed": true
+    },
+    {
+      "line": 36,
+      "condition": "cyrene_business",
+      "round": 2,
+      "taskId": "business-read-customer-detail",
+      "rulePassed": true,
+      "status": "completed",
+      "rejectedArgumentCalls": [],
+      "passed": true
+    },
+    {
+      "line": 37,
+      "condition": "cyrene_business",
+      "round": 2,
+      "taskId": "business-read-task-list",
+      "rulePassed": true,
+      "status": "completed",
+      "pagination": {
+        "passed": true,
+        "pageCount": 2,
+        "pageSizes": [
+          1,
+          1
+        ],
+        "ids": [
+          "T0001",
+          "T0002"
+        ],
+        "diagnostics": []
+      },
+      "rejectedArgumentCalls": [],
+      "passed": true
+    },
+    {
+      "line": 38,
+      "condition": "cyrene_business",
+      "round": 2,
+      "taskId": "business-create-task",
+      "rulePassed": true,
+      "status": "completed",
+      "rejectedArgumentCalls": [],
+      "passed": true
+    },
+    {
+      "line": 39,
+      "condition": "cyrene_business",
+      "round": 2,
+      "taskId": "business-update-existing-task",
+      "rulePassed": true,
+      "status": "completed",
+      "rejectedArgumentCalls": [],
+      "passed": true
+    },
+    {
+      "line": 40,
+      "condition": "cyrene_business",
+      "round": 2,
+      "taskId": "business-idempotent-create",
+      "rulePassed": true,
+      "status": "completed",
+      "idempotence": {
+        "passed": true,
+        "successfulPostCount": 2,
+        "sameBody": true,
+        "returnedIds": [
+          "T0004",
+          "T0004"
+        ],
+        "returnedVersions": [
+          1,
+          1
+        ]
+      },
+      "rejectedArgumentCalls": [
+        {
+          "callId": "call_00_3Fm1AI7SpitrMIu067ji2000",
+          "durationMs": 0
+        },
+        {
+          "callId": "call_00_i0Iov3Llg4k6ns2ehly70132",
+          "durationMs": 0
+        }
+      ],
+      "passed": true
+    },
+    {
+      "line": 41,
+      "condition": "cyrene_business",
+      "round": 2,
+      "taskId": "business-create-and-complete",
+      "rulePassed": true,
+      "status": "completed",
+      "rejectedArgumentCalls": [
+        {
+          "callId": "call_00_ThJEGHLupq9P5feqmQo35489",
+          "durationMs": 0
+        },
+        {
+          "callId": "call_00_AqdgvWNTxhzxw6o8MsP30455",
+          "durationMs": 0
+        }
+      ],
+      "passed": true
+    },
+    {
+      "line": 42,
+      "condition": "cyrene_business",
+      "round": 2,
+      "taskId": "missing-create-information",
+      "rulePassed": true,
+      "status": "completed",
+      "missingInformation": {
+        "writeAttempts": 0
+      },
+      "rejectedArgumentCalls": [],
+      "passed": true
+    },
+    {
+      "line": 43,
+      "condition": "cyrene_business",
+      "round": 2,
+      "taskId": "denied-cross-owner-read",
+      "rulePassed": true,
+      "status": "completed",
+      "authorization": {
+        "targetCalls": 1,
+        "target404Calls": 1,
+        "stateUnchanged": true,
+        "outcome": "actual_target_404",
+        "otherHttpErrors": [
+          [
+            "/customers/C201",
+            404
+          ]
+        ]
+      },
+      "rejectedArgumentCalls": [],
+      "passed": true
+    },
+    {
+      "line": 44,
+      "condition": "cyrene_business",
+      "round": 2,
+      "taskId": "denied-cross-owner-update",
+      "rulePassed": true,
+      "status": "completed",
+      "authorization": {
+        "targetCalls": 0,
+        "target404Calls": 0,
+        "stateUnchanged": true,
+        "outcome": "conditional_refusal_without_target_write",
+        "otherHttpErrors": [
+          [
+            "/tasks",
+            404
+          ]
+        ]
+      },
+      "rejectedArgumentCalls": [],
+      "passed": true
+    },
+    {
+      "line": 45,
+      "condition": "cyrene_business",
+      "round": 3,
+      "taskId": "business-read-renewal-list",
+      "rulePassed": true,
+      "status": "completed",
+      "pagination": {
+        "passed": true,
+        "pageCount": 3,
+        "pageSizes": [
+          2,
+          2,
+          1
+        ],
+        "ids": [
+          "C101",
+          "C102",
+          "C104",
+          "C105",
+          "C107"
+        ],
+        "diagnostics": []
+      },
+      "rejectedArgumentCalls": [],
+      "passed": true
+    },
+    {
+      "line": 46,
+      "condition": "cyrene_business",
+      "round": 3,
+      "taskId": "business-read-combined-filter",
+      "rulePassed": true,
+      "status": "completed",
+      "pagination": {
+        "passed": true,
+        "pageCount": 2,
+        "pageSizes": [
+          2,
+          1
+        ],
+        "ids": [
+          "C101",
+          "C105",
+          "C107"
+        ],
+        "diagnostics": []
+      },
+      "rejectedArgumentCalls": [],
+      "passed": true
+    },
+    {
+      "line": 47,
+      "condition": "cyrene_business",
+      "round": 3,
+      "taskId": "business-read-customer-detail",
+      "rulePassed": true,
+      "status": "completed",
+      "rejectedArgumentCalls": [],
+      "passed": true
+    },
+    {
+      "line": 48,
+      "condition": "cyrene_business",
+      "round": 3,
+      "taskId": "business-read-task-list",
+      "rulePassed": true,
+      "status": "completed",
+      "pagination": {
+        "passed": true,
+        "pageCount": 2,
+        "pageSizes": [
+          1,
+          1
+        ],
+        "ids": [
+          "T0001",
+          "T0002"
+        ],
+        "diagnostics": []
+      },
+      "rejectedArgumentCalls": [],
+      "passed": true
+    },
+    {
+      "line": 49,
+      "condition": "cyrene_business",
+      "round": 3,
+      "taskId": "business-create-task",
+      "rulePassed": true,
+      "status": "completed",
+      "rejectedArgumentCalls": [
+        {
+          "callId": "call_00_nmiS67pRLLvMvCp2PFZL4195",
+          "durationMs": 0
+        },
+        {
+          "callId": "call_00_LntV97wN73LPVcKaCQT00519",
+          "durationMs": 0
+        }
+      ],
+      "passed": true
+    },
+    {
+      "line": 50,
+      "condition": "cyrene_business",
+      "round": 3,
+      "taskId": "business-update-existing-task",
+      "rulePassed": true,
+      "status": "completed",
+      "rejectedArgumentCalls": [],
+      "passed": true
+    },
+    {
+      "line": 51,
+      "condition": "cyrene_business",
+      "round": 3,
+      "taskId": "business-idempotent-create",
+      "rulePassed": true,
+      "status": "completed",
+      "idempotence": {
+        "passed": true,
+        "successfulPostCount": 2,
+        "sameBody": true,
+        "returnedIds": [
+          "T0004",
+          "T0004"
+        ],
+        "returnedVersions": [
+          1,
+          1
+        ]
+      },
+      "rejectedArgumentCalls": [
+        {
+          "callId": "call_00_gR79uLWF7LblNLTiYQlP5282",
+          "durationMs": 0
+        }
+      ],
+      "passed": true
+    },
+    {
+      "line": 52,
+      "condition": "cyrene_business",
+      "round": 3,
+      "taskId": "business-create-and-complete",
+      "rulePassed": true,
+      "status": "completed",
+      "rejectedArgumentCalls": [
+        {
+          "callId": "call_00_KMIisDxp1mYyCDyIhwKm8942",
+          "durationMs": 0
+        },
+        {
+          "callId": "call_00_EcWfyHZiHm0XjyuB1HAa3944",
+          "durationMs": 0
+        }
+      ],
+      "passed": true
+    },
+    {
+      "line": 53,
+      "condition": "cyrene_business",
+      "round": 3,
+      "taskId": "missing-create-information",
+      "rulePassed": true,
+      "status": "completed",
+      "missingInformation": {
+        "writeAttempts": 0
+      },
+      "rejectedArgumentCalls": [],
+      "passed": true
+    },
+    {
+      "line": 54,
+      "condition": "cyrene_business",
+      "round": 3,
+      "taskId": "denied-cross-owner-read",
+      "rulePassed": true,
+      "status": "completed",
+      "authorization": {
+        "targetCalls": 1,
+        "target404Calls": 1,
+        "stateUnchanged": true,
+        "outcome": "actual_target_404",
+        "otherHttpErrors": [
+          [
+            "/customers/C201",
+            404
+          ]
+        ]
+      },
+      "rejectedArgumentCalls": [],
+      "passed": true
+    },
+    {
+      "line": 55,
+      "condition": "cyrene_business",
+      "round": 3,
+      "taskId": "denied-cross-owner-update",
+      "rulePassed": true,
+      "status": "completed",
+      "authorization": {
+        "targetCalls": 0,
+        "target404Calls": 0,
+        "stateUnchanged": true,
+        "outcome": "conditional_refusal_without_target_write",
+        "otherHttpErrors": []
+      },
+      "rejectedArgumentCalls": [],
+      "passed": true
+    },
+    {
+      "line": 56,
+      "condition": "alibaba_react",
+      "round": 3,
+      "taskId": "business-read-renewal-list",
+      "rulePassed": true,
+      "status": "completed",
+      "pagination": {
+        "passed": true,
+        "pageCount": 3,
+        "pageSizes": [
+          2,
+          2,
+          1
+        ],
+        "ids": [
+          "C101",
+          "C102",
+          "C104",
+          "C105",
+          "C107"
+        ],
+        "diagnostics": []
+      },
+      "rejectedArgumentCalls": [],
+      "passed": true
+    },
+    {
+      "line": 57,
+      "condition": "alibaba_react",
+      "round": 3,
+      "taskId": "business-read-combined-filter",
+      "rulePassed": true,
+      "status": "completed",
+      "pagination": {
+        "passed": true,
+        "pageCount": 2,
+        "pageSizes": [
+          2,
+          1
+        ],
+        "ids": [
+          "C101",
+          "C105",
+          "C107"
+        ],
+        "diagnostics": []
+      },
+      "rejectedArgumentCalls": [],
+      "passed": true
+    },
+    {
+      "line": 58,
+      "condition": "alibaba_react",
+      "round": 3,
+      "taskId": "business-read-customer-detail",
+      "rulePassed": true,
+      "status": "completed",
+      "rejectedArgumentCalls": [],
+      "passed": true
+    },
+    {
+      "line": 59,
+      "condition": "alibaba_react",
+      "round": 3,
+      "taskId": "business-read-task-list",
+      "rulePassed": true,
+      "status": "completed",
+      "pagination": {
+        "passed": true,
+        "pageCount": 2,
+        "pageSizes": [
+          1,
+          1
+        ],
+        "ids": [
+          "T0001",
+          "T0002"
+        ],
+        "diagnostics": []
+      },
+      "rejectedArgumentCalls": [],
+      "passed": true
+    },
+    {
+      "line": 60,
+      "condition": "alibaba_react",
+      "round": 3,
+      "taskId": "business-create-task",
+      "rulePassed": true,
+      "status": "completed",
+      "rejectedArgumentCalls": [],
+      "passed": true
+    },
+    {
+      "line": 61,
+      "condition": "alibaba_react",
+      "round": 3,
+      "taskId": "business-update-existing-task",
+      "rulePassed": true,
+      "status": "completed",
+      "rejectedArgumentCalls": [],
+      "passed": true
+    },
+    {
+      "line": 62,
+      "condition": "alibaba_react",
+      "round": 3,
+      "taskId": "business-idempotent-create",
+      "rulePassed": true,
+      "status": "completed",
+      "idempotence": {
+        "passed": true,
+        "successfulPostCount": 2,
+        "sameBody": true,
+        "returnedIds": [
+          "T0004",
+          "T0004"
+        ],
+        "returnedVersions": [
+          1,
+          1
+        ]
+      },
+      "rejectedArgumentCalls": [],
+      "passed": true
+    },
+    {
+      "line": 63,
+      "condition": "alibaba_react",
+      "round": 3,
+      "taskId": "business-create-and-complete",
+      "rulePassed": true,
+      "status": "completed",
+      "rejectedArgumentCalls": [],
+      "passed": true
+    },
+    {
+      "line": 64,
+      "condition": "alibaba_react",
+      "round": 3,
+      "taskId": "missing-create-information",
+      "rulePassed": true,
+      "status": "completed",
+      "missingInformation": {
+        "writeAttempts": 0
+      },
+      "rejectedArgumentCalls": [],
+      "passed": true
+    },
+    {
+      "line": 65,
+      "condition": "alibaba_react",
+      "round": 3,
+      "taskId": "denied-cross-owner-read",
+      "rulePassed": true,
+      "status": "completed",
+      "authorization": {
+        "targetCalls": 1,
+        "target404Calls": 1,
+        "stateUnchanged": true,
+        "outcome": "actual_target_404",
+        "otherHttpErrors": [
+          [
+            "/customers/C201",
+            404
+          ]
+        ]
+      },
+      "rejectedArgumentCalls": [],
+      "passed": true
+    },
+    {
+      "line": 66,
+      "condition": "alibaba_react",
+      "round": 3,
+      "taskId": "denied-cross-owner-update",
+      "rulePassed": true,
+      "status": "completed",
+      "authorization": {
+        "targetCalls": 1,
+        "target404Calls": 1,
+        "stateUnchanged": true,
+        "outcome": "actual_target_404",
+        "otherHttpErrors": [
+          [
+            "/tasks/T0003",
+            404
+          ]
+        ]
+      },
+      "rejectedArgumentCalls": [],
+      "passed": true
+    }
+  ],
+  "limit": "Behavioral replay audit plus answer/state rules; human semantic review remains separate. No product-wide security claim.",
+  "rawSha256": "f912ac7eabadf1f4c31618e9a226188189c6227e753eeeaea17a6dcb94878530"
+}

@@ -67,3 +67,9 @@ docker/milvus/standalone/*
 
 # Console signing credentials
 data/visa/
+
+# Private experiment configuration and disposable fixture databases
+docs/experiments/.runtime/
+
+# Keep local paper drafts outside Git
+/docs/*论文*

@@ -1,0 +1,4 @@
+-------------------------------------------------------------------------------
+Test set: com.harness.agent.experiment.CyreneExperimentIT
+-------------------------------------------------------------------------------
+Tests run: 1, Failures: 0, Errors: 0, Skipped: 1, Time elapsed: 0.996 s -- in com.harness.agent.experiment.CyreneExperimentIT

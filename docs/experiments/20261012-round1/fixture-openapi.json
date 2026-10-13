@@ -1,0 +1,692 @@
+{
+  "openapi" : "3.0.3",
+  "info" : {
+    "title" : "Synthetic Cyrene CRM fixture",
+    "version" : "1",
+    "description" : "Isolated fictional business fixture. Dates are fixed to benchmark date 2026-10-12. Authentication fixes tenant and owner; no owner or tenant override is accepted. Error NOT_FOUND does not reveal whether another owner has the record."
+  },
+  "servers" : [ {
+    "url" : "/"
+  } ],
+  "security" : [ {
+    "bearerAuth" : [ ]
+  } ],
+  "paths" : {
+    "/customers" : {
+      "get" : {
+        "operationId" : "listCustomers",
+        "description" : "List current user's customers ordered by id, with stable cursor pagination; expiresBefore compares renewalDate and inactiveBefore compares lastContactDate strictly before a fixed date",
+        "responses" : {
+          "200" : {
+            "description" : "Successful result",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/CustomerPage"
+                }
+              }
+            }
+          },
+          "400" : {
+            "description" : "Invalid request",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401" : {
+            "description" : "Missing or invalid credential",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403" : {
+            "description" : "Token not authorized",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404" : {
+            "description" : "Resource absent from current-user scope",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409" : {
+            "description" : "Idempotency or version conflict",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503" : {
+            "description" : "Fixture storage unavailable",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "parameters" : [ {
+          "name" : "limit",
+          "in" : "query",
+          "schema" : {
+            "type" : "integer",
+            "minimum" : 1,
+            "maximum" : 100,
+            "default" : 50
+          }
+        }, {
+          "name" : "cursor",
+          "in" : "query",
+          "description" : "Opaque cursor from pageInfo.nextCursor; preserve the same filters and user credential",
+          "schema" : {
+            "type" : "string"
+          }
+        }, {
+          "name" : "expiresBefore",
+          "in" : "query",
+          "description" : "Strictly before this YYYY-MM-DD date",
+          "schema" : {
+            "type" : "string",
+            "format" : "date"
+          }
+        }, {
+          "name" : "inactiveBefore",
+          "in" : "query",
+          "description" : "Strictly before this YYYY-MM-DD date",
+          "schema" : {
+            "type" : "string",
+            "format" : "date"
+          }
+        } ]
+      }
+    },
+    "/customers/{id}" : {
+      "get" : {
+        "operationId" : "getCustomer",
+        "description" : "Read one customer only in the authenticated current-user scope",
+        "responses" : {
+          "200" : {
+            "description" : "Successful result",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/Customer"
+                }
+              }
+            }
+          },
+          "400" : {
+            "description" : "Invalid request",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401" : {
+            "description" : "Missing or invalid credential",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403" : {
+            "description" : "Token not authorized",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404" : {
+            "description" : "Resource absent from current-user scope",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409" : {
+            "description" : "Idempotency or version conflict",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503" : {
+            "description" : "Fixture storage unavailable",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "parameters" : [ {
+          "name" : "id",
+          "in" : "path",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        } ]
+      }
+    },
+    "/tasks" : {
+      "get" : {
+        "operationId" : "listTasks",
+        "description" : "List current user's tasks ordered by task id. customerId optionally restricts to an owned customer. Read task version here before updating",
+        "responses" : {
+          "200" : {
+            "description" : "Successful result",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/TaskPage"
+                }
+              }
+            }
+          },
+          "400" : {
+            "description" : "Invalid request",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401" : {
+            "description" : "Missing or invalid credential",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403" : {
+            "description" : "Token not authorized",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404" : {
+            "description" : "Resource absent from current-user scope",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409" : {
+            "description" : "Idempotency or version conflict",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503" : {
+            "description" : "Fixture storage unavailable",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "parameters" : [ {
+          "name" : "limit",
+          "in" : "query",
+          "schema" : {
+            "type" : "integer",
+            "minimum" : 1,
+            "maximum" : 100,
+            "default" : 50
+          }
+        }, {
+          "name" : "cursor",
+          "in" : "query",
+          "description" : "Opaque cursor from pageInfo.nextCursor; preserve the same filters and user credential",
+          "schema" : {
+            "type" : "string"
+          }
+        }, {
+          "name" : "customerId",
+          "in" : "query",
+          "schema" : {
+            "type" : "string"
+          }
+        } ]
+      },
+      "post" : {
+        "operationId" : "createTask",
+        "description" : "Create one current-user task atomically. Use a unique nonempty idempotencyKey; identical retries produce one task; changed payload with same key is rejected",
+        "responses" : {
+          "200" : {
+            "description" : "Successful result",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/Task"
+                }
+              }
+            }
+          },
+          "400" : {
+            "description" : "Invalid request",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401" : {
+            "description" : "Missing or invalid credential",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403" : {
+            "description" : "Token not authorized",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404" : {
+            "description" : "Resource absent from current-user scope",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409" : {
+            "description" : "Idempotency or version conflict",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503" : {
+            "description" : "Fixture storage unavailable",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "201" : {
+            "description" : "Task created; retry with the same idempotency key and payload returns the same task",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/Task"
+                }
+              }
+            }
+          }
+        },
+        "requestBody" : {
+          "required" : true,
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/CreateTask"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tasks/{id}" : {
+      "put" : {
+        "operationId" : "updateTask",
+        "description" : "Update owned task status using its current expectedVersion; increments version exactly once; stale version is rejected without a write",
+        "responses" : {
+          "200" : {
+            "description" : "Successful result",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/Task"
+                }
+              }
+            }
+          },
+          "400" : {
+            "description" : "Invalid request",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401" : {
+            "description" : "Missing or invalid credential",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403" : {
+            "description" : "Token not authorized",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404" : {
+            "description" : "Resource absent from current-user scope",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409" : {
+            "description" : "Idempotency or version conflict",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503" : {
+            "description" : "Fixture storage unavailable",
+            "content" : {
+              "application/json" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "parameters" : [ {
+          "name" : "id",
+          "in" : "path",
+          "required" : true,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "required" : true,
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/UpdateTask"
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components" : {
+    "securitySchemes" : {
+      "bearerAuth" : {
+        "type" : "http",
+        "scheme" : "bearer"
+      }
+    },
+    "schemas" : {
+      "Customer" : {
+        "type" : "object",
+        "properties" : {
+          "id" : {
+            "type" : "string"
+          },
+          "tenantId" : {
+            "type" : "string"
+          },
+          "ownerId" : {
+            "type" : "string"
+          },
+          "name" : {
+            "type" : "string"
+          },
+          "tier" : {
+            "type" : "string"
+          },
+          "region" : {
+            "type" : "string"
+          },
+          "renewalDate" : {
+            "type" : "string",
+            "format" : "date"
+          },
+          "lastContactDate" : {
+            "type" : "string",
+            "format" : "date"
+          },
+          "billingHold" : {
+            "type" : "boolean"
+          }
+        },
+        "required" : [ "id", "tenantId", "ownerId", "name", "tier", "region", "renewalDate", "lastContactDate", "billingHold" ],
+        "additionalProperties" : false
+      },
+      "Task" : {
+        "type" : "object",
+        "properties" : {
+          "id" : {
+            "type" : "string"
+          },
+          "tenantId" : {
+            "type" : "string"
+          },
+          "ownerId" : {
+            "type" : "string"
+          },
+          "customerId" : {
+            "type" : "string"
+          },
+          "title" : {
+            "type" : "string"
+          },
+          "idempotencyKey" : {
+            "type" : "string"
+          },
+          "dueDate" : {
+            "type" : "string",
+            "format" : "date"
+          },
+          "status" : {
+            "type" : "string",
+            "enum" : [ "open", "inProgress", "done", "cancelled" ]
+          },
+          "version" : {
+            "type" : "integer",
+            "minimum" : 1
+          }
+        },
+        "required" : [ "id", "tenantId", "ownerId", "customerId", "title", "idempotencyKey", "dueDate", "status", "version" ],
+        "additionalProperties" : false
+      },
+      "PageInfo" : {
+        "type" : "object",
+        "properties" : {
+          "limit" : {
+            "type" : "integer"
+          },
+          "nextCursor" : {
+            "type" : "string"
+          },
+          "hasMore" : {
+            "type" : "boolean"
+          }
+        },
+        "required" : [ "limit", "nextCursor", "hasMore" ],
+        "additionalProperties" : false
+      },
+      "ApiError" : {
+        "type" : "object",
+        "properties" : {
+          "code" : {
+            "type" : "string"
+          },
+          "message" : {
+            "type" : "string"
+          },
+          "details" : {
+            "type" : "object"
+          }
+        },
+        "required" : [ "code", "message", "details" ],
+        "additionalProperties" : false
+      },
+      "CreateTask" : {
+        "type" : "object",
+        "properties" : {
+          "customerId" : {
+            "type" : "string"
+          },
+          "title" : {
+            "type" : "string",
+            "minLength" : 1,
+            "maxLength" : 200
+          },
+          "dueDate" : {
+            "type" : "string",
+            "format" : "date"
+          },
+          "idempotencyKey" : {
+            "type" : "string",
+            "minLength" : 1,
+            "maxLength" : 100
+          }
+        },
+        "required" : [ "customerId", "title", "dueDate", "idempotencyKey" ],
+        "additionalProperties" : false
+      },
+      "UpdateTask" : {
+        "type" : "object",
+        "properties" : {
+          "status" : {
+            "type" : "string",
+            "enum" : [ "open", "inProgress", "done", "cancelled" ]
+          },
+          "expectedVersion" : {
+            "type" : "integer",
+            "minimum" : 1
+          }
+        },
+        "required" : [ "status", "expectedVersion" ],
+        "additionalProperties" : false
+      },
+      "CustomerPage" : {
+        "type" : "object",
+        "properties" : {
+          "items" : {
+            "type" : "array",
+            "items" : {
+              "$ref" : "#/components/schemas/Customer"
+            }
+          },
+          "pageInfo" : {
+            "$ref" : "#/components/schemas/PageInfo"
+          }
+        },
+        "required" : [ "items", "pageInfo" ],
+        "additionalProperties" : false
+      },
+      "TaskPage" : {
+        "type" : "object",
+        "properties" : {
+          "items" : {
+            "type" : "array",
+            "items" : {
+              "$ref" : "#/components/schemas/Task"
+            }
+          },
+          "pageInfo" : {
+            "$ref" : "#/components/schemas/PageInfo"
+          }
+        },
+        "required" : [ "items", "pageInfo" ],
+        "additionalProperties" : false
+      }
+    }
+  }
+}

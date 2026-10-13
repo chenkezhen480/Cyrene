@@ -51,6 +51,63 @@ class ReActEngineTerminationTest {
 
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
+    void invalidArgumentsNeverExecuteAToolAndCorrectedObjectCanRecover(boolean streaming) {
+        EnvConfig.init(java.util.Map.of(EnvKey.REACT_MAX_TOOL_CALLS_PER_ROUND, "16",
+                EnvKey.REACT_REFLECTION_THRESHOLD, "16"));
+        try {
+            String[] invalidArguments = {null, "", "{broken}", "null", "[]", "1", "true", "\"text\"",
+                    "{} false", "{} {}", "{\"id\":\"C101\"} trailing"};
+            var executions = new AtomicInteger();
+            var rounds = new AtomicInteger();
+            java.util.function.Function<ChatRequest, ChatResponse> respond = request -> {
+                int round = rounds.getAndIncrement();
+                if (round == 0) {
+                    var calls = java.util.stream.IntStream.range(0, invalidArguments.length)
+                            .mapToObj(index -> ToolExecutionRequest.builder().id("invalid-" + index)
+                                    .name("test_tool").arguments(invalidArguments[index]).build()).toList();
+                    return ChatResponse.builder().aiMessage(AiMessage.from(calls)).build();
+                }
+                if (round == 1) {
+                    assertThat(executions).hasValue(0);
+                    var failures = request.messages().stream().filter(ToolExecutionResultMessage.class::isInstance)
+                            .map(ToolExecutionResultMessage.class::cast).toList();
+                    assertThat(failures).hasSize(invalidArguments.length);
+                    for (int index = 0; index < failures.size(); index++) {
+                        assertThat(failures.get(index).id()).isEqualTo("invalid-" + index);
+                        assertThat(failures.get(index).text()).startsWith("ERROR:").contains("JSON object");
+                    }
+                    return ChatResponse.builder().aiMessage(AiMessage.from(List.of(
+                            ToolExecutionRequest.builder().id("corrected").name("test_tool").arguments("{}").build()))).build();
+                }
+                assertThat(executions).hasValue(1);
+                return ChatResponse.builder().aiMessage(AiMessage.from("completed after correction")).build();
+            };
+            var model = new ChatModel() {
+                @Override public ChatResponse doChat(ChatRequest request) { return respond.apply(request); }
+            };
+            var provider = provider(model);
+            when(provider.streamingModel()).thenReturn(new StreamingChatModel() {
+                @Override public void doChat(ChatRequest request, StreamingChatResponseHandler handler) {
+                    handler.onCompleteResponse(respond.apply(request));
+                }
+            });
+            var executor = mock(ToolExecutor.class);
+            when(executor.executeAuthorized(any(), any(), isNull(), any())).thenAnswer(invocation -> {
+                ToolCall call = invocation.getArgument(0);
+                executions.incrementAndGet();
+                return ToolResult.ok(call.id(), call.toolName(), "changed", 1);
+            });
+            var engine = new ReActEngine(provider, catalog(), executor, null, null, 3);
+            var request = new ReActRequest("system", "perform mutation", List.of(), RunTrace.noop(),
+                    null, null, ThinkingLevel.OFF, null);
+            assertThat((streaming ? engine.streamExecute(request) : engine.execute(request)).output())
+                    .isEqualTo("completed after correction");
+            assertThat(executions).hasValue(1);
+        } finally { EnvConfig.init(java.util.Map.of()); }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
     void coordinatesWholeBatchBeforePublishingResultsAndNextModelCall(boolean streaming) {
         var executions = new AtomicInteger();
         var rounds = new AtomicInteger();

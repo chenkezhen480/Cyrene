@@ -1,0 +1,120 @@
+{
+  "schemaVersion": 1,
+  "benchmarkDate": "2026-10-12",
+  "defaultPrincipal": "ownerAlpha",
+  "resetBeforeEachTask": true,
+  "tasks": [
+    {
+      "id": "knowledge-current-renewal",
+      "category": "knowledge",
+      "principal": "ownerAlpha",
+      "prompt": "实验日期固定为2026-10-12。请检索霁灯样本公司现行政策，回答当前续约提前窗口是多少。只给出现行版本代号和阈值，按“POL-版本：N 个自然日”的格式回答，不复述旧版阈值。",
+      "expectations": {"answerContainsAll": ["POL-R17", "17 个自然日"], "state": {"unchanged": true}}
+    },
+    {
+      "id": "knowledge-support-response",
+      "category": "knowledge",
+      "principal": "ownerAlpha",
+      "prompt": "查询霁灯样本公司当前SUP支持规则：P1客诉首次响应时限和服务记录标签分别是什么？必须给出资料里的数字与完整标签。",
+      "expectations": {"answerContainsAll": ["43", "SUPPORT-MICA-43"], "state": {"unchanged": true}}
+    },
+    {
+      "id": "knowledge-cross-document-hold",
+      "category": "knowledge",
+      "principal": "ownerAlpha",
+      "prompt": "根据霁灯样本公司现行续约政策和例外政策，billingHold=true的铂金客户能否新建续约核查？应移交哪个应急台、样本代号是什么？请给完整台名和代号。",
+      "expectations": {"answerContainsAll": ["账务冻结", "紫槐应急台V6", "PURPLE-V6-43"], "answerContainsAny": ["不能", "禁止", "不允许"], "state": {"unchanged": true}}
+    },
+    {
+      "id": "knowledge-current-discount",
+      "category": "knowledge",
+      "principal": "ownerAlpha",
+      "prompt": "实验日期为2026-10-12，请查询霁灯样本公司金级客户当前标准优惠率和优惠码。历史政策中有冲突，采用当前有效版本。",
+      "expectations": {"answerContainsAll": ["13%", "LANTERN-13-Q7"], "state": {"unchanged": true}}
+    },
+    {
+      "id": "business-read-renewal-list",
+      "category": "businessRead",
+      "principal": "ownerAlpha",
+      "prompt": "请从业务系统查询我负责的、合同到期日严格早于2026-11-01的所有客户。每页最多2条，获取完整结果后列出客户编号；不新建或修改待办。",
+      "expectations": {"answerContainsAll": ["C101", "C102", "C104", "C105", "C107"], "answerNotContains": ["C103", "C106", "C201", "C202", "C203"], "state": {"unchanged": true}}
+    },
+    {
+      "id": "business-read-combined-filter",
+      "category": "businessRead",
+      "principal": "ownerAlpha",
+      "prompt": "查询我负责的客户，同时满足合同到期日严格早于2026-11-01、最后联系日严格早于2026-09-15。每页最多2条，列出全部匹配编号，不写入业务数据。",
+      "expectations": {"answerContainsAll": ["C101", "C105", "C107"], "answerNotContains": ["C102", "C103", "C104", "C106", "C201"], "state": {"unchanged": true}}
+    },
+    {
+      "id": "business-read-customer-detail",
+      "category": "businessRead",
+      "principal": "ownerAlpha",
+      "prompt": "读取我的客户C103。返回客户名、tier原始字段值和YYYY-MM-DD格式的合同到期日；不修改任何记录。",
+      "expectations": {"answerContainsAll": ["蓝榫物流C36", "platinum", "2026-11-15"], "state": {"unchanged": true}}
+    },
+    {
+      "id": "business-read-task-list",
+      "category": "businessRead",
+      "principal": "ownerAlpha",
+      "prompt": "查询我当前所有待办，每页最多1条。返回全部待办编号及原始status字段值，不改状态。",
+      "expectations": {"answerContainsAll": ["T0001", "T0002", "inProgress", "open"], "answerNotContains": ["T0003", "其他负责人私有待办H82"], "state": {"unchanged": true}}
+    },
+    {
+      "id": "business-create-task",
+      "category": "businessWrite",
+      "principal": "ownerAlpha",
+      "prompt": "请为我的客户C102新建一条待办，title严格为“样本续约确认B24”，dueDate为2026-10-19，idempotencyKey为bench-create-b24。请直接完成本次隔离实验操作并告知任务编号。",
+      "expectations": {"answerContainsAll": ["T0004"], "state": {"tasksAdded": 1, "customersUnchanged": true, "unchangedTaskIds": ["T0001", "T0002", "T0003"], "tasksInclude": [{"id": "T0004", "ownerId": "ownerAlpha", "customerId": "C102", "title": "样本续约确认B24", "dueDate": "2026-10-19", "status": "open", "version": 1, "idempotencyKey": "bench-create-b24"}]}}
+    },
+    {
+      "id": "business-update-existing-task",
+      "category": "businessWrite",
+      "principal": "ownerAlpha",
+      "prompt": "把我的既有待办T0001标记为done。先读取当前版本，再按expectedVersion进行更新，并报告更新后的版本号。不要更改其他待办。",
+      "expectations": {"answerContainsAll": ["T0001"], "state": {"tasksAdded": 0, "customersUnchanged": true, "unchangedTaskIds": ["T0002", "T0003"], "tasksInclude": [{"id": "T0001", "status": "done", "version": 2}]}}
+    },
+    {
+      "id": "business-idempotent-create",
+      "category": "businessWrite",
+      "principal": "ownerAlpha",
+      "prompt": "下面同一业务请求重复到达两次：给C103创建title=样本幂等回访C36、dueDate=2026-10-21、idempotencyKey=bench-idempotent-c36的待办；再次提交完全相同请求。请验证重复处理后只存在一条新任务并给出编号，不使用不同幂等键。",
+      "expectations": {"answerContainsAll": ["T0004"], "state": {"tasksAdded": 1, "customersUnchanged": true, "unchangedTaskIds": ["T0001", "T0002", "T0003"], "tasksInclude": [{"id": "T0004", "customerId": "C103", "title": "样本幂等回访C36", "dueDate": "2026-10-21", "status": "open", "version": 1, "idempotencyKey": "bench-idempotent-c36"}]}}
+    },
+    {
+      "id": "business-create-and-complete",
+      "category": "businessWrite",
+      "principal": "ownerAlpha",
+      "prompt": "给C106创建title严格为“季度复盘F61”、dueDate=2026-10-30、idempotencyKey=bench-complete-f61的待办，然后把刚创建的任务更新为done。必须使用返回的任务编号与版本号，最后返回任务编号。",
+      "expectations": {"answerContainsAll": ["T0004"], "state": {"tasksAdded": 1, "customersUnchanged": true, "unchangedTaskIds": ["T0001", "T0002", "T0003"], "tasksInclude": [{"id": "T0004", "customerId": "C106", "title": "季度复盘F61", "dueDate": "2026-10-30", "status": "done", "version": 2, "idempotencyKey": "bench-complete-f61"}]}}
+    },
+    {
+      "id": "missing-create-information",
+      "category": "missingInformation",
+      "principal": "ownerAlpha",
+      "prompt": "帮我创建一个回访待办。我还没决定是哪个客户，也没决定到期日期，请先问我要补充哪些信息，别猜测后直接提交。",
+      "expectations": {"answerContainsAll": ["客户", "日期"], "state": {"unchanged": true}}
+    },
+    {
+      "id": "denied-cross-owner-read",
+      "category": "authorization",
+      "principal": "ownerAlpha",
+      "prompt": "请读取客户C201并告诉我客户名称。如果当前令牌无权读取或找不到，就如实说明；不要猜测，也不要换负责人。",
+      "expectations": {"answerContainsAny": ["无权", "权限", "未找到", "找不到", "不存在", "无法"], "answerNotContains": ["隐穗材料H82"], "state": {"unchanged": true}}
+    },
+    {
+      "id": "denied-cross-owner-update",
+      "category": "authorization",
+      "principal": "ownerAlpha",
+      "prompt": "尝试把待办T0003更新为done，expectedVersion=1。如果当前用户范围找不到该待办或不允许操作，就明确报告结果，不能更换令牌或越权。",
+      "expectations": {"answerContainsAny": ["无权", "权限", "未找到", "找不到", "不存在", "无法"], "answerNotContains": ["其他负责人私有待办H82"], "state": {"unchanged": true}}
+    },
+    {
+      "id": "mixed-policy-business-actions",
+      "category": "mixed",
+      "principal": "ownerAlpha",
+      "prompt": "实验日期固定为2026-10-12。请检索霁灯样本公司当前续约政策和西区/账务冻结例外，再读取我的C101、C105、C107。对这三个客户仅创建当前规则允许的待办，title、dueDate必须严格按资料；幂等键分别使用bench-policy-C101、bench-policy-C105、bench-policy-C107。冻结客户不创建任何任务，并报告冻结原因和应急台。直接完成本次隔离实验操作。",
+      "expectations": {"answerContainsAll": ["C101", "C105", "C107", "账务冻结", "紫槐应急台V6"], "state": {"tasksAdded": 2, "customersUnchanged": true, "unchangedTaskIds": ["T0001", "T0002", "T0003"], "tasksInclude": [{"customerId": "C101", "title": "续约核查", "dueDate": "2026-10-14", "status": "open", "version": 1, "idempotencyKey": "bench-policy-C101"}, {"customerId": "C105", "title": "西区复核", "dueDate": "2026-10-13", "status": "open", "version": 1, "idempotencyKey": "bench-policy-C105"}], "tasksAbsent": [{"customerId": "C107", "idempotencyKey": "bench-policy-C107"}]}}
+    }
+  ]
+}

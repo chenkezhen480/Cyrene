@@ -2,6 +2,7 @@ package com.harness.tool.discovery;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
 import com.harness.core.model.ApiEndpoint;
 import com.harness.core.model.AuthMode;
@@ -89,9 +90,8 @@ public class OpenApiSpecParser {
     /**
      * Parse OpenAPI 3.x spec.
      */
-    private ProjectApiConfig parseOpenApi3(JsonNode root, Path projectRoot) {
+    private ProjectApiConfig parseOpenApi3(JsonNode root, Path projectRoot) throws IOException {
         List<ApiEndpoint> endpoints = new ArrayList<>();
-        String basePath = "";
 
         // Extract base URL from servers
         JsonNode servers = root.get("servers");
@@ -213,7 +213,7 @@ public class OpenApiSpecParser {
     /**
      * Extract parameters as JSON Schema from OpenAPI 3.x operation.
      */
-    private JsonNode extractParametersSchema(JsonNode operation, JsonNode root) {
+    private JsonNode extractParametersSchema(JsonNode operation, JsonNode root) throws IOException {
         var schema = jsonMapper.createObjectNode();
         schema.put("type", "object");
         var properties = jsonMapper.createObjectNode();
@@ -226,12 +226,13 @@ public class OpenApiSpecParser {
                 String in = param.has("in") ? param.get("in").asText() : "query";
                 boolean isRequired = param.has("required") && param.get("required").asBoolean();
 
-                var propSchema = jsonMapper.createObjectNode();
                 JsonNode schemaNode = param.get("schema");
-                if (schemaNode != null) {
-                    if (schemaNode.has("type")) propSchema.put("type", schemaNode.get("type").asText());
-                    if (schemaNode.has("description")) propSchema.put("description", schemaNode.get("description").asText());
+                JsonNode resolved = schemaNode != null
+                        ? resolveSchemaReferences(schemaNode, root, new HashSet<>()) : jsonMapper.createObjectNode();
+                if (!resolved.isObject()) {
+                    throw new IOException("Parameter schema must be an object: " + name);
                 }
+                var propSchema = (ObjectNode) resolved;
                 propSchema.put("in", in);
                 if (param.has("description")) propSchema.put("description", param.get("description").asText());
                 properties.set(name, propSchema);
@@ -246,7 +247,8 @@ public class OpenApiSpecParser {
             if (content != null) {
                 JsonNode jsonContent = content.get("application/json");
                 if (jsonContent != null && jsonContent.has("schema")) {
-                    properties.set("__body__", jsonContent.get("schema"));
+                    properties.set("__body__", resolveSchemaReferences(jsonContent.get("schema"), root, new HashSet<>()));
+                    if (requestBody.path("required").asBoolean()) required.add("__body__");
                 }
             }
         }
@@ -254,6 +256,60 @@ public class OpenApiSpecParser {
         schema.set("properties", properties);
         if (!required.isEmpty()) schema.set("required", required);
         return schema;
+    }
+
+    private JsonNode resolveSchemaReferences(JsonNode schema, JsonNode root, Set<String> activeReferences) throws IOException {
+        if (schema.isBoolean()) return schema;
+        if (!schema.isObject()) throw new IOException("Input schema must be an object or boolean");
+        ObjectNode resolved = schema.deepCopy();
+        JsonNode referenceNode = resolved.remove("$ref");
+        if (referenceNode != null) {
+            if (!referenceNode.isTextual() || !referenceNode.asText().startsWith("#/")) {
+                throw new IOException("Only local JSON pointer schema references are supported: " + referenceNode);
+            }
+            String reference = referenceNode.asText();
+            JsonNode target = root.at(reference.substring(1));
+            if (!target.isObject() && !target.isBoolean()) {
+                throw new IOException("Schema reference does not resolve to a schema: " + reference);
+            }
+            if (!activeReferences.add(reference)) throw new IOException("Cyclic schema reference: " + reference);
+            try {
+                JsonNode referenced = resolveSchemaReferences(target, root, activeReferences);
+                if (resolved.isEmpty()) return referenced;
+                if (!referenced.isObject()) throw new IOException("Boolean schema reference cannot have sibling fields: " + reference);
+                ObjectNode merged = referenced.deepCopy();
+                merged.setAll(resolved);
+                resolved = merged;
+            } finally {
+                activeReferences.remove(reference);
+            }
+        }
+        for (String keyword : List.of("properties", "patternProperties", "definitions", "$defs", "dependentSchemas")) {
+            JsonNode children = resolved.get(keyword);
+            if (children == null) continue;
+            if (!children.isObject()) throw new IOException("Schema '" + keyword + "' must be an object");
+            ObjectNode resolvedChildren = jsonMapper.createObjectNode();
+            var fields = children.fields();
+            while (fields.hasNext()) {
+                var field = fields.next();
+                resolvedChildren.set(field.getKey(), resolveSchemaReferences(field.getValue(), root, activeReferences));
+            }
+            resolved.set(keyword, resolvedChildren);
+        }
+        for (String keyword : List.of("items", "additionalProperties", "additionalItems", "contains", "not", "if", "then", "else",
+                "propertyNames", "unevaluatedProperties", "unevaluatedItems")) {
+            JsonNode child = resolved.get(keyword);
+            if (child != null) resolved.set(keyword, resolveSchemaReferences(child, root, activeReferences));
+        }
+        for (String keyword : List.of("allOf", "anyOf", "oneOf", "prefixItems")) {
+            JsonNode children = resolved.get(keyword);
+            if (children == null) continue;
+            if (!children.isArray()) throw new IOException("Schema '" + keyword + "' must be an array");
+            var resolvedChildren = jsonMapper.createArrayNode();
+            for (JsonNode child : children) resolvedChildren.add(resolveSchemaReferences(child, root, activeReferences));
+            resolved.set(keyword, resolvedChildren);
+        }
+        return resolved;
     }
 
     /**

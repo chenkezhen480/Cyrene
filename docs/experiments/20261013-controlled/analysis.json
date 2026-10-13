@@ -1,0 +1,778 @@
+{
+  "bare_langchain4j": {
+    "trials": 16,
+    "passed": 15,
+    "failed": 1,
+    "successRate": 0.9375,
+    "durationMs": {
+      "observedTrials": 16,
+      "sumObserved": 64357,
+      "meanObserved": 4022.3125,
+      "p50": 3183,
+      "p95": 11443
+    },
+    "failureTaskIds": [
+      "business-read-renewal-list"
+    ],
+    "categories": {
+      "authorization": {
+        "trials": 2,
+        "passed": 2,
+        "durationMs": {
+          "observedTrials": 2,
+          "sumObserved": 5703,
+          "meanObserved": 2851.5,
+          "p50": 2501,
+          "p95": 3202
+        },
+        "inputTokens": {
+          "observedTrials": 2,
+          "sumObserved": 11394,
+          "meanObserved": 5697.0,
+          "p50": 5627,
+          "p95": 5767,
+          "partialTrials": 0,
+          "unknownTrials": 0,
+          "observedCalls": 4,
+          "modelCalls": 4
+        },
+        "outputTokens": {
+          "observedTrials": 2,
+          "sumObserved": 576,
+          "meanObserved": 288.0,
+          "p50": 226,
+          "p95": 350,
+          "partialTrials": 0,
+          "unknownTrials": 0,
+          "observedCalls": 4,
+          "modelCalls": 4
+        }
+      },
+      "businessRead": {
+        "trials": 4,
+        "passed": 3,
+        "durationMs": {
+          "observedTrials": 4,
+          "sumObserved": 12868,
+          "meanObserved": 3217.0,
+          "p50": 2963,
+          "p95": 4628
+        },
+        "inputTokens": {
+          "observedTrials": 4,
+          "sumObserved": 38125,
+          "meanObserved": 9531.25,
+          "p50": 9099,
+          "p95": 13747,
+          "partialTrials": 0,
+          "unknownTrials": 0,
+          "observedCalls": 12,
+          "modelCalls": 12
+        },
+        "outputTokens": {
+          "observedTrials": 4,
+          "sumObserved": 1842,
+          "meanObserved": 460.5,
+          "p50": 338,
+          "p95": 780,
+          "partialTrials": 0,
+          "unknownTrials": 0,
+          "observedCalls": 12,
+          "modelCalls": 12
+        }
+      },
+      "businessWrite": {
+        "trials": 4,
+        "passed": 4,
+        "durationMs": {
+          "observedTrials": 4,
+          "sumObserved": 13162,
+          "meanObserved": 3290.5,
+          "p50": 2487,
+          "p95": 6115
+        },
+        "inputTokens": {
+          "observedTrials": 4,
+          "sumObserved": 46327,
+          "meanObserved": 11581.75,
+          "p50": 8885,
+          "p95": 19593,
+          "partialTrials": 0,
+          "unknownTrials": 0,
+          "observedCalls": 15,
+          "modelCalls": 15
+        },
+        "outputTokens": {
+          "observedTrials": 4,
+          "sumObserved": 1425,
+          "meanObserved": 356.25,
+          "p50": 231,
+          "p95": 713,
+          "partialTrials": 0,
+          "unknownTrials": 0,
+          "observedCalls": 15,
+          "modelCalls": 15
+        }
+      },
+      "knowledge": {
+        "trials": 4,
+        "passed": 4,
+        "durationMs": {
+          "observedTrials": 4,
+          "sumObserved": 20247,
+          "meanObserved": 5061.75,
+          "p50": 3525,
+          "p95": 7507
+        },
+        "inputTokens": {
+          "observedTrials": 4,
+          "sumObserved": 71436,
+          "meanObserved": 17859.0,
+          "p50": 12139,
+          "p95": 24212,
+          "partialTrials": 0,
+          "unknownTrials": 0,
+          "observedCalls": 10,
+          "modelCalls": 10
+        },
+        "outputTokens": {
+          "observedTrials": 4,
+          "sumObserved": 3097,
+          "meanObserved": 774.25,
+          "p50": 468,
+          "p95": 1426,
+          "partialTrials": 0,
+          "unknownTrials": 0,
+          "observedCalls": 10,
+          "modelCalls": 10
+        }
+      },
+      "missingInformation": {
+        "trials": 1,
+        "passed": 1,
+        "durationMs": {
+          "observedTrials": 1,
+          "sumObserved": 934,
+          "meanObserved": 934.0,
+          "p50": 934,
+          "p95": 934
+        },
+        "inputTokens": {
+          "observedTrials": 1,
+          "sumObserved": 2769,
+          "meanObserved": 2769.0,
+          "p50": 2769,
+          "p95": 2769,
+          "partialTrials": 0,
+          "unknownTrials": 0,
+          "observedCalls": 1,
+          "modelCalls": 1
+        },
+        "outputTokens": {
+          "observedTrials": 1,
+          "sumObserved": 78,
+          "meanObserved": 78.0,
+          "p50": 78,
+          "p95": 78,
+          "partialTrials": 0,
+          "unknownTrials": 0,
+          "observedCalls": 1,
+          "modelCalls": 1
+        }
+      },
+      "mixed": {
+        "trials": 1,
+        "passed": 1,
+        "durationMs": {
+          "observedTrials": 1,
+          "sumObserved": 11443,
+          "meanObserved": 11443.0,
+          "p50": 11443,
+          "p95": 11443
+        },
+        "inputTokens": {
+          "observedTrials": 1,
+          "sumObserved": 37575,
+          "meanObserved": 37575.0,
+          "p50": 37575,
+          "p95": 37575,
+          "partialTrials": 0,
+          "unknownTrials": 0,
+          "observedCalls": 5,
+          "modelCalls": 5
+        },
+        "outputTokens": {
+          "observedTrials": 1,
+          "sumObserved": 2028,
+          "meanObserved": 2028.0,
+          "p50": 2028,
+          "p95": 2028,
+          "partialTrials": 0,
+          "unknownTrials": 0,
+          "observedCalls": 5,
+          "modelCalls": 5
+        }
+      }
+    },
+    "inputTokens": {
+      "observedTrials": 16,
+      "sumObserved": 207626,
+      "meanObserved": 12976.625,
+      "p50": 9620,
+      "p95": 37575,
+      "partialTrials": 0,
+      "unknownTrials": 0,
+      "observedCalls": 47,
+      "modelCalls": 47
+    },
+    "outputTokens": {
+      "observedTrials": 16,
+      "sumObserved": 9046,
+      "meanObserved": 565.375,
+      "p50": 338,
+      "p95": 2028,
+      "partialTrials": 0,
+      "unknownTrials": 0,
+      "observedCalls": 47,
+      "modelCalls": 47
+    },
+    "cachedInputTokens": {
+      "observedTrials": 16,
+      "sumObserved": 164736,
+      "meanObserved": 10296.0,
+      "p50": 8320,
+      "p95": 31360,
+      "partialTrials": 0,
+      "unknownTrials": 0,
+      "observedCalls": 47,
+      "modelCalls": 47
+    },
+    "totalTokens": {
+      "observedTrials": 16,
+      "sumObserved": 216672,
+      "meanObserved": 13542.0,
+      "p50": 10200,
+      "p95": 39603,
+      "partialTrials": 0,
+      "unknownTrials": 0,
+      "observedCalls": 47,
+      "modelCalls": 47
+    }
+  },
+  "wiki_off": {
+    "trials": 16,
+    "passed": 16,
+    "failed": 0,
+    "successRate": 1.0,
+    "durationMs": {
+      "observedTrials": 16,
+      "sumObserved": 65816,
+      "meanObserved": 4113.5,
+      "p50": 3389,
+      "p95": 12387
+    },
+    "failureTaskIds": [],
+    "categories": {
+      "authorization": {
+        "trials": 2,
+        "passed": 2,
+        "durationMs": {
+          "observedTrials": 2,
+          "sumObserved": 5554,
+          "meanObserved": 2777.0,
+          "p50": 2165,
+          "p95": 3389
+        },
+        "inputTokens": {
+          "observedTrials": 2,
+          "sumObserved": 11549,
+          "meanObserved": 5774.5,
+          "p50": 5759,
+          "p95": 5790,
+          "partialTrials": 0,
+          "unknownTrials": 0,
+          "observedCalls": 4,
+          "modelCalls": 4
+        },
+        "outputTokens": {
+          "observedTrials": 2,
+          "sumObserved": 553,
+          "meanObserved": 276.5,
+          "p50": 186,
+          "p95": 367,
+          "partialTrials": 0,
+          "unknownTrials": 0,
+          "observedCalls": 4,
+          "modelCalls": 4
+        }
+      },
+      "businessRead": {
+        "trials": 4,
+        "passed": 4,
+        "durationMs": {
+          "observedTrials": 4,
+          "sumObserved": 12066,
+          "meanObserved": 3016.5,
+          "p50": 2671,
+          "p95": 3850
+        },
+        "inputTokens": {
+          "observedTrials": 4,
+          "sumObserved": 38142,
+          "meanObserved": 9535.5,
+          "p50": 9103,
+          "p95": 13756,
+          "partialTrials": 0,
+          "unknownTrials": 0,
+          "observedCalls": 12,
+          "modelCalls": 12
+        },
+        "outputTokens": {
+          "observedTrials": 4,
+          "sumObserved": 1790,
+          "meanObserved": 447.5,
+          "p50": 370,
+          "p95": 642,
+          "partialTrials": 0,
+          "unknownTrials": 0,
+          "observedCalls": 12,
+          "modelCalls": 12
+        }
+      },
+      "businessWrite": {
+        "trials": 4,
+        "passed": 4,
+        "durationMs": {
+          "observedTrials": 4,
+          "sumObserved": 15899,
+          "meanObserved": 3974.75,
+          "p50": 2383,
+          "p95": 6424
+        },
+        "inputTokens": {
+          "observedTrials": 4,
+          "sumObserved": 65250,
+          "meanObserved": 16312.5,
+          "p50": 8907,
+          "p95": 29747,
+          "partialTrials": 0,
+          "unknownTrials": 0,
+          "observedCalls": 18,
+          "modelCalls": 18
+        },
+        "outputTokens": {
+          "observedTrials": 4,
+          "sumObserved": 1654,
+          "meanObserved": 413.5,
+          "p50": 231,
+          "p95": 662,
+          "partialTrials": 0,
+          "unknownTrials": 0,
+          "observedCalls": 18,
+          "modelCalls": 18
+        }
+      },
+      "knowledge": {
+        "trials": 4,
+        "passed": 4,
+        "durationMs": {
+          "observedTrials": 4,
+          "sumObserved": 18113,
+          "meanObserved": 4528.25,
+          "p50": 3569,
+          "p95": 6037
+        },
+        "inputTokens": {
+          "observedTrials": 4,
+          "sumObserved": 70013,
+          "meanObserved": 17503.25,
+          "p50": 12229,
+          "p95": 22871,
+          "partialTrials": 0,
+          "unknownTrials": 0,
+          "observedCalls": 10,
+          "modelCalls": 10
+        },
+        "outputTokens": {
+          "observedTrials": 4,
+          "sumObserved": 2460,
+          "meanObserved": 615.0,
+          "p50": 463,
+          "p95": 882,
+          "partialTrials": 0,
+          "unknownTrials": 0,
+          "observedCalls": 10,
+          "modelCalls": 10
+        }
+      },
+      "missingInformation": {
+        "trials": 1,
+        "passed": 1,
+        "durationMs": {
+          "observedTrials": 1,
+          "sumObserved": 1797,
+          "meanObserved": 1797.0,
+          "p50": 1797,
+          "p95": 1797
+        },
+        "inputTokens": {
+          "observedTrials": 1,
+          "sumObserved": 2769,
+          "meanObserved": 2769.0,
+          "p50": 2769,
+          "p95": 2769,
+          "partialTrials": 0,
+          "unknownTrials": 0,
+          "observedCalls": 1,
+          "modelCalls": 1
+        },
+        "outputTokens": {
+          "observedTrials": 1,
+          "sumObserved": 129,
+          "meanObserved": 129.0,
+          "p50": 129,
+          "p95": 129,
+          "partialTrials": 0,
+          "unknownTrials": 0,
+          "observedCalls": 1,
+          "modelCalls": 1
+        }
+      },
+      "mixed": {
+        "trials": 1,
+        "passed": 1,
+        "durationMs": {
+          "observedTrials": 1,
+          "sumObserved": 12387,
+          "meanObserved": 12387.0,
+          "p50": 12387,
+          "p95": 12387
+        },
+        "inputTokens": {
+          "observedTrials": 1,
+          "sumObserved": 59790,
+          "meanObserved": 59790.0,
+          "p50": 59790,
+          "p95": 59790,
+          "partialTrials": 0,
+          "unknownTrials": 0,
+          "observedCalls": 7,
+          "modelCalls": 7
+        },
+        "outputTokens": {
+          "observedTrials": 1,
+          "sumObserved": 2227,
+          "meanObserved": 2227.0,
+          "p50": 2227,
+          "p95": 2227,
+          "partialTrials": 0,
+          "unknownTrials": 0,
+          "observedCalls": 7,
+          "modelCalls": 7
+        }
+      }
+    },
+    "inputTokens": {
+      "observedTrials": 16,
+      "sumObserved": 247513,
+      "meanObserved": 15469.5625,
+      "p50": 9626,
+      "p95": 59790,
+      "partialTrials": 0,
+      "unknownTrials": 0,
+      "observedCalls": 52,
+      "modelCalls": 52
+    },
+    "outputTokens": {
+      "observedTrials": 16,
+      "sumObserved": 8813,
+      "meanObserved": 550.8125,
+      "p50": 370,
+      "p95": 2227,
+      "partialTrials": 0,
+      "unknownTrials": 0,
+      "observedCalls": 52,
+      "modelCalls": 52
+    },
+    "cachedInputTokens": {
+      "observedTrials": 16,
+      "sumObserved": 202112,
+      "meanObserved": 12632.0,
+      "p50": 8320,
+      "p95": 52480,
+      "partialTrials": 0,
+      "unknownTrials": 0,
+      "observedCalls": 52,
+      "modelCalls": 52
+    },
+    "totalTokens": {
+      "observedTrials": 16,
+      "sumObserved": 256326,
+      "meanObserved": 16020.375,
+      "p50": 10268,
+      "p95": 62017,
+      "partialTrials": 0,
+      "unknownTrials": 0,
+      "observedCalls": 52,
+      "modelCalls": 52
+    }
+  },
+  "wiki_on": {
+    "trials": 16,
+    "passed": 16,
+    "failed": 0,
+    "successRate": 1.0,
+    "durationMs": {
+      "observedTrials": 16,
+      "sumObserved": 67391,
+      "meanObserved": 4211.9375,
+      "p50": 3326,
+      "p95": 13884
+    },
+    "failureTaskIds": [],
+    "categories": {
+      "authorization": {
+        "trials": 2,
+        "passed": 2,
+        "durationMs": {
+          "observedTrials": 2,
+          "sumObserved": 4604,
+          "meanObserved": 2302.0,
+          "p50": 1751,
+          "p95": 2853
+        },
+        "inputTokens": {
+          "observedTrials": 2,
+          "sumObserved": 11545,
+          "meanObserved": 5772.5,
+          "p50": 5755,
+          "p95": 5790,
+          "partialTrials": 0,
+          "unknownTrials": 0,
+          "observedCalls": 4,
+          "modelCalls": 4
+        },
+        "outputTokens": {
+          "observedTrials": 2,
+          "sumObserved": 432,
+          "meanObserved": 216.0,
+          "p50": 146,
+          "p95": 286,
+          "partialTrials": 0,
+          "unknownTrials": 0,
+          "observedCalls": 4,
+          "modelCalls": 4
+        }
+      },
+      "businessRead": {
+        "trials": 4,
+        "passed": 4,
+        "durationMs": {
+          "observedTrials": 4,
+          "sumObserved": 14357,
+          "meanObserved": 3589.25,
+          "p50": 3326,
+          "p95": 5155
+        },
+        "inputTokens": {
+          "observedTrials": 4,
+          "sumObserved": 38134,
+          "meanObserved": 9533.5,
+          "p50": 9103,
+          "p95": 13756,
+          "partialTrials": 0,
+          "unknownTrials": 0,
+          "observedCalls": 12,
+          "modelCalls": 12
+        },
+        "outputTokens": {
+          "observedTrials": 4,
+          "sumObserved": 1965,
+          "meanObserved": 491.25,
+          "p50": 416,
+          "p95": 799,
+          "partialTrials": 0,
+          "unknownTrials": 0,
+          "observedCalls": 12,
+          "modelCalls": 12
+        }
+      },
+      "businessWrite": {
+        "trials": 4,
+        "passed": 4,
+        "durationMs": {
+          "observedTrials": 4,
+          "sumObserved": 13205,
+          "meanObserved": 3301.25,
+          "p50": 2204,
+          "p95": 5255
+        },
+        "inputTokens": {
+          "observedTrials": 4,
+          "sumObserved": 51509,
+          "meanObserved": 12877.25,
+          "p50": 8883,
+          "p95": 20450,
+          "partialTrials": 0,
+          "unknownTrials": 0,
+          "observedCalls": 16,
+          "modelCalls": 16
+        },
+        "outputTokens": {
+          "observedTrials": 4,
+          "sumObserved": 1419,
+          "meanObserved": 354.75,
+          "p50": 245,
+          "p95": 554,
+          "partialTrials": 0,
+          "unknownTrials": 0,
+          "observedCalls": 16,
+          "modelCalls": 16
+        }
+      },
+      "knowledge": {
+        "trials": 4,
+        "passed": 4,
+        "durationMs": {
+          "observedTrials": 4,
+          "sumObserved": 19824,
+          "meanObserved": 4956.0,
+          "p50": 3791,
+          "p95": 7109
+        },
+        "inputTokens": {
+          "observedTrials": 4,
+          "sumObserved": 63949,
+          "meanObserved": 15987.25,
+          "p50": 12187,
+          "p95": 22817,
+          "partialTrials": 0,
+          "unknownTrials": 0,
+          "observedCalls": 10,
+          "modelCalls": 10
+        },
+        "outputTokens": {
+          "observedTrials": 4,
+          "sumObserved": 2299,
+          "meanObserved": 574.75,
+          "p50": 420,
+          "p95": 884,
+          "partialTrials": 0,
+          "unknownTrials": 0,
+          "observedCalls": 10,
+          "modelCalls": 10
+        }
+      },
+      "missingInformation": {
+        "trials": 1,
+        "passed": 1,
+        "durationMs": {
+          "observedTrials": 1,
+          "sumObserved": 1517,
+          "meanObserved": 1517.0,
+          "p50": 1517,
+          "p95": 1517
+        },
+        "inputTokens": {
+          "observedTrials": 1,
+          "sumObserved": 2769,
+          "meanObserved": 2769.0,
+          "p50": 2769,
+          "p95": 2769,
+          "partialTrials": 0,
+          "unknownTrials": 0,
+          "observedCalls": 1,
+          "modelCalls": 1
+        },
+        "outputTokens": {
+          "observedTrials": 1,
+          "sumObserved": 132,
+          "meanObserved": 132.0,
+          "p50": 132,
+          "p95": 132,
+          "partialTrials": 0,
+          "unknownTrials": 0,
+          "observedCalls": 1,
+          "modelCalls": 1
+        }
+      },
+      "mixed": {
+        "trials": 1,
+        "passed": 1,
+        "durationMs": {
+          "observedTrials": 1,
+          "sumObserved": 13884,
+          "meanObserved": 13884.0,
+          "p50": 13884,
+          "p95": 13884
+        },
+        "inputTokens": {
+          "observedTrials": 1,
+          "sumObserved": 59608,
+          "meanObserved": 59608.0,
+          "p50": 59608,
+          "p95": 59608,
+          "partialTrials": 0,
+          "unknownTrials": 0,
+          "observedCalls": 7,
+          "modelCalls": 7
+        },
+        "outputTokens": {
+          "observedTrials": 1,
+          "sumObserved": 2273,
+          "meanObserved": 2273.0,
+          "p50": 2273,
+          "p95": 2273,
+          "partialTrials": 0,
+          "unknownTrials": 0,
+          "observedCalls": 7,
+          "modelCalls": 7
+        }
+      }
+    },
+    "inputTokens": {
+      "observedTrials": 16,
+      "sumObserved": 227514,
+      "meanObserved": 14219.625,
+      "p50": 9618,
+      "p95": 59608,
+      "partialTrials": 0,
+      "unknownTrials": 0,
+      "observedCalls": 50,
+      "modelCalls": 50
+    },
+    "outputTokens": {
+      "observedTrials": 16,
+      "sumObserved": 8520,
+      "meanObserved": 532.5,
+      "p50": 416,
+      "p95": 2273,
+      "partialTrials": 0,
+      "unknownTrials": 0,
+      "observedCalls": 50,
+      "modelCalls": 50
+    },
+    "cachedInputTokens": {
+      "observedTrials": 16,
+      "sumObserved": 186752,
+      "meanObserved": 11672.0,
+      "p50": 8320,
+      "p95": 52480,
+      "partialTrials": 0,
+      "unknownTrials": 0,
+      "observedCalls": 50,
+      "modelCalls": 50
+    },
+    "totalTokens": {
+      "observedTrials": 16,
+      "sumObserved": 236034,
+      "meanObserved": 14752.125,
+      "p50": 10251,
+      "p95": 61881,
+      "partialTrials": 0,
+      "unknownTrials": 0,
+      "observedCalls": 50,
+      "modelCalls": 50
+    }
+  }
+}

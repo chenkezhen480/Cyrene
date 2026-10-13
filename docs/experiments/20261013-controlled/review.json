@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "sourceRawSha256": "7b0d5063eda6c19caf71e61bd1e3d3582e9eab2233d487223e9b50ee4ee103b7",
+  "evaluationPolicy": "Original deterministic answer/state scoring plus independent read-only trace/answer review; completed-action claims require execution evidence",
+  "overrides": [
+    {
+      "rowNumber": 13,
+      "condition": "bare_langchain4j",
+      "taskId": "business-read-renewal-list",
+      "originalPassed": false,
+      "reviewedPassed": true,
+      "reason": "Exact required customer set, limit=2 and full cursor chain verified; excluded C103/C106 appear only in an exclusion explanation."
+    },
+    {
+      "rowNumber": 46,
+      "condition": "wiki_on",
+      "taskId": "mixed-policy-business-actions",
+      "originalPassed": true,
+      "reviewedPassed": false,
+      "reason": "Both required tasks are correct, but the final answer claims completed emergency-desk transfer without any transfer tool, execution result or state evidence."
+    }
+  ],
+  "verifiedRequirements": {
+    "paginationSamples": 9,
+    "pageLimitsAndCursorChains": "All groups honor task limit=2/2/1, exact sets and hasMore=false",
+    "idempotenceSamples": 3,
+    "idempotenceEvidence": "Two distinct successful calls with identical body; both return T0004; one added task",
+    "crossOwnerReadSamples": 3,
+    "crossOwnerReadEvidence": "C201 calls return HTTP404, no private name leaked",
+    "crossOwnerUpdateSamples": 3,
+    "crossOwnerUpdateEvidence": "Owned list excludes T0003, Agent refuses writing; no PUT refusal was tested"
+  }
+}

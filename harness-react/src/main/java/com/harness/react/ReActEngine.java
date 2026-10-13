@@ -656,6 +656,11 @@ public class ReActEngine implements ReActLoop {
             return ToolResult.fail(toolCall.id(), toolCall.toolName(), "Cancelled", 0);
         }
 
+        if (toolCall.arguments() == null || !toolCall.arguments().isObject()) {
+            return ToolResult.fail(toolCall.id(), toolCall.toolName(),
+                    "Tool arguments must be a valid JSON object; correct the arguments and retry", 0);
+        }
+
         // Track thread for interruption during tool execution
         if (cancellationToken != null) cancellationToken.trackCurrentThread();
 
@@ -718,7 +723,9 @@ public class ReActEngine implements ReActLoop {
 
     private JsonNode parseArgs(String arguments) {
         try {
-            return OBJECT_MAPPER.readTree(arguments);
+            return OBJECT_MAPPER.reader()
+                    .with(com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
+                    .readTree(arguments);
         } catch (Exception e) {
             log.warn("[L3-ReAct] Failed to parse tool args: {}", e.getMessage());
             return com.fasterxml.jackson.databind.node.NullNode.getInstance();

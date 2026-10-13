@@ -1,0 +1,44 @@
+{
+  "schemaVersion": 1,
+  "rawSha256": "f912ac7eabadf1f4c31618e9a226188189c6227e753eeeaea17a6dcb94878530",
+  "reviewer": "Codex manual review of all 66 answers and offline behavioral evidence",
+  "policy": "Business outcome and ID checks remain raw passed; reviewed full-response factual accuracy rejects explicit false counts/date claims. Unexecuted unsupported future suggestions are noted separately. No raw edits.",
+  "overrides": [
+    {
+      "line": 35,
+      "condition": "cyrene_business",
+      "taskId": "business-read-combined-filter",
+      "round": 2,
+      "passed": false,
+      "reason": "Says all three renewals are approximately 2-3 weeks away. On benchmark 2026-10-12, C101=8, C105=17, C107=2 days."
+    },
+    {
+      "line": 46,
+      "condition": "cyrene_business",
+      "taskId": "business-read-combined-filter",
+      "round": 3,
+      "passed": false,
+      "reason": "Says all three contracts expire within two weeks. C105 expires 2026-10-29, 17 days after benchmark."
+    },
+    {
+      "line": 56,
+      "condition": "alibaba_react",
+      "taskId": "business-read-renewal-list",
+      "round": 3,
+      "passed": false,
+      "reason": "Says 7 records while tool pages and displayed list have exactly 5."
+    }
+  ],
+  "qualitativeNotes": [
+    {
+      "lines": [
+        5,
+        7,
+        39,
+        49
+      ],
+      "condition": "cyrene_business",
+      "reason": "Suggests changing dueDate after completing task, but current host PUT only changes status. No such operation was actually executed; this is a capability-claim issue, not an observed wrong write."
+    }
+  ]
+}

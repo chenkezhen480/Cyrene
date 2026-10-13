@@ -1,0 +1,19 @@
+{
+  "artifacts": [
+    {
+      "mavenRepositoryPath": "com/alibaba/cloud/ai/spring-ai-alibaba-agent-framework/1.1.2.0/spring-ai-alibaba-agent-framework-1.1.2.0.jar",
+      "sha256": "715d545168f10a9bb53e8ece9e9247abbbeef7356a9a77be7e0c59d3d95d8b79"
+    },
+    {
+      "mavenRepositoryPath": "com/alibaba/cloud/ai/spring-ai-alibaba-graph-core/1.1.2.0/spring-ai-alibaba-graph-core-1.1.2.0.jar",
+      "sha256": "0c184fc72b3f7738d719e9f7975e4027ea4e5231a51aab70efd9d87e79f5a7f5"
+    },
+    {
+      "mavenRepositoryPath": "org/springframework/ai/spring-ai-openai/1.1.2/spring-ai-openai-1.1.2.jar",
+      "sha256": "e6e30985ae9f11f5db01310740dd872774e656788f10be25de271807b102c8b3"
+    }
+  ],
+  "jacksonBom": "2.19.2",
+  "source": "Published release jars from configured Maven mirror; APIs inspected from matching source jars.",
+  "initialDependencyConflict": "Unmanaged transitive jackson-databind2.19.4/core2.17.2/annotations2.17.0 caused NoSuchMethodError; experiment-local Jackson BOM aligned family, production root POM unchanged."
+}

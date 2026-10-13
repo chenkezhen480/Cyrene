@@ -1,0 +1,13 @@
+{
+  "schemaVersion" : 1,
+  "trials" : 11,
+  "failureCount" : 0,
+  "allPassed" : true,
+  "conditions" : {
+    "cyrene_business" : {
+      "failed" : 0,
+      "trials" : 11,
+      "passed" : 11
+    }
+  }
+}

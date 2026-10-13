@@ -1,0 +1,64 @@
+-------------------------------------------------------------------------------
+Test set: com.harness.tool.discovery.OpenApiSpecParserTest
+-------------------------------------------------------------------------------
+Tests run: 16, Failures: 15, Errors: 0, Skipped: 0, Time elapsed: 1.158 s <<< FAILURE! -- in com.harness.tool.discovery.OpenApiSpecParserTest
+com.harness.tool.discovery.OpenApiSpecParserTest.rejectsCyclicReferencesWithoutUnboundedExpansion(String)[1] -- Time elapsed: 0.279 s <<< FAILURE!
+org.opentest4j.AssertionFailedError: Expected java.io.IOException to be thrown, but nothing was thrown.
+	at com.harness.tool.discovery.OpenApiSpecParserTest.rejectsCyclicReferencesWithoutUnboundedExpansion(OpenApiSpecParserTest.java:96)
+
+com.harness.tool.discovery.OpenApiSpecParserTest.rejectsCyclicReferencesWithoutUnboundedExpansion(String)[2] -- Time elapsed: 0.026 s <<< FAILURE!
+org.opentest4j.AssertionFailedError: Expected java.io.IOException to be thrown, but nothing was thrown.
+	at com.harness.tool.discovery.OpenApiSpecParserTest.rejectsCyclicReferencesWithoutUnboundedExpansion(OpenApiSpecParserTest.java:96)
+
+com.harness.tool.discovery.OpenApiSpecParserTest.preservesReferencedQueryParameterConstraintsAndArrayItems -- Time elapsed: 0.031 s <<< FAILURE!
+org.opentest4j.AssertionFailedError: expected: <{"limit":{"type":"integer","minimum":1,"maximum":100,"format":"int32","in":"query"},"tags":{"type":"array","items":{"type":"string","enum":["open","done"]},"in":"query"}}> but was: <{"limit":{"in":"query"},"tags":{"type":"array","in":"query"}}>
+	at com.harness.tool.discovery.OpenApiSpecParserTest.preservesReferencedQueryParameterConstraintsAndArrayItems(OpenApiSpecParserTest.java:61)
+
+com.harness.tool.discovery.OpenApiSpecParserTest.rejectsMissingExternalAndInvalidReferences(String)[1] -- Time elapsed: 0.024 s <<< FAILURE!
+org.opentest4j.AssertionFailedError: Expected java.io.IOException to be thrown, but nothing was thrown.
+	at com.harness.tool.discovery.OpenApiSpecParserTest.rejectsMissingExternalAndInvalidReferences(OpenApiSpecParserTest.java:73)
+
+com.harness.tool.discovery.OpenApiSpecParserTest.rejectsMissingExternalAndInvalidReferences(String)[2] -- Time elapsed: 0.024 s <<< FAILURE!
+org.opentest4j.AssertionFailedError: Expected java.io.IOException to be thrown, but nothing was thrown.
+	at com.harness.tool.discovery.OpenApiSpecParserTest.rejectsMissingExternalAndInvalidReferences(OpenApiSpecParserTest.java:73)
+
+com.harness.tool.discovery.OpenApiSpecParserTest.rejectsMissingExternalAndInvalidReferences(String)[3] -- Time elapsed: 0.019 s <<< FAILURE!
+org.opentest4j.AssertionFailedError: Expected java.io.IOException to be thrown, but nothing was thrown.
+	at com.harness.tool.discovery.OpenApiSpecParserTest.rejectsMissingExternalAndInvalidReferences(OpenApiSpecParserTest.java:73)
+
+com.harness.tool.discovery.OpenApiSpecParserTest.rejectsMissingExternalAndInvalidReferences(String)[4] -- Time elapsed: 0.019 s <<< FAILURE!
+org.opentest4j.AssertionFailedError: Expected java.io.IOException to be thrown, but nothing was thrown.
+	at com.harness.tool.discovery.OpenApiSpecParserTest.rejectsMissingExternalAndInvalidReferences(OpenApiSpecParserTest.java:73)
+
+com.harness.tool.discovery.OpenApiSpecParserTest.rejectsMissingExternalAndInvalidReferences(String)[5] -- Time elapsed: 0.018 s <<< FAILURE!
+org.opentest4j.AssertionFailedError: Expected java.io.IOException to be thrown, but nothing was thrown.
+	at com.harness.tool.discovery.OpenApiSpecParserTest.rejectsMissingExternalAndInvalidReferences(OpenApiSpecParserTest.java:73)
+
+com.harness.tool.discovery.OpenApiSpecParserTest.rejectsNonStringReferences(String)[1] -- Time elapsed: 0.022 s <<< FAILURE!
+org.opentest4j.AssertionFailedError: Expected java.io.IOException to be thrown, but nothing was thrown.
+	at com.harness.tool.discovery.OpenApiSpecParserTest.rejectsNonStringReferences(OpenApiSpecParserTest.java:81)
+
+com.harness.tool.discovery.OpenApiSpecParserTest.rejectsNonStringReferences(String)[2] -- Time elapsed: 0.020 s <<< FAILURE!
+org.opentest4j.AssertionFailedError: Expected java.io.IOException to be thrown, but nothing was thrown.
+	at com.harness.tool.discovery.OpenApiSpecParserTest.rejectsNonStringReferences(OpenApiSpecParserTest.java:81)
+
+com.harness.tool.discovery.OpenApiSpecParserTest.rejectsNonStringReferences(String)[3] -- Time elapsed: 0.020 s <<< FAILURE!
+org.opentest4j.AssertionFailedError: Expected java.io.IOException to be thrown, but nothing was thrown.
+	at com.harness.tool.discovery.OpenApiSpecParserTest.rejectsNonStringReferences(OpenApiSpecParserTest.java:81)
+
+com.harness.tool.discovery.OpenApiSpecParserTest.rejectsReferencesToNonSchemaTargets(String)[1] -- Time elapsed: 0.019 s <<< FAILURE!
+org.opentest4j.AssertionFailedError: Expected java.io.IOException to be thrown, but nothing was thrown.
+	at com.harness.tool.discovery.OpenApiSpecParserTest.rejectsReferencesToNonSchemaTargets(OpenApiSpecParserTest.java:87)
+
+com.harness.tool.discovery.OpenApiSpecParserTest.rejectsReferencesToNonSchemaTargets(String)[2] -- Time elapsed: 0.020 s <<< FAILURE!
+org.opentest4j.AssertionFailedError: Expected java.io.IOException to be thrown, but nothing was thrown.
+	at com.harness.tool.discovery.OpenApiSpecParserTest.rejectsReferencesToNonSchemaTargets(OpenApiSpecParserTest.java:87)
+
+com.harness.tool.discovery.OpenApiSpecParserTest.rejectsReferencesToNonSchemaTargets(String)[3] -- Time elapsed: 0.019 s <<< FAILURE!
+org.opentest4j.AssertionFailedError: Expected java.io.IOException to be thrown, but nothing was thrown.
+	at com.harness.tool.discovery.OpenApiSpecParserTest.rejectsReferencesToNonSchemaTargets(OpenApiSpecParserTest.java:87)
+
+com.harness.tool.discovery.OpenApiSpecParserTest.resolvesNestedLocalBodyReferencesAndRetainsSchemaConstraints -- Time elapsed: 0.031 s <<< FAILURE!
+org.opentest4j.AssertionFailedError: expected: <{"type":"object","properties":{"reason":{"type":"string","minLength":1},"repeatReason":{"type":"string","minLength":1},"tags":{"type":"array","items":{"type":"string","minLength":1}}},"required":["reason"]}> but was: <{"type":"object","properties":{"reason":{"$ref":"#/components/schemas/Text"},"repeatReason":{"$ref":"#/components/schemas/Text"},"tags":{"type":"array","items":{"$ref":"#/components/schemas/Text"}}},"required":["reason"]}>
+	at com.harness.tool.discovery.OpenApiSpecParserTest.resolvesNestedLocalBodyReferencesAndRetainsSchemaConstraints(OpenApiSpecParserTest.java:33)
+

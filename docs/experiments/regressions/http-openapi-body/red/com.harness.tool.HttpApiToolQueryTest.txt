@@ -1,0 +1,16 @@
+-------------------------------------------------------------------------------
+Test set: com.harness.tool.HttpApiToolQueryTest
+-------------------------------------------------------------------------------
+Tests run: 19, Failures: 3, Errors: 0, Skipped: 0, Time elapsed: 0.966 s <<< FAILURE! -- in com.harness.tool.HttpApiToolQueryTest
+com.harness.tool.HttpApiToolQueryTest.parsedOpenApiSendsReferencedJsonBodyWithoutWrapper(String)[1] -- Time elapsed: 0.687 s <<< FAILURE!
+org.opentest4j.AssertionFailedError: expected: <{"id":"bodyId","status":"done","expectedVersion":2}> but was: <{"__body__":{"id":"bodyId","status":"done","expectedVersion":2}}>
+	at com.harness.tool.HttpApiToolQueryTest.parsedOpenApiSendsReferencedJsonBodyWithoutWrapper(HttpApiToolQueryTest.java:208)
+
+com.harness.tool.HttpApiToolQueryTest.parsedOpenApiSendsReferencedJsonBodyWithoutWrapper(String)[2] -- Time elapsed: 0.031 s <<< FAILURE!
+org.opentest4j.AssertionFailedError: expected: <{"id":"bodyId","status":"done","expectedVersion":2}> but was: <{"__body__":{"id":"bodyId","status":"done","expectedVersion":2}}>
+	at com.harness.tool.HttpApiToolQueryTest.parsedOpenApiSendsReferencedJsonBodyWithoutWrapper(HttpApiToolQueryTest.java:208)
+
+com.harness.tool.HttpApiToolQueryTest.parsedOpenApiSendsReferencedJsonBodyWithoutWrapper(String)[3] -- Time elapsed: 0.026 s <<< FAILURE!
+org.opentest4j.AssertionFailedError: expected: <{"id":"bodyId","status":"done","expectedVersion":2}> but was: <{"__body__":{"id":"bodyId","status":"done","expectedVersion":2}}>
+	at com.harness.tool.HttpApiToolQueryTest.parsedOpenApiSendsReferencedJsonBodyWithoutWrapper(HttpApiToolQueryTest.java:208)
+
