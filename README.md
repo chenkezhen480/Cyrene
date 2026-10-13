@@ -10,11 +10,16 @@ Cyrene Agent 是一个使用 Java 21 构建的 Agent 开发框架。它面向垂
 
 不同于 codex，claude code 等 Agent，Cyrene Agent 解决的是另一类问题：**如何为已有系统构建专用 Agent**。
 
-使用案例1：
+### 应用案例：谱伴
+
+**谱伴是面向孤独症儿童的个性化成长 Agent，目前为可运行原型 / 演示。** 它把个体练习目标组织为绘本与互动情景，已有展示包括绘本生成、选择保存，以及基于绘本的互动游戏。Cyrene 为应用提供知识、工具、记忆和 Trace 运行设施；儿童档案、IEP（个别化教育计划）、专业审核和业务权限由应用系统负责。
+
+以下为产品功能展示。当前材料未提供机构试点、真实使用人数、效果评估或完整人工接入工时；Trace 筛选后微调、评测与模型发布属于演进方案。[案例、材料依据与功能边界](docs/CASE_STUDY_PUBAN.md)。
+
 <table>
   <tr>
-    <td><img src="docs/assets/图片1.png" height="560" alt="场景1"></td>
-    <td><img src="docs/assets/图片2.png" height="560" alt="场景2"></td>
+    <td><img src="docs/assets/图片1.png" height="560" alt="谱伴绘本生成与保存展示"></td>
+    <td><img src="docs/assets/图片2.png" height="560" alt="谱伴绘本与互动入口展示"></td>
   </tr>
 </table>
 
@@ -87,7 +92,7 @@ java -jar harness-server/target/harness-server.jar
 - 服务默认监听 `8080`。 
 - 打开 Web Agent端控制台后，可以完成模型配置，项目接口扫描、知识库上传、图谱管理和 Agent 测试对话。
 - 推荐内网部署，连接项目后端。
-- 对接的租户和身份，以及userID与Token认证参数是通过chat接口的上下文参数传入的，有默认值，可以根据自己系统情况进行设计，默认值面向无租户，无身份设计系统。
+- 用户、租户和身份由服务端认证主体绑定，不能用请求中的 `context.userId`、`tenantId` 或 `identity` 覆盖。可信宿主后端通过 `context.credentials` 传递业务 API 凭证，业务系统继续校验权限。固定服务 Token 接入用户级接口还需要可信用户解析适配器，当前默认 `Main` 未接入该适配器；详见[版本与接入限制](docs/PROJECT_STATUS.md)。
 
 完整配置见 [.env.example](./.env.example)。
 
@@ -157,6 +162,14 @@ ReAct Loop 执行“模型决策 → 工具调用 → 工具结果检查 → 模
 Trace 覆盖整个运行过程，包括输入、模型轮次、工具调用与结果、检查和反思状态、运行耗时、Token 消耗、确认决策及最终输出。子 Agent 拥有独立 Trace，并通过 `parent_trace_id` 与主 Agent 关联，从而还原完整任务树。
 
 ![审计界面](docs/assets/trace.png)
+
+## 项目状态与参与
+
+- [0.6.6 功能范围、验收证据与已知限制](docs/PROJECT_STATUS.md)：区分代码实现、CI、真实模型实验和规划。
+- [贡献归属、AI 辅助开发与维护路线](docs/GOVERNANCE.md)：说明上游提供什么、Cyrene 增加什么，以及维护责任。
+- [贡献指南](CONTRIBUTING.md)、[行为准则](CODE_OF_CONDUCT.md)、[安全问题报告](SECURITY.md)。
+
+本地 TODO 规划文件保留在开发者工作区，不纳入后续 Git 版本；公开完成度以版本状态和可复核证据为准。历史提交中的规划记录不被重写。
 
 ## 许可证
 

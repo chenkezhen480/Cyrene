@@ -10,11 +10,16 @@ Cyrene Agent is an Agent development framework built with Java 21. It is designe
 
 Unlike agents such as Codex and Claude Code, Cyrene Agent addresses a different question: **how do you build a dedicated Agent for an existing system?**
 
-Use case 1:
+### Application Case: Puban
+
+**Puban is a personalized growth Agent for autistic children, currently a runnable prototype / demonstration.** Its demonstrated features include picture-book generation, selection and saving, and interactive activities based on the books. Cyrene supplies knowledge, tools, memory, and tracing facilities. The host application owns child profiles, IEPs (individualized education plans), professional review, and business authorization.
+
+The images below demonstrate product features. The supplied material does not include institutional trials, user counts, outcome evaluation, or complete developer integration time. Trace-based fine-tuning, evaluation, and model release are an evolution proposal. [Case evidence and scope](docs/CASE_STUDY_PUBAN.md) (Chinese).
+
 <table>
   <tr>
-    <td><img src="docs/assets/图片1.png" height="560" alt="Scenario 1"></td>
-    <td><img src="docs/assets/图片2.png" height="560" alt="Scenario 2"></td>
+    <td><img src="docs/assets/图片1.png" height="560" alt="Puban picture-book generation and saving demonstration"></td>
+    <td><img src="docs/assets/图片2.png" height="560" alt="Puban picture book and interactive activity entry"></td>
   </tr>
 </table>
 
@@ -87,7 +92,7 @@ java -jar harness-server/target/harness-server.jar
 - The service listens on `8080` by default.
 - The Web console covers model configuration, project API discovery, knowledge upload, knowledge-graph management, and test conversations with the Agent.
 - An intranet deployment connected to the project backend is recommended.
-- The tenant and identity, along with the `userId` and token credentials, arrive as context parameters on the chat API. Both have defaults, so you can shape them around your own system — the defaults target systems with no tenancy and no identity.
+- User, tenant, and identity are bound by the authenticated server principal; request fields such as `context.userId`, `tenantId`, and `identity` cannot override it. A trusted host backend supplies business API credentials through `context.credentials`, while the business system retains authorization. Service-token access to user-scoped endpoints requires a trusted user adapter, which the default `Main` does not install. See [version and integration limits](docs/PROJECT_STATUS.md) (Chinese).
 
 See [.env.example](./.env.example) for the complete configuration surface.
 
@@ -160,6 +165,14 @@ Tools can also expose structured result states that evolve later calls. For exam
 Trace observes the complete run: input, model rounds, tool calls and results, inspection and reflection status, latency, token consumption, confirmation decisions, and final output. A sub-agent owns an independent trace linked to its parent through `parent_trace_id`, making the full task tree reconstructable.
 
 ![Trace interface](docs/assets/trace.png)
+
+## Project Status and Participation
+
+- [0.6.6 scope, verification evidence, and known limits](docs/PROJECT_STATUS.md) (Chinese).
+- [Upstream attribution, AI-assisted development, and maintenance](docs/GOVERNANCE.md) (Chinese).
+- [Contribution guide](CONTRIBUTING.md), [code of conduct](CODE_OF_CONDUCT.md), and [security reporting](SECURITY.md) (Chinese).
+
+Local TODO planning documents remain in developer workspaces and are excluded from future Git revisions. Public completion claims follow the version status and verifiable evidence; historical commits are not rewritten.
 
 ## License
 

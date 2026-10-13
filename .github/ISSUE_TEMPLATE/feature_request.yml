@@ -1,0 +1,22 @@
+name: 需求建议
+description: 说明实际场景与最小可用结果
+body:
+  - type: textarea
+    id: scenario
+    attributes:
+      label: 使用场景与当前缺口
+      description: 描述具体任务以及现有能力为何无法满足。
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: 期望结果与范围
+      description: 给出最小可用行为、接口约束和明确不需要的内容。
+    validations:
+      required: true
+  - type: textarea
+    id: validation
+    attributes:
+      label: 验收方式与替代方案
+      description: 使用什么样例和结果判断完成；是否可复用已有能力。

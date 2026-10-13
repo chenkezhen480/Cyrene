@@ -73,3 +73,7 @@ docs/experiments/.runtime/
 
 # Keep local paper drafts outside Git
 /docs/*论文*
+
+# Local development plans and task scratch files
+[Tt][Oo][Dd][Oo]*.md
+/work/

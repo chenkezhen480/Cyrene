@@ -1,0 +1,38 @@
+name: 缺陷报告
+description: 报告一个可复现的问题
+body:
+  - type: markdown
+    attributes:
+      value: 请只提供脱敏或合成的配置、日志和输入。安全问题先按 SECURITY.md 请求私密报告渠道。
+  - type: input
+    id: version
+    attributes:
+      label: 版本或提交
+      description: 填写根 POM 版本及相关提交；注明是否有本地修改。
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: 运行环境
+      description: 操作系统、Java、部署方式、相关中间件和模型 / 协议；不要提供密钥。
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: 最小复现
+      description: 写出输入和步骤，使用脱敏或合成样例。
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: 预期与实际结果
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 验证与日志
+      description: 命令、错误、脱敏 Trace 或截图；说明尚未验证的部分。
