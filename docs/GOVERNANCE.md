@@ -1,6 +1,6 @@
 # 贡献、设计责任与维护
 
-本说明基于 0.6.6 源码与公开记录，核对日期为 2026-10-13。项目定位是为已有业务系统提供专用 Agent 接入与运行设施。
+本说明基于 0.6.6 源码与公开记录，核对日期为 2026-10-14。项目围绕“让 Agent 懂已有系统、会操作已有系统”提供快速接入与运行设施。
 
 ## 上游与 Cyrene 的边界
 
@@ -19,9 +19,12 @@
 
 | 取舍 | 原因 | 代码或测试证据 |
 |---|---|---|
+| 独立部署 Agent，通过 HTTP / SSE 接入宿主 | 让已有项目复用 Agent 设施，无需采用相同语言与开发栈 | [服务入口](../harness-server/src/main/java/com/harness/server/Main.java)、[项目接口发现](../harness-agent/src/main/java/com/harness/agent/ProjectDiscoveryService.java) |
+| 兼容默认单租户与可信多租户范围 | 适配不同业务系统，同时继承已有用户身份与权限 | [AgentContext](../harness-core/src/main/java/com/harness/core/model/AgentContext.java)、[身份解析](../harness-server/src/main/java/com/harness/server/security/RequestPrincipalResolver.java) |
 | 核心使用自主 ReAct；结构化输出约束最终业务响应 | 保持模型自主选择工具，同时让接入方校验最终返回格式 | [ReActEngine](../harness-react/src/main/java/com/harness/react/ReActEngine.java)、[结构化输出测试](../harness-react/src/test/java/com/harness/react/ReActEngineStructuredOutputTest.java) |
 | 每次运行使用不可变工具快照，子 Agent 范围继续收窄 | 防止运行中热加载改变工具定义与执行权限的对应关系 | [RunToolCatalog](../harness-tool/src/main/java/com/harness/tool/RunToolCatalog.java)、[范围测试](../harness-agent/src/test/java/com/harness/agent/SubAgentRunScopeTest.java) |
 | MySQL 作为知识权威，Milvus 作为检索投影，图事实保留在 Neo4j | 检索结果不能绕过当前权限、版本和生命周期校验 | [KnowledgeReadTool](../harness-agent/src/main/java/com/harness/agent/knowledge/KnowledgeReadTool.java)、[读取授权测试](../harness-agent/src/test/java/com/harness/agent/knowledge/KnowledgeReadToolTest.java) |
+| 按任务相关性组织知识与记忆 | 发挥已有项目的数据价值，减少无关上下文对判断的影响 | [加权 RRF](../harness-tool/src/main/java/com/harness/tool/knowledge/index/ReciprocalRankFusion.java)、[知识路由](../harness-agent/src/main/java/com/harness/agent/knowledge/KnowledgeDiscoveryRouter.java) |
 | 宿主继续执行业务授权；框架绑定可信身份并透传请求凭证 | 复用已有系统的数据范围，避免共享管理员身份代替用户权限 | [RequestPrincipalResolver](../harness-server/src/main/java/com/harness/server/security/RequestPrincipalResolver.java)、[HttpApiTool](../harness-tool/src/main/java/com/harness/tool/HttpApiTool.java) |
 | 用事务、outbox 与持久化任务协调跨存储操作 | 在异常、重试和恢复后保持权威状态与投影一致 | [知识投影测试](../harness-tool/src/test/java/com/harness/tool/knowledge/index/KnowledgeProjectionFlowTest.java)、[图谱 Saga 测试](../harness-tool/src/test/java/com/harness/graph/build/GraphMutationSagaServiceTest.java) |
 | 保留不利结果、失败试验和事实复核 | 让完成声明、性能范围与原始证据可追溯 | [Alibaba 对照](experiments/2026-10-13-alibaba-results.md)、[Wiki 实验](experiments/2026-10-13-results.md) |
@@ -33,6 +36,8 @@
 项目使用 AI 编码代理辅助实现、排查、测试与材料整理，仓库提供 `AGENTS.md`、`CLAUDE.md`、`.agents/` 和 `.codex/` 的开发说明或配置。这些文件不用于证明人工贡献比例，也不作为功能或测试完成的证据。
 
 人工设计与维护责任包括：确定接入场景及需求范围，决定架构取舍和授权边界，审核 AI 生成的实现与第三方内容，核对实验和失败结果，决定业务材料的专业适配与发布范围。代码是否合格以审查和实际验证为准，AI 的完成声明不能替代这些工作。
+
+维护者确认的产品设计目标包括：以独立 Agent 服务快速接入已有项目；同时支持单租户和多租户范围；将接口工具化与身份权限继承作为业务操作基础；通过知识与记忆的相关性选择利用已有数据；将审核后的 Trace 用于业务模型微调，优化对应业务中的选择与决策权重。这些目标与实现审核、业务验证共同构成人工设计责任。
 
 贡献者在 PR 中说明自己的设计与实现范围、重要取舍、验证方式，以及 AI 辅助的环节。当前未统计人工 / AI 代码比例，不据此声称全部代码手写，也不以 AI 文件的存在否定人的设计责任。
 
@@ -69,8 +74,8 @@ Cyrene 使用 [Apache License 2.0](../LICENSE)。下表是关键组件的上游�
 |---|---|---|
 | 当前优先 | 修复通用 HTTP 参数 / 响应完整性、加强 Markdown 渲染与默认部署边界 | 针对原问题的回归通过，文档与实际协议一致 |
 | 发布准备 | 全新 Compose 部署、示例验收、安全扫描恢复、固定发布制品 | 固定版本、保留环境和执行记录，逐项说明未覆盖范围 |
-| 应用证据 | 完成谱伴脱敏业务链路验收和人工接入计时，再扩第二类宿主 | 业务状态与 Trace 对应，计时口径可复查；不提前声明专业效果 |
+| 应用接入 | 持续完善已在线下机构试点的谱伴业务链路，并拓展其他宿主 | 保留业务状态与 Trace 对应关系，验证接口兼容性和身份范围 |
 | 性能与检索 | 定位额外输入和参数失败，扩大 Wiki 文档与任务样本 | 保持正确性与授权边界，用配对实验记录性能及摄取成本 |
-| 应用演进 | Trace 数据准入、微调、评测和模型发布 | 先确定授权、脱敏与独立评价，再决定实施；当前属于规划 |
+| 数据与模型优化 | 在已有 Trace 业务微调应用上完善样本质量、效果评价与版本管理 | 明确授权与脱敏范围，保留样本、评价和模型使用记录 |
 
 计划按证据与维护能力调整，不承诺未经评估的发布日期。当前验证范围和限制统一记录在[版本状态](PROJECT_STATUS.md)。
